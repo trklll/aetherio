@@ -1,0 +1,4336 @@
+﻿=== AETHERIO PROJECT SNAPSHOT ===
+Generado: 2026-05-06 00:02
+Ruta: C:\Users\Administrator\Documents\Projects\aetherio
+
+=== ESTRUCTURA DE CARPETAS ===
+  src\adapters
+  src\addons
+  src\assets
+  src\components
+  src\core
+  src\database
+  src\hooks
+  src\pages
+  src\player
+  src\services
+  src\store
+  src\types
+  src\utils
+  src\components\cards
+  src\components\layout
+  src\components\navigation
+  src\components\ui
+  src\database\migrations
+  src\database\queries
+  src\pages\Addons
+  src\pages\Detail
+  src\pages\Home
+  src\pages\Library
+  src\pages\Person
+  src\pages\Player
+  src\pages\Search
+  src\pages\Settings
+
+=== package.json ===
+Nombre: aetherio  Version: 0.1.0
+--- dependencies ---
+  @tanstack/react-query: ^5.100.9
+  @tauri-apps/api: ^2
+  @tauri-apps/plugin-opener: ^2
+  axios: ^1.16.0
+  clsx: ^2.1.1
+  framer-motion: ^12.38.0
+  lucide-react: ^1.14.0
+  react: ^19.1.0
+  react-dom: ^19.1.0
+  react-router-dom: ^7.14.2
+  tailwind-merge: ^3.5.0
+  zustand: ^5.0.13
+--- devDependencies ---
+  @tauri-apps/cli: ^2
+  @types/react: ^19.1.8
+  @types/react-dom: ^19.1.6
+  @vitejs/plugin-react: ^4.6.0
+  autoprefixer: ^10.5.0
+  postcss: ^8.5.13
+  tailwindcss: ^3.4.19
+  typescript: ~5.8.3
+  vite: ^7.0.4
+
+=== src-tauri/tauri.conf.json ===
+{
+  "productName": "aetherio",
+  "version": "0.1.0",
+  "identifier": "com.administrator.aetherio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Aetherio",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": [
+      "bin/mpv"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
+
+
+=== ARCHIVOS DE CODIGO FUENTE ===
+
+<<< FILE: .vscode\extensions.json >>>
+{
+  "recommendations": ["tauri-apps.tauri-vscode", "rust-lang.rust-analyzer"]
+}
+
+<<< END: .vscode\extensions.json >>>
+
+<<< FILE: package.json >>>
+{
+  "name": "aetherio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.100.9",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "axios": "^1.16.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.14.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.14.2",
+    "tailwind-merge": "^3.5.0",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.13",
+    "tailwindcss": "^3.4.19",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}
+
+<<< END: package.json >>>
+--- package-lock.json [OMITIDO: 116KB] ---
+
+<<< FILE: postcss.config.js >>>
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+<<< END: postcss.config.js >>>
+--- src\adapters\MPVAdapter.ts [VACIO] ---
+--- src\adapters\SQLiteAdapter.ts [VACIO] ---
+--- src\adapters\StremioAddonAdapter.ts [VACIO] ---
+--- src\addons\AddonFetcher.ts [VACIO] ---
+--- src\addons\AddonIsolator.ts [VACIO] ---
+--- src\addons\AddonRegistry.ts [VACIO] ---
+--- src\addons\ManifestValidator.ts [VACIO] ---
+--- src\App.css [VACIO] ---
+
+<<< FILE: src\App.tsx >>>
+import { Routes, Route, Navigate } from "react-router-dom";
+import { useAddonStore } from "./store/addonStore";
+import AppShell from "./components/layout/AppShell";
+import HomePage    from "./pages/Home";
+import LibraryPage from "./pages/Library";
+import AddonsPage  from "./pages/Addons";
+import SettingsPage from "./pages/Settings";
+import DetailPage  from "./pages/Detail";
+import StreamPicker from "./pages/Detail/StreamPicker";
+import PlayerPage from "./pages/Player";
+import PersonPage  from "./pages/Person";
+import SearchPage  from "./pages/Search";
+
+export default function App() {
+  const addons = useAddonStore(s => s.addons);
+  const defaultRoute = addons.length === 0 ? "/addons" : "/home";
+
+  return (
+    <AppShell>
+      <Routes>
+        <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
+        <Route path="/home"              element={<HomePage />} />
+        <Route path="/library"           element={<LibraryPage />} />
+        <Route path="/addons"            element={<AddonsPage />} />
+        <Route path="/settings"          element={<SettingsPage />} />
+        <Route path="/detail/:type/:id"  element={<DetailPage />} />
+        <Route path="/streams"           element={<StreamPicker />} />
+        <Route path="/player"            element={<PlayerPage />} />
+        <Route path="/person/:id"        element={<PersonPage />} />
+        <Route path="/search"            element={<SearchPage />} />
+      </Routes>
+    </AppShell>
+  );
+}
+
+<<< END: src\App.tsx >>>
+--- src\components\cards\CardSkeleton.tsx [VACIO] ---
+--- src\components\cards\CinematicCard.tsx [VACIO] ---
+--- src\components\cards\HeroCard.tsx [VACIO] ---
+
+<<< FILE: src\components\layout\AppShell.tsx >>>
+import { ReactNode, useRef, useEffect } from "react";
+import { useLocation } from "react-router-dom";
+import TopNav from "./TopNav";
+
+const FULLBLEED_ROUTES = ["/home", "/detail", "/player", "/streams"];
+
+export default function AppShell({ children }: { children: ReactNode }) {
+  const loc       = useLocation();
+  const hideNav   = loc.pathname === "/player" || loc.pathname === "/streams";
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to top al cambiar de ruta
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+  }, [loc.pathname, loc.search]);
+
+  const isFullbleed = FULLBLEED_ROUTES.some(r => loc.pathname.startsWith(r));
+
+  return (
+    <div style={{
+      position: "relative",
+      height: "100vh",
+      width: "100vw",
+      overflow: "hidden",
+      background: "#1f1f1f",
+      color: "#fff",
+    }}>
+      {!hideNav && <TopNav />}
+      <div
+        ref={scrollRef}
+        style={{
+          height: "100%",
+          width: "100%",
+          overflowY: "auto",
+          overflowX: "hidden",
+          paddingTop: hideNav || isFullbleed ? 0 : 72,
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+<<< END: src\components\layout\AppShell.tsx >>>
+--- src\components\layout\PageContainer.tsx [VACIO] ---
+
+<<< FILE: src\components\layout\Sidebar.tsx >>>
+import { NavLink } from "react-router-dom";
+import { Home, Search, BookMarked, Puzzle, Settings } from "lucide-react";
+import { useUIStore } from "../../store/uiStore";
+import clsx from "clsx";
+
+const NAV = [
+  { to: "/home",     icon: Home,        label: "Home" },
+  { to: "/search",   icon: Search,      label: "Buscar" },
+  { to: "/library",  icon: BookMarked,  label: "Biblioteca" },
+  { to: "/addons",   icon: Puzzle,      label: "Add-ons" },
+  { to: "/settings", icon: Settings,    label: "Ajustes" },
+];
+
+export default function Sidebar() {
+  const collapsed = useUIStore(s => s.sidebarCollapsed);
+  const toggle    = useUIStore(s => s.toggleSidebar);
+
+  return (
+    <aside
+      className={clsx(
+        "flex flex-col h-full glass border-r border-glass-border transition-all duration-300 ease-smooth z-50 shrink-0",
+        collapsed ? "w-[72px]" : "w-[220px]"
+      )}
+    >
+      {/* Logo / nombre */}
+      <div
+        className="flex items-center gap-3 px-4 py-6 cursor-pointer select-none"
+        onClick={toggle}
+        data-tauri-drag-region
+      >
+        <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 shadow-glow">
+          <span className="text-white font-bold text-sm">A</span>
+        </div>
+        {!collapsed && (
+          <span className="font-semibold text-text-primary text-base tracking-wide animate-fadeIn">
+            Aetherio
+          </span>
+        )}
+      </div>
+
+      {/* Nav items */}
+      <nav className="flex flex-col gap-1 px-2 flex-1">
+        {NAV.map(({ to, icon: Icon, label }) => (
+          <NavLink
+            key={to}
+            to={to}
+            className={({ isActive }) =>
+              clsx(
+                "flex items-center gap-3 px-3 py-3 rounded-card transition-all duration-fast focus-ring",
+                isActive
+                  ? "bg-accent/20 text-accent shadow-glow"
+                  : "text-text-secondary hover:bg-glass-hover hover:text-text-primary"
+              )
+            }
+          >
+            <Icon size={20} className="shrink-0" />
+            {!collapsed && (
+              <span className="text-sm font-medium animate-fadeIn">{label}</span>
+            )}
+          </NavLink>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+
+<<< END: src\components\layout\Sidebar.tsx >>>
+
+<<< FILE: src\components\layout\TopNav.tsx >>>
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import { Search, X, Puzzle, Settings } from "lucide-react";
+import clsx from "clsx";
+
+const TMDB_KEY = "d8fbcec110971e64699f338caf0e7192";
+
+const NAV_ITEMS = [
+  { label: "Inicio",     to: "/home",             type: null },
+  { label: "Películas",  to: "/home?type=movie",  type: "movie" },
+  { label: "Series",     to: "/home?type=series", type: "series" },
+  { label: "Anime",      to: "/home?type=anime",  type: "anime" },
+  { label: "Biblioteca", to: "/library",           type: null },
+];
+
+interface Suggestion {
+  id: number;
+  title: string;
+  media_type: "movie" | "tv";
+  poster_path?: string;
+  release_date?: string;
+  first_air_date?: string;
+}
+
+export default function TopNav() {
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery]         = useState("");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [showSugg, setShowSugg]   = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Active nav item detection
+  const isActive = (to: string) => {
+    const [path, qs] = to.split("?");
+    const params = new URLSearchParams(qs ?? "");
+    const type   = params.get("type");
+    const curParams = new URLSearchParams(location.search);
+    const curType = curParams.get("type");
+    if (location.pathname !== path) return false;
+    if (type) return curType === type;
+    return !curType;
+  };
+
+  // Open search
+  function openSearch() {
+    setSearching(true);
+    setTimeout(() => inputRef.current?.focus(), 300);
+  }
+
+  // Close search
+  function closeSearch() {
+    setSearching(false);
+    setQuery("");
+    setSuggestions([]);
+    setShowSugg(false);
+  }
+
+  // Fetch suggestions (TMDB multi-search)
+  const fetchSuggestions = useCallback(async (q: string) => {
+    if (q.length < 2) { setSuggestions([]); setShowSugg(false); return; }
+    try {
+      const res  = await fetch(
+        `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(q)}&language=es-ES&page=1`
+      );
+      const data = await res.json();
+      const filtered = (data.results ?? [])
+        .filter((r: any) => r.media_type === "movie" || r.media_type === "tv")
+        .slice(0, 6);
+      setSuggestions(filtered);
+      setShowSugg(filtered.length > 0);
+    } catch { setSuggestions([]); }
+  }, []);
+
+  function handleInput(val: string) {
+    setQuery(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchSuggestions(val), 280);
+  }
+
+  function handleSearch(q = query) {
+    if (!q.trim()) return;
+    setShowSugg(false);
+    navigate(`/search?q=${encodeURIComponent(q.trim())}`);
+  }
+
+  function handleSuggestion(s: Suggestion) {
+    const type = s.media_type === "movie" ? "movie" : "series";
+    const id   = `tmdb:${s.id}`;
+    closeSearch();
+    navigate(`/detail/${type}/${id}`);
+  }
+
+  // Escape to close
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") closeSearch(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  return (
+    <div className="absolute top-0 left-0 right-0 z-50 flex justify-center pt-4" data-tauri-drag-region>
+      <div className="relative liquid-glass-pill px-2 py-1.5 flex items-center min-w-0"
+           style={{ boxShadow: "0 4px 24px rgba(0,0,0,0.5)" }}>
+
+        {/* Logo */}
+        <button
+          onClick={() => { closeSearch(); navigate("/home"); }}
+          className="w-8 h-8 rounded-full bg-white flex items-center justify-center shrink-0 mr-2 hover:scale-105 transition-transform"
+        >
+          <span className="text-black font-black text-sm">A</span>
+        </button>
+
+        {/* NAV ITEMS — ocultos durante búsqueda */}
+        <AnimatePresence>
+          {!searching && (
+            <motion.div
+              className="flex items-center gap-0.5"
+              initial={{ opacity: 0, width: 0 }}
+              animate={{ opacity: 1, width: "auto" }}
+              exit={{ opacity: 0, width: 0 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+            >
+              {NAV_ITEMS.map(({ label, to }) => (
+                <button
+                  key={to}
+                  onClick={() => navigate(to)}
+                  className={clsx(
+                    "px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200 whitespace-nowrap",
+                    isActive(to)
+                      ? "bg-atv-selected text-white font-semibold"
+                      : "text-atv-secondary hover:text-white hover:bg-atv-hover"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* SEARCH INPUT — aparece durante búsqueda */}
+        <AnimatePresence>
+          {searching && (
+            <motion.div
+              className="flex items-center"
+              initial={{ opacity: 0, width: 0 }}
+              animate={{ opacity: 1, width: 320 }}
+              exit={{ opacity: 0, width: 0 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <Search size={15} className="text-atv-secondary shrink-0 ml-1 mr-2" />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={e => handleInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleSearch()}
+                placeholder="Buscar películas, series, anime..."
+                className="flex-1 bg-transparent text-sm text-white placeholder-atv-secondary focus:outline-none min-w-0"
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Separador */}
+        <div className="w-px h-4 bg-white/10 mx-2 shrink-0" />
+
+        {/* SEARCH ICON / X */}
+        <div className="flex items-center gap-1 shrink-0">
+          {!searching ? (
+            <button
+              onClick={openSearch}
+              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
+            >
+              <Search size={15} />
+            </button>
+          ) : (
+            <button
+              onClick={closeSearch}
+              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
+            >
+              <X size={15} />
+            </button>
+          )}
+          <button
+            onClick={() => { closeSearch(); navigate("/addons"); }}
+            className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
+            title="Add-ons"
+          >
+            <Puzzle size={15} />
+          </button>
+          <button
+            onClick={() => { closeSearch(); navigate("/settings"); }}
+            className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
+            title="Ajustes"
+          >
+            <Settings size={15} />
+          </button>
+        </div>
+      </div>
+
+      {/* SUGGESTIONS DROPDOWN */}
+      <AnimatePresence>
+        {searching && showSugg && suggestions.length > 0 && (
+          <motion.div
+            className="absolute top-[56px] liquid-glass-dark rounded-lg2 overflow-hidden min-w-[320px]"
+            initial={{ opacity: 0, y: -8, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.97 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            style={{ boxShadow: "0 16px 48px rgba(0,0,0,0.7)" }}
+          >
+            {suggestions.map((s, i) => {
+              const title = s.title ?? (s as any).name ?? "";
+              const year  = (s.release_date ?? s.first_air_date ?? "").slice(0, 4);
+              const typeLabel = s.media_type === "movie" ? "Película" : "Serie";
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => handleSuggestion(s)}
+                  className={clsx(
+                    "w-full flex items-center gap-3 px-4 py-3 hover:bg-atv-hover transition-colors text-left",
+                    i < suggestions.length - 1 && "border-b border-white/5"
+                  )}
+                >
+                  {s.poster_path ? (
+                    <img
+                      src={`https://image.tmdb.org/t/p/w92${s.poster_path}`}
+                      alt=""
+                      className="w-8 h-12 object-cover rounded"
+                    />
+                  ) : (
+                    <div className="w-8 h-12 bg-atv-surface rounded flex-shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{title}</p>
+                    <p className="text-xs text-atv-secondary">{typeLabel}{year ? ` · ${year}` : ""}</p>
+                  </div>
+                  <Search size={13} className="text-atv-muted shrink-0" />
+                </button>
+              );
+            })}
+            <button
+              onClick={() => handleSearch()}
+              className="w-full px-4 py-3 text-sm text-atv-secondary hover:text-white hover:bg-atv-hover transition-colors text-left border-t border-white/5"
+            >
+              Ver todos los resultados de "<span className="text-white">{query}</span>"
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+<<< END: src\components\layout\TopNav.tsx >>>
+--- src\components\navigation\FocusRing.tsx [VACIO] ---
+--- src\components\ui\Badge.tsx [VACIO] ---
+--- src\components\ui\Button.tsx [VACIO] ---
+
+<<< FILE: src\components\ui\FormatBadges.tsx >>>
+// Badges de formato estilo Apple TV+
+// 4K · DV · HDR · Atmos · CC · SDH
+// Se muestran siempre como indicadores de capacidad máxima de la plataforma
+
+interface BadgeProps { label: string; style?: "box" | "text" }
+
+function Badge({ label, style = "box" }: BadgeProps) {
+  if (style === "text") {
+    return (
+      <span className="text-[10px] font-semibold text-atv-secondary tracking-wide">{label}</span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center justify-center px-1 py-0.5 rounded text-[9px] font-bold tracking-wider border border-atv-secondary/50 text-atv-secondary leading-none">
+      {label}
+    </span>
+  );
+}
+
+// Dolby Vision — styled badge
+function DVBadge() {
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-atv-secondary/40 leading-none">
+      <span className="text-[8px] font-black text-atv-secondary tracking-tighter">DOLBY</span>
+      <span className="text-[8px] font-black text-atv-secondary tracking-tighter">VISION</span>
+    </span>
+  );
+}
+
+// Atmos
+function AtmosBadge() {
+  return (
+    <span className="inline-flex items-center px-1 py-0.5 rounded border border-atv-secondary/40 leading-none">
+      <span className="text-[8px] font-black text-atv-secondary tracking-tighter">ATMOS</span>
+    </span>
+  );
+}
+
+interface FormatBadgesProps {
+  quality?: "4K" | "1080p" | "720p";
+  showDV?: boolean;
+  showAtmos?: boolean;
+  showCC?: boolean;
+  showSDH?: boolean;
+}
+
+export default function FormatBadges({
+  quality = "4K",
+  showDV = true,
+  showAtmos = true,
+  showCC = true,
+  showSDH = true,
+}: FormatBadgesProps) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <Badge label={quality} />
+      {showDV && <DVBadge />}
+      {showAtmos && <AtmosBadge />}
+      {showCC && <Badge label="CC" />}
+      {showSDH && <Badge label="SDH" />}
+    </div>
+  );
+}
+<<< END: src\components\ui\FormatBadges.tsx >>>
+--- src\components\ui\GlassPanel.tsx [VACIO] ---
+--- src\components\ui\Input.tsx [VACIO] ---
+--- src\components\ui\Modal.tsx [VACIO] ---
+--- src\components\ui\Skeleton.tsx [VACIO] ---
+--- src\components\ui\Toggle.tsx [VACIO] ---
+--- src\core\AddonManager.ts [VACIO] ---
+--- src\core\CacheManager.ts [VACIO] ---
+--- src\core\DeduplicationEngine.ts [VACIO] ---
+--- src\core\IdentityResolver.ts [VACIO] ---
+--- src\core\PlayerManager.ts [VACIO] ---
+--- src\database\migrations\001_initial.sql [VACIO] ---
+--- src\database\queries\addons.ts [VACIO] ---
+--- src\database\queries\history.ts [VACIO] ---
+--- src\database\queries\library.ts [VACIO] ---
+--- src\database\queries\settings.ts [VACIO] ---
+--- src\hooks\useAddons.ts [VACIO] ---
+--- src\hooks\useCatalogs.ts [VACIO] ---
+--- src\hooks\useHistory.ts [VACIO] ---
+--- src\hooks\useLibrary.ts [VACIO] ---
+--- src\hooks\useMeta.ts [VACIO] ---
+--- src\hooks\usePlayer.ts [VACIO] ---
+--- src\hooks\useSearch.ts [VACIO] ---
+
+<<< FILE: src\hooks\useStreams.ts >>>
+import { useEffect, useMemo, useState } from "react";
+import { useAddonStore } from "../store/addonStore";
+import type { MediaStream, StreamQuery } from "../types/stream";
+
+interface UseStreamsResult {
+  streams: MediaStream[];
+  loading: boolean;
+  error: string | null;
+  streamId: string;
+  reload: () => void;
+}
+
+function buildStreamId(query: StreamQuery) {
+  if (query.type !== "movie" && query.season && query.episode) {
+    return `${query.id}:${query.season}:${query.episode}`;
+  }
+  return query.id;
+}
+
+function normalizeStream(raw: any, addonId: string, addonName: string, index: number): MediaStream {
+  const url = typeof raw.url === "string" ? raw.url : undefined;
+  const externalUrl = typeof raw.externalUrl === "string" ? raw.externalUrl : undefined;
+  const ytId = typeof raw.ytId === "string" ? raw.ytId : undefined;
+  const infoHash = typeof raw.infoHash === "string" ? raw.infoHash : undefined;
+  const title = typeof raw.title === "string" ? raw.title : undefined;
+  const name = typeof raw.name === "string" ? raw.name : addonName;
+  const fileIdx = typeof raw.fileIdx === "number" ? raw.fileIdx : undefined;
+  const identity = [addonId, url, infoHash, title, fileIdx, index].filter(v => v !== undefined).join("|");
+
+  return {
+    id: identity,
+    addonId,
+    addonName,
+    name,
+    title,
+    description: typeof raw.description === "string" ? raw.description : undefined,
+    url,
+    externalUrl,
+    ytId,
+    infoHash,
+    fileIdx,
+    behaviorHints: raw.behaviorHints,
+    subtitles: Array.isArray(raw.subtitles) ? raw.subtitles : undefined,
+  };
+}
+
+function dedupe(streams: MediaStream[]) {
+  const seen = new Set<string>();
+  return streams.filter(stream => {
+    const key = stream.url ?? stream.externalUrl ?? stream.ytId ?? `${stream.infoHash ?? ""}:${stream.fileIdx ?? ""}:${stream.title ?? ""}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function useStreams(query: StreamQuery | null): UseStreamsResult {
+  const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+  const [streams, setStreams] = useState<MediaStream[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const streamId = useMemo(() => query ? buildStreamId(query) : "", [query]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      if (!query || !streamId) return;
+      setLoading(true);
+      setError(null);
+
+      const loaded: MediaStream[] = [];
+      for (const addon of getEnabledAddons()) {
+        const hasStreamResource = (addon.manifest?.resources ?? []).some((resource: any) => {
+          if (typeof resource === "string") return resource === "stream";
+          return resource?.name === "stream";
+        });
+        if (!hasStreamResource && addon.manifest?.resources?.length) continue;
+
+        try {
+          const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
+          const response = await fetch(`${base}/stream/${query.type}/${encodeURIComponent(streamId)}.json`);
+          if (!response.ok) continue;
+          const json = await response.json();
+          const addonStreams = (json.streams ?? []).map((stream: any, index: number) =>
+            normalizeStream(stream, addon.id, addon.name, index)
+          );
+          loaded.push(...addonStreams);
+        } catch {
+          // One broken addon should not block the rest of the selector.
+        }
+      }
+
+      if (!cancelled) {
+        setStreams(dedupe(loaded));
+        setLoading(false);
+      }
+    }
+
+    load().catch(() => {
+      if (!cancelled) {
+        setError("No se pudieron cargar las fuentes.");
+        setLoading(false);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [getEnabledAddons, query, streamId, tick]);
+
+  return {
+    streams,
+    loading,
+    error,
+    streamId,
+    reload: () => setTick(value => value + 1),
+  };
+}
+
+<<< END: src\hooks\useStreams.ts >>>
+
+<<< FILE: src\hooks\useSubtitles.ts >>>
+import { useEffect, useMemo, useState } from "react";
+import { useAddonStore } from "../store/addonStore";
+import type { MediaStream, StreamQuery } from "../types/stream";
+import type { SubtitleSource } from "../types/subtitle";
+
+interface UseSubtitlesResult {
+  subtitles: SubtitleSource[];
+  loading: boolean;
+}
+
+function buildVideoId(query: StreamQuery) {
+  if (query.type !== "movie" && query.season && query.episode) {
+    return `${query.id}:${query.season}:${query.episode}`;
+  }
+  return query.id;
+}
+
+function labelFor(raw: any) {
+  return raw.label ?? raw.title ?? raw.lang ?? raw.language ?? "Subtítulos";
+}
+
+function normalizeSubtitle(raw: any, addonId: string, addonName: string, index: number): SubtitleSource | null {
+  const url = typeof raw.url === "string" ? raw.url : undefined;
+  if (!url) return null;
+  const lang = raw.lang ?? raw.language ?? "und";
+  return {
+    id: [addonId, url, index].join("|"),
+    addonId,
+    addonName,
+    url,
+    lang,
+    label: `${labelFor(raw)} · ${addonName}`,
+    format: raw.format,
+  };
+}
+
+function dedupe(items: SubtitleSource[]) {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    if (seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  });
+}
+
+export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | null): UseSubtitlesResult {
+  const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+  const [subtitles, setSubtitles] = useState<SubtitleSource[]>([]);
+  const [loading, setLoading] = useState(false);
+  const videoId = useMemo(() => query ? buildVideoId(query) : "", [query]);
+  const subtitleLookup = useMemo(() => {
+    if (!stream) return null;
+    const behaviorHints = stream.behaviorHints ?? {};
+    const videoHash = typeof behaviorHints.videoHash === "string" ? behaviorHints.videoHash : "";
+    const videoSize = typeof behaviorHints.videoSize === "number" ? behaviorHints.videoSize : undefined;
+    const filename = typeof behaviorHints.filename === "string" ? behaviorHints.filename : undefined;
+    return { videoHash, videoSize, filename };
+  }, [stream]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      if (!query || !videoId) {
+        setSubtitles([]);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      const loaded: SubtitleSource[] = [];
+
+      for (const addon of getEnabledAddons()) {
+        const hasSubtitles = (addon.manifest?.resources ?? []).some((resource: any) => {
+          if (typeof resource === "string") return resource === "subtitles";
+          return resource?.name === "subtitles";
+        });
+        if (!hasSubtitles) continue;
+
+        try {
+          const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
+          const extraArgs = new URLSearchParams();
+          extraArgs.set("videoID", videoId);
+          if (subtitleLookup?.videoSize) extraArgs.set("videoSize", String(subtitleLookup.videoSize));
+          if (subtitleLookup?.filename) extraArgs.set("filename", subtitleLookup.filename);
+          if (subtitleLookup?.videoHash) extraArgs.set("videoHash", subtitleLookup.videoHash);
+          const extraSegment = extraArgs.toString();
+          const idsToTry = Array.from(new Set([
+            subtitleLookup?.videoHash?.trim(),
+            videoId,
+          ].filter(Boolean) as string[]));
+          const requestTargets = idsToTry.flatMap(id => {
+            const encodedId = encodeURIComponent(id);
+            return [
+              extraSegment ? `${base}/subtitles/${query.type}/${encodedId}/${extraSegment}.json` : null,
+              extraSegment ? `${base}/subtitles/${query.type}/${encodedId}.json?${extraSegment}` : null,
+              `${base}/subtitles/${query.type}/${encodedId}.json`,
+            ].filter(Boolean) as string[];
+          });
+
+          for (const target of requestTargets) {
+            const response = await fetch(target);
+            if (!response.ok) continue;
+            const json = await response.json();
+            const normalized = (json.subtitles ?? [])
+              .map((subtitle: any, index: number) => normalizeSubtitle(subtitle, addon.id, addon.name, index))
+              .filter(Boolean) as SubtitleSource[];
+            loaded.push(...normalized);
+            if (normalized.length > 0) break;
+          }
+        } catch {
+          // Subtitle addons are optional; keep playback moving.
+        }
+      }
+
+      if (!cancelled) {
+        setSubtitles(dedupe(loaded));
+        setLoading(false);
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [getEnabledAddons, query, subtitleLookup, videoId]);
+
+  return { subtitles, loading };
+}
+
+<<< END: src\hooks\useSubtitles.ts >>>
+
+<<< FILE: src\index.css >>>
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+
+html,body,#root{
+  height:100%;width:100%;overflow:hidden;
+  background:#1f1f1f;color:#fff;
+  font-family:"Inter",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+::-webkit-scrollbar{width:3px;height:3px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:99px;}
+::selection{background:rgba(255,255,255,0.2);color:#fff;}
+
+.liquid-glass{
+  background:rgba(255,255,255,0.10);
+  backdrop-filter:blur(20px) saturate(180%);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  border:1px solid rgba(255,255,255,0.14);
+  box-shadow:0 4px 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.liquid-glass-dark{
+  background:rgba(0,0,0,0.65);
+  backdrop-filter:blur(30px) saturate(200%);
+  -webkit-backdrop-filter:blur(30px) saturate(200%);
+  border:1px solid rgba(255,255,255,0.10);
+}
+.liquid-glass-pill{
+  background:rgba(255,255,255,0.12);
+  backdrop-filter:blur(24px) saturate(160%);
+  -webkit-backdrop-filter:blur(24px) saturate(160%);
+  border:1px solid rgba(255,255,255,0.16);
+  border-radius:999px;
+}
+.hero-gradient-bottom{
+  background:linear-gradient(to top,rgba(0,0,0,0.95) 0%,rgba(0,0,0,0.7) 25%,rgba(0,0,0,0.2) 55%,transparent 75%);
+}
+.hero-gradient-left{
+  background:linear-gradient(to right,rgba(0,0,0,0.80) 0%,rgba(0,0,0,0.40) 35%,transparent 60%);
+}
+.skeleton{
+  background:linear-gradient(90deg,#1c1c1e 25%,#2c2c2e 50%,#1c1c1e 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.8s infinite linear;
+}
+.scroll-row{
+  display:flex;gap:12px;
+  overflow-x:auto;overflow-y:visible;
+  padding:4px 0 12px;scrollbar-width:none;
+}
+.scroll-row::-webkit-scrollbar{display:none;}
+.focus-ring:focus-visible{outline:2px solid rgba(255,255,255,0.6);outline-offset:2px;border-radius:8px;}
+[data-tauri-drag-region]{-webkit-app-region:drag;app-region:drag;}
+[data-tauri-drag-region] *{-webkit-app-region:no-drag;app-region:no-drag;}
+.line-clamp-2{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+.line-clamp-3{overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;}
+
+@keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+@keyframes fadeIn{0%{opacity:0;}100%{opacity:1;}}
+@keyframes fadeUp{0%{opacity:0;transform:translateY(10px);}100%{opacity:1;transform:translateY(0);}}
+@keyframes scaleIn{0%{opacity:0;transform:scale(0.96);}100%{opacity:1;transform:scale(1);}}
+@keyframes ratingCue{0%{opacity:0;transform:translateY(-10px);}12%{opacity:1;transform:translateY(0);}78%{opacity:1;transform:translateY(0);}100%{opacity:0;transform:translateY(-10px);}}
+@keyframes aetherioBreathing{0%,100%{transform:scale(1);opacity:0.92;}50%{transform:scale(1.08);opacity:1;}}
+
+.aetherio-rating-cue{animation:ratingCue 7s ease forwards;}
+.aetherio-breathe{animation:aetherioBreathing 2.2s ease-in-out infinite;}
+
+<<< END: src\index.css >>>
+
+<<< FILE: src\main.tsx >>>
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import App from "./App";
+import "./index.css";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 1, staleTime: 1000 * 60 * 5 },
+  },
+});
+
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </QueryClientProvider>
+  </React.StrictMode>
+);
+
+<<< END: src\main.tsx >>>
+--- src\pages\Addons\AddonCard.tsx [VACIO] ---
+
+<<< FILE: src\pages\Addons\index.tsx >>>
+import { useState } from "react";
+import { useAddonStore } from "../../store/addonStore";
+import { Puzzle, Plus, Trash2, ToggleLeft, ToggleRight, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+
+export default function AddonsPage() {
+  const [url, setUrl]         = useState("");
+  const [log, setLog]         = useState<string[]>([]);
+  const [showLog, setShowLog] = useState(false);
+
+  const {
+    addons, isInstalling, installError,
+    setInstalling, setInstallError, addAddon, removeAddon, enableAddon, disableAddon,
+  } = useAddonStore();
+
+  function addLog(msg: string) {
+    setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    setShowLog(true);
+  }
+
+  async function handleInstall() {
+    const raw = url.trim();
+    if (!raw) return;
+
+    setInstalling(true);
+    setInstallError(null);
+    setLog([]);
+
+    // Construir URL del manifest
+    let manifestUrl = raw.replace(/\/manifest\.json$/, "").replace(/\/$/, "") + "/manifest.json";
+    addLog(`Intentando conectar a: ${manifestUrl}`);
+
+    try {
+      addLog("Enviando petición fetch...");
+      const res = await fetch(manifestUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      addLog(`Respuesta HTTP: ${res.status} ${res.statusText}`);
+
+      if (!res.ok) {
+        throw new Error(`El servidor respondió con error ${res.status}`);
+      }
+
+      const text = await res.text();
+      addLog(`Respuesta recibida (${text.length} chars)`);
+
+      let manifest: any;
+      try {
+        manifest = JSON.parse(text);
+      } catch {
+        throw new Error("La respuesta no es JSON válido");
+      }
+
+      addLog(`Manifest parseado: id="${manifest.id}" name="${manifest.name}"`);
+
+      if (!manifest.id || !manifest.name) {
+        throw new Error("Manifest inválido: faltan campos 'id' o 'name'");
+      }
+
+      addAddon({
+        id:          manifest.id,
+        name:        manifest.name,
+        description: manifest.description,
+        logo:        manifest.logo,
+        url:         raw,
+        manifest,
+        enabled:     true,
+        installedAt: Date.now(),
+        version:     manifest.version ?? "1.0.0",
+      });
+
+      addLog(`✅ Addon "${manifest.name}" instalado correctamente.`);
+      setUrl("");
+
+    } catch (e: any) {
+      const msg = e?.message ?? "Error desconocido";
+      addLog(`❌ ERROR: ${msg}`);
+      setInstallError(msg);
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full p-8 animate-fadeIn overflow-y-auto">
+
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-8">
+        <Puzzle size={28} className="text-accent" />
+        <h1 className="text-3xl font-bold text-text-primary">Add-ons</h1>
+      </div>
+
+      {/* Install form */}
+      <div className="glass rounded-glass p-6 mb-4 max-w-2xl">
+        <h2 className="text-lg font-semibold text-text-primary mb-1">Instalar addon</h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Pega la URL base del addon o directamente la URL de <code className="text-accent">/manifest.json</code>
+        </p>
+        <div className="flex gap-3">
+          <input
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleInstall()}
+            placeholder="https://v3-cinemeta.strem.io/manifest.json"
+            className="flex-1 bg-bg-surface border border-glass-border rounded-card px-4 py-3 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-colors text-sm"
+          />
+          <button
+            onClick={handleInstall}
+            disabled={isInstalling || !url.trim()}
+            className="flex items-center gap-2 px-5 py-3 bg-accent hover:bg-accent-dark text-white font-semibold rounded-card transition-all duration-fast disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isInstalling
+              ? <Loader2 size={16} className="animate-spin" />
+              : <Plus size={16} />}
+            {isInstalling ? "Instalando..." : "Instalar"}
+          </button>
+        </div>
+
+        {installError && (
+          <p className="mt-3 text-sm text-red-400 font-medium">⚠ {installError}</p>
+        )}
+      </div>
+
+      {/* Log panel */}
+      {log.length > 0 && (
+        <div className="max-w-2xl mb-6">
+          <button
+            onClick={() => setShowLog(v => !v)}
+            className="flex items-center gap-2 text-xs text-text-muted hover:text-text-secondary mb-2 transition-colors"
+          >
+            {showLog ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+            Log de instalación ({log.length} líneas)
+          </button>
+          {showLog && (
+            <div className="bg-bg-surface border border-glass-border rounded-card p-4 font-mono text-xs text-text-secondary space-y-1 max-h-48 overflow-y-auto">
+              {log.map((line, i) => (
+                <div
+                  key={i}
+                  className={line.includes("❌") ? "text-red-400" : line.includes("✅") ? "text-green-400" : ""}
+                >
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Addons instalados */}
+      <div className="max-w-2xl">
+        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-4">
+          Instalados ({addons.length})
+        </h2>
+
+        {addons.length === 0 ? (
+          <div className="glass rounded-glass p-8 text-center">
+            <Puzzle size={36} className="text-text-muted mx-auto mb-3" />
+            <p className="text-text-muted text-sm">No hay addons instalados.</p>
+            <p className="text-text-muted text-xs mt-1">
+              Prueba con: <span className="text-accent">https://v3-cinemeta.strem.io/manifest.json</span>
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {addons.map(addon => (
+              <div key={addon.id} className="glass rounded-glass p-4 flex items-center gap-4 animate-fadeIn">
+                {addon.logo ? (
+                  <img src={addon.logo} alt="" className="w-10 h-10 rounded-lg object-contain bg-bg-surface" />
+                ) : (
+                  <div className="w-10 h-10 rounded-lg bg-bg-surface flex items-center justify-center shrink-0">
+                    <Puzzle size={18} className="text-text-muted" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-text-primary truncate">{addon.name}</p>
+                  <p className="text-xs text-text-muted truncate">
+                    {addon.manifest?.types?.join(" · ")} · v{addon.version}
+                  </p>
+                  {addon.description && (
+                    <p className="text-xs text-text-secondary truncate mt-0.5">{addon.description}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    onClick={() => addon.enabled ? disableAddon(addon.id) : enableAddon(addon.id)}
+                    className={`transition-colors ${addon.enabled ? "text-accent" : "text-text-muted"}`}
+                    title={addon.enabled ? "Desactivar" : "Activar"}
+                  >
+                    {addon.enabled ? <ToggleRight size={26} /> : <ToggleLeft size={26} />}
+                  </button>
+                  <button
+                    onClick={() => removeAddon(addon.id)}
+                    className="text-text-muted hover:text-red-400 transition-colors"
+                    title="Eliminar"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+<<< END: src\pages\Addons\index.tsx >>>
+--- src\pages\Addons\InstallForm.tsx [VACIO] ---
+--- src\pages\Detail\DetailHero.tsx [VACIO] ---
+--- src\pages\Detail\EpisodeGrid.tsx [VACIO] ---
+
+<<< FILE: src\pages\Detail\index.tsx >>>
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { Play, X, ChevronRight } from "lucide-react";
+import { useAddonStore } from "../../store/addonStore";
+
+const TMDB_KEY = "d8fbcec110971e64699f338caf0e7192";
+const TMDB     = "https://api.themoviedb.org/3";
+const IMG      = "https://image.tmdb.org/t/p";
+const DEBUG_LOGO = true;
+
+interface CastMember { id:number;name:string;character:string;profile_path?:string; }
+interface Trailer    { key:string;name:string; }
+interface Related    { id:number;title?:string;poster_path?:string;media_type:string; }
+interface Episode    { id:string;episode:number;season:number;name?:string;overview?:string;still?:string;runtime?:number; }
+interface DetailData {
+  id:string;name:string;type:string;
+  backdrop?:string;poster?:string;logo?:string;
+  description?:string;year?:number;runtime?:string;
+  genres?:string[];rating?:string;cast?:CastMember[];
+  director?:string;trailers?:Trailer[];related?:Related[];
+  seasons?:{number:number;episodes:Episode[]}[];
+}
+
+export default function DetailPage() {
+  const { type, id } = useParams<{type:string;id:string}>();
+  const navigate = useNavigate();
+  const [data, setData]         = useState<DetailData|null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [season, setSeason]     = useState(1);
+  const [showMore, setShowMore] = useState(false);
+  const [logoStatus, setLogoStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const getEnabled = useAddonStore(s => s.getEnabledAddons);
+
+  function logoLog(event: string, extra?: Record<string, unknown>) {
+    if (!DEBUG_LOGO) return;
+    console.info("[AETHERIO:DETAIL:LOGO]", {
+      event,
+      ts: Number(performance.now().toFixed(1)),
+      mediaType: type,
+      mediaId: id,
+      dataLogo: data?.logo ?? null,
+      logoStatus,
+      ...extra,
+    });
+  }
+
+  useEffect(() => { if (type && id) load(type, id); }, [type, id]);
+  useEffect(() => {
+    if (!data?.logo) {
+      logoLog("logo state reset to idle");
+      setLogoStatus("idle");
+      return;
+    }
+    logoLog("logo state loading", { url: data.logo });
+    setLogoStatus("loading");
+  }, [data?.logo]);
+
+  useEffect(() => {
+    if (logoStatus !== "loading" || !data?.logo) return;
+    const timer = window.setTimeout(() => {
+      logoLog("logo load timeout -> fallback error", { url: data.logo });
+      setLogoStatus("error");
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [data?.logo, logoStatus]);
+
+  async function load(t:string, mediaId:string) {
+    setLoading(true);
+    let d:DetailData = { id:mediaId, name:"", type:t };
+
+    for (const addon of getEnabled()) {
+      try {
+        const base = addon.url.replace(/\/manifest\.json$/,"").replace(/\/$/,"");
+        const endpoint = `${base}/meta/${t}/${encodeURIComponent(mediaId)}.json`;
+        logoLog("meta request start", { addonId: addon.id, endpoint });
+        const res  = await fetch(endpoint);
+        logoLog("meta response", { addonId: addon.id, endpoint, status: res.status, ok: res.ok });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const m    = json.meta ?? json;
+        logoLog("meta payload mapped", {
+          addonId: addon.id,
+          payloadKeys: Object.keys(m ?? {}),
+          rawLogo: m?.logo ?? null,
+          background: m?.background ?? m?.backdrop ?? null,
+          poster: m?.poster ?? null,
+        });
+        d = { ...d, name:m.name??d.name, backdrop:m.background??m.backdrop, poster:m.poster, logo:m.logo,
+          description:m.description, year:m.year, runtime:m.runtime, genres:m.genres, rating:m.imdbRating,
+          cast:Array.isArray(m.cast)?m.cast.map((c:any)=>({ id:c.id??Math.random(), name:typeof c==="string"?c:c.name, character:c.character??"", profile_path:c.image })):undefined,
+          director:Array.isArray(m.director)?m.director.join(", "):m.director };
+        break;
+      } catch {}
+    }
+
+    try {
+      let tmdbId:number|null = null;
+      if (mediaId.startsWith("tt")) {
+        const fr = await fetch(`${TMDB}/find/${mediaId}?api_key=${TMDB_KEY}&external_source=imdb_id&language=es-ES`);
+        const fd = await fr.json();
+        const rs = fd.movie_results?.length?fd.movie_results:fd.tv_results??[];
+        tmdbId = rs[0]?.id??null;
+      } else if (mediaId.startsWith("tmdb:")) {
+        tmdbId = parseInt(mediaId.replace("tmdb:",""),10);
+      }
+      if (!tmdbId && d.name) {
+        const ep = t==="movie"
+          ?`${TMDB}/search/movie?api_key=${TMDB_KEY}&query=${encodeURIComponent(d.name)}&language=es-ES`
+          :`${TMDB}/search/tv?api_key=${TMDB_KEY}&query=${encodeURIComponent(d.name)}&language=es-ES`;
+        const sr=await fetch(ep); const sd=await sr.json(); tmdbId=sd.results?.[0]?.id??null;
+      }
+      if (!tmdbId) { setData(d); setLoading(false); return; }
+
+      const ep2 = t==="movie"?`${TMDB}/movie/${tmdbId}`:`${TMDB}/tv/${tmdbId}`;
+      const [mainRes,imgRes]=await Promise.all([
+        fetch(`${ep2}?api_key=${TMDB_KEY}&language=es-ES&append_to_response=credits,videos,similar`),
+        fetch(`${ep2}/images?api_key=${TMDB_KEY}&include_image_language=en,es,null`),
+      ]);
+      const main=await mainRes.json(); const imgs=await imgRes.json();
+
+      const logo=imgs.logos?.[0];
+      if (logo&&!d.logo)              d.logo=`${IMG}/original${logo.file_path}`;
+      logoLog("tmdb logo fallback", { tmdbLogoPath: logo?.file_path ?? null, resolvedLogo: d.logo ?? null });
+      if (!d.backdrop&&main.backdrop_path) d.backdrop=`${IMG}/original${main.backdrop_path}`;
+      if (!d.poster&&main.poster_path)     d.poster=`${IMG}/original${main.poster_path}`;
+      if (!d.description) d.description=main.overview;
+      if (!d.year) d.year=parseInt((main.release_date??main.first_air_date??"").slice(0,4),10)||undefined;
+      if (!d.genres?.length) d.genres=main.genres?.map((g:any)=>g.name);
+      if (!d.name) d.name=main.title??main.name??"";
+      if (!d.runtime){ const mins=t==="movie"?main.runtime:main.episode_run_time?.[0]; if(mins) d.runtime=`${Math.floor(mins/60)}h ${mins%60}min`; }
+      if (!d.cast?.length) d.cast=(main.credits?.cast??[]).slice(0,14).map((c:any)=>({ id:c.id,name:c.name,character:c.character,profile_path:c.profile_path?`${IMG}/w342${c.profile_path}`:undefined }));
+      if (!d.director){ const dir=(main.credits?.crew??[]).find((c:any)=>c.job==="Director"); if(dir) d.director=dir.name; }
+      d.trailers=(main.videos?.results??[]).filter((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser")).slice(0,5).map((v:any)=>({key:v.key,name:v.name}));
+      d.related=(main.similar?.results??[]).slice(0,14).map((r:any)=>({ id:r.id, title:r.title??r.name, poster_path:r.poster_path?`${IMG}/original${r.poster_path}`:undefined, media_type:t }));
+
+      if (t!=="movie"&&main.seasons) {
+        const seasons=[];
+        for (const s of (main.seasons??[]).filter((s:any)=>s.season_number>0).slice(0,8)) {
+          try {
+            const sr2=await fetch(`${TMDB}/tv/${tmdbId}/season/${s.season_number}?api_key=${TMDB_KEY}&language=es-ES`);
+            const sd2=await sr2.json();
+            seasons.push({ number:s.season_number, episodes:(sd2.episodes??[]).map((e:any)=>({ id:`${tmdbId}:${s.season_number}:${e.episode_number}`, episode:e.episode_number, season:s.season_number, name:e.name, overview:e.overview, still:e.still_path?`${IMG}/original${e.still_path}`:undefined, runtime:e.runtime })) });
+          } catch {}
+        }
+        d.seasons=seasons;
+      }
+    } catch(e){ console.warn("TMDB:",e); }
+
+    logoLog("detail data ready", { resolvedLogo: d.logo ?? null });
+    setData(d); setLoading(false);
+  }
+
+  if (loading) return <div className="skeleton" style={{ width:"100%", height:"100vh", marginTop:-72 }} />;
+  if (!data)   return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>Error cargando.</div>;
+
+  const isMovie = data.type==="movie";
+  const typeLabel = isMovie?"Película":data.type==="anime"?"Anime":"Programa de TV";
+  const DESC_MAX  = 180;
+  const descShort = (data.description??"").length>DESC_MAX?(data.description??"").slice(0,DESC_MAX)+"…":(data.description??"");
+  const hasMore   = (data.description??"").length>DESC_MAX;
+  const curSeason = data.seasons?.find(s=>s.number===season)??data.seasons?.[0];
+
+  // Navegar al selector de fuentes
+  function goToStreams(season?: number, ep?: number) {
+    const q = new URLSearchParams({ type: data!.type, id: data!.id });
+    if (season) q.set("season", String(season));
+    if (ep)     q.set("ep", String(ep));
+    navigate(`/streams?${q.toString()}`);
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#1f1f1f" }}>
+
+      {/* ══ HERO — full-bleed ════════════════════════════════ */}
+      <div style={{ position:"relative", width:"100%", height:"calc(92vh + 72px)", minHeight:600, marginTop:-72 }}>
+        {(data.backdrop??data.poster)&&(
+          <img src={data.backdrop??data.poster} alt=""
+            style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"center top" }} />
+        )}
+        <div style={{ position:"absolute",inset:0,background:"linear-gradient(to right,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.4) 40%,transparent 65%)",pointerEvents:"none" }} />
+        <div style={{ position:"absolute",inset:0,background:"linear-gradient(to top,rgba(31,31,31,1) 0%,rgba(31,31,31,0.55) 22%,transparent 52%)",pointerEvents:"none" }} />
+
+        <div style={{ position:"absolute",bottom:0,left:0,padding:"0 48px 36px",maxWidth:520 }}>
+          {data.logo && logoStatus !== "error" ? (
+            <div style={{ minHeight:100,display:"flex",alignItems:"center",marginBottom:14 }}>
+              {logoStatus !== "loaded" && (
+                <div className="animate-spin" style={{ width:32,height:32,borderRadius:"50%",border:"2px solid rgba(255,255,255,0.32)",borderTopColor:"rgba(255,255,255,0.92)" }} />
+              )}
+              <img
+                src={data.logo}
+                alt={data.name}
+                onLoad={() => {
+                  logoLog("logo img onLoad", { url: data.logo });
+                  setLogoStatus("loaded");
+                }}
+                onError={() => {
+                  logoLog("logo img onError", { url: data.logo });
+                  setLogoStatus("error");
+                }}
+                style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 20px rgba(0,0,0,0.95))",display:logoStatus === "loaded" ? "block" : "none" }}
+              />
+            </div>
+          ) : (
+            <h1 style={{ fontSize:"2.6rem",fontWeight:900,color:"#fff",marginBottom:14,lineHeight:1.05,textShadow:"0 2px 20px rgba(0,0,0,0.8)" }}>{data.name}</h1>
+          )}
+          <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:10,flexWrap:"wrap" }}>
+            <span style={{ fontSize:15,color:"rgba(255,255,255,0.65)",fontWeight:500 }}>{typeLabel}</span>
+            {data.genres?.slice(0,2).map(g=><span key={g} style={{ fontSize:15,color:"rgba(255,255,255,0.55)" }}>· {g}</span>)}
+            {data.rating&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.5)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:4,padding:"2px 7px" }}>{data.rating}+</span>}
+          </div>
+          <div style={{ marginBottom:12 }}>
+            <span style={{ fontSize:15,color:"rgba(255,255,255,0.65)",lineHeight:1.6 }}>{descShort}</span>
+            {hasMore&&<button onClick={()=>setShowMore(true)} style={{ fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.7)",background:"none",border:"none",cursor:"pointer",marginLeft:6 }}>MÁS</button>}
+          </div>
+          <div style={{ display:"flex",alignItems:"center",gap:7,marginBottom:18,flexWrap:"wrap" }}>
+            {data.year&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.5)" }}>{data.year}</span>}
+            {data.runtime&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.5)" }}>· {data.runtime}</span>}
+            {["4K","DV","Atmos","CC","SDH"].map(b=>(
+              <span key={b} style={{ fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.4)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:4,padding:"2px 5px",letterSpacing:0 }}>{b}</span>
+            ))}
+          </div>
+          <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+            {/* Reproducir → /streams */}
+            <button onClick={()=>goToStreams()}
+              style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 4px 20px rgba(0,0,0,0.5)" }}>
+              <Play size={16} fill="black" /> Reproducir
+            </button>
+            <button style={{ width:40,height:40,borderRadius:"50%",background:"rgba(255,255,255,0.12)",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:20 }}>+</button>
+          </div>
+        </div>
+
+        {(data.cast?.length||data.director)&&(
+          <div style={{ position:"absolute",bottom:0,right:0,padding:"0 48px 36px",textAlign:"right",maxWidth:300 }}>
+            {!!data.cast?.length&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map(c=>c.name).join(", ")}</p>}
+            {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)" }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Dirección </span>{data.director}</p>}
+          </div>
+        )}
+      </div>
+
+      {/* ══ SECCIONES INFERIORES ═════════════════════════════ */}
+      <div style={{ padding:"36px 48px",display:"flex",flexDirection:"column",gap:44,background:"#1f1f1f" }}>
+
+        {/* Episodios */}
+        {!isMovie&&curSeason&&(
+          <section>
+            <div style={{ display:"flex",alignItems:"center",gap:14,marginBottom:18 }}>
+              <h2 style={{ fontSize:17,fontWeight:700,color:"#fff" }}>Temporada {season}</h2>
+              {(data.seasons?.length??0)>1&&(
+                <select value={season} onChange={e=>setSeason(Number(e.target.value))}
+                  style={{ background:"rgba(255,255,255,0.1)",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:999,color:"#fff",fontSize:13,padding:"5px 14px",cursor:"pointer" }}>
+                  {data.seasons?.map(s=><option key={s.number} value={s.number} style={{background:"#1c1c1e"}}>Temporada {s.number}</option>)}
+                </select>
+              )}
+            </div>
+            <div style={{ display:"flex",gap:10,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" }}>
+              {curSeason.episodes.map(ep=>(
+                <EpCard key={ep.id} ep={ep} onPlay={()=>goToStreams(ep.season,ep.episode)} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {!!data.trailers?.length&&(
+          <section>
+            <SectionH title="Tráilers" />
+            <div style={{ display:"flex",gap:10,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" }}>
+              {data.trailers.map(t=><TrailerCard key={t.key} trailer={t} title={data.name} />)}
+            </div>
+          </section>
+        )}
+
+        {!!data.cast?.length&&(
+          <section>
+            <SectionH title="Reparto y equipo" />
+            <div style={{ display:"flex",gap:18,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" }}>
+              {data.cast.map(c=><CastCard key={c.id} member={c} onPress={()=>navigate(`/person/${c.id}`)} />)}
+            </div>
+          </section>
+        )}
+
+        {!!data.related?.length&&(
+          <section>
+            <SectionH title="Títulos relacionados" />
+            <div style={{ display:"flex",gap:8,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" }}>
+              {data.related.map(r=>(
+                <div key={r.id}
+                  onClick={()=>navigate(`/detail/${r.media_type}/tmdb:${r.id}`)}
+                  style={{ flexShrink:0,width:180,height:271,borderRadius:10,overflow:"hidden",cursor:"pointer",transition:"transform 0.25s",background:"#1c1c1e" }}
+                  onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.transform="scale(1.04)"}
+                  onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.transform="scale(1)"}
+                >
+                  {r.poster_path?<img src={r.poster_path} alt="" style={{ width:"100%",height:"100%",objectFit:"cover" }} />:<div style={{ width:"100%",height:"100%",background:"#2c2c2e" }}/>}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+
+      {showMore&&(
+        <div onClick={()=>setShowMore(false)}
+          style={{ position:"fixed",inset:0,zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(8px)" }}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{ background:"rgba(20,20,22,0.95)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:36,maxWidth:500,margin:"0 16px",position:"relative" }}>
+            <button onClick={()=>setShowMore(false)} style={{ position:"absolute",top:16,right:16,background:"none",border:"none",color:"rgba(255,255,255,0.5)",cursor:"pointer" }}><X size={18}/></button>
+            <p style={{ fontSize:15,color:"rgba(255,255,255,0.8)",lineHeight:1.7,paddingRight:28 }}>{data.description}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionH({ title }:{title:string}) {
+  return (
+    <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:16 }}>
+      <h2 style={{ fontSize:17,fontWeight:700,color:"#fff" }}>{title}</h2>
+      <ChevronRight size={15} style={{ color:"rgba(255,255,255,0.35)",marginTop:1 }} />
+    </div>
+  );
+}
+
+function EpCard({ ep, onPlay }:{ep:Episode;onPlay:()=>void}) {
+  return (
+    <div onClick={onPlay}
+      style={{ flexShrink:0,width:302,height:196,borderRadius:10,overflow:"hidden",cursor:"pointer",position:"relative",background:"#1c1c1e",transition:"transform 0.25s" }}
+      onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.transform="scale(1.03)"}
+      onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.transform="scale(1)"}
+    >
+      {ep.still&&<img src={ep.still} alt="" loading="lazy" decoding="async" style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover" }} />}
+      <div style={{ position:"absolute",left:0,right:0,bottom:0,height:"25%",pointerEvents:"none",
+        background:"linear-gradient(to top, rgba(31,31,31,1) 0%, rgba(31,31,31,1) 30%, rgba(31,31,31,0.9) 52%, rgba(31,31,31,0.58) 74%, rgba(31,31,31,0.18) 90%, rgba(31,31,31,0) 100%)" }} />
+      <div style={{ position:"absolute",bottom:0,left:0,right:0,
+        padding:"22px 12px 10px" }}>
+        <p style={{ fontSize:10,color:"rgba(255,255,255,0.5)",marginBottom:3,letterSpacing:0 }}>EPISODIO {ep.episode}</p>
+        <p style={{ fontSize:14,fontWeight:700,color:"#fff",marginBottom:3,lineHeight:1.3 }}>{ep.name??`Episodio ${ep.episode}`}</p>
+        {ep.overview&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.4,marginBottom:3 }}>{ep.overview}</p>}
+        {ep.runtime&&<p style={{ fontSize:12,color:"rgba(255,255,255,0.4)" }}>{ep.runtime} min</p>}
+      </div>
+    </div>
+  );
+}
+
+function TrailerCard({ trailer, title }:{trailer:Trailer;title:string}) {
+  const [thumbSrc, setThumbSrc] = useState(`https://img.youtube.com/vi/${trailer.key}/maxresdefault.jpg`);
+  return (
+    <a href={`https://youtube.com/watch?v=${trailer.key}`} target="_blank" rel="noopener noreferrer"
+      style={{ flexShrink:0,width:302,height:232,borderRadius:10,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",transition:"transform 0.25s" }}
+      onMouseEnter={e=>(e.currentTarget as HTMLAnchorElement).style.transform="scale(1.03)"}
+      onMouseLeave={e=>(e.currentTarget as HTMLAnchorElement).style.transform="scale(1)"}
+    >
+      <img src={thumbSrc} alt={trailer.name}
+        onError={() => setThumbSrc(`https://img.youtube.com/vi/${trailer.key}/hqdefault.jpg`)}
+        loading="lazy"
+        decoding="async"
+        style={{ width:"100%",height:"100%",objectFit:"cover" }} />
+      <div style={{ position:"absolute",left:0,right:0,bottom:0,height:"25%",pointerEvents:"none",
+        background:"linear-gradient(to top, rgba(31,31,31,1) 0%, rgba(31,31,31,1) 30%, rgba(31,31,31,0.9) 52%, rgba(31,31,31,0.58) 74%, rgba(31,31,31,0.18) 90%, rgba(31,31,31,0) 100%)" }} />
+      <div style={{ position:"absolute",bottom:0,left:0,right:0,
+        padding:"32px 12px 10px" }}>
+        <p style={{ fontSize:15,fontWeight:700,color:"#fff",marginBottom:4 }}>{title}</p>
+        <p style={{ fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.5)" }}>▶ {trailer.name}</p>
+      </div>
+    </a>
+  );
+}
+
+function CastCard({ member, onPress }:{member:CastMember;onPress:()=>void}) {
+  return (
+    <div onClick={onPress} style={{ flexShrink:0,width:142,display:"flex",flexDirection:"column",alignItems:"center",gap:8,cursor:"pointer" }}>
+      {member.profile_path?(
+        <img src={member.profile_path} alt={member.name} style={{ width:142,height:142,borderRadius:"50%",objectFit:"cover",flexShrink:0 }} />
+      ):(
+        <div style={{ width:142,height:142,borderRadius:"50%",background:"#2c2c2e",display:"flex",alignItems:"center",justifyContent:"center",fontSize:40,color:"rgba(255,255,255,0.5)",fontWeight:700,flexShrink:0 }}>
+          {member.name.charAt(0)}
+        </div>
+      )}
+      <p style={{ fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.6)",textAlign:"center",lineHeight:1.3 }}>{member.name}</p>
+      {member.character&&<p style={{ fontSize:12,fontWeight:700,color:"#fff",textAlign:"center",marginTop:-5,lineHeight:1.3 }}>{member.character}</p>}
+    </div>
+  );
+}
+
+<<< END: src\pages\Detail\index.tsx >>>
+
+<<< FILE: src\pages\Detail\StreamPicker.tsx >>>
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft, BadgeCheck, Play, RefreshCw, Wifi } from "lucide-react";
+import { useStreams } from "../../hooks/useStreams";
+import { useAddonStore } from "../../store/addonStore";
+import type { MediaStream, PlaybackEngine, StreamKind, StreamQuery } from "../../types/stream";
+
+interface PickerMeta {
+  name: string;
+  background?: string;
+  poster?: string;
+  logo?: string;
+}
+
+const SELECTED_STREAM_KEY = "aetherio-selected-stream";
+const SELECTED_ENGINE_KEY = "aetherio-selected-engine";
+
+function getStreamKind(stream: MediaStream): StreamKind {
+  const url = stream.url?.toLowerCase() ?? "";
+  if (url.startsWith("http://") || url.startsWith("https://")) return "https";
+  if (stream.infoHash || url.startsWith("magnet:") || url.startsWith("stremio:")) return "p2p";
+  if (url) return "external";
+  return "unknown";
+}
+
+function looksWebPlayable(stream: MediaStream) {
+  const target = (stream.url ?? stream.externalUrl ?? "").toLowerCase();
+  const filename = String(stream.behaviorHints?.filename ?? "").toLowerCase();
+  const title = `${stream.name ?? ""} ${stream.title ?? ""} ${stream.description ?? ""}`.toLowerCase();
+  const source = `${target} ${filename} ${title}`;
+
+  if (!target.startsWith("http://") && !target.startsWith("https://")) return false;
+  if (/\.(m3u8|mpd|mkv|avi|mov|wmv|flv|ts|m2ts)(\?|$)/.test(target)) return false;
+  if (/(x265|h265|hevc|10bit|remux|bluray)/.test(source)) return false;
+  if (stream.behaviorHints?.notWebReady) return false;
+  return /\.(mp4|m4v|webm|ogv|ogg)(\?|$)/.test(target) || /\.(mp4|m4v|webm|ogv|ogg)$/.test(filename);
+}
+
+function chooseEngine(stream: MediaStream, query: StreamQuery): PlaybackEngine {
+  void query;
+  if (looksWebPlayable(stream)) return "web";
+  return "mpv";
+}
+
+function formatBytes(value?: number) {
+  if (!value) return null;
+  const gb = value / 1024 / 1024 / 1024;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  return `${Math.round(value / 1024 / 1024)} MB`;
+}
+
+function buildPlayerSearch(params: URLSearchParams) {
+  const next = new URLSearchParams();
+  for (const key of ["type", "id", "season", "ep"]) {
+    const value = params.get(key);
+    if (value) next.set(key, value);
+  }
+  return next.toString();
+}
+
+export default function StreamPicker() {
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+  const [meta, setMeta] = useState<PickerMeta | null>(null);
+
+  const query = useMemo<StreamQuery | null>(() => {
+    const type = params.get("type");
+    const id = params.get("id");
+    if (!type || !id) return null;
+    const season = Number(params.get("season"));
+    const episode = Number(params.get("ep"));
+    return {
+      type,
+      id,
+      season: Number.isFinite(season) && season > 0 ? season : undefined,
+      episode: Number.isFinite(episode) && episode > 0 ? episode : undefined,
+    };
+  }, [params]);
+
+  const { streams, loading, error, reload } = useStreams(query);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMeta() {
+      if (!query) return;
+      for (const addon of getEnabledAddons()) {
+        try {
+          const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
+          const response = await fetch(`${base}/meta/${query.type}/${query.id}.json`);
+          if (!response.ok) continue;
+          const json = await response.json();
+          const item = json.meta ?? json;
+          if (!cancelled) {
+            setMeta({
+              name: item.name ?? query.id,
+              background: item.background ?? item.backdrop,
+              poster: item.poster,
+              logo: item.logo,
+            });
+          }
+          return;
+        } catch {
+          // Keep trying other addons.
+        }
+      }
+      if (!cancelled) setMeta({ name: query.id });
+    }
+
+    loadMeta();
+    return () => { cancelled = true; };
+  }, [getEnabledAddons, query]);
+
+  function selectStream(stream: MediaStream) {
+    if (!query) return;
+    const engine = chooseEngine(stream, query);
+    sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
+    sessionStorage.setItem(SELECTED_ENGINE_KEY, engine);
+    navigate(`/player?${buildPlayerSearch(params)}`);
+  }
+
+  if (!query) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black text-white/60">
+        Faltan datos para cargar fuentes.
+      </div>
+    );
+  }
+
+  const background = meta?.background ?? meta?.poster;
+  const episodeLabel = query.season && query.episode ? `Temporada ${query.season}, Episodio ${query.episode}` : "Película";
+
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-black text-white">
+      {background && (
+        <img src={background} alt="" className="absolute inset-0 h-full w-full object-cover object-center" />
+      )}
+      <div className="absolute inset-0 bg-black/55" />
+      <div className="absolute inset-0" style={{ background: "linear-gradient(to right, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.48) 46%, rgba(0,0,0,0.76) 100%)" }} />
+
+      <div className="relative z-10 grid min-h-screen grid-cols-[minmax(320px,0.82fr)_minmax(420px,1fr)] gap-10 px-12 pb-12 pt-24">
+        <section className="flex flex-col justify-end pb-8">
+          <button
+            onClick={() => navigate(-1)}
+            className="liquid-glass mb-auto flex h-10 w-10 items-center justify-center rounded-md text-white/80 transition hover:text-white"
+            title="Volver"
+          >
+            <ArrowLeft size={20} />
+          </button>
+
+          {meta?.logo ? (
+            <img src={meta.logo} alt={meta.name} className="mb-5 max-h-28 max-w-[320px] object-contain drop-shadow-2xl" />
+          ) : (
+            <h1 className="mb-5 max-w-xl text-5xl font-black leading-none text-white">{meta?.name ?? query.id}</h1>
+          )}
+          <div className="flex flex-wrap items-center gap-2 text-sm text-white/64">
+            <span className="liquid-glass-pill px-3 py-1">{query.type === "anime" ? "Anime" : query.type === "movie" ? "Film" : "Serie"}</span>
+            <span className="liquid-glass-pill px-3 py-1">{episodeLabel}</span>
+            <span className="liquid-glass-pill px-3 py-1">Fuentes disponibles</span>
+          </div>
+        </section>
+
+        <section className="flex min-h-0 flex-col justify-center">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase text-white/42">Fuentes cargadas</p>
+              <h2 className="text-2xl font-bold text-white">{loading ? "Buscando reproducción" : `${streams.length} opciones`}</h2>
+            </div>
+            <button
+              onClick={reload}
+              className="liquid-glass flex h-10 w-10 items-center justify-center rounded-md text-white/80 transition hover:text-white"
+              title="Recargar fuentes"
+            >
+              <RefreshCw size={18} />
+            </button>
+          </div>
+
+          <div className="max-h-[68vh] space-y-3 overflow-y-auto pr-2">
+            {loading && [0, 1, 2, 3].map(item => <SourceSkeleton key={item} />)}
+            {!loading && error && <p className="liquid-glass rounded-lg p-5 text-sm text-white/70">{error}</p>}
+            {!loading && !error && streams.length === 0 && (
+              <p className="liquid-glass rounded-lg p-5 text-sm text-white/70">No se encontraron fuentes para este contenido.</p>
+            )}
+            {!loading && streams.map(stream => (
+              <SourceCard key={stream.id} stream={stream} engine={chooseEngine(stream, query)} onSelect={() => selectStream(stream)} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function SourceSkeleton() {
+  return <div className="skeleton h-24 rounded-lg" />;
+}
+
+function SourceCard({ stream, engine, onSelect }: { stream: MediaStream; engine: PlaybackEngine; onSelect: () => void }) {
+  const kind = getStreamKind(stream);
+  const size = formatBytes(stream.behaviorHints?.videoSize);
+  const title = stream.title ?? stream.description ?? stream.name;
+  const isDirect = kind === "https";
+
+  return (
+    <button
+      onClick={onSelect}
+      className="liquid-glass group flex w-full items-center gap-4 rounded-lg p-4 text-left transition hover:bg-white/16"
+    >
+      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-white/12 text-white">
+        {isDirect ? <Play size={20} fill="white" /> : <Wifi size={20} />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="mb-1 flex items-center gap-2">
+          <span className="truncate text-base font-bold text-white">{stream.name}</span>
+          {isDirect && <BadgeCheck size={16} className="shrink-0 text-white/58" />}
+        </span>
+        <span className="line-clamp-2 text-sm leading-relaxed text-white/58">{title}</span>
+        <span className="mt-2 flex flex-wrap gap-2 text-xs text-white/44">
+          <span>{stream.addonName}</span>
+          <span>{kind.toUpperCase()}</span>
+          <span>{engine === "web" ? "WEB" : "MPV"}</span>
+          {size && <span>{size}</span>}
+          {stream.subtitles?.length ? <span>Subtítulos</span> : null}
+        </span>
+      </span>
+      <span className="rounded-md bg-white px-4 py-2 text-sm font-bold text-black opacity-90 transition group-hover:opacity-100">
+        Elegir
+      </span>
+    </button>
+  );
+}
+
+<<< END: src\pages\Detail\StreamPicker.tsx >>>
+
+<<< FILE: src\pages\Home\CatalogRow.tsx >>>
+import { useNavigate } from "react-router-dom";
+import { useRef, useState, useEffect } from "react";
+import { ChevronRight } from "lucide-react";
+import type { CatalogRowData, MediaItem } from "../../types/ui";
+
+function cleanTitle(name: string): string {
+  return name.replace(/\s*[|·\-]\s*.+$/, "").replace(/\s*(ElfHosted|AIOMetadata|Cinemeta)\s*$/i,"").trim();
+}
+
+const CARD_W = 302;
+const CARD_H = 196;
+const GAP    = 10;
+
+export default function CatalogRow({ row }: { row: CatalogRowData }) {
+  const navigate   = useNavigate();
+  const scrollRef  = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered]     = useState(false);
+  const [showLeft, setShowLeft]   = useState(false);
+  const [showRight, setShowRight] = useState(false);
+  const title = cleanTitle(row.name);
+
+  // Calcular visibilidad de flechas al montar y al scroll
+  function updateArrows() {
+    const el = scrollRef.current;
+    if (!el) return;
+    setShowLeft(el.scrollLeft > 10);
+    setShowRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 10);
+  }
+
+  useEffect(() => {
+    // Pequeño delay para que el DOM esté pintado
+    setTimeout(updateArrows, 100);
+  }, [row.items.length]);
+
+  function scroll(dir: "left" | "right") {
+    scrollRef.current?.scrollBy({ left: dir === "right" ? (CARD_W + GAP) * 3 : -(CARD_W + GAP) * 3, behavior: "smooth" });
+  }
+
+  return (
+    <section style={{ paddingLeft:48, paddingRight:48 }}>
+      {/* Header */}
+      <button onClick={()=>{}}
+        style={{ display:"flex",alignItems:"center",gap:4,marginBottom:14,background:"none",border:"none",cursor:"pointer",padding:0 }}>
+        <span style={{ fontSize:17, fontWeight:700, color:"#fff" }}>{title}</span>
+        <ChevronRight size={15} style={{ color:"rgba(255,255,255,0.4)", marginTop:1 }} />
+      </button>
+
+      {/* Row con flechas estilo Apple TV */}
+      <div
+        style={{ position:"relative" }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        {/* Flecha IZQUIERDA — solo si hay scroll y está hovereado */}
+        <div style={{
+          position:"absolute", left:-48, top:0, bottom:0, width:80, zIndex:10,
+          background:"linear-gradient(to right, #1f1f1f 30%, transparent 100%)",
+          display:"flex", alignItems:"center", justifyContent:"flex-start",
+          paddingLeft:6,
+          opacity: hovered && showLeft ? 1 : 0,
+          pointerEvents: hovered && showLeft ? "auto" : "none",
+          transition:"opacity 0.2s",
+        }}>
+          <button onClick={()=>scroll("left")} style={{
+            width:34, height:34, borderRadius:6,
+            background:"rgba(245,245,247,0.82)", backdropFilter:"blur(10px)",
+            border:"1px solid rgba(255,255,255,0.22)",
+            color:"#fff", cursor:"pointer",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:28, fontWeight:600, lineHeight:1,
+            boxShadow:"0 2px 12px rgba(0,0,0,0.5)",
+            transition:"background 0.15s",
+            textShadow:"0 1px 4px rgba(0,0,0,0.7)",
+          }}
+            onMouseEnter={e=>(e.currentTarget.style.background="rgba(255,255,255,0.95)")}
+            onMouseLeave={e=>(e.currentTarget.style.background="rgba(245,245,247,0.82)")}
+          >‹</button>
+        </div>
+
+        {/* Scroll container */}
+        <div
+          ref={scrollRef}
+          onScroll={updateArrows}
+          style={{ display:"flex", gap:GAP, overflowX:"auto", overflowY:"visible", paddingBottom:12, scrollbarWidth:"none" }}
+        >
+          {row.items.map((item, idx) => (
+            <CinematicCard
+              key={`${item.id}-${row.catalogId}-${idx}`}
+              item={item}
+              onClick={() => navigate(`/detail/${row.type}/${item.id}`)}
+            />
+          ))}
+        </div>
+
+        {/* Flecha DERECHA — solo si hay más contenido y está hovereado */}
+        <div style={{
+          position:"absolute", right:-48, top:0, bottom:0, width:80, zIndex:10,
+          background:"linear-gradient(to left, #1f1f1f 30%, transparent 100%)",
+          display:"flex", alignItems:"center", justifyContent:"flex-end",
+          paddingRight:6,
+          opacity: hovered && showRight ? 1 : 0,
+          pointerEvents: hovered && showRight ? "auto" : "none",
+          transition:"opacity 0.2s",
+        }}>
+          <button onClick={()=>scroll("right")} style={{
+            width:34, height:34, borderRadius:6,
+            background:"rgba(245,245,247,0.82)", backdropFilter:"blur(10px)",
+            border:"1px solid rgba(255,255,255,0.22)",
+            color:"#fff", cursor:"pointer",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:28, fontWeight:600, lineHeight:1,
+            boxShadow:"0 2px 12px rgba(0,0,0,0.5)",
+            transition:"background 0.15s",
+            textShadow:"0 1px 4px rgba(0,0,0,0.7)",
+          }}
+            onMouseEnter={e=>(e.currentTarget.style.background="rgba(255,255,255,0.95)")}
+            onMouseLeave={e=>(e.currentTarget.style.background="rgba(245,245,247,0.82)")}
+          >›</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CinematicCard({ item, onClick }: { item: MediaItem; onClick: () => void }) {
+  const image = item.background ?? item.poster ?? "";
+  return (
+    <div onClick={onClick}
+      style={{ position:"relative",flexShrink:0,width:CARD_W,height:CARD_H,borderRadius:10,overflow:"hidden",cursor:"pointer",
+        transition:"transform 0.25s,box-shadow 0.25s",background:"#1c1c1e" }}
+      onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.transform="scale(1.04)";(e.currentTarget as HTMLDivElement).style.boxShadow="0 8px 32px rgba(0,0,0,0.7)";}}
+      onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.transform="scale(1)";(e.currentTarget as HTMLDivElement).style.boxShadow="none";}}
+    >
+      {image && <img src={image} alt={item.name} loading="lazy"
+        style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover" }} />}
+      <div style={{ position:"absolute",bottom:0,left:0,right:0,height:"45%",
+        background:"linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)",pointerEvents:"none" }} />
+      <div style={{ position:"absolute",bottom:0,left:0,right:0,padding:"0 10px 9px" }}>
+        {item.logo ? (
+          <img src={item.logo} alt={item.name}
+            style={{ maxHeight:28,maxWidth:140,objectFit:"contain",filter:"drop-shadow(0 1px 6px rgba(0,0,0,0.95))",marginBottom:3 }} />
+        ) : (
+          <span style={{ fontSize:13,fontWeight:600,color:"#fff",textShadow:"0 1px 8px rgba(0,0,0,0.95)",
+            display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden" }}>
+            {item.name}
+          </span>
+        )}
+        {(item.year || item.imdbRating) && (
+          <div style={{ fontSize:11,color:"rgba(255,255,255,0.45)",marginTop:2 }}>
+            {item.year}{item.imdbRating?` · ★ ${item.imdbRating}`:""}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+<<< END: src\pages\Home\CatalogRow.tsx >>>
+--- src\pages\Home\ContinueWatchingRow.tsx [VACIO] ---
+
+<<< FILE: src\pages\Home\HeroSection.tsx >>>
+import { useNavigate } from "react-router-dom";
+import { Play } from "lucide-react";
+import type { MediaItem } from "../../types/ui";
+
+interface Props {
+  item: MediaItem;
+  items: MediaItem[];
+  activeIndex: number;
+  onSelect: (i: number) => void;
+}
+
+export default function HeroSection({ item, items, activeIndex, onSelect }: Props) {
+  const navigate = useNavigate();
+  const bg = item.background ?? item.poster ?? "";
+  const typeLabel = item.type === "movie" ? "Película" : item.type === "anime" ? "Anime" : "Programa de TV";
+
+  return (
+    // marginTop:-72 cancela el paddingTop del AppShell → imagen full-bleed
+    <div style={{ position:"relative", width:"100%", height:"calc(88vh + 72px)", minHeight:560, marginTop:-72, flexShrink:0 }}>
+      {bg && (
+        <img key={bg} src={bg} alt=""
+          style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", objectPosition:"center top" }} />
+      )}
+      {/* Gradientes */}
+      <div style={{ position:"absolute", inset:0, background:"linear-gradient(to right,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.38) 40%,transparent 65%)", pointerEvents:"none" }} />
+      <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top,rgba(31,31,31,1) 0%,rgba(31,31,31,0.5) 22%,transparent 52%)", pointerEvents:"none" }} />
+
+      {/* Contenido — empujado hacia abajo con paddingTop:72 para no quedar bajo el nav */}
+      <div style={{ position:"absolute", bottom:0, left:0, padding:"0 48px 36px", maxWidth:520 }}>
+        {item.logo ? (
+          <img src={item.logo} alt={item.name}
+            style={{ maxHeight:96, maxWidth:300, objectFit:"contain", marginBottom:14, filter:"drop-shadow(0 2px 16px rgba(0,0,0,0.9))" }} />
+        ) : (
+          <h1 style={{ fontSize:"2.6rem", fontWeight:900, color:"#fff", marginBottom:14, lineHeight:1.05, textShadow:"0 2px 20px rgba(0,0,0,0.8)" }}>
+            {item.name}
+          </h1>
+        )}
+        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:15, color:"rgba(255,255,255,0.65)", fontWeight:500 }}>{typeLabel}</span>
+          {item.genres?.slice(0,2).map(g => <span key={g} style={{ fontSize:15, color:"rgba(255,255,255,0.55)" }}>· {g}</span>)}
+          {(item.rating ?? item.imdbRating) && (
+            <span style={{ fontSize:13, color:"rgba(255,255,255,0.5)", border:"1px solid rgba(255,255,255,0.3)", borderRadius:4, padding:"2px 7px" }}>
+              {item.rating ?? item.imdbRating}
+            </span>
+          )}
+        </div>
+        {item.description && (
+          <p style={{ fontSize:15, color:"rgba(255,255,255,0.65)", lineHeight:1.6, marginBottom:12,
+            display:"-webkit-box", WebkitLineClamp:3, WebkitBoxOrient:"vertical", overflow:"hidden" }}>
+            {item.description}
+          </p>
+        )}
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:18 }}>
+          {item.year && <span style={{ fontSize:13, color:"rgba(255,255,255,0.5)" }}>{item.year}</span>}
+          {item.runtime && <span style={{ fontSize:13, color:"rgba(255,255,255,0.5)" }}>· {item.runtime}</span>}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <button
+            onClick={() => navigate(`/detail/${item.type}/${item.id}`)}
+            style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 4px 20px rgba(0,0,0,0.5)" }}
+            onMouseEnter={e=>(e.currentTarget.style.opacity="0.88")}
+            onMouseLeave={e=>(e.currentTarget.style.opacity="1")}
+          >
+            <Play size={16} fill="black" /> Reproducir
+          </button>
+          <button style={{ width:40,height:40,borderRadius:"50%",background:"rgba(255,255,255,0.12)",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:20 }}>
+            +
+          </button>
+        </div>
+      </div>
+
+      {items.length > 1 && (
+        <div style={{ position:"absolute", bottom:16, left:"50%", transform:"translateX(-50%)", display:"flex", gap:6, alignItems:"center" }}>
+          {items.map((_,i) => (
+            <button key={i} onClick={()=>onSelect(i)}
+              style={{ borderRadius:999,background:i===activeIndex?"#fff":"rgba(255,255,255,0.3)",width:i===activeIndex?18:6,height:6,border:"none",cursor:"pointer",transition:"all 0.3s",padding:0 }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+<<< END: src\pages\Home\HeroSection.tsx >>>
+
+<<< FILE: src\pages\Home\index.tsx >>>
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
+import { useAddonStore } from "../../store/addonStore";
+import type { MediaItem, CatalogRowData } from "../../types/ui";
+import HeroSection from "./HeroSection";
+import CatalogRow from "./CatalogRow";
+
+export type { MediaItem, CatalogRowData };
+
+function upgradeTmdbImage(url?: string) {
+  if (!url) return url;
+  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, "https://image.tmdb.org/t/p/original/");
+}
+
+function normalizeMediaItem(item: MediaItem): MediaItem {
+  return {
+    ...item,
+    poster: upgradeTmdbImage(item.poster),
+    background: upgradeTmdbImage(item.background),
+  };
+}
+
+export default function HomePage() {
+  const [rows, setRows]           = useState<CatalogRowData[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const location                  = useLocation();
+  const getEnabled                = useAddonStore(s => s.getEnabledAddons);
+  const typeFilter = new URLSearchParams(location.search).get("type");
+
+  useEffect(() => { fetchAll(); }, []);
+
+  const heroItems = rows.length > 0 ? rows[0].items.slice(0, 8) : [];
+  useEffect(() => {
+    if (heroItems.length < 2) return;
+    const t = setInterval(() => setHeroIndex(i => (i + 1) % heroItems.length), 7000);
+    return () => clearInterval(t);
+  }, [heroItems.length]);
+
+  async function fetchAll() {
+    setLoading(true);
+    const addons  = getEnabled();
+    const allRows: CatalogRowData[] = [];
+    for (const addon of addons) {
+      for (const cat of addon.manifest?.catalogs ?? []) {
+        try {
+          const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
+          const res  = await fetch(`${base}/catalog/${cat.type}/${cat.id}.json`);
+          if (!res.ok) continue;
+          const data  = await res.json();
+          const seen  = new Set<string>();
+          const items = (data.metas ?? [])
+            .filter((m: any) => { if (seen.has(m.id)) return false; seen.add(m.id); return true; })
+            .slice(0, 20)
+            .map((item: MediaItem) => normalizeMediaItem(item));
+          if (!items.length) continue;
+          allRows.push({
+            addonId: addon.id, addonName: addon.name,
+            catalogId: cat.id, type: cat.type,
+            name: cat.name ?? cat.id, items,
+          });
+        } catch { /* addon roto */ }
+      }
+    }
+    setRows(allRows);
+    setLoading(false);
+  }
+
+  const filteredRows = typeFilter ? rows.filter(r => r.type === typeFilter) : rows;
+
+  if (loading) return <Skeleton />;
+  if (!filteredRows.length) return <Empty typeFilter={typeFilter} />;
+
+  const hero = heroItems[heroIndex];
+
+  return (
+    // fondo #1f1f1f — consistente con toda la app
+    <div style={{ minHeight:"100vh", background:"#1f1f1f" }}>
+      {hero && !typeFilter && (
+        <HeroSection item={hero} items={heroItems} activeIndex={heroIndex} onSelect={setHeroIndex} />
+      )}
+      <div style={{ display:"flex", flexDirection:"column", gap:32, paddingBottom:48, background:"#1f1f1f" }}>
+        {filteredRows.map((row, i) => (
+          <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div style={{ background:"#1f1f1f", minHeight:"100vh" }}>
+      <div className="skeleton" style={{ width:"100%", height:"74vh" }} />
+      <div style={{ display:"flex", flexDirection:"column", gap:32, padding:"32px 48px" }}>
+        {[0,1,2].map(i => (
+          <div key={i}>
+            <div className="skeleton" style={{ height:18, width:160, borderRadius:6, marginBottom:14 }} />
+            <div style={{ display:"flex", gap:10 }}>
+              {[0,1,2,3,4].map(j => (
+                <div key={j} className="skeleton" style={{ flexShrink:0, width:302, height:196, borderRadius:10 }} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Empty({ typeFilter }: { typeFilter: string | null }) {
+  const labels: Record<string,string> = { movie:"películas", series:"series", anime:"anime" };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"80vh", gap:16, textAlign:"center", padding:"0 32px", background:"#1f1f1f" }}>
+      <p style={{ fontSize:52 }}>🎬</p>
+      <p style={{ fontSize:20, fontWeight:700, color:"#fff" }}>
+        {typeFilter ? `No hay ${labels[typeFilter] ?? typeFilter} disponibles` : "Sin contenido"}
+      </p>
+      <p style={{ fontSize:14, color:"rgba(255,255,255,0.5)" }}>
+        Instala un addon compatible para ver catálogos aquí.
+      </p>
+    </div>
+  );
+}
+
+<<< END: src\pages\Home\index.tsx >>>
+--- src\pages\Library\Favorites.tsx [VACIO] ---
+
+<<< FILE: src\pages\Library\index.tsx >>>
+export default function LibraryPage() {
+  return (
+    <div className="flex flex-col h-full p-8 animate-fadeIn">
+      <h1 className="text-3xl font-bold text-text-primary mb-8">Biblioteca</h1>
+      <div className="grid grid-cols-2 gap-4 max-w-md">
+        {["Favoritos","Lista de seguimiento"].map(s => (
+          <div key={s} className="glass rounded-glass p-6 text-center text-text-secondary hover:text-text-primary transition-colors cursor-pointer">
+            {s}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+<<< END: src\pages\Library\index.tsx >>>
+--- src\pages\Library\Watchlist.tsx [VACIO] ---
+
+<<< FILE: src\pages\Person\index.tsx >>>
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+
+const TMDB_KEY = "d8fbcec110971e64699f338caf0e7192";
+const TMDB     = "https://api.themoviedb.org/3";
+const IMG      = "https://image.tmdb.org/t/p";
+
+interface PersonData {
+  id: number;
+  name: string;
+  biography: string;
+  profile_path?: string;
+  birthday?: string;
+  place_of_birth?: string;
+  known_for_department?: string;
+}
+
+interface CreditItem {
+  id: number;
+  title?: string;
+  name?: string;
+  poster_path?: string;
+  media_type: "movie" | "tv";
+  department?: string;
+  character?: string;
+  job?: string;
+  vote_average?: number;
+}
+
+interface CreditGroup {
+  label: string;
+  items: CreditItem[];
+}
+
+// Categorías a mostrar (sin "Para toda la familia")
+const DEPT_LABELS: Record<string,string> = {
+  Acting:    "Actuación",
+  Directing: "Dirección",
+  Writing:   "Escritor",
+  Production:"Producción",
+  Sound:     "Sonido",
+  Crew:      "Equipo técnico",
+};
+
+export default function PersonPage() {
+  const { id }     = useParams<{ id: string }>();
+  const navigate   = useNavigate();
+  const [person, setPerson]   = useState<PersonData | null>(null);
+  const [groups, setGroups]   = useState<CreditGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [bioExpanded, setBioExpanded] = useState(false);
+
+  useEffect(() => { if (id) load(Number(id)); }, [id]);
+
+  async function load(personId: number) {
+    setLoading(true);
+    try {
+      const [personRes, creditsRes] = await Promise.all([
+        fetch(`${TMDB}/person/${personId}?api_key=${TMDB_KEY}&language=es-ES`),
+        fetch(`${TMDB}/person/${personId}/combined_credits?api_key=${TMDB_KEY}&language=es-ES`),
+      ]);
+
+      const personData  = await personRes.json();
+      const creditsData = await creditsRes.json();
+
+      setPerson({
+        id:          personData.id,
+        name:        personData.name,
+        biography:   personData.biography ?? "",
+        profile_path:personData.profile_path ? `${IMG}/w300${personData.profile_path}` : undefined,
+        birthday:    personData.birthday,
+        place_of_birth: personData.place_of_birth,
+        known_for_department: personData.known_for_department,
+      });
+
+      // Agrupar créditos por departamento
+      const allCredits: CreditItem[] = [
+        ...(creditsData.cast ?? []).map((c: any) => ({ ...c, department: "Acting" })),
+        ...(creditsData.crew ?? []).map((c: any) => ({ ...c, department: c.department ?? "Crew" })),
+      ];
+
+      // Dedup por id+department
+      const seen = new Set<string>();
+      const deduped = allCredits.filter(c => {
+        const k = `${c.id}:${c.department}`;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+
+      // Filtrar solo los que tienen poster y ordenar por popularidad
+      const withPoster = deduped.filter(c => c.poster_path);
+
+      // Agrupar
+      const deptMap = new Map<string, CreditItem[]>();
+      for (const c of withPoster) {
+        const dept = c.department ?? "Crew";
+        if (!deptMap.has(dept)) deptMap.set(dept, []);
+        deptMap.get(dept)!.push(c);
+      }
+
+      // Ordenar cada grupo por vote_average desc, max 20 items
+      const groupList: CreditGroup[] = [];
+      for (const [dept, items] of deptMap.entries()) {
+        if (!DEPT_LABELS[dept]) continue; // ignorar departamentos sin etiqueta
+        const sorted = items
+          .sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0))
+          .slice(0, 20);
+        groupList.push({ label: DEPT_LABELS[dept], items: sorted });
+      }
+
+      // Acting primero
+      groupList.sort((a, b) => {
+        if (a.label === "Actuación") return -1;
+        if (b.label === "Actuación") return 1;
+        return 0;
+      });
+
+      setGroups(groupList);
+    } catch (e) {
+      console.warn("Person load error:", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loading) return <LoadingSkeleton />;
+  if (!person) return (
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>
+      No se encontró la persona.
+    </div>
+  );
+
+  const BIO_MAX = 280;
+  const bioShort = person.biography.length > BIO_MAX
+    ? person.biography.slice(0, BIO_MAX) + "…"
+    : person.biography;
+  const hasBioMore = person.biography.length > BIO_MAX;
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#1f1f1f", paddingBottom:60 }}>
+
+      {/* ══ HEADER DEL PERSONAJE ══════════════════════════════ */}
+      <div style={{
+        display:"flex",
+        alignItems:"center",
+        justifyContent:"center",
+        gap:32,
+        padding:"48px 80px 40px",
+        background:"linear-gradient(to bottom,rgba(0,0,0,0.3) 0%,transparent 100%)",
+      }}>
+        {/* Foto */}
+        <div style={{ flexShrink:0 }}>
+          {person.profile_path ? (
+            <img
+              src={person.profile_path}
+              alt={person.name}
+              style={{ width:120,height:120,borderRadius:"50%",objectFit:"cover",border:"3px solid rgba(255,255,255,0.15)" }}
+            />
+          ) : (
+            <div style={{ width:120,height:120,borderRadius:"50%",background:"#2c2c2e",display:"flex",alignItems:"center",justifyContent:"center",fontSize:42,color:"rgba(255,255,255,0.5)",fontWeight:700,border:"3px solid rgba(255,255,255,0.1)" }}>
+              {person.name.charAt(0)}
+            </div>
+          )}
+        </div>
+
+        {/* Info */}
+        <div style={{ maxWidth:560 }}>
+          <h1 style={{ fontSize:"1.9rem",fontWeight:800,color:"#fff",marginBottom:8,lineHeight:1.1 }}>{person.name}</h1>
+          {person.known_for_department && (
+            <p style={{ fontSize:14,color:"rgba(255,255,255,0.45)",marginBottom:10 }}>{person.known_for_department}</p>
+          )}
+          {person.biography && (
+            <div>
+              <p style={{ fontSize:14,color:"rgba(255,255,255,0.65)",lineHeight:1.7 }}>
+                {bioShort}
+                {hasBioMore && (
+                  <button
+                    onClick={() => setBioExpanded(true)}
+                    style={{ fontSize:12,color:"rgba(255,255,255,0.5)",background:"none",border:"none",cursor:"pointer",marginLeft:6 }}
+                  >
+                    MÁS
+                  </button>
+                )}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ══ GRUPOS DE CRÉDITOS ════════════════════════════════ */}
+      <div style={{ display:"flex",flexDirection:"column",gap:40,padding:"0 48px" }}>
+        {groups.map(group => (
+          <CreditsRow key={group.label} group={group} navigate={navigate} />
+        ))}
+        {groups.length === 0 && (
+          <div style={{ textAlign:"center",color:"rgba(255,255,255,0.3)",paddingTop:40,fontSize:15 }}>
+            No se encontraron créditos para esta persona.
+          </div>
+        )}
+      </div>
+
+      {/* BIO POPUP */}
+      {bioExpanded && (
+        <div
+          onClick={() => setBioExpanded(false)}
+          style={{ position:"fixed",inset:0,zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(10px)" }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background:"rgba(20,20,22,0.97)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:36,maxWidth:560,margin:"0 20px",position:"relative",maxHeight:"70vh",overflowY:"auto" }}
+          >
+            <button onClick={() => setBioExpanded(false)}
+              style={{ position:"absolute",top:16,right:16,background:"none",border:"none",color:"rgba(255,255,255,0.5)",cursor:"pointer",fontSize:20 }}>✕</button>
+            <div style={{ display:"flex",alignItems:"center",gap:16,marginBottom:20 }}>
+              {person.profile_path && (
+                <img src={person.profile_path} alt="" style={{ width:56,height:56,borderRadius:"50%",objectFit:"cover" }} />
+              )}
+              <h2 style={{ fontSize:18,fontWeight:700,color:"#fff" }}>{person.name}</h2>
+            </div>
+            <p style={{ fontSize:15,color:"rgba(255,255,255,0.75)",lineHeight:1.8,paddingRight:20 }}>{person.biography}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Fila de créditos con posters verticales ─────────────────
+function CreditsRow({ group, navigate }: { group: CreditGroup; navigate: (to: string) => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  function scroll(dir: "left" | "right") {
+    scrollRef.current?.scrollBy({ left: dir === "right" ? 600 : -600, behavior:"smooth" });
+  }
+
+  return (
+    <section>
+      <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:14 }}>
+        <h2 style={{ fontSize:17,fontWeight:700,color:"#fff" }}>{group.label}</h2>
+        <ChevronRight size={15} style={{ color:"rgba(255,255,255,0.35)",marginTop:1 }} />
+      </div>
+
+      <div style={{ position:"relative" }}>
+        <ScrollArrow dir="left"  onClick={() => scroll("left")} />
+        <div ref={scrollRef}
+          style={{ display:"flex",gap:10,overflowX:"auto",paddingBottom:10,scrollbarWidth:"none" }}>
+          {group.items.map((item, idx) => (
+            <PosterCard
+              key={`${item.id}-${idx}`}
+              item={item}
+              onClick={() => navigate(`/detail/${item.media_type}/tmdb:${item.id}`)}
+            />
+          ))}
+        </div>
+        <ScrollArrow dir="right" onClick={() => scroll("right")} />
+      </div>
+    </section>
+  );
+}
+
+// ── Poster vertical 180x271 ─────────────────────────────────
+function PosterCard({ item, onClick }: { item: CreditItem; onClick: () => void }) {
+  const title = item.title ?? item.name ?? "";
+  return (
+    <div
+      onClick={onClick}
+      style={{ flexShrink:0,width:180,height:271,borderRadius:10,overflow:"hidden",cursor:"pointer",position:"relative",background:"#2c2c2e",transition:"transform 0.25s" }}
+      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.transform="scale(1.05)"}
+      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.transform="scale(1)"}
+    >
+      {item.poster_path ? (
+        <img
+          src={`${IMG}/w185${item.poster_path}`}
+          alt={title}
+          loading="lazy"
+          style={{ width:"100%",height:"100%",objectFit:"cover" }}
+        />
+      ) : (
+        <div style={{ width:"100%",height:"100%",background:"#2c2c2e",display:"flex",alignItems:"center",justifyContent:"center" }}>
+          <p style={{ fontSize:12,color:"rgba(255,255,255,0.4)",textAlign:"center",padding:"0 10px" }}>{title}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Flecha de scroll ────────────────────────────────────────
+function ScrollArrow({ dir, onClick }: { dir: "left"|"right"; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        position:"absolute",
+        [dir==="left"?"left":"right"]:-18,
+        top:"50%",transform:"translateY(-50%)",zIndex:10,
+        width:36,height:36,borderRadius:"50%",
+        background:"rgba(255,255,255,0.12)",backdropFilter:"blur(20px)",
+        border:"1px solid rgba(255,255,255,0.2)",color:"#fff",
+        cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+        transition:"background 0.2s",
+      }}
+      onMouseEnter={e=>(e.currentTarget.style.background="rgba(255,255,255,0.22)")}
+      onMouseLeave={e=>(e.currentTarget.style.background="rgba(255,255,255,0.12)")}
+    >
+      {dir==="left"?<ChevronLeft size={18}/>:<ChevronRight size={18}/>}
+    </button>
+  );
+}
+
+// ── Skeleton ────────────────────────────────────────────────
+function LoadingSkeleton() {
+  return (
+    <div style={{ padding:"48px 80px" }}>
+      <div style={{ display:"flex",alignItems:"center",gap:32,marginBottom:48 }}>
+        <div className="skeleton" style={{ width:120,height:120,borderRadius:"50%",flexShrink:0 }} />
+        <div style={{ flex:1 }}>
+          <div className="skeleton" style={{ height:28,width:200,borderRadius:8,marginBottom:12 }} />
+          <div className="skeleton" style={{ height:14,width:"100%",borderRadius:6,marginBottom:8 }} />
+          <div className="skeleton" style={{ height:14,width:"80%",borderRadius:6 }} />
+        </div>
+      </div>
+      {[0,1,2].map(i=>(
+        <div key={i} style={{ marginBottom:40 }}>
+          <div className="skeleton" style={{ height:18,width:130,borderRadius:6,marginBottom:16 }} />
+          <div style={{ display:"flex",gap:10 }}>
+            {[0,1,2,3,4,5].map(j=>(
+              <div key={j} className="skeleton" style={{ flexShrink:0,width:180,height:271,borderRadius:10 }} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// necesario para useRef en CreditsRow (import al inicio del archivo)
+import { useRef } from "react";
+
+<<< END: src\pages\Person\index.tsx >>>
+
+<<< FILE: src\pages\Player\index.tsx >>>
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  ArrowLeft,
+  AudioLines,
+  Captions,
+  ChevronLeft,
+  ChevronRight,
+  ListVideo,
+  Maximize,
+  Pause,
+  Play,
+  RotateCcw,
+  RotateCw,
+  TimerReset,
+  Volume2,
+} from "lucide-react";
+import { useSubtitles } from "../../hooks/useSubtitles";
+import { useAddonStore } from "../../store/addonStore";
+import type { PlaybackEngine, MediaStream, StreamKind, StreamQuery } from "../../types/stream";
+import type { SubtitleSource } from "../../types/subtitle";
+
+const SELECTED_STREAM_KEY = "aetherio-selected-stream";
+const SELECTED_ENGINE_KEY = "aetherio-selected-engine";
+const TMDB_KEY = "d8fbcec110971e64699f338caf0e7192";
+const TMDB = "https://api.themoviedb.org/3";
+const IMG = "https://image.tmdb.org/t/p";
+const DEBUG_AUTOPLAY = true;
+
+interface MpvLaunchResult {
+  pid: number;
+  logPath?: string;
+}
+
+interface MpvTrack {
+  id?: number;
+  type?: string;
+  title?: string;
+  lang?: string;
+  selected?: boolean;
+}
+
+interface MpvStatusSnapshot {
+  timePos?: number | null;
+  duration?: number | null;
+  pause?: boolean | null;
+  sid?: number | null;
+  aid?: number | null;
+  speed?: number | null;
+  fileLoaded?: boolean | null;
+  pausedForCache?: boolean | null;
+  cacheBufferingState?: number | null;
+  chapter?: number | null;
+  chapterList?: { title?: string; time?: number }[] | null;
+  tracks?: MpvTrack[] | null;
+}
+
+interface EpisodeOption {
+  id: string;
+  episode: number;
+  season: number;
+  name: string;
+  overview?: string;
+  airDate?: string;
+  still?: string;
+}
+
+interface ChapterOption {
+  index: number;
+  title: string;
+  time: number;
+}
+
+function getStreamKind(stream: MediaStream | null): StreamKind {
+  const url = stream?.url?.toLowerCase() ?? "";
+  if (url.startsWith("http://") || url.startsWith("https://")) return "https";
+  if (stream?.infoHash || url.startsWith("magnet:") || url.startsWith("stremio:")) return "p2p";
+  if (url) return "external";
+  return "unknown";
+}
+
+function looksWebPlayable(stream: MediaStream | null) {
+  if (!stream) return false;
+  const target = (stream.url ?? stream.externalUrl ?? "").toLowerCase();
+  const filename = String(stream.behaviorHints?.filename ?? "").toLowerCase();
+  const title = `${stream.name ?? ""} ${stream.title ?? ""} ${stream.description ?? ""}`.toLowerCase();
+  const source = `${target} ${filename} ${title}`;
+
+  if (!target.startsWith("http://") && !target.startsWith("https://")) return false;
+  if (/\.(m3u8|mpd|mkv|avi|mov|wmv|flv|ts|m2ts)(\?|$)/.test(target)) return false;
+  if (/(x265|h265|hevc|10bit|remux|bluray)/.test(source)) return false;
+  if (stream.behaviorHints?.notWebReady) return false;
+  return /\.(mp4|m4v|webm|ogv|ogg)(\?|$)/.test(target) || /\.(mp4|m4v|webm|ogv|ogg)$/.test(filename);
+}
+
+function formatTime(value: number) {
+  if (!Number.isFinite(value)) return "0:00";
+  const total = Math.max(0, Math.floor(value));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getPlaybackTarget(stream: MediaStream) {
+  return stream.url
+    ?? stream.externalUrl
+    ?? (stream.ytId ? `https://www.youtube.com/watch?v=${stream.ytId}` : undefined)
+    ?? (stream.infoHash ? `magnet:?xt=urn:btih:${stream.infoHash}` : undefined)
+    ?? "";
+}
+
+async function openExternal(stream: MediaStream, subtitle?: string) {
+  const target = getPlaybackTarget(stream);
+  if (!target) return { result: null, error: "La fuente no tiene URL reproducible." };
+  if (target.toLowerCase().startsWith("magnet:")) {
+    return {
+      result: null,
+      error: "Esta fuente es P2P/torrent y todavia necesita un motor de streaming antes de llegar a MPV.",
+    };
+  }
+  try {
+    const result = await invoke<MpvLaunchResult>("open_mpv", { target, subtitle });
+    return { result, error: null };
+  } catch (error) {
+    return { result: null, error: String(error) };
+  }
+}
+
+function buildQuery(params: URLSearchParams): StreamQuery | null {
+  const type = params.get("type");
+  const id = params.get("id");
+  if (!type || !id) return null;
+  const season = Number(params.get("season"));
+  const episode = Number(params.get("ep"));
+  return {
+    type,
+    id,
+    season: Number.isFinite(season) && season > 0 ? season : undefined,
+    episode: Number.isFinite(episode) && episode > 0 ? episode : undefined,
+  };
+}
+
+async function resolveTmdbId(type: string, id: string) {
+  if (id.startsWith("tmdb:")) return Number(id.slice(5));
+  if (!id.startsWith("tt")) return null;
+  const mediaType = type === "movie" ? "movie_results" : "tv_results";
+  const response = await fetch(`${TMDB}/find/${id}?api_key=${TMDB_KEY}&external_source=imdb_id&language=es-ES`);
+  if (!response.ok) return null;
+  const json = await response.json();
+  return json[mediaType]?.[0]?.id ?? null;
+}
+
+export default function PlayerPage() {
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hideTimer = useRef<number | null>(null);
+  const mpvLaunchKeyRef = useRef("");
+  const mpvAutoPlayKeyRef = useRef("");
+  const mpvRecoveryKeyRef = useRef("");
+  const currentTimeRef = useRef(0);
+  const lastProgressTimeRef = useRef(0);
+  const lastProgressAtRef = useRef(0);
+  const lastMpvFileLoadedRef = useRef(false);
+  const lastMpvCacheRef = useRef(-1);
+  const lastMpvPauseRef = useRef<boolean | null>(null);
+
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [engine, setEngine] = useState<PlaybackEngine>("mpv");
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [volume, setVolume] = useState(0.86);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [selectedSubtitle, setSelectedSubtitle] = useState("");
+  const [selectedMpvSubtitle, setSelectedMpvSubtitle] = useState("");
+  const [selectedMpvAudio, setSelectedMpvAudio] = useState("");
+  const [selectedSpeed, setSelectedSpeed] = useState("1");
+  const [mpvStatus, setMpvStatus] = useState<string | null>(null);
+  const [mpvBundled, setMpvBundled] = useState<boolean | null>(null);
+  const [mpvTracks, setMpvTracks] = useState<MpvTrack[]>([]);
+  const [chapterIndex, setChapterIndex] = useState<number | null>(null);
+  const [chapterOptions, setChapterOptions] = useState<ChapterOption[]>([]);
+  const [showEpisodePanel, setShowEpisodePanel] = useState(false);
+  const [episodeOptions, setEpisodeOptions] = useState<EpisodeOption[]>([]);
+  const [seriesLogoUrl, setSeriesLogoUrl] = useState<string | null>(null);
+  const [addonLogoUrl, setAddonLogoUrl] = useState<string | null>(null);
+  const [playbackStarted, setPlaybackStarted] = useState(false);
+  const [mpvFileLoaded, setMpvFileLoaded] = useState(false);
+  const [mpvPausedForCache, setMpvPausedForCache] = useState(false);
+  const [mpvCacheBuffering, setMpvCacheBuffering] = useState<number>(0);
+  const [stalledPlayback, setStalledPlayback] = useState(false);
+  const [webBuffering, setWebBuffering] = useState(false);
+  const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+
+  const query = useMemo(() => buildQuery(params), [params]);
+  const { subtitles: addonSubtitles, loading: subtitlesLoading } = useSubtitles(query, stream);
+
+  function debugLog(event: string, extra?: Record<string, unknown>) {
+    if (!DEBUG_AUTOPLAY) return;
+    const video = videoRef.current;
+    const payload = {
+      event,
+      ts: Number(performance.now().toFixed(1)),
+      engine,
+      currentTime: Number(currentTimeRef.current.toFixed(3)),
+      playbackStarted,
+      readyState: video?.readyState,
+      networkState: video?.networkState,
+      paused: video?.paused,
+      mpvFileLoaded,
+      mpvPausedForCache,
+      mpvCacheBuffering,
+      stalledPlayback,
+      ...extra,
+    };
+    console.info("[AETHERIO:PLAYER]", payload);
+  }
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem(SELECTED_STREAM_KEY);
+    const savedEngine = sessionStorage.getItem(SELECTED_ENGINE_KEY) as PlaybackEngine | null;
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as MediaStream;
+      const recommendedEngine: PlaybackEngine = looksWebPlayable(parsed) ? "web" : "mpv";
+      setStream(parsed);
+      setEngine(savedEngine === "web" || savedEngine === "mpv" ? savedEngine : recommendedEngine);
+      if (savedEngine !== recommendedEngine) sessionStorage.setItem(SELECTED_ENGINE_KEY, recommendedEngine);
+    } catch {
+      setStream(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    invoke<{ mpvBundled: boolean }>("playback_capabilities")
+      .then(result => setMpvBundled(result.mpvBundled))
+      .catch(() => setMpvBundled(false));
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || engine !== "web" || !stream?.url || !looksWebPlayable(stream)) return;
+
+    let cancelled = false;
+    debugLog("src assigned", { src: stream.url });
+
+    let lastReadyState = video.readyState;
+    let lastNetworkState = video.networkState;
+    const stateWatch = window.setInterval(() => {
+      if (!videoRef.current) return;
+      if (videoRef.current.readyState !== lastReadyState) {
+        lastReadyState = videoRef.current.readyState;
+        debugLog("readyState changed", { readyState: lastReadyState });
+      }
+      if (videoRef.current.networkState !== lastNetworkState) {
+        lastNetworkState = videoRef.current.networkState;
+        debugLog("networkState changed", { networkState: lastNetworkState });
+      }
+    }, 120);
+
+    const requestPlayback = () => {
+      if (cancelled) return;
+      debugLog("play() called");
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise
+          .then(() => debugLog("play() resolved"))
+          .catch((error: unknown) => {
+            debugLog("play() rejected", { error: String(error) });
+          if (!cancelled && stream) {
+            setMpvStatus("La reproduccion web fallo. Cambiando a MPV...");
+            setEngine("mpv");
+            sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
+          }
+          });
+      }
+    };
+
+    const syncTime = () => setCurrentTime(video.currentTime);
+    const syncDuration = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    const onLoadedMetadata = () => {
+      debugLog("loadedmetadata");
+      syncDuration();
+      if (video.paused) requestPlayback();
+    };
+    const onLoadedData = () => {
+      debugLog("loadeddata");
+      if (video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) requestPlayback();
+    };
+    const onCanPlay = () => {
+      debugLog("canplay");
+      setWebBuffering(false);
+      if (video.paused) requestPlayback();
+    };
+    const onCanPlayThrough = () => debugLog("canplaythrough");
+    const onProgress = () => {
+      debugLog("progress");
+      if (video.buffered.length > 0) setWebBuffering(false);
+    };
+    const onWaiting = () => {
+      debugLog("waiting");
+      setWebBuffering(true);
+    };
+    const onStalled = () => {
+      debugLog("stalled");
+      setWebBuffering(true);
+    };
+    const onSeeking = () => debugLog("seeking");
+    const onSeeked = () => {
+      debugLog("seeked");
+      if (video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) requestPlayback();
+    };
+    const syncPlay = () => {
+      debugLog("playing");
+      setPlaying(true);
+      setWebBuffering(false);
+      setPlaybackStarted(true);
+    };
+    const syncPause = () => {
+      debugLog("pause");
+      setPlaying(false);
+    };
+    const syncError = () => {
+      debugLog("error", { mediaError: video.error?.message ?? video.error?.code });
+      if (!stream) return;
+      setMpvStatus("La reproduccion web fallo. Cambiando a MPV...");
+      setEngine("mpv");
+      sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
+    };
+    const onTimeUpdate = () => {
+      debugLog("timeupdate");
+      syncTime();
+    };
+
+    video.preload = "auto";
+    debugLog("load() called");
+    video.load();
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) requestPlayback();
+
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("loadedmetadata", onLoadedMetadata);
+    video.addEventListener("loadeddata", onLoadedData);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("canplaythrough", onCanPlayThrough);
+    video.addEventListener("progress", onProgress);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("seeking", onSeeking);
+    video.addEventListener("seeked", onSeeked);
+    video.addEventListener("playing", syncPlay);
+    video.addEventListener("play", syncPlay);
+    video.addEventListener("pause", syncPause);
+    video.addEventListener("error", syncError);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(stateWatch);
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("loadeddata", onLoadedData);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("canplaythrough", onCanPlayThrough);
+      video.removeEventListener("progress", onProgress);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("seeking", onSeeking);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("playing", syncPlay);
+      video.removeEventListener("play", syncPlay);
+      video.removeEventListener("pause", syncPause);
+      video.removeEventListener("error", syncError);
+    };
+  }, [engine, stream]);
+
+  useEffect(() => {
+    if (!stream || engine !== "web" || looksWebPlayable(stream)) return;
+    setEngine("mpv");
+    sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
+  }, [engine, stream]);
+
+  useEffect(() => {
+    if (engine !== "mpv") return;
+    let cancelled = false;
+
+    const syncMpvStatus = async () => {
+      try {
+        const status = await invoke<MpvStatusSnapshot>("mpv_status");
+        if (cancelled) return;
+        const nextTime = Number(status.timePos ?? 0);
+        const nextDuration = Number(status.duration ?? 0);
+        const nextFileLoaded = Boolean(status.fileLoaded);
+        const nextCache = Number(status.cacheBufferingState ?? 0);
+        const nextPause = status.pause === null || status.pause === undefined ? null : Boolean(status.pause);
+        if (nextFileLoaded !== lastMpvFileLoadedRef.current) {
+          lastMpvFileLoadedRef.current = nextFileLoaded;
+          debugLog("mpv fileLoaded changed", { fileLoaded: nextFileLoaded });
+        }
+        if (nextCache !== lastMpvCacheRef.current) {
+          lastMpvCacheRef.current = nextCache;
+          debugLog("mpv cacheBuffering changed", { cacheBufferingState: nextCache });
+        }
+        if (nextPause !== lastMpvPauseRef.current) {
+          lastMpvPauseRef.current = nextPause;
+          debugLog("mpv pause changed", { pause: nextPause });
+        }
+        setCurrentTime(Number.isFinite(nextTime) ? nextTime : 0);
+        setDuration(Number.isFinite(nextDuration) ? Math.max(0, nextDuration) : 0);
+        setPlaying(!status.pause);
+        setMpvFileLoaded(Boolean(status.fileLoaded));
+        setMpvPausedForCache(Boolean(status.pausedForCache));
+        setMpvCacheBuffering(Number(status.cacheBufferingState ?? 0));
+        setMpvTracks(status.tracks ?? []);
+        setSelectedMpvSubtitle(typeof status.sid === "number" ? `track:${status.sid}` : "");
+        if (typeof status.aid === "number") {
+          setSelectedMpvAudio(`track:${status.aid}`);
+        } else {
+          const selectedAudioTrack = (status.tracks ?? []).find(track => {
+            const kind = String(track.type ?? "").toLowerCase();
+            return (kind === "audio" || kind === "a" || kind.includes("audio")) && track.selected && Number.isFinite(Number(track.id));
+          });
+          setSelectedMpvAudio(selectedAudioTrack ? `track:${Number(selectedAudioTrack.id)}` : "");
+        }
+        setSelectedSpeed(String(status.speed ?? 1));
+        setChapterIndex(typeof status.chapter === "number" ? status.chapter : null);
+        setChapterOptions((status.chapterList ?? []).map((chapter, index) => ({
+          index,
+          title: chapter.title?.trim() || `Capitulo ${index + 1}`,
+          time: Number(chapter.time ?? 0),
+        })));
+      } catch {
+        if (!cancelled) {
+          setMpvTracks([]);
+          setChapterOptions([]);
+          setMpvFileLoaded(false);
+          setMpvPausedForCache(false);
+          setMpvCacheBuffering(0);
+        }
+      }
+    };
+
+    void syncMpvStatus();
+    const interval = window.setInterval(() => {
+      void syncMpvStatus();
+    }, 900);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      setMpvTracks([]);
+      setChapterOptions([]);
+      setMpvFileLoaded(false);
+      setMpvPausedForCache(false);
+      setMpvCacheBuffering(0);
+    };
+  }, [engine]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.volume = volume;
+  }, [volume]);
+
+  useEffect(() => {
+    if (engine === "mpv") return;
+    const video = videoRef.current;
+    if (video) video.playbackRate = Number(selectedSpeed) || 1;
+  }, [engine, selectedSpeed]);
+
+  useEffect(() => {
+    if (!query?.season || !query.episode || query.type === "movie") {
+      setEpisodeOptions([]);
+      setSeriesLogoUrl(null);
+      return;
+    }
+    let cancelled = false;
+
+    const loadEpisodes = async () => {
+      try {
+        const tmdbId = await resolveTmdbId(query.type, query.id);
+        if (!tmdbId) return;
+        const [seasonResponse, detailsResponse] = await Promise.all([
+          fetch(`${TMDB}/tv/${tmdbId}/season/${query.season}?api_key=${TMDB_KEY}&language=es-ES`),
+          fetch(`${TMDB}/tv/${tmdbId}?api_key=${TMDB_KEY}&language=es-ES&append_to_response=images&include_image_language=es,null,en`),
+        ]);
+        if (!seasonResponse.ok) return;
+        const seasonJson = await seasonResponse.json();
+        const detailsJson = detailsResponse.ok ? await detailsResponse.json() : null;
+        if (cancelled) return;
+
+        const logos = detailsJson?.images?.logos ?? [];
+        const logoPath = logos.find((item: any) => typeof item?.file_path === "string")?.file_path;
+        setSeriesLogoUrl(logoPath ? `${IMG}/original${logoPath}` : null);
+
+        setEpisodeOptions((seasonJson.episodes ?? []).map((episode: any) => ({
+          id: `${tmdbId}:${query.season}:${episode.episode_number}`,
+          episode: episode.episode_number,
+          season: query.season!,
+          name: episode.name ?? `Episodio ${episode.episode_number}`,
+          overview: typeof episode.overview === "string" ? episode.overview : undefined,
+          airDate: episode.air_date,
+          still: episode.still_path ? `${IMG}/original${episode.still_path}` : undefined,
+        })));
+      } catch {
+        if (!cancelled) {
+          setEpisodeOptions([]);
+          setSeriesLogoUrl(null);
+        }
+      }
+    };
+
+    void loadEpisodes();
+    return () => {
+      cancelled = true;
+    };
+  }, [query]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAddonLogo = async () => {
+      if (!query || !stream?.addonId) {
+        setAddonLogoUrl(null);
+        return;
+      }
+      const addon = getEnabledAddons().find(item => item.id === stream.addonId);
+      if (!addon) {
+        setAddonLogoUrl(null);
+        return;
+      }
+      try {
+        const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
+        const mediaId = query.id;
+        const response = await fetch(`${base}/meta/${query.type}/${encodeURIComponent(mediaId)}.json`);
+        if (!response.ok) {
+          if (!cancelled) setAddonLogoUrl(null);
+          return;
+        }
+        const json = await response.json();
+        if (cancelled) return;
+        const logo = json?.meta?.logo;
+        setAddonLogoUrl(typeof logo === "string" && logo.trim().length > 0 ? logo : null);
+      } catch {
+        if (!cancelled) setAddonLogoUrl(null);
+      }
+    };
+    void loadAddonLogo();
+    return () => {
+      cancelled = true;
+    };
+  }, [getEnabledAddons, query, stream?.addonId]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+    if (engine !== "mpv") return;
+    if (currentTime > lastProgressTimeRef.current + 0.08) {
+      lastProgressTimeRef.current = currentTime;
+      lastProgressAtRef.current = Date.now();
+      setStalledPlayback(false);
+    }
+  }, [currentTime, engine]);
+
+  useEffect(() => {
+    if (engine !== "mpv") {
+      setStalledPlayback(false);
+      return;
+    }
+    const interval = window.setInterval(() => {
+      const cacheHint = mpvPausedForCache || (mpvCacheBuffering > 0 && mpvCacheBuffering < 100);
+      if (cacheHint) {
+        setStalledPlayback(true);
+        return;
+      }
+      if (!playing || (!playbackStarted && currentTimeRef.current < 0.35)) {
+        setStalledPlayback(false);
+        return;
+      }
+      setStalledPlayback(Date.now() - lastProgressAtRef.current > 1600);
+    }, 350);
+    return () => window.clearInterval(interval);
+  }, [engine, mpvCacheBuffering, mpvPausedForCache, playbackStarted, playing]);
+
+  useEffect(() => {
+    if (engine !== "mpv" || !stream || !stalledPlayback || !playbackStarted) return;
+    const interval = window.setInterval(() => {
+      void sendMpvCommand(["set_property", "pause", false]);
+      void sendMpvCommand(["set_property", "speed", 1.0]);
+    }, 900);
+    return () => window.clearInterval(interval);
+  }, [engine, playbackStarted, stalledPlayback, stream]);
+
+  useEffect(() => {
+    if (currentTime > 0.35) {
+      setPlaybackStarted(true);
+    }
+  }, [currentTime]);
+
+  useEffect(() => {
+    if (query?.type === "movie") {
+      setShowEpisodePanel(false);
+    }
+  }, [query?.type]);
+
+  const allSubtitles = useMemo<SubtitleSource[]>(() => {
+    const embedded = (stream?.subtitles ?? [])
+      .filter(item => item.url)
+      .map((item, index) => ({
+        id: `stream-${index}-${item.url}`,
+        addonId: stream?.addonId ?? "stream",
+        addonName: stream?.addonName ?? "Stream",
+        url: item.url!,
+        lang: item.lang ?? item.language ?? "und",
+        label: item.title ?? item.lang ?? item.language ?? "Subtitulos del stream",
+      }));
+    const seen = new Set<string>();
+    return [...embedded, ...addonSubtitles].filter(item => {
+      if (seen.has(item.url)) return false;
+      seen.add(item.url);
+      return true;
+    });
+  }, [addonSubtitles, stream]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const activeLabel = allSubtitles.find(item => item.url === selectedSubtitle)?.label;
+    Array.from(video.textTracks).forEach(track => {
+      track.mode = activeLabel && track.label === activeLabel ? "showing" : "disabled";
+    });
+  }, [allSubtitles, selectedSubtitle]);
+
+  const kind = getStreamKind(stream);
+  const audioOptions = useMemo(
+    () =>
+      mpvTracks
+        .map(track => ({
+          ...track,
+          parsedId: Number(track.id),
+          kind: String(track.type ?? "").toLowerCase(),
+        }))
+        .filter(track => Number.isFinite(track.parsedId) && (track.kind === "audio" || track.kind === "a" || track.kind.includes("audio")))
+        .map(track => ({
+          value: `track:${track.parsedId}`,
+          label: track.title ?? track.lang ?? `Audio ${track.parsedId}`,
+        })),
+    [mpvTracks],
+  );
+
+  const subtitleOptions = useMemo(() => {
+    if (engine !== "mpv") {
+      return allSubtitles.map(subtitle => ({ value: subtitle.url, label: subtitle.label }));
+    }
+    const internal = mpvTracks
+      .map(track => ({
+        ...track,
+        parsedId: Number(track.id),
+        kind: String(track.type ?? "").toLowerCase(),
+      }))
+      .filter(track => Number.isFinite(track.parsedId) && (track.kind === "sub" || track.kind === "subtitle" || track.kind.includes("sub")))
+      .map(track => ({
+        value: `track:${track.parsedId}`,
+        label: track.title ?? track.lang ?? `Subtitulo ${track.parsedId}`,
+      }));
+    const external = allSubtitles.map(subtitle => ({
+      value: `ext:${subtitle.url}`,
+      label: subtitle.label,
+    }));
+    return [...internal, ...external];
+  }, [allSubtitles, engine, mpvTracks]);
+
+  const speedOptions = ["0.5", "0.75", "1", "1.25", "1.5", "2"];
+  const normalizedAudioOptions = audioOptions.length > 0
+    ? audioOptions
+    : (selectedMpvAudio ? [{ value: selectedMpvAudio, label: `Audio ${selectedMpvAudio.replace("track:", "")}` }] : []);
+  const panelItems = episodeOptions.length > 0
+    ? episodeOptions.map(item => ({
+      key: item.id,
+      title: `${item.episode}. ${item.name}`,
+      subtitle: item.airDate ?? `T${item.season} E${item.episode}`,
+      image: item.still,
+      active: item.episode === query?.episode,
+      onClick: () => {
+        if (item.episode === query?.episode) return;
+        void invoke("stop_mpv").catch(() => undefined).finally(() => {
+          navigate(`/streams?type=${query?.type}&id=${encodeURIComponent(query?.id ?? "")}&season=${item.season}&ep=${item.episode}`);
+        });
+      },
+    }))
+    : chapterOptions.map(item => ({
+      key: `chapter:${item.index}`,
+      title: item.title,
+      subtitle: formatTime(item.time),
+      image: undefined,
+      active: item.index === chapterIndex,
+      onClick: () => {
+        if (engine !== "mpv") {
+          seek(item.time);
+          return;
+        }
+        void sendMpvCommand(["set_property", "chapter", item.index]);
+      },
+    }));
+
+  const title = useMemo(() => {
+    const type = params.get("type");
+    const season = params.get("season");
+    const episode = params.get("ep");
+    if (type !== "movie" && season && episode) return `Temporada ${season}, Episodio ${episode}`;
+    return stream?.name ?? "Reproduccion";
+  }, [params, stream?.name]);
+
+  function wakeControls() {
+    setControlsVisible(true);
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setControlsVisible(false), 800);
+  }
+
+  function togglePlay() {
+    if (engine === "mpv") {
+      setPlaying(value => !value);
+      void sendMpvCommand(["cycle", "pause"]);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play();
+    else video.pause();
+  }
+
+  function seek(value: number) {
+    debugLog("seek() called", { value });
+    if (engine === "mpv") {
+      setCurrentTime(value);
+      void sendMpvCommand(["seek", value, "absolute", "exact"]);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.min(Math.max(value, 0), duration || value);
+    setCurrentTime(video.currentTime);
+  }
+
+  function jump(offset: number) {
+    debugLog("jump() called", { offset });
+    if (engine === "mpv") {
+      void sendMpvCommand(["seek", offset, "relative"]);
+      return;
+    }
+    seek(currentTime + offset);
+  }
+
+  function applyVolume(nextVolume: number) {
+    const clamped = Math.min(1, Math.max(0, nextVolume));
+    setVolume(clamped);
+    if (engine === "mpv") {
+      void sendMpvCommand(["set_property", "volume", Math.round(clamped * 100)]);
+    }
+  }
+
+  function toggleFullscreen() {
+    const root = document.documentElement;
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void root.requestFullscreen();
+  }
+
+  async function launchMpv(showOpening = true) {
+    if (!stream) return;
+    if (showOpening) setMpvStatus("Abriendo MPV...");
+    const { error } = await openExternal(stream);
+    setPlaying(!error);
+    setMpvStatus(error ? `MPV no inicio: ${error}` : null);
+  }
+
+  async function retryMpvPlayback() {
+    setMpvStatus("Reiniciando MPV...");
+    await launchMpv(false);
+  }
+
+  async function sendMpvCommand(command: unknown[]) {
+    debugLog("mpv_command send", { command });
+    try {
+      await invoke("mpv_command", { command });
+      debugLog("mpv_command ok", { command });
+    } catch (error) {
+      debugLog("mpv_command error", { command, error: String(error) });
+      setMpvStatus(`MPV: ${String(error)}`);
+    }
+  }
+
+  function goBack() {
+    if (engine !== "mpv") {
+      navigate(-1);
+      return;
+    }
+    void invoke("stop_mpv")
+      .catch(() => undefined)
+      .finally(() => navigate(-1));
+  }
+
+  function navigateEpisode(direction: "prev" | "next") {
+    if (!query?.season || !query.episode) return;
+    const currentIndex = episodeOptions.findIndex(episode => episode.episode === query.episode);
+    if (currentIndex === -1) return;
+    const nextEpisode = episodeOptions[currentIndex + (direction === "next" ? 1 : -1)];
+    if (!nextEpisode) return;
+    void invoke("stop_mpv").catch(() => undefined).finally(() => {
+      navigate(`/streams?type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}`);
+    });
+  }
+
+  useEffect(() => {
+    if (!stream || engine !== "mpv") return;
+    const launchKey = getPlaybackTarget(stream);
+    if (mpvLaunchKeyRef.current === launchKey) return;
+    let cancelled = false;
+    mpvLaunchKeyRef.current = launchKey;
+    mpvAutoPlayKeyRef.current = "";
+    mpvRecoveryKeyRef.current = "";
+    lastProgressTimeRef.current = 0;
+    lastProgressAtRef.current = Date.now();
+    currentTimeRef.current = 0;
+    setStalledPlayback(false);
+    setPlaybackStarted(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setPlaying(false);
+    setMpvStatus("Abriendo MPV...");
+    debugLog("mpv openExternal called", { target: launchKey });
+    openExternal(stream).then(({ error }) => {
+      if (!cancelled) setPlaying(!error);
+      if (!cancelled) setMpvStatus(error ? `MPV no inicio: ${error}` : null);
+      if (!cancelled) debugLog(error ? "mpv openExternal error" : "mpv openExternal resolved", { error });
+    });
+    return () => {
+      cancelled = true;
+      setPlaying(false);
+      mpvLaunchKeyRef.current = "";
+      mpvRecoveryKeyRef.current = "";
+      setStalledPlayback(false);
+      void invoke("stop_mpv");
+    };
+  }, [engine, stream]);
+
+  useEffect(() => {
+    if (engine !== "mpv" || !stream || !mpvFileLoaded) return;
+    const launchKey = getPlaybackTarget(stream);
+    if (!launchKey) return;
+    if (mpvAutoPlayKeyRef.current === launchKey) return;
+    mpvAutoPlayKeyRef.current = launchKey;
+    debugLog("mpv autoplay unlock", { launchKey });
+    void sendMpvCommand(["set_property", "pause", false]);
+    void sendMpvCommand(["set_property", "speed", 1.0]);
+  }, [engine, mpvFileLoaded, stream]);
+
+  useEffect(() => {
+    if (engine !== "mpv" || !stream || !mpvFileLoaded) return;
+    const launchKey = getPlaybackTarget(stream);
+    if (!launchKey || mpvRecoveryKeyRef.current === launchKey) return;
+    if (playbackStarted || mpvPausedForCache || (mpvCacheBuffering > 0 && mpvCacheBuffering < 100)) return;
+    if (!stalledPlayback || currentTimeRef.current >= 0.3) return;
+
+    mpvRecoveryKeyRef.current = launchKey;
+    debugLog("mpv stalled recovery", { launchKey });
+    void sendMpvCommand(["set_property", "pause", false]);
+    void sendMpvCommand(["set_property", "speed", 1.0]);
+    void sendMpvCommand(["seek", 0, "absolute", "exact"]);
+  }, [engine, mpvCacheBuffering, mpvFileLoaded, mpvPausedForCache, playbackStarted, stalledPlayback, stream]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName.toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) return;
+      }
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        togglePlay();
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        jump(10);
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        jump(-10);
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        applyVolume(volume + 0.05);
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        applyVolume(volume - 0.05);
+        wakeControls();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applyVolume, jump, togglePlay, volume, wakeControls]);
+
+  if (!stream) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-black text-white">
+        <p className="text-white/64">No hay una fuente seleccionada.</p>
+        <button onClick={goBack} className="liquid-glass rounded-md px-5 py-2 font-bold">Volver</button>
+      </div>
+    );
+  }
+
+  const playbackTarget = getPlaybackTarget(stream);
+  const canPlayInline = engine === "web" && kind === "https" && looksWebPlayable(stream) && !!stream.url;
+  const mpvError = engine === "mpv" && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
+  const showFallbackPanel = !canPlayInline && (engine !== "mpv" || mpvError);
+  const currentEpisodeIndex = episodeOptions.findIndex(episode => episode.episode === query?.episode);
+  const currentEpisode = currentEpisodeIndex >= 0 ? episodeOptions[currentEpisodeIndex] : null;
+  const canGoPrevEpisode = currentEpisodeIndex > 0;
+  const canGoNextEpisode = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodeOptions.length - 1;
+  const isMovie = query?.type === "movie";
+  const selectedSubtitleValue = engine === "mpv" ? selectedMpvSubtitle : selectedSubtitle;
+  const selectedSubtitleLabel = subtitleOptions.find(option => option.value === selectedSubtitleValue)?.label ?? "Subtitulos";
+  const selectedAudioLabel = normalizedAudioOptions.find(option => option.value === selectedMpvAudio)?.label ?? "Audio";
+  const selectedSpeedLabel = `${selectedSpeed}x`;
+  const showPanelToggle = !isMovie && panelItems.length > 0;
+  const currentMetaTitle = currentEpisode?.name ?? stream.title ?? stream.name;
+  const currentOverview = currentEpisode?.overview?.trim() || "Sin descripcion disponible para este episodio.";
+  const controlsActive = controlsVisible || showEpisodePanel;
+  const loadingArtwork = addonLogoUrl || null;
+  const bufferingActive = mpvPausedForCache || (mpvCacheBuffering > 0 && mpvCacheBuffering < 100) || stalledPlayback;
+  const shouldShowLoading = (
+    (engine === "mpv" && !showFallbackPanel && (!playbackStarted || bufferingActive) && !mpvError)
+    || (engine === "web" && !showFallbackPanel && (!playbackStarted || webBuffering))
+  );
+
+  return (
+    <div
+      className={`relative h-screen w-screen overflow-hidden text-white ${engine === "mpv" ? "bg-transparent" : "bg-black"}`}
+      style={{ fontFamily: "Inter, system-ui, sans-serif" }}
+      onMouseMove={wakeControls}
+      onClick={wakeControls}
+    >
+      {canPlayInline ? (
+        <video
+          ref={videoRef}
+          src={stream.url}
+          className="h-full w-full bg-black object-contain"
+          autoPlay
+          playsInline
+          crossOrigin="anonymous"
+          onClick={togglePlay}
+        >
+          {allSubtitles.map((subtitle, index) => (
+            <track
+              key={subtitle.id}
+              src={subtitle.url}
+              kind="subtitles"
+              srcLang={subtitle.lang}
+              label={subtitle.label}
+              default={selectedSubtitle === subtitle.url || (!selectedSubtitle && index === 0)}
+            />
+          ))}
+        </video>
+      ) : showFallbackPanel ? (
+        <div className={`pointer-events-none absolute inset-0 flex items-center justify-center px-8 text-center ${engine === "mpv" ? "bg-transparent" : "bg-[radial-gradient(circle_at_center,#202024_0%,#050505_68%)]"}`}>
+          <div className="pointer-events-auto liquid-glass-dark max-w-lg rounded-lg p-6 opacity-95 transition-opacity duration-300 hover:opacity-100">
+            <h1 className="mb-3 text-xl font-black">{engine === "mpv" ? "MPV interno" : "Fuente externa"}</h1>
+            {engine !== "mpv" && (
+              <p className="mb-6 text-sm leading-relaxed text-white/62">
+                Esta fuente no es reproducible directamente por el reproductor web.
+              </p>
+            )}
+            {mpvBundled === false && (
+              <p className="mb-4 rounded-md bg-white/10 px-4 py-3 text-xs text-white/62">
+                MPV interno no esta instalado en el bundle. Instala el runtime en src-tauri/bin/mpv y vuelve a empaquetar.
+              </p>
+            )}
+            {mpvStatus && <p className="mb-4 text-xs text-white/58">{mpvStatus}</p>}
+            <button onClick={() => void retryMpvPlayback()} className="rounded-md bg-white px-5 py-2.5 font-bold text-black">
+              Reintentar reproduccion
+            </button>
+            {engine !== "mpv" && playbackTarget && <p className="mt-4 break-all text-xs text-white/32">{playbackTarget}</p>}
+          </div>
+        </div>
+      ) : (
+        <div className="pointer-events-none absolute inset-0 bg-transparent" />
+      )}
+
+      {shouldShowLoading && (
+        <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="aetherio-breathe grid max-h-36 min-h-16 min-w-[240px] max-w-[520px] place-items-center overflow-hidden rounded-2xl bg-black/28 px-6 py-4 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-[14px]">
+              {loadingArtwork ? (
+                <img src={loadingArtwork} alt={stream.name} className="max-h-28 w-auto max-w-[460px] object-contain" />
+              ) : (
+                <div className="h-11 w-11 animate-spin rounded-full border-2 border-white/28 border-t-white/92" />
+              )}
+            </div>
+            <p className="text-xs font-medium tracking-wide text-white/72">Cargando reproduccion...</p>
+          </div>
+        </div>
+      )}
+
+      {showEpisodePanel && showPanelToggle && (
+        <div className="absolute inset-y-4 right-5 z-50 w-[410px] max-w-[calc(100vw-40px)]">
+          <div
+            className="flex h-full flex-col rounded-[30px] border border-white/24 p-5 shadow-[0_34px_90px_rgba(0,0,0,0.76)]"
+            style={{
+              backgroundColor: "rgba(31,31,31,0.96)",
+              backdropFilter: "blur(82px) saturate(180%)",
+              WebkitBackdropFilter: "blur(82px) saturate(180%)",
+            }}
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[30px] font-black leading-none text-white">
+                  {seriesLogoUrl ? <img src={seriesLogoUrl} alt={stream.name} className="max-h-16 w-auto object-contain" /> : stream.name}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowEpisodePanel(false)}
+                className="flex h-11 w-11 items-center justify-center rounded-full border border-white/16 bg-white/12 text-white/90 transition hover:bg-white/20"
+                title="Cerrar panel"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+
+            <div className="mb-4 rounded-2xl border border-white/24 bg-black/58 p-4">
+              <div className="mb-2 flex items-center justify-between text-white/75">
+                <span className="text-sm font-semibold">{title}</span>
+                <span className="text-sm">{currentEpisode?.airDate ?? ""}</span>
+              </div>
+              <p className="line-clamp-4 text-sm leading-6 text-white/80">{currentOverview}</p>
+            </div>
+
+            {episodeOptions.length > 0 && (
+              <div className="mb-4 grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => navigateEpisode("prev")}
+                  disabled={!canGoPrevEpisode}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  <ChevronLeft size={16} />
+                  Anterior
+                </button>
+                <button
+                  onClick={() => navigateEpisode("next")}
+                  disabled={!canGoNextEpisode}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Siguiente
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-3 overflow-y-auto pr-1">
+              {panelItems.map(item => (
+                <button
+                  key={item.key}
+                  onClick={item.onClick}
+                  className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-4 text-left transition ${
+                    item.active
+                      ? "border-white/28 bg-white/16"
+                      : "border-white/14 bg-black/24 hover:border-white/20 hover:bg-white/12"
+                  }`}
+                >
+                  <div className="relative h-28 w-48 overflow-hidden rounded-xl">
+                    {item.image ? (
+                      <>
+                        <img src={item.image} alt="" className="h-28 w-48 object-cover" />
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/86 via-black/28 to-transparent" />
+                      </>
+                    ) : (
+                      <div className="flex h-28 w-48 items-center justify-center bg-white/10 text-white/60">
+                        <ListVideo size={18} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold leading-tight text-white">{item.title}</p>
+                    <p className="mt-1 text-sm text-white/72">{item.subtitle}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div
+        className="absolute inset-x-0 bottom-0 z-40 px-4 pb-3 transition-opacity duration-300"
+        style={{ opacity: controlsActive ? 1 : 0, pointerEvents: controlsActive ? "auto" : "none" }}
+      >
+        <div
+          className="mx-auto w-full max-w-[1240px] rounded-[24px] border border-white/30 px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)]"
+          style={{
+            backgroundColor: "rgba(8,8,8,0.94)",
+            backdropFilter: "blur(104px) saturate(180%)",
+            WebkitBackdropFilter: "blur(104px) saturate(180%)",
+          }}
+        >
+          <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
+            <span className="max-w-[36ch] truncate text-base font-semibold text-white/92">{currentMetaTitle}</span>
+            <span className="h-1 w-1 rounded-full bg-white/45" />
+            <span>{title}</span>
+          </div>
+
+          <div className="mb-3.5 flex items-center gap-3">
+            <span className="w-12 text-right text-xs text-white/84">{formatTime(currentTime)}</span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={1}
+              value={Math.min(currentTime, duration || currentTime)}
+              onChange={event => seek(Number(event.target.value))}
+              disabled={!duration}
+              className="h-1.5 flex-1 accent-white disabled:opacity-35"
+            />
+            <span className="w-12 text-xs text-white/84">{formatTime(duration)}</span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <IconButton label="Volver" onClick={goBack}>
+                <ArrowLeft size={18} />
+              </IconButton>
+              <IconButton label="Retroceder 10 segundos" onClick={() => jump(-10)}>
+                <RotateCcw size={19} />
+              </IconButton>
+              <IconButton label={playing ? "Pausar" : "Reproducir"} onClick={togglePlay} large>
+                {playing ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" />}
+              </IconButton>
+              <IconButton label="Avanzar 10 segundos" onClick={() => jump(10)}>
+                <RotateCw size={19} />
+              </IconButton>
+              <div className="flex items-center gap-3 rounded-full border border-white/14 bg-white/14 px-3.5 py-2.5">
+                <Volume2 size={17} className="text-white/84" />
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={volume}
+                  onChange={event => {
+                    const nextVolume = Number(event.target.value);
+                    applyVolume(nextVolume);
+                  }}
+                  className="h-1 w-32 accent-white"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2.5">
+              {engine === "mpv" && (
+                <SelectPill
+                  icon={<AudioLines size={16} />}
+                  value={selectedMpvAudio}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setSelectedMpvAudio(value);
+                    if (!value) {
+                      void sendMpvCommand(["set_property", "aid", "no"]);
+                      return;
+                    }
+                    if (value.startsWith("track:")) {
+                      void sendMpvCommand(["set_property", "aid", Number(value.slice(6))]);
+                    }
+                  }}
+                >
+                  <option value="" className="bg-black">Sin audio</option>
+                  {normalizedAudioOptions.map(option => (
+                    <option key={option.value} value={option.value} className="bg-black">{option.label}</option>
+                  ))}
+                </SelectPill>
+              )}
+
+              <SelectPill
+                icon={<Captions size={16} />}
+                value={selectedSubtitleValue}
+                onChange={event => {
+                  const value = event.target.value;
+                  if (engine !== "mpv") {
+                    setSelectedSubtitle(value);
+                    return;
+                  }
+                  setSelectedMpvSubtitle(value);
+                  if (!value) {
+                    void sendMpvCommand(["set_property", "sid", "no"]);
+                    return;
+                  }
+                  if (value.startsWith("track:")) {
+                    void sendMpvCommand(["set_property", "sid", Number(value.slice(6))]);
+                    return;
+                  }
+                  if (value.startsWith("ext:")) {
+                    void sendMpvCommand(["sub-add", value.slice(4), "select"]);
+                  }
+                }}
+              >
+                <option value="" className="bg-black">Sin subtitulos</option>
+                {subtitleOptions.map(subtitle => (
+                  <option key={subtitle.value} value={subtitle.value} className="bg-black">{subtitle.label}</option>
+                ))}
+              </SelectPill>
+
+              <SelectPill
+                icon={<TimerReset size={16} />}
+                value={selectedSpeed}
+                onChange={event => {
+                  const value = event.target.value;
+                  setSelectedSpeed(value);
+                  if (engine === "mpv") void sendMpvCommand(["set_property", "speed", Number(value)]);
+                }}
+              >
+                {speedOptions.map(option => (
+                  <option key={option} value={option} className="bg-black">{option}x</option>
+                ))}
+              </SelectPill>
+
+              {showPanelToggle && (
+                <button
+                  onClick={() => setShowEpisodePanel(value => !value)}
+                  className={`flex h-10 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold transition ${
+                    showEpisodePanel
+                      ? "border-white/18 bg-white/20 text-white"
+                      : "border-white/12 bg-white/12 text-white/90 hover:bg-white/18"
+                  }`}
+                >
+                  <ListVideo size={16} />
+                  <span>Episodios</span>
+                </button>
+              )}
+
+              {episodeOptions.length > 0 && (
+                <>
+                  <IconButton
+                    label="Episodio anterior"
+                    onClick={() => navigateEpisode("prev")}
+                    disabled={!canGoPrevEpisode}
+                  >
+                    <ChevronLeft size={18} />
+                  </IconButton>
+                  <IconButton
+                    label="Episodio siguiente"
+                    onClick={() => navigateEpisode("next")}
+                    disabled={!canGoNextEpisode}
+                  >
+                    <ChevronRight size={18} />
+                  </IconButton>
+                </>
+              )}
+
+              <IconButton label="Pantalla completa" onClick={toggleFullscreen}>
+                <Maximize size={19} />
+              </IconButton>
+            </div>
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[11px] text-white/58">
+            <span>{selectedAudioLabel}</span>
+            <span className="h-1 w-1 rounded-full bg-white/35" />
+            <span>{selectedSubtitleLabel}</span>
+            <span className="h-1 w-1 rounded-full bg-white/35" />
+            <span>{selectedSpeedLabel}</span>
+            {subtitlesLoading && (
+              <>
+                <span className="h-1 w-1 rounded-full bg-white/35" />
+                <span>Cargando subtitulos...</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IconButton({
+  children,
+  label,
+  onClick,
+  disabled = false,
+  large = false,
+}: {
+  children: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  large?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center justify-center rounded-full border border-white/12 bg-white/12 text-white transition hover:bg-white/22 disabled:cursor-not-allowed disabled:opacity-35 ${
+        large ? "h-11 w-11" : "h-10 w-10"
+      }`}
+      title={label}
+      aria-label={label}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SelectPill({
+  icon,
+  value,
+  onChange,
+  children,
+}: {
+  icon: ReactNode;
+  value: string;
+  onChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="flex h-10 items-center gap-2 rounded-full border border-white/12 bg-white/12 px-3.5 text-sm text-white/90">
+      <span className="text-white/86">{icon}</span>
+      <select
+        value={value}
+        onChange={onChange}
+        className="max-w-40 bg-transparent text-sm text-white outline-none"
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
+<<< END: src\pages\Player\index.tsx >>>
+--- src\pages\Player\NextEpisodeOverlay.tsx [VACIO] ---
+--- src\pages\Player\PlayerControls.tsx [VACIO] ---
+--- src\pages\Player\SubtitleOverlay.tsx [VACIO] ---
+
+<<< FILE: src\pages\Search\index.tsx >>>
+export default function SearchPage() {
+  return (
+    <div className="flex flex-col h-full p-8 animate-fadeIn">
+      <h1 className="text-3xl font-bold text-text-primary mb-6">Buscar</h1>
+      <input
+        className="w-full max-w-xl bg-bg-surface border border-glass-border rounded-card px-4 py-3 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-colors"
+        placeholder="Busca películas, series, anime..."
+      />
+    </div>
+  );
+}
+
+<<< END: src\pages\Search\index.tsx >>>
+--- src\pages\Search\SearchResultGroup.tsx [VACIO] ---
+--- src\pages\Settings\CacheSettings.tsx [VACIO] ---
+
+<<< FILE: src\pages\Settings\index.tsx >>>
+export default function SettingsPage() {
+  return (
+    <div className="flex flex-col h-full p-8 animate-fadeIn">
+      <h1 className="text-3xl font-bold text-text-primary mb-2">Ajustes</h1>
+      <p className="text-text-secondary">Próximamente.</p>
+    </div>
+  );
+}
+
+<<< END: src\pages\Settings\index.tsx >>>
+--- src\pages\Settings\PlaybackSettings.tsx [VACIO] ---
+--- src\pages\Settings\PlayerSettings.tsx [VACIO] ---
+--- src\pages\Settings\SubtitleSettings.tsx [VACIO] ---
+--- src\player\AbstractPlayer.ts [VACIO] ---
+--- src\player\MPVPlayer.ts [VACIO] ---
+--- src\player\PlayerFactory.ts [VACIO] ---
+--- src\services\AddonService.ts [VACIO] ---
+--- src\services\HistoryService.ts [VACIO] ---
+--- src\services\LibraryService.ts [VACIO] ---
+--- src\services\SearchService.ts [VACIO] ---
+--- src\services\SettingsService.ts [VACIO] ---
+--- src\services\SubtitleService.ts [VACIO] ---
+
+<<< FILE: src\store\addonStore.ts >>>
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+export interface InstalledAddon {
+  id: string;
+  name: string;
+  description?: string;
+  logo?: string;
+  url: string;
+  manifest: any;
+  enabled: boolean;
+  installedAt: number;
+  version: string;
+}
+
+interface AddonStore {
+  addons: InstalledAddon[];
+  isInstalling: boolean;
+  installError: string | null;
+  addAddon: (a: InstalledAddon) => void;
+  removeAddon: (id: string) => void;
+  enableAddon: (id: string) => void;
+  disableAddon: (id: string) => void;
+  reorderAddons: (ordered: InstalledAddon[]) => void;
+  setInstalling: (v: boolean) => void;
+  setInstallError: (e: string | null) => void;
+  getEnabledAddons: () => InstalledAddon[];
+}
+
+export const useAddonStore = create<AddonStore>()(
+  persist(
+    (set, get) => ({
+      addons: [],
+      isInstalling: false,
+      installError: null,
+      addAddon: (a) =>
+        set((s) => ({ addons: [...s.addons.filter((x) => x.id !== a.id), a] })),
+      removeAddon: (id) =>
+        set((s) => ({ addons: s.addons.filter((a) => a.id !== id) })),
+      enableAddon: (id) =>
+        set((s) => ({ addons: s.addons.map((a) => a.id === id ? { ...a, enabled: true } : a) })),
+      disableAddon: (id) =>
+        set((s) => ({ addons: s.addons.map((a) => a.id === id ? { ...a, enabled: false } : a) })),
+      reorderAddons: (ordered) => set({ addons: ordered }),
+      setInstalling: (v) => set({ isInstalling: v }),
+      setInstallError: (e) => set({ installError: e }),
+      getEnabledAddons: () => get().addons.filter((a) => a.enabled),
+    }),
+    { name: "aetherio-addons" }
+  )
+);
+
+<<< END: src\store\addonStore.ts >>>
+--- src\store\cacheStore.ts [VACIO] ---
+--- src\store\libraryStore.ts [VACIO] ---
+--- src\store\playerStore.ts [VACIO] ---
+--- src\store\settingsStore.ts [VACIO] ---
+
+<<< FILE: src\store\uiStore.ts >>>
+import { create } from "zustand";
+
+interface UIStore {
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
+  setSidebarCollapsed: (v: boolean) => void;
+  streamPickerOpen: boolean;
+  setStreamPickerOpen: (v: boolean) => void;
+}
+
+export const useUIStore = create<UIStore>()((set) => ({
+  sidebarCollapsed: false,
+  toggleSidebar: () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+  streamPickerOpen: false,
+  setStreamPickerOpen: (v) => set({ streamPickerOpen: v }),
+}));
+
+<<< END: src\store\uiStore.ts >>>
+
+<<< FILE: src\types\addon.ts >>>
+export type ContentType = "movie" | "series" | "anime" | "channel" | "tv";
+export type ResourceType = "catalog" | "meta" | "stream" | "subtitles";
+
+export interface CatalogDefinition {
+  type: ContentType;
+  id: string;
+  name: string;
+}
+
+export interface StremioManifest {
+  id: string;
+  version: string;
+  name: string;
+  description?: string;
+  logo?: string;
+  background?: string;
+  resources: (ResourceType | { name: ResourceType; types?: string[]; idPrefixes?: string[] })[];
+  types: ContentType[];
+  catalogs: CatalogDefinition[];
+  idPrefixes?: string[];
+  behaviorHints?: {
+    adult?: boolean;
+    p2p?: boolean;
+    configurable?: boolean;
+    configurationRequired?: boolean;
+  };
+}
+
+export type PlaybackMode =
+  | "always_ask" | "auto_best_quality"
+  | "auto_best_source" | "reuse_last" | "smart";
+
+export type NextEpisodeMode =
+  | "autoplay" | "countdown" | "ask"
+  | "return_to_detail" | "disabled";
+
+<<< END: src\types\addon.ts >>>
+--- src\types\media.ts [VACIO] ---
+--- src\types\player.ts [VACIO] ---
+--- src\types\settings.ts [VACIO] ---
+
+<<< FILE: src\types\stream.ts >>>
+export interface StreamSubtitle {
+  id?: string;
+  url?: string;
+  lang?: string;
+  language?: string;
+  title?: string;
+}
+
+export interface MediaStream {
+  id: string;
+  addonId: string;
+  addonName: string;
+  name: string;
+  title?: string;
+  description?: string;
+  url?: string;
+  externalUrl?: string;
+  ytId?: string;
+  infoHash?: string;
+  fileIdx?: number;
+  behaviorHints?: {
+    filename?: string;
+    videoSize?: number;
+    bingeGroup?: string;
+    notWebReady?: boolean;
+    [key: string]: unknown;
+  };
+  subtitles?: StreamSubtitle[];
+}
+
+export interface StreamQuery {
+  type: string;
+  id: string;
+  season?: number;
+  episode?: number;
+}
+
+export type StreamKind = "https" | "p2p" | "external" | "unknown";
+
+export type PlaybackEngine = "web" | "mpv";
+
+<<< END: src\types\stream.ts >>>
+
+<<< FILE: src\types\subtitle.ts >>>
+export interface SubtitleSource {
+  id: string;
+  addonId: string;
+  addonName: string;
+  url: string;
+  lang: string;
+  label: string;
+  format?: string;
+}
+
+<<< END: src\types\subtitle.ts >>>
+
+<<< FILE: src\types\ui.ts >>>
+export interface MediaItem {
+  id: string;
+  type: string;
+  name: string;
+  poster?: string;
+  background?: string;
+  logo?: string;
+  description?: string;
+  imdbRating?: string;
+  rating?: string;
+  year?: number;
+  genres?: string[];
+  runtime?: string;
+}
+
+export interface CatalogRowData {
+  addonId: string;
+  addonName: string;
+  catalogId: string;
+  type: string;
+  name: string;
+  items: MediaItem[];
+}
+
+<<< END: src\types\ui.ts >>>
+--- src\utils\dedupe.ts [VACIO] ---
+--- src\utils\formatDuration.ts [VACIO] ---
+--- src\utils\identity.ts [VACIO] ---
+--- src\utils\imageProxy.ts [VACIO] ---
+--- src\utils\logger.ts [VACIO] ---
+
+<<< FILE: src\vite-env.d.ts >>>
+/// <reference types="vite/client" />
+
+<<< END: src\vite-env.d.ts >>>
+
+<<< FILE: tailwind.config.js >>>
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html","./src/**/*.{js,ts,jsx,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        atv: {
+          black:    "#000000",
+          bg:       "#0d0d0d",
+          surface:  "#1c1c1e",
+          elevated: "#2c2c2e",
+          border:   "rgba(255,255,255,0.12)",
+          hover:    "rgba(255,255,255,0.08)",
+          text:     "#ffffff",
+          secondary:"rgba(255,255,255,0.60)",
+          muted:    "rgba(255,255,255,0.30)",
+          selected: "rgba(255,255,255,0.15)",
+        },
+      },
+      fontFamily: { sans: ["Inter","system-ui","sans-serif"] },
+      backdropBlur: { atv: "20px", heavy: "40px" },
+      borderRadius: { pill: "999px", card: "10px", lg2: "16px" },
+      boxShadow: {
+        glass:  "0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
+        card:   "0 4px 20px rgba(0,0,0,0.6)",
+        "card-hover": "0 8px 36px rgba(0,0,0,0.8)",
+        glow:   "0 0 0 2px rgba(255,255,255,0.35)",
+      },
+      keyframes: {
+        shimmer:{"0%":{backgroundPosition:"-200% 0"},"100%":{backgroundPosition:"200% 0"}},
+        fadeUp: {"0%":{opacity:"0",transform:"translateY(10px)"},"100%":{opacity:"1",transform:"translateY(0)"}},
+        fadeIn: {"0%":{opacity:"0"},"100%":{opacity:"1"}},
+        scaleIn:{"0%":{opacity:"0",transform:"scale(0.96)"},"100%":{opacity:"1",transform:"scale(1)"}},
+        slideLeft:{"0%":{transform:"translateX(0)"},"100%":{transform:"translateX(-100%)"}},
+      },
+      animation: {
+        shimmer:  "shimmer 1.8s infinite linear",
+        fadeUp:   "fadeUp 0.4s cubic-bezier(0.16,1,0.3,1) forwards",
+        fadeIn:   "fadeIn 0.3s ease forwards",
+        scaleIn:  "scaleIn 0.25s cubic-bezier(0.16,1,0.3,1) forwards",
+      },
+      transitionTimingFunction: {
+        smooth: "cubic-bezier(0.16,1,0.3,1)",
+        spring: "cubic-bezier(0.34,1.56,0.64,1)",
+      },
+    },
+  },
+  plugins: [],
+}
+<<< END: tailwind.config.js >>>
+
+<<< FILE: tsconfig.json >>>
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
+
+<<< END: tsconfig.json >>>
+
+<<< FILE: tsconfig.node.json >>>
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["vite.config.ts"]
+}
+
+<<< END: tsconfig.node.json >>>
+
+<<< FILE: vite.config.ts >>>
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import path from "path";
+
+export default defineConfig(async () => ({
+  plugins: [react()],
+  resolve: {
+    alias: { "@": path.resolve(__dirname, "./src") },
+  },
+  clearScreen: false,
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: { ignored: ["**/src-tauri/**"] },
+  },
+}));
+
+<<< END: vite.config.ts >>>
+
+=== RESUMEN ===
+Archivos leidos: 34
+Archivos omitidos: 1

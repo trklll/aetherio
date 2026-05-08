@@ -1,0 +1,1351 @@
+﻿=== PARTE 2 de 2 ===
+lay", syncPlay);
+      video.removeEventListener("pause", syncPause);
+      video.removeEventListener("error", syncError);
+    };
+  }, [engine, stream]);
+
+  useEffect(() => {
+    if (!stream || engine !== "web" || looksWebPlayable(stream)) return;
+    setEngine("mpv");
+    sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
+  }, [engine, stream]);
+
+  useEffect(() => {
+    if (engine !== "mpv") return;
+    let cancelled = false;
+
+    const syncMpvStatus = async () => {
+      try {
+        const status = await invoke<MpvStatusSnapshot>("mpv_status");
+        if (cancelled) return;
+        const nextTime = Number(status.timePos ?? 0);
+        const nextDuration = Number(status.duration ?? 0);
+        const nextFileLoaded = Boolean(status.fileLoaded);
+        const nextCache = Number(status.cacheBufferingState ?? 0);
+        const nextPause = status.pause === null || status.pause === undefined ? null : Boolean(status.pause);
+        if (nextFileLoaded !== lastMpvFileLoadedRef.current) {
+          lastMpvFileLoadedRef.current = nextFileLoaded;
+          debugLog("mpv fileLoaded changed", { fileLoaded: nextFileLoaded });
+        }
+        if (nextCache !== lastMpvCacheRef.current) {
+          lastMpvCacheRef.current = nextCache;
+          debugLog("mpv cacheBuffering changed", { cacheBufferingState: nextCache });
+        }
+        if (nextPause !== lastMpvPauseRef.current) {
+          lastMpvPauseRef.current = nextPause;
+          debugLog("mpv pause changed", { pause: nextPause });
+        }
+        setCurrentTime(Number.isFinite(nextTime) ? nextTime : 0);
+        setDuration(Number.isFinite(nextDuration) ? Math.max(0, nextDuration) : 0);
+        setPlaying(!status.pause);
+        setMpvFileLoaded(Boolean(status.fileLoaded));
+        setMpvPausedForCache(Boolean(status.pausedForCache));
+        setMpvCacheBuffering(Number(status.cacheBufferingState ?? 0));
+        setMpvTracks(status.tracks ?? []);
+        setSelectedMpvSubtitle(typeof status.sid === "number" ? `track:${status.sid}` : "");
+        if (typeof status.aid === "number") {
+          setSelectedMpvAudio(`track:${status.aid}`);
+        } else {
+          const selectedAudioTrack = (status.tracks ?? []).find(track => {
+            const kind = String(track.type ?? "").toLowerCase();
+            return (kind === "audio" || kind === "a" || kind.includes("audio")) && track.selected && Number.isFinite(Number(track.id));
+          });
+          setSelectedMpvAudio(selectedAudioTrack ? `track:${Number(selectedAudioTrack.id)}` : "");
+        }
+        setSelectedSpeed(String(status.speed ?? 1));
+        setChapterIndex(typeof status.chapter === "number" ? status.chapter : null);
+        setChapterOptions((status.chapterList ?? []).map((chapter, index) => ({
+          index,
+          title: chapter.title?.trim() || `Capitulo ${index + 1}`,
+          time: Number(chapter.time ?? 0),
+        })));
+      } catch {
+        if (!cancelled) {
+          setMpvTracks([]);
+          setChapterOptions([]);
+          setMpvFileLoaded(false);
+          setMpvPausedForCache(false);
+          setMpvCacheBuffering(0);
+        }
+      }
+    };
+
+    void syncMpvStatus();
+    const interval = window.setInterval(() => {
+      void syncMpvStatus();
+    }, 900);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      setMpvTracks([]);
+      setChapterOptions([]);
+      setMpvFileLoaded(false);
+      setMpvPausedForCache(false);
+      setMpvCacheBuffering(0);
+    };
+  }, [engine]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.volume = volume;
+  }, [volume]);
+
+  useEffect(() => {
+    if (engine === "mpv") return;
+    const video = videoRef.current;
+    if (video) video.playbackRate = Number(selectedSpeed) || 1;
+  }, [engine, selectedSpeed]);
+
+  useEffect(() => {
+    if (!query?.season || !query.episode || query.type === "movie") {
+      setEpisodeOptions([]);
+      setSeriesLogoUrl(null);
+      return;
+    }
+    let cancelled = false;
+
+    const loadEpisodes = async () => {
+      try {
+        const tmdbId = await resolveTmdbId(query.type, query.id);
+        if (!tmdbId) return;
+        const [seasonResponse, detailsResponse] = await Promise.all([
+          fetch(`${TMDB}/tv/${tmdbId}/season/${query.season}?api_key=${TMDB_KEY}&language=es-ES`),
+          fetch(`${TMDB}/tv/${tmdbId}?api_key=${TMDB_KEY}&language=es-ES&append_to_response=images&include_image_language=es,null,en`),
+        ]);
+        if (!seasonResponse.ok) return;
+        const seasonJson = await seasonResponse.json();
+        const detailsJson = detailsResponse.ok ? await detailsResponse.json() : null;
+        if (cancelled) return;
+
+        const logos = detailsJson?.images?.logos ?? [];
+        const logoPath = logos.find((item: any) => typeof item?.file_path === "string")?.file_path;
+        setSeriesLogoUrl(logoPath ? `${IMG}/original${logoPath}` : null);
+
+        setEpisodeOptions((seasonJson.episodes ?? []).map((episode: any) => ({
+          id: `${tmdbId}:${query.season}:${episode.episode_number}`,
+          episode: episode.episode_number,
+          season: query.season!,
+          name: episode.name ?? `Episodio ${episode.episode_number}`,
+          overview: typeof episode.overview === "string" ? episode.overview : undefined,
+          airDate: episode.air_date,
+          still: episode.still_path ? `${IMG}/original${episode.still_path}` : undefined,
+        })));
+      } catch {
+        if (!cancelled) {
+          setEpisodeOptions([]);
+          setSeriesLogoUrl(null);
+        }
+      }
+    };
+
+    void loadEpisodes();
+    return () => {
+      cancelled = true;
+    };
+  }, [query]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAddonLogo = async () => {
+      if (!query || !stream?.addonId) {
+        setAddonLogoUrl(null);
+        return;
+      }
+      const addon = getEnabledAddons().find(item => item.id === stream.addonId);
+      if (!addon) {
+        setAddonLogoUrl(null);
+        return;
+      }
+      try {
+        const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
+        const mediaId = query.id;
+        const response = await fetch(`${base}/meta/${query.type}/${encodeURIComponent(mediaId)}.json`);
+        if (!response.ok) {
+          if (!cancelled) setAddonLogoUrl(null);
+          return;
+        }
+        const json = await response.json();
+        if (cancelled) return;
+        const logo = json?.meta?.logo;
+        setAddonLogoUrl(typeof logo === "string" && logo.trim().length > 0 ? logo : null);
+      } catch {
+        if (!cancelled) setAddonLogoUrl(null);
+      }
+    };
+    void loadAddonLogo();
+    return () => {
+      cancelled = true;
+    };
+  }, [getEnabledAddons, query, stream?.addonId]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+    if (engine !== "mpv") return;
+    if (currentTime > lastProgressTimeRef.current + 0.08) {
+      lastProgressTimeRef.current = currentTime;
+      lastProgressAtRef.current = Date.now();
+      setStalledPlayback(false);
+    }
+  }, [currentTime, engine]);
+
+  useEffect(() => {
+    if (engine !== "mpv") {
+      setStalledPlayback(false);
+      return;
+    }
+    const interval = window.setInterval(() => {
+      const cacheHint = mpvPausedForCache || (mpvCacheBuffering > 0 && mpvCacheBuffering < 100);
+      if (cacheHint) {
+        setStalledPlayback(true);
+        return;
+      }
+      if (!playing || (!playbackStarted && currentTimeRef.current < 0.35)) {
+        setStalledPlayback(false);
+        return;
+      }
+      setStalledPlayback(Date.now() - lastProgressAtRef.current > 1600);
+    }, 350);
+    return () => window.clearInterval(interval);
+  }, [engine, mpvCacheBuffering, mpvPausedForCache, playbackStarted, playing]);
+
+  useEffect(() => {
+    if (engine !== "mpv" || !stream || !stalledPlayback || !playbackStarted) return;
+    const interval = window.setInterval(() => {
+      void sendMpvCommand(["set_property", "pause", false]);
+      void sendMpvCommand(["set_property", "speed", 1.0]);
+    }, 900);
+    return () => window.clearInterval(interval);
+  }, [engine, playbackStarted, stalledPlayback, stream]);
+
+  useEffect(() => {
+    if (currentTime > 0.35) {
+      setPlaybackStarted(true);
+    }
+  }, [currentTime]);
+
+  useEffect(() => {
+    if (query?.type === "movie") {
+      setShowEpisodePanel(false);
+    }
+  }, [query?.type]);
+
+  const allSubtitles = useMemo<SubtitleSource[]>(() => {
+    const embedded = (stream?.subtitles ?? [])
+      .filter(item => item.url)
+      .map((item, index) => ({
+        id: `stream-${index}-${item.url}`,
+        addonId: stream?.addonId ?? "stream",
+        addonName: stream?.addonName ?? "Stream",
+        url: item.url!,
+        lang: item.lang ?? item.language ?? "und",
+        label: item.title ?? item.lang ?? item.language ?? "Subtitulos del stream",
+      }));
+    const seen = new Set<string>();
+    return [...embedded, ...addonSubtitles].filter(item => {
+      if (seen.has(item.url)) return false;
+      seen.add(item.url);
+      return true;
+    });
+  }, [addonSubtitles, stream]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const activeLabel = allSubtitles.find(item => item.url === selectedSubtitle)?.label;
+    Array.from(video.textTracks).forEach(track => {
+      track.mode = activeLabel && track.label === activeLabel ? "showing" : "disabled";
+    });
+  }, [allSubtitles, selectedSubtitle]);
+
+  const kind = getStreamKind(stream);
+  const audioOptions = useMemo(
+    () =>
+      mpvTracks
+        .map(track => ({
+          ...track,
+          parsedId: Number(track.id),
+          kind: String(track.type ?? "").toLowerCase(),
+        }))
+        .filter(track => Number.isFinite(track.parsedId) && (track.kind === "audio" || track.kind === "a" || track.kind.includes("audio")))
+        .map(track => ({
+          value: `track:${track.parsedId}`,
+          label: track.title ?? track.lang ?? `Audio ${track.parsedId}`,
+        })),
+    [mpvTracks],
+  );
+
+  const subtitleOptions = useMemo(() => {
+    if (engine !== "mpv") {
+      return allSubtitles.map(subtitle => ({ value: subtitle.url, label: subtitle.label }));
+    }
+    const internal = mpvTracks
+      .map(track => ({
+        ...track,
+        parsedId: Number(track.id),
+        kind: String(track.type ?? "").toLowerCase(),
+      }))
+      .filter(track => Number.isFinite(track.parsedId) && (track.kind === "sub" || track.kind === "subtitle" || track.kind.includes("sub")))
+      .map(track => ({
+        value: `track:${track.parsedId}`,
+        label: track.title ?? track.lang ?? `Subtitulo ${track.parsedId}`,
+      }));
+    const external = allSubtitles.map(subtitle => ({
+      value: `ext:${subtitle.url}`,
+      label: subtitle.label,
+    }));
+    return [...internal, ...external];
+  }, [allSubtitles, engine, mpvTracks]);
+
+  const speedOptions = ["0.5", "0.75", "1", "1.25", "1.5", "2"];
+  const normalizedAudioOptions = audioOptions.length > 0
+    ? audioOptions
+    : (selectedMpvAudio ? [{ value: selectedMpvAudio, label: `Audio ${selectedMpvAudio.replace("track:", "")}` }] : []);
+  const panelItems = episodeOptions.length > 0
+    ? episodeOptions.map(item => ({
+      key: item.id,
+      title: `${item.episode}. ${item.name}`,
+      subtitle: item.airDate ?? `T${item.season} E${item.episode}`,
+      image: item.still,
+      active: item.episode === query?.episode,
+      onClick: () => {
+        if (item.episode === query?.episode) return;
+        void invoke("stop_mpv").catch(() => undefined).finally(() => {
+          navigate(`/streams?type=${query?.type}&id=${encodeURIComponent(query?.id ?? "")}&season=${item.season}&ep=${item.episode}`);
+        });
+      },
+    }))
+    : chapterOptions.map(item => ({
+      key: `chapter:${item.index}`,
+      title: item.title,
+      subtitle: formatTime(item.time),
+      image: undefined,
+      active: item.index === chapterIndex,
+      onClick: () => {
+        if (engine !== "mpv") {
+          seek(item.time);
+          return;
+        }
+        void sendMpvCommand(["set_property", "chapter", item.index]);
+      },
+    }));
+
+  const title = useMemo(() => {
+    const type = params.get("type");
+    const season = params.get("season");
+    const episode = params.get("ep");
+    if (type !== "movie" && season && episode) return `Temporada ${season}, Episodio ${episode}`;
+    return stream?.name ?? "Reproduccion";
+  }, [params, stream?.name]);
+
+  function wakeControls() {
+    setControlsVisible(true);
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setControlsVisible(false), 800);
+  }
+
+  function togglePlay() {
+    if (engine === "mpv") {
+      setPlaying(value => !value);
+      void sendMpvCommand(["cycle", "pause"]);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play();
+    else video.pause();
+  }
+
+  function seek(value: number) {
+    debugLog("seek() called", { value });
+    if (engine === "mpv") {
+      setCurrentTime(value);
+      void sendMpvCommand(["seek", value, "absolute", "exact"]);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.min(Math.max(value, 0), duration || value);
+    setCurrentTime(video.currentTime);
+  }
+
+  function jump(offset: number) {
+    debugLog("jump() called", { offset });
+    if (engine === "mpv") {
+      void sendMpvCommand(["seek", offset, "relative"]);
+      return;
+    }
+    seek(currentTime + offset);
+  }
+
+  function applyVolume(nextVolume: number) {
+    const clamped = Math.min(1, Math.max(0, nextVolume));
+    setVolume(clamped);
+    if (engine === "mpv") {
+      void sendMpvCommand(["set_property", "volume", Math.round(clamped * 100)]);
+    }
+  }
+
+  function toggleFullscreen() {
+    const root = document.documentElement;
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void root.requestFullscreen();
+  }
+
+  async function launchMpv(showOpening = true) {
+    if (!stream) return;
+    if (showOpening) setMpvStatus("Abriendo MPV...");
+    const { error } = await openExternal(stream);
+    setPlaying(!error);
+    setMpvStatus(error ? `MPV no inicio: ${error}` : null);
+  }
+
+  async function retryMpvPlayback() {
+    setMpvStatus("Reiniciando MPV...");
+    await launchMpv(false);
+  }
+
+  async function sendMpvCommand(command: unknown[]) {
+    debugLog("mpv_command send", { command });
+    try {
+      await invoke("mpv_command", { command });
+      debugLog("mpv_command ok", { command });
+    } catch (error) {
+      debugLog("mpv_command error", { command, error: String(error) });
+      setMpvStatus(`MPV: ${String(error)}`);
+    }
+  }
+
+  function goBack() {
+    if (engine !== "mpv") {
+      navigate(-1);
+      return;
+    }
+    void invoke("stop_mpv")
+      .catch(() => undefined)
+      .finally(() => navigate(-1));
+  }
+
+  function navigateEpisode(direction: "prev" | "next") {
+    if (!query?.season || !query.episode) return;
+    const currentIndex = episodeOptions.findIndex(episode => episode.episode === query.episode);
+    if (currentIndex === -1) return;
+    const nextEpisode = episodeOptions[currentIndex + (direction === "next" ? 1 : -1)];
+    if (!nextEpisode) return;
+    void invoke("stop_mpv").catch(() => undefined).finally(() => {
+      navigate(`/streams?type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}`);
+    });
+  }
+
+  useEffect(() => {
+    if (!stream || engine !== "mpv") return;
+    const launchKey = getPlaybackTarget(stream);
+    if (mpvLaunchKeyRef.current === launchKey) return;
+    let cancelled = false;
+    mpvLaunchKeyRef.current = launchKey;
+    mpvAutoPlayKeyRef.current = "";
+    mpvRecoveryKeyRef.current = "";
+    lastProgressTimeRef.current = 0;
+    lastProgressAtRef.current = Date.now();
+    currentTimeRef.current = 0;
+    setStalledPlayback(false);
+    setPlaybackStarted(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setPlaying(false);
+    setMpvStatus("Abriendo MPV...");
+    debugLog("mpv openExternal called", { target: launchKey });
+    openExternal(stream).then(({ error }) => {
+      if (!cancelled) setPlaying(!error);
+      if (!cancelled) setMpvStatus(error ? `MPV no inicio: ${error}` : null);
+      if (!cancelled) debugLog(error ? "mpv openExternal error" : "mpv openExternal resolved", { error });
+    });
+    return () => {
+      cancelled = true;
+      setPlaying(false);
+      mpvLaunchKeyRef.current = "";
+      mpvRecoveryKeyRef.current = "";
+      setStalledPlayback(false);
+      void invoke("stop_mpv");
+    };
+  }, [engine, stream]);
+
+  useEffect(() => {
+    if (engine !== "mpv" || !stream || !mpvFileLoaded) return;
+    const launchKey = getPlaybackTarget(stream);
+    if (!launchKey) return;
+    if (mpvAutoPlayKeyRef.current === launchKey) return;
+    mpvAutoPlayKeyRef.current = launchKey;
+    debugLog("mpv autoplay unlock", { launchKey });
+    void sendMpvCommand(["set_property", "pause", false]);
+    void sendMpvCommand(["set_property", "speed", 1.0]);
+  }, [engine, mpvFileLoaded, stream]);
+
+  useEffect(() => {
+    if (engine !== "mpv" || !stream || !mpvFileLoaded) return;
+    const launchKey = getPlaybackTarget(stream);
+    if (!launchKey || mpvRecoveryKeyRef.current === launchKey) return;
+    if (playbackStarted || mpvPausedForCache || (mpvCacheBuffering > 0 && mpvCacheBuffering < 100)) return;
+    if (!stalledPlayback || currentTimeRef.current >= 0.3) return;
+
+    mpvRecoveryKeyRef.current = launchKey;
+    debugLog("mpv stalled recovery", { launchKey });
+    void sendMpvCommand(["set_property", "pause", false]);
+    void sendMpvCommand(["set_property", "speed", 1.0]);
+    void sendMpvCommand(["seek", 0, "absolute", "exact"]);
+  }, [engine, mpvCacheBuffering, mpvFileLoaded, mpvPausedForCache, playbackStarted, stalledPlayback, stream]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName.toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) return;
+      }
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        togglePlay();
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        jump(10);
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        jump(-10);
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        applyVolume(volume + 0.05);
+        wakeControls();
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        applyVolume(volume - 0.05);
+        wakeControls();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applyVolume, jump, togglePlay, volume, wakeControls]);
+
+  if (!stream) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-black text-white">
+        <p className="text-white/64">No hay una fuente seleccionada.</p>
+        <button onClick={goBack} className="liquid-glass rounded-md px-5 py-2 font-bold">Volver</button>
+      </div>
+    );
+  }
+
+  const playbackTarget = getPlaybackTarget(stream);
+  const canPlayInline = engine === "web" && kind === "https" && looksWebPlayable(stream) && !!stream.url;
+  const mpvError = engine === "mpv" && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
+  const showFallbackPanel = !canPlayInline && (engine !== "mpv" || mpvError);
+  const currentEpisodeIndex = episodeOptions.findIndex(episode => episode.episode === query?.episode);
+  const currentEpisode = currentEpisodeIndex >= 0 ? episodeOptions[currentEpisodeIndex] : null;
+  const canGoPrevEpisode = currentEpisodeIndex > 0;
+  const canGoNextEpisode = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodeOptions.length - 1;
+  const isMovie = query?.type === "movie";
+  const selectedSubtitleValue = engine === "mpv" ? selectedMpvSubtitle : selectedSubtitle;
+  const selectedSubtitleLabel = subtitleOptions.find(option => option.value === selectedSubtitleValue)?.label ?? "Subtitulos";
+  const selectedAudioLabel = normalizedAudioOptions.find(option => option.value === selectedMpvAudio)?.label ?? "Audio";
+  const selectedSpeedLabel = `${selectedSpeed}x`;
+  const showPanelToggle = !isMovie && panelItems.length > 0;
+  const currentMetaTitle = currentEpisode?.name ?? stream.title ?? stream.name;
+  const currentOverview = currentEpisode?.overview?.trim() || "Sin descripcion disponible para este episodio.";
+  const controlsActive = controlsVisible || showEpisodePanel;
+  const loadingArtwork = addonLogoUrl || null;
+  const bufferingActive = mpvPausedForCache || (mpvCacheBuffering > 0 && mpvCacheBuffering < 100) || stalledPlayback;
+  const shouldShowLoading = (
+    (engine === "mpv" && !showFallbackPanel && (!playbackStarted || bufferingActive) && !mpvError)
+    || (engine === "web" && !showFallbackPanel && (!playbackStarted || webBuffering))
+  );
+
+  return (
+    <div
+      className={`relative h-screen w-screen overflow-hidden text-white ${engine === "mpv" ? "bg-transparent" : "bg-black"}`}
+      style={{ fontFamily: "Inter, system-ui, sans-serif" }}
+      onMouseMove={wakeControls}
+      onClick={wakeControls}
+    >
+      {canPlayInline ? (
+        <video
+          ref={videoRef}
+          src={stream.url}
+          className="h-full w-full bg-black object-contain"
+          autoPlay
+          playsInline
+          crossOrigin="anonymous"
+          onClick={togglePlay}
+        >
+          {allSubtitles.map((subtitle, index) => (
+            <track
+              key={subtitle.id}
+              src={subtitle.url}
+              kind="subtitles"
+              srcLang={subtitle.lang}
+              label={subtitle.label}
+              default={selectedSubtitle === subtitle.url || (!selectedSubtitle && index === 0)}
+            />
+          ))}
+        </video>
+      ) : showFallbackPanel ? (
+        <div className={`pointer-events-none absolute inset-0 flex items-center justify-center px-8 text-center ${engine === "mpv" ? "bg-transparent" : "bg-[radial-gradient(circle_at_center,#202024_0%,#050505_68%)]"}`}>
+          <div className="pointer-events-auto liquid-glass-dark max-w-lg rounded-lg p-6 opacity-95 transition-opacity duration-300 hover:opacity-100">
+            <h1 className="mb-3 text-xl font-black">{engine === "mpv" ? "MPV interno" : "Fuente externa"}</h1>
+            {engine !== "mpv" && (
+              <p className="mb-6 text-sm leading-relaxed text-white/62">
+                Esta fuente no es reproducible directamente por el reproductor web.
+              </p>
+            )}
+            {mpvBundled === false && (
+              <p className="mb-4 rounded-md bg-white/10 px-4 py-3 text-xs text-white/62">
+                MPV interno no esta instalado en el bundle. Instala el runtime en src-tauri/bin/mpv y vuelve a empaquetar.
+              </p>
+            )}
+            {mpvStatus && <p className="mb-4 text-xs text-white/58">{mpvStatus}</p>}
+            <button onClick={() => void retryMpvPlayback()} className="rounded-md bg-white px-5 py-2.5 font-bold text-black">
+              Reintentar reproduccion
+            </button>
+            {engine !== "mpv" && playbackTarget && <p className="mt-4 break-all text-xs text-white/32">{playbackTarget}</p>}
+          </div>
+        </div>
+      ) : (
+        <div className="pointer-events-none absolute inset-0 bg-transparent" />
+      )}
+
+      {shouldShowLoading && (
+        <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="aetherio-breathe grid max-h-36 min-h-16 min-w-[240px] max-w-[520px] place-items-center overflow-hidden rounded-2xl bg-black/28 px-6 py-4 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-[14px]">
+              {loadingArtwork ? (
+                <img src={loadingArtwork} alt={stream.name} className="max-h-28 w-auto max-w-[460px] object-contain" />
+              ) : (
+                <div className="h-11 w-11 animate-spin rounded-full border-2 border-white/28 border-t-white/92" />
+              )}
+            </div>
+            <p className="text-xs font-medium tracking-wide text-white/72">Cargando reproduccion...</p>
+          </div>
+        </div>
+      )}
+
+      {showEpisodePanel && showPanelToggle && (
+        <div className="absolute inset-y-4 right-5 z-50 w-[410px] max-w-[calc(100vw-40px)]">
+          <div
+            className="flex h-full flex-col rounded-[30px] border border-white/24 p-5 shadow-[0_34px_90px_rgba(0,0,0,0.76)]"
+            style={{
+              backgroundColor: "rgba(31,31,31,0.96)",
+              backdropFilter: "blur(82px) saturate(180%)",
+              WebkitBackdropFilter: "blur(82px) saturate(180%)",
+            }}
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[30px] font-black leading-none text-white">
+                  {seriesLogoUrl ? <img src={seriesLogoUrl} alt={stream.name} className="max-h-16 w-auto object-contain" /> : stream.name}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowEpisodePanel(false)}
+                className="flex h-11 w-11 items-center justify-center rounded-full border border-white/16 bg-white/12 text-white/90 transition hover:bg-white/20"
+                title="Cerrar panel"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+
+            <div className="mb-4 rounded-2xl border border-white/24 bg-black/58 p-4">
+              <div className="mb-2 flex items-center justify-between text-white/75">
+                <span className="text-sm font-semibold">{title}</span>
+                <span className="text-sm">{currentEpisode?.airDate ?? ""}</span>
+              </div>
+              <p className="line-clamp-4 text-sm leading-6 text-white/80">{currentOverview}</p>
+            </div>
+
+            {episodeOptions.length > 0 && (
+              <div className="mb-4 grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => navigateEpisode("prev")}
+                  disabled={!canGoPrevEpisode}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  <ChevronLeft size={16} />
+                  Anterior
+                </button>
+                <button
+                  onClick={() => navigateEpisode("next")}
+                  disabled={!canGoNextEpisode}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Siguiente
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-3 overflow-y-auto pr-1">
+              {panelItems.map(item => (
+                <button
+                  key={item.key}
+                  onClick={item.onClick}
+                  className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-4 text-left transition ${
+                    item.active
+                      ? "border-white/28 bg-white/16"
+                      : "border-white/14 bg-black/24 hover:border-white/20 hover:bg-white/12"
+                  }`}
+                >
+                  <div className="relative h-28 w-48 overflow-hidden rounded-xl">
+                    {item.image ? (
+                      <>
+                        <img src={item.image} alt="" className="h-28 w-48 object-cover" />
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/86 via-black/28 to-transparent" />
+                      </>
+                    ) : (
+                      <div className="flex h-28 w-48 items-center justify-center bg-white/10 text-white/60">
+                        <ListVideo size={18} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold leading-tight text-white">{item.title}</p>
+                    <p className="mt-1 text-sm text-white/72">{item.subtitle}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div
+        className="absolute inset-x-0 bottom-0 z-40 px-4 pb-3 transition-opacity duration-300"
+        style={{ opacity: controlsActive ? 1 : 0, pointerEvents: controlsActive ? "auto" : "none" }}
+      >
+        <div
+          className="mx-auto w-full max-w-[1240px] rounded-[24px] border border-white/30 px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)]"
+          style={{
+            backgroundColor: "rgba(8,8,8,0.94)",
+            backdropFilter: "blur(104px) saturate(180%)",
+            WebkitBackdropFilter: "blur(104px) saturate(180%)",
+          }}
+        >
+          <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
+            <span className="max-w-[36ch] truncate text-base font-semibold text-white/92">{currentMetaTitle}</span>
+            <span className="h-1 w-1 rounded-full bg-white/45" />
+            <span>{title}</span>
+          </div>
+
+          <div className="mb-3.5 flex items-center gap-3">
+            <span className="w-12 text-right text-xs text-white/84">{formatTime(currentTime)}</span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={1}
+              value={Math.min(currentTime, duration || currentTime)}
+              onChange={event => seek(Number(event.target.value))}
+              disabled={!duration}
+              className="h-1.5 flex-1 accent-white disabled:opacity-35"
+            />
+            <span className="w-12 text-xs text-white/84">{formatTime(duration)}</span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <IconButton label="Volver" onClick={goBack}>
+                <ArrowLeft size={18} />
+              </IconButton>
+              <IconButton label="Retroceder 10 segundos" onClick={() => jump(-10)}>
+                <RotateCcw size={19} />
+              </IconButton>
+              <IconButton label={playing ? "Pausar" : "Reproducir"} onClick={togglePlay} large>
+                {playing ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" />}
+              </IconButton>
+              <IconButton label="Avanzar 10 segundos" onClick={() => jump(10)}>
+                <RotateCw size={19} />
+              </IconButton>
+              <div className="flex items-center gap-3 rounded-full border border-white/14 bg-white/14 px-3.5 py-2.5">
+                <Volume2 size={17} className="text-white/84" />
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={volume}
+                  onChange={event => {
+                    const nextVolume = Number(event.target.value);
+                    applyVolume(nextVolume);
+                  }}
+                  className="h-1 w-32 accent-white"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2.5">
+              {engine === "mpv" && (
+                <SelectPill
+                  icon={<AudioLines size={16} />}
+                  value={selectedMpvAudio}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setSelectedMpvAudio(value);
+                    if (!value) {
+                      void sendMpvCommand(["set_property", "aid", "no"]);
+                      return;
+                    }
+                    if (value.startsWith("track:")) {
+                      void sendMpvCommand(["set_property", "aid", Number(value.slice(6))]);
+                    }
+                  }}
+                >
+                  <option value="" className="bg-black">Sin audio</option>
+                  {normalizedAudioOptions.map(option => (
+                    <option key={option.value} value={option.value} className="bg-black">{option.label}</option>
+                  ))}
+                </SelectPill>
+              )}
+
+              <SelectPill
+                icon={<Captions size={16} />}
+                value={selectedSubtitleValue}
+                onChange={event => {
+                  const value = event.target.value;
+                  if (engine !== "mpv") {
+                    setSelectedSubtitle(value);
+                    return;
+                  }
+                  setSelectedMpvSubtitle(value);
+                  if (!value) {
+                    void sendMpvCommand(["set_property", "sid", "no"]);
+                    return;
+                  }
+                  if (value.startsWith("track:")) {
+                    void sendMpvCommand(["set_property", "sid", Number(value.slice(6))]);
+                    return;
+                  }
+                  if (value.startsWith("ext:")) {
+                    void sendMpvCommand(["sub-add", value.slice(4), "select"]);
+                  }
+                }}
+              >
+                <option value="" className="bg-black">Sin subtitulos</option>
+                {subtitleOptions.map(subtitle => (
+                  <option key={subtitle.value} value={subtitle.value} className="bg-black">{subtitle.label}</option>
+                ))}
+              </SelectPill>
+
+              <SelectPill
+                icon={<TimerReset size={16} />}
+                value={selectedSpeed}
+                onChange={event => {
+                  const value = event.target.value;
+                  setSelectedSpeed(value);
+                  if (engine === "mpv") void sendMpvCommand(["set_property", "speed", Number(value)]);
+                }}
+              >
+                {speedOptions.map(option => (
+                  <option key={option} value={option} className="bg-black">{option}x</option>
+                ))}
+              </SelectPill>
+
+              {showPanelToggle && (
+                <button
+                  onClick={() => setShowEpisodePanel(value => !value)}
+                  className={`flex h-10 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold transition ${
+                    showEpisodePanel
+                      ? "border-white/18 bg-white/20 text-white"
+                      : "border-white/12 bg-white/12 text-white/90 hover:bg-white/18"
+                  }`}
+                >
+                  <ListVideo size={16} />
+                  <span>Episodios</span>
+                </button>
+              )}
+
+              {episodeOptions.length > 0 && (
+                <>
+                  <IconButton
+                    label="Episodio anterior"
+                    onClick={() => navigateEpisode("prev")}
+                    disabled={!canGoPrevEpisode}
+                  >
+                    <ChevronLeft size={18} />
+                  </IconButton>
+                  <IconButton
+                    label="Episodio siguiente"
+                    onClick={() => navigateEpisode("next")}
+                    disabled={!canGoNextEpisode}
+                  >
+                    <ChevronRight size={18} />
+                  </IconButton>
+                </>
+              )}
+
+              <IconButton label="Pantalla completa" onClick={toggleFullscreen}>
+                <Maximize size={19} />
+              </IconButton>
+            </div>
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[11px] text-white/58">
+            <span>{selectedAudioLabel}</span>
+            <span className="h-1 w-1 rounded-full bg-white/35" />
+            <span>{selectedSubtitleLabel}</span>
+            <span className="h-1 w-1 rounded-full bg-white/35" />
+            <span>{selectedSpeedLabel}</span>
+            {subtitlesLoading && (
+              <>
+                <span className="h-1 w-1 rounded-full bg-white/35" />
+                <span>Cargando subtitulos...</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IconButton({
+  children,
+  label,
+  onClick,
+  disabled = false,
+  large = false,
+}: {
+  children: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  large?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center justify-center rounded-full border border-white/12 bg-white/12 text-white transition hover:bg-white/22 disabled:cursor-not-allowed disabled:opacity-35 ${
+        large ? "h-11 w-11" : "h-10 w-10"
+      }`}
+      title={label}
+      aria-label={label}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SelectPill({
+  icon,
+  value,
+  onChange,
+  children,
+}: {
+  icon: ReactNode;
+  value: string;
+  onChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="flex h-10 items-center gap-2 rounded-full border border-white/12 bg-white/12 px-3.5 text-sm text-white/90">
+      <span className="text-white/86">{icon}</span>
+      <select
+        value={value}
+        onChange={onChange}
+        className="max-w-40 bg-transparent text-sm text-white outline-none"
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
+<<< END: src\pages\Player\index.tsx >>>
+--- src\pages\Player\NextEpisodeOverlay.tsx [VACIO] ---
+--- src\pages\Player\PlayerControls.tsx [VACIO] ---
+--- src\pages\Player\SubtitleOverlay.tsx [VACIO] ---
+
+<<< FILE: src\pages\Search\index.tsx >>>
+export default function SearchPage() {
+  return (
+    <div className="flex flex-col h-full p-8 animate-fadeIn">
+      <h1 className="text-3xl font-bold text-text-primary mb-6">Buscar</h1>
+      <input
+        className="w-full max-w-xl bg-bg-surface border border-glass-border rounded-card px-4 py-3 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-colors"
+        placeholder="Busca películas, series, anime..."
+      />
+    </div>
+  );
+}
+
+<<< END: src\pages\Search\index.tsx >>>
+--- src\pages\Search\SearchResultGroup.tsx [VACIO] ---
+--- src\pages\Settings\CacheSettings.tsx [VACIO] ---
+
+<<< FILE: src\pages\Settings\index.tsx >>>
+export default function SettingsPage() {
+  return (
+    <div className="flex flex-col h-full p-8 animate-fadeIn">
+      <h1 className="text-3xl font-bold text-text-primary mb-2">Ajustes</h1>
+      <p className="text-text-secondary">Próximamente.</p>
+    </div>
+  );
+}
+
+<<< END: src\pages\Settings\index.tsx >>>
+--- src\pages\Settings\PlaybackSettings.tsx [VACIO] ---
+--- src\pages\Settings\PlayerSettings.tsx [VACIO] ---
+--- src\pages\Settings\SubtitleSettings.tsx [VACIO] ---
+--- src\player\AbstractPlayer.ts [VACIO] ---
+--- src\player\MPVPlayer.ts [VACIO] ---
+--- src\player\PlayerFactory.ts [VACIO] ---
+--- src\services\AddonService.ts [VACIO] ---
+--- src\services\HistoryService.ts [VACIO] ---
+--- src\services\LibraryService.ts [VACIO] ---
+--- src\services\SearchService.ts [VACIO] ---
+--- src\services\SettingsService.ts [VACIO] ---
+--- src\services\SubtitleService.ts [VACIO] ---
+
+<<< FILE: src\store\addonStore.ts >>>
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+export interface InstalledAddon {
+  id: string;
+  name: string;
+  description?: string;
+  logo?: string;
+  url: string;
+  manifest: any;
+  enabled: boolean;
+  installedAt: number;
+  version: string;
+}
+
+interface AddonStore {
+  addons: InstalledAddon[];
+  isInstalling: boolean;
+  installError: string | null;
+  addAddon: (a: InstalledAddon) => void;
+  removeAddon: (id: string) => void;
+  enableAddon: (id: string) => void;
+  disableAddon: (id: string) => void;
+  reorderAddons: (ordered: InstalledAddon[]) => void;
+  setInstalling: (v: boolean) => void;
+  setInstallError: (e: string | null) => void;
+  getEnabledAddons: () => InstalledAddon[];
+}
+
+export const useAddonStore = create<AddonStore>()(
+  persist(
+    (set, get) => ({
+      addons: [],
+      isInstalling: false,
+      installError: null,
+      addAddon: (a) =>
+        set((s) => ({ addons: [...s.addons.filter((x) => x.id !== a.id), a] })),
+      removeAddon: (id) =>
+        set((s) => ({ addons: s.addons.filter((a) => a.id !== id) })),
+      enableAddon: (id) =>
+        set((s) => ({ addons: s.addons.map((a) => a.id === id ? { ...a, enabled: true } : a) })),
+      disableAddon: (id) =>
+        set((s) => ({ addons: s.addons.map((a) => a.id === id ? { ...a, enabled: false } : a) })),
+      reorderAddons: (ordered) => set({ addons: ordered }),
+      setInstalling: (v) => set({ isInstalling: v }),
+      setInstallError: (e) => set({ installError: e }),
+      getEnabledAddons: () => get().addons.filter((a) => a.enabled),
+    }),
+    { name: "aetherio-addons" }
+  )
+);
+
+<<< END: src\store\addonStore.ts >>>
+--- src\store\cacheStore.ts [VACIO] ---
+--- src\store\libraryStore.ts [VACIO] ---
+--- src\store\playerStore.ts [VACIO] ---
+--- src\store\settingsStore.ts [VACIO] ---
+
+<<< FILE: src\store\uiStore.ts >>>
+import { create } from "zustand";
+
+interface UIStore {
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
+  setSidebarCollapsed: (v: boolean) => void;
+  streamPickerOpen: boolean;
+  setStreamPickerOpen: (v: boolean) => void;
+}
+
+export const useUIStore = create<UIStore>()((set) => ({
+  sidebarCollapsed: false,
+  toggleSidebar: () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+  streamPickerOpen: false,
+  setStreamPickerOpen: (v) => set({ streamPickerOpen: v }),
+}));
+
+<<< END: src\store\uiStore.ts >>>
+
+<<< FILE: src\types\addon.ts >>>
+export type ContentType = "movie" | "series" | "anime" | "channel" | "tv";
+export type ResourceType = "catalog" | "meta" | "stream" | "subtitles";
+
+export interface CatalogDefinition {
+  type: ContentType;
+  id: string;
+  name: string;
+}
+
+export interface StremioManifest {
+  id: string;
+  version: string;
+  name: string;
+  description?: string;
+  logo?: string;
+  background?: string;
+  resources: (ResourceType | { name: ResourceType; types?: string[]; idPrefixes?: string[] })[];
+  types: ContentType[];
+  catalogs: CatalogDefinition[];
+  idPrefixes?: string[];
+  behaviorHints?: {
+    adult?: boolean;
+    p2p?: boolean;
+    configurable?: boolean;
+    configurationRequired?: boolean;
+  };
+}
+
+export type PlaybackMode =
+  | "always_ask" | "auto_best_quality"
+  | "auto_best_source" | "reuse_last" | "smart";
+
+export type NextEpisodeMode =
+  | "autoplay" | "countdown" | "ask"
+  | "return_to_detail" | "disabled";
+
+<<< END: src\types\addon.ts >>>
+--- src\types\media.ts [VACIO] ---
+--- src\types\player.ts [VACIO] ---
+--- src\types\settings.ts [VACIO] ---
+
+<<< FILE: src\types\stream.ts >>>
+export interface StreamSubtitle {
+  id?: string;
+  url?: string;
+  lang?: string;
+  language?: string;
+  title?: string;
+}
+
+export interface MediaStream {
+  id: string;
+  addonId: string;
+  addonName: string;
+  name: string;
+  title?: string;
+  description?: string;
+  url?: string;
+  externalUrl?: string;
+  ytId?: string;
+  infoHash?: string;
+  fileIdx?: number;
+  behaviorHints?: {
+    filename?: string;
+    videoSize?: number;
+    bingeGroup?: string;
+    notWebReady?: boolean;
+    [key: string]: unknown;
+  };
+  subtitles?: StreamSubtitle[];
+}
+
+export interface StreamQuery {
+  type: string;
+  id: string;
+  season?: number;
+  episode?: number;
+}
+
+export type StreamKind = "https" | "p2p" | "external" | "unknown";
+
+export type PlaybackEngine = "web" | "mpv";
+
+<<< END: src\types\stream.ts >>>
+
+<<< FILE: src\types\subtitle.ts >>>
+export interface SubtitleSource {
+  id: string;
+  addonId: string;
+  addonName: string;
+  url: string;
+  lang: string;
+  label: string;
+  format?: string;
+}
+
+<<< END: src\types\subtitle.ts >>>
+
+<<< FILE: src\types\ui.ts >>>
+export interface MediaItem {
+  id: string;
+  type: string;
+  name: string;
+  poster?: string;
+  background?: string;
+  logo?: string;
+  description?: string;
+  imdbRating?: string;
+  rating?: string;
+  year?: number;
+  genres?: string[];
+  runtime?: string;
+}
+
+export interface CatalogRowData {
+  addonId: string;
+  addonName: string;
+  catalogId: string;
+  type: string;
+  name: string;
+  items: MediaItem[];
+}
+
+<<< END: src\types\ui.ts >>>
+--- src\utils\dedupe.ts [VACIO] ---
+--- src\utils\formatDuration.ts [VACIO] ---
+--- src\utils\identity.ts [VACIO] ---
+--- src\utils\imageProxy.ts [VACIO] ---
+--- src\utils\logger.ts [VACIO] ---
+
+<<< FILE: src\vite-env.d.ts >>>
+/// <reference types="vite/client" />
+
+<<< END: src\vite-env.d.ts >>>
+
+<<< FILE: tailwind.config.js >>>
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html","./src/**/*.{js,ts,jsx,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        atv: {
+          black:    "#000000",
+          bg:       "#0d0d0d",
+          surface:  "#1c1c1e",
+          elevated: "#2c2c2e",
+          border:   "rgba(255,255,255,0.12)",
+          hover:    "rgba(255,255,255,0.08)",
+          text:     "#ffffff",
+          secondary:"rgba(255,255,255,0.60)",
+          muted:    "rgba(255,255,255,0.30)",
+          selected: "rgba(255,255,255,0.15)",
+        },
+      },
+      fontFamily: { sans: ["Inter","system-ui","sans-serif"] },
+      backdropBlur: { atv: "20px", heavy: "40px" },
+      borderRadius: { pill: "999px", card: "10px", lg2: "16px" },
+      boxShadow: {
+        glass:  "0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
+        card:   "0 4px 20px rgba(0,0,0,0.6)",
+        "card-hover": "0 8px 36px rgba(0,0,0,0.8)",
+        glow:   "0 0 0 2px rgba(255,255,255,0.35)",
+      },
+      keyframes: {
+        shimmer:{"0%":{backgroundPosition:"-200% 0"},"100%":{backgroundPosition:"200% 0"}},
+        fadeUp: {"0%":{opacity:"0",transform:"translateY(10px)"},"100%":{opacity:"1",transform:"translateY(0)"}},
+        fadeIn: {"0%":{opacity:"0"},"100%":{opacity:"1"}},
+        scaleIn:{"0%":{opacity:"0",transform:"scale(0.96)"},"100%":{opacity:"1",transform:"scale(1)"}},
+        slideLeft:{"0%":{transform:"translateX(0)"},"100%":{transform:"translateX(-100%)"}},
+      },
+      animation: {
+        shimmer:  "shimmer 1.8s infinite linear",
+        fadeUp:   "fadeUp 0.4s cubic-bezier(0.16,1,0.3,1) forwards",
+        fadeIn:   "fadeIn 0.3s ease forwards",
+        scaleIn:  "scaleIn 0.25s cubic-bezier(0.16,1,0.3,1) forwards",
+      },
+      transitionTimingFunction: {
+        smooth: "cubic-bezier(0.16,1,0.3,1)",
+        spring: "cubic-bezier(0.34,1.56,0.64,1)",
+      },
+    },
+  },
+  plugins: [],
+}
+<<< END: tailwind.config.js >>>
+
+<<< FILE: tsconfig.json >>>
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
+
+<<< END: tsconfig.json >>>
+
+<<< FILE: tsconfig.node.json >>>
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["vite.config.ts"]
+}
+
+<<< END: tsconfig.node.json >>>
+
+<<< FILE: vite.config.ts >>>
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import path from "path";
+
+export default defineConfig(async () => ({
+  plugins: [react()],
+  resolve: {
+    alias: { "@": path.resolve(__dirname, "./src") },
+  },
+  clearScreen: false,
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: { ignored: ["**/src-tauri/**"] },
+  },
+}));
+
+<<< END: vite.config.ts >>>
+
+=== RESUMEN ===
+Archivos leidos: 34
+Archivos omitidos: 1
+
