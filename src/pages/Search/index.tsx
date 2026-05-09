@@ -103,7 +103,7 @@ export default function SearchPage() {
             {results.map(item => {
               const title = item.title ?? item.name ?? "Sin título";
               const year = (item.release_date ?? item.first_air_date ?? "").slice(0, 4);
-              const poster = item.poster_path ? `${IMG}/w500${item.poster_path}` : null;
+              const poster = item.poster_path ? `${IMG}/w342${item.poster_path}` : null;
 
               return (
                 <button
@@ -113,7 +113,7 @@ export default function SearchPage() {
                   className="group overflow-hidden rounded-xl bg-white/6 text-left transition hover:scale-[1.03]"
                 >
                   <div className="aspect-[2/3] bg-white/8">
-                    {poster ? <img src={poster} alt="" className="h-full w-full object-cover" /> : null}
+                    {poster ? <img src={poster} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" /> : null}
                   </div>
                   <div className="p-3">
                     <p className="truncate text-sm font-bold text-white">{title}</p>

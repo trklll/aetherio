@@ -13,23 +13,29 @@ const HERO_TOTAL_LIMIT = 7;
 const HOME_ROWS_STALE_TIME = 1000 * 60 * 30;
 const HOME_HERO_STALE_TIME = 1000 * 60 * 20;
 const HOME_GC_TIME = 1000 * 60 * 60 * 6;
+const HOME_HERO_IMAGE_VERSION = "hero-original-v2";
 
-function upgradeTmdbImage(url?: string) {
+function upgradeTmdbImage(url: string | undefined, size: "w1280" | "w780" | "w500" | "w342" = "w500") {
   if (!url) return url;
-  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, "https://image.tmdb.org/t/p/original/");
+  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `https://image.tmdb.org/t/p/${size}/`);
 }
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
   return {
     ...item,
-    poster: upgradeTmdbImage(item.poster),
-    background: upgradeTmdbImage(item.background),
-    logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo)),
+    poster: upgradeTmdbImage(item.poster, "w500"),
+    background: upgradeTmdbImage(item.background, "w780"),
+    logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w500")),
   };
 }
 
-function tmdbImage(path?: string | null) {
-  return path ? `${IMG}/original${path}` : undefined;
+function tmdbImage(path?: string | null, size: "original" | "w1280" | "w780" | "w500" | "w342" | "w185" = "w500") {
+  return path ? `${IMG}/${size}${path}` : undefined;
+}
+
+function originalTmdbImage(url?: string) {
+  if (!url) return url;
+  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `${IMG}/original/`);
 }
 
 function yearFrom(date?: string) {
@@ -60,7 +66,7 @@ function enabledAddonSignature(addons: InstalledAddon[]) {
 }
 
 function heroSignature() {
-  return `${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}`;
+  return `${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}|${HOME_HERO_IMAGE_VERSION}`;
 }
 
 export const homeCatalogKeys = {
@@ -78,7 +84,7 @@ async function tmdbLogo(type: "movie" | "tv", id: number) {
     const logo = data.logos?.find((item: any) => item.iso_639_1 === "es")
       ?? data.logos?.find((item: any) => item.iso_639_1 === "en")
       ?? data.logos?.[0];
-    return tmdbImage(logo?.file_path);
+    return tmdbImage(logo?.file_path, "w500");
   } catch {
     return undefined;
   }
@@ -86,18 +92,18 @@ async function tmdbLogo(type: "movie" | "tv", id: number) {
 
 async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anime", group: string): Promise<MediaItem> {
   const tmdbType = type === "movie" ? "movie" : "tv";
-  return normalizeMediaItem({
+  return {
     id: `tmdb:${item.id}`,
     type,
     name: item.title ?? item.name ?? "Sin titulo",
-    poster: tmdbImage(item.poster_path),
-    background: tmdbImage(item.backdrop_path),
-    logo: await tmdbLogo(tmdbType, item.id),
+    poster: tmdbImage(item.poster_path, "w500"),
+    background: tmdbImage(item.backdrop_path, "original"),
+    logo: sanitizeLogoUrl(await tmdbLogo(tmdbType, item.id)),
     description: item.overview,
     rating: typeof item.vote_average === "number" && item.vote_average > 0 ? item.vote_average.toFixed(1) : undefined,
     year: yearFrom(item.release_date ?? item.first_air_date),
     heroGroup: group,
-  } as MediaItem);
+  } as MediaItem;
 }
 
 function interleaveGroups(groups: MediaItem[][]) {
@@ -178,7 +184,10 @@ function cachedRows(signature: string) {
 function cachedHero(signature: string) {
   const home = useCacheStore.getState().home;
   if (!home || home.heroSignature !== signature || !isFreshHomeCache(home.heroUpdatedAt)) return undefined;
-  return home.heroItems;
+  return home.heroItems.map(item => ({
+    ...item,
+    background: originalTmdbImage(item.background),
+  }));
 }
 
 export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddon[]) {

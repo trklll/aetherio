@@ -327,11 +327,11 @@ function IconMenu({
         <div
           id={`${id}-menu`}
           role="menu"
-          className="absolute bottom-[calc(100%+10px)] right-0 z-50 max-h-72 min-w-56 overflow-y-auto rounded-2xl border border-white/18 p-1.5 shadow-[0_22px_70px_rgba(0,0,0,0.72)]"
+          className="absolute bottom-[calc(100%+10px)] right-0 z-50 max-h-72 min-w-56 overflow-y-auto rounded-2xl border border-white/18 p-1.5 shadow-[0_12px_30px_rgba(0,0,0,0.54)]"
           style={{
             backgroundColor: "rgba(12,12,12,0.86)",
-            backdropFilter: "blur(42px) saturate(190%)",
-            WebkitBackdropFilter: "blur(42px) saturate(190%)",
+            backdropFilter: "blur(12px) saturate(155%)",
+            WebkitBackdropFilter: "blur(12px) saturate(155%)",
           }}
         >
           {options.map(option => {

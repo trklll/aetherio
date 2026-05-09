@@ -130,7 +130,7 @@ export default function TopNav() {
     <div className="relative z-50 flex items-center justify-center" data-tauri-drag-region>
       <div
         className="relative liquid-glass-pill px-2 py-1.5 flex items-center min-w-0"
-        style={{ boxShadow: "0 4px 24px rgba(0,0,0,0.5)" }}
+        style={{ boxShadow: "0 3px 14px rgba(0,0,0,0.38)" }}
       >
         <button
           onClick={() => {
@@ -244,8 +244,8 @@ export default function TopNav() {
             initial={{ opacity: 0, y: -8, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.97 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-            style={{ boxShadow: "0 16px 48px rgba(0,0,0,0.7)" }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+            style={{ boxShadow: "0 10px 28px rgba(0,0,0,0.56)" }}
           >
             {suggestions.map((s, i) => {
               const title = s.title ?? (s as any).name ?? "";
@@ -264,6 +264,8 @@ export default function TopNav() {
                     <img
                       src={`https://image.tmdb.org/t/p/w92${s.poster_path}`}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       className="w-8 h-12 object-cover rounded"
                     />
                   ) : (

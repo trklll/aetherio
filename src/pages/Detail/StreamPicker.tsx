@@ -141,9 +141,9 @@ export default function StreamPicker() {
           const logoPath = images?.logos?.find((item: any) => typeof item?.file_path === "string")?.file_path;
           nextMeta = {
             name: nextMeta.name !== query.id ? nextMeta.name : (details?.title ?? details?.name ?? nextMeta.name),
-            background: nextMeta.background ?? (details?.backdrop_path ? `${IMG}/original${details.backdrop_path}` : undefined),
-            poster: nextMeta.poster ?? (details?.poster_path ? `${IMG}/original${details.poster_path}` : undefined),
-            logo: nextMeta.logo ?? (logoPath ? `${IMG}/original${logoPath}` : undefined),
+            background: nextMeta.background ?? (details?.backdrop_path ? `${IMG}/w1280${details.backdrop_path}` : undefined),
+            poster: nextMeta.poster ?? (details?.poster_path ? `${IMG}/w780${details.poster_path}` : undefined),
+            logo: nextMeta.logo ?? (logoPath ? `${IMG}/w500${logoPath}` : undefined),
           };
         }
       } catch {
@@ -234,7 +234,7 @@ export default function StreamPicker() {
   return (
     <div className="relative min-h-screen overflow-hidden bg-black text-white">
       {background && (
-        <img src={background} alt="" className="absolute inset-0 h-full w-full object-cover object-center" />
+        <img src={background} alt="" decoding="async" className="absolute inset-0 h-full w-full object-cover object-center" />
       )}
       <div className="absolute inset-0 bg-black/55" />
       <div className="absolute inset-0" style={{ background: "linear-gradient(to right, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.48) 46%, rgba(0,0,0,0.76) 100%)" }} />
@@ -242,7 +242,7 @@ export default function StreamPicker() {
       <PageContainer fullBleed className="relative z-10 grid min-h-screen grid-cols-[minmax(320px,0.82fr)_minmax(420px,1fr)] gap-10 pb-12 pt-24">
         <section className="flex flex-col justify-end pb-8">
           {meta?.logo ? (
-            <img src={meta.logo} alt={meta.name} className="mb-5 max-h-28 max-w-[320px] object-contain drop-shadow-2xl" />
+            <img src={meta.logo} alt={meta.name} decoding="async" className="mb-5 max-h-28 max-w-[320px] object-contain drop-shadow-2xl" />
           ) : (
             <h1 className="mb-5 max-w-xl text-5xl font-black leading-none text-white">{meta?.name ?? query.id}</h1>
           )}

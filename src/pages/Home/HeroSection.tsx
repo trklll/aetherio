@@ -25,6 +25,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect }: Prop
             key={`${item.id}-${bg}`}
             src={bg}
             alt=""
+            decoding="async"
             initial={{ opacity: 0, x: 96, scale: 1.025 }}
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, x: -96, scale: 1.01 }}
@@ -50,7 +51,8 @@ export default function HeroSection({ item, items, activeIndex, onSelect }: Prop
             <img
               src={logo}
               alt={item.name}
-              style={{ maxHeight: 104, maxWidth: 330, objectFit: "contain", marginBottom: 14, filter: "drop-shadow(0 2px 16px rgba(0,0,0,0.9))" }}
+              decoding="async"
+              style={{ maxHeight: 104, maxWidth: 330, objectFit: "contain", marginBottom: 14, filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.72))" }}
             />
           ) : (
             <div style={{ minHeight: 86, marginBottom: 14 }} />
@@ -71,7 +73,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect }: Prop
           )}
           <button
             onClick={() => navigate(`/detail/${item.type}/${item.id}`)}
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 30px", background: "#fff", color: "#000", fontWeight: 800, borderRadius: 999, fontSize: 15, border: "none", cursor: "pointer", boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 30px", background: "#fff", color: "#000", fontWeight: 800, borderRadius: 999, fontSize: 15, border: "none", cursor: "pointer", boxShadow: "0 3px 12px rgba(0,0,0,0.38)" }}
             onMouseEnter={event => { event.currentTarget.style.opacity = "0.88"; }}
             onMouseLeave={event => { event.currentTarget.style.opacity = "1"; }}
           >

@@ -64,12 +64,13 @@ export default function CatalogRow({ row }: { row: CatalogRowData }) {
         }}>
           <button onClick={()=>scroll("left")} style={{
             width:34, height:34, borderRadius:6,
-            background:"rgba(245,245,247,0.82)", backdropFilter:"blur(10px)",
+            background:"rgba(245,245,247,0.82)", backdropFilter:"blur(6px)",
+            WebkitBackdropFilter:"blur(6px)",
             border:"1px solid rgba(255,255,255,0.22)",
             color:"#fff", cursor:"pointer",
             display:"flex", alignItems:"center", justifyContent:"center",
             fontSize:28, fontWeight:600, lineHeight:1,
-            boxShadow:"0 2px 12px rgba(0,0,0,0.5)",
+            boxShadow:"0 1px 8px rgba(0,0,0,0.38)",
             transition:"background 0.15s",
             textShadow:"0 1px 4px rgba(0,0,0,0.7)",
           }}
@@ -105,12 +106,13 @@ export default function CatalogRow({ row }: { row: CatalogRowData }) {
         }}>
           <button onClick={()=>scroll("right")} style={{
             width:34, height:34, borderRadius:6,
-            background:"rgba(245,245,247,0.82)", backdropFilter:"blur(10px)",
+            background:"rgba(245,245,247,0.82)", backdropFilter:"blur(6px)",
+            WebkitBackdropFilter:"blur(6px)",
             border:"1px solid rgba(255,255,255,0.22)",
             color:"#fff", cursor:"pointer",
             display:"flex", alignItems:"center", justifyContent:"center",
             fontSize:28, fontWeight:600, lineHeight:1,
-            boxShadow:"0 2px 12px rgba(0,0,0,0.5)",
+            boxShadow:"0 1px 8px rgba(0,0,0,0.38)",
             transition:"background 0.15s",
             textShadow:"0 1px 4px rgba(0,0,0,0.7)",
           }}
@@ -130,16 +132,18 @@ function CinematicCard({ item, onClick }: { item: MediaItem; onClick: () => void
     <div onClick={onClick}
       style={{ position:"relative",flexShrink:0,width:CARD_W,height:CARD_H,borderRadius:10,overflow:"hidden",cursor:"pointer",
         transition:"transform 0.25s,box-shadow 0.25s",background:"#1c1c1e" }}
-      onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.transform="scale(1.04)";(e.currentTarget as HTMLDivElement).style.boxShadow="0 8px 32px rgba(0,0,0,0.7)";}}
+      onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.transform="scale(1.04)";(e.currentTarget as HTMLDivElement).style.boxShadow="0 5px 18px rgba(0,0,0,0.5)";}}
       onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.transform="scale(1)";(e.currentTarget as HTMLDivElement).style.boxShadow="none";}}
     >
-      {image && <img src={image} alt={item.name} loading="lazy"
+      {image && <img src={image} alt={item.name} loading="lazy" decoding="async"
         style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover" }} />}
       <div style={{ position:"absolute",bottom:0,left:0,right:0,height:"45%",
         background:"linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)",pointerEvents:"none" }} />
       <div style={{ position:"absolute",bottom:0,left:0,right:0,padding:"0 10px 9px" }}>
         {logo ? (
           <img src={logo} alt={item.name}
+            loading="lazy"
+            decoding="async"
             style={{ maxHeight:28,maxWidth:140,objectFit:"contain",filter:"drop-shadow(0 1px 6px rgba(0,0,0,0.95))",marginBottom:3 }} />
         ) : (
           <span style={{ fontSize:13,fontWeight:600,color:"#fff",textShadow:"0 1px 8px rgba(0,0,0,0.95)",

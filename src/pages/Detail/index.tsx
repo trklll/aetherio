@@ -157,19 +157,19 @@ export default function DetailPage() {
       const main=await mainRes.json(); const imgs=await imgRes.json();
 
       const logo=imgs.logos?.[0];
-      if (logo&&!d.logo)              d.logo=`${IMG}/original${logo.file_path}`;
+      if (logo&&!d.logo)              d.logo=`${IMG}/w500${logo.file_path}`;
       logoLog("tmdb logo fallback", { tmdbLogoPath: logo?.file_path ?? null, resolvedLogo: d.logo ?? null });
       if (!d.backdrop&&main.backdrop_path) d.backdrop=`${IMG}/original${main.backdrop_path}`;
-      if (!d.poster&&main.poster_path)     d.poster=`${IMG}/original${main.poster_path}`;
+      if (!d.poster&&main.poster_path)     d.poster=`${IMG}/w780${main.poster_path}`;
       if (!d.description) d.description=main.overview;
       if (!d.year) d.year=parseInt((main.release_date??main.first_air_date??"").slice(0,4),10)||undefined;
       if (!d.genres?.length) d.genres=main.genres?.map((g:any)=>g.name);
       if (!d.name) d.name=main.title??main.name??"";
       if (!d.runtime){ const mins=t==="movie"?main.runtime:main.episode_run_time?.[0]; if(mins) d.runtime=`${Math.floor(mins/60)}h ${mins%60}min`; }
-      if (!d.cast?.length) d.cast=(main.credits?.cast??[]).slice(0,14).map((c:any)=>({ id:c.id,name:c.name,character:c.character,profile_path:c.profile_path?`${IMG}/w342${c.profile_path}`:undefined }));
+      if (!d.cast?.length) d.cast=(main.credits?.cast??[]).slice(0,14).map((c:any)=>({ id:c.id,name:c.name,character:c.character,profile_path:c.profile_path?`${IMG}/w185${c.profile_path}`:undefined }));
       if (!d.director){ const dir=(main.credits?.crew??[]).find((c:any)=>c.job==="Director"); if(dir) d.director=dir.name; }
       d.trailers=(main.videos?.results??[]).filter((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser")).slice(0,5).map((v:any)=>({key:v.key,name:v.name}));
-      d.related=(main.similar?.results??[]).slice(0,14).map((r:any)=>({ id:r.id, title:r.title??r.name, poster_path:r.poster_path?`${IMG}/original${r.poster_path}`:undefined, media_type:t }));
+      d.related=(main.similar?.results??[]).slice(0,14).map((r:any)=>({ id:r.id, title:r.title??r.name, poster_path:r.poster_path?`${IMG}/w342${r.poster_path}`:undefined, media_type:t }));
 
       if (t!=="movie"&&main.seasons) {
         const seasons=[];
@@ -177,7 +177,7 @@ export default function DetailPage() {
           try {
             const sr2=await fetch(`${TMDB}/tv/${tmdbId}/season/${s.season_number}?api_key=${tmdbKey}&language=es-ES`);
             const sd2=await sr2.json();
-            seasons.push({ number:s.season_number, episodes:(sd2.episodes??[]).map((e:any)=>({ id:`${tmdbId}:${s.season_number}:${e.episode_number}`, episode:e.episode_number, season:s.season_number, name:e.name, overview:e.overview, still:e.still_path?`${IMG}/original${e.still_path}`:undefined, runtime:e.runtime })) });
+            seasons.push({ number:s.season_number, episodes:(sd2.episodes??[]).map((e:any)=>({ id:`${tmdbId}:${s.season_number}:${e.episode_number}`, episode:e.episode_number, season:s.season_number, name:e.name, overview:e.overview, still:e.still_path?`${IMG}/w500${e.still_path}`:undefined, runtime:e.runtime })) });
           } catch {}
         }
         d.seasons=seasons;
@@ -273,7 +273,7 @@ export default function DetailPage() {
                   logoLog("logo img onError", { url: displayLogo });
                   setLogoStatus("error");
                 }}
-                style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 20px rgba(0,0,0,0.95))",opacity:1, transition:"opacity 0.35s ease", display:"block" }}
+                style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 10px rgba(0,0,0,0.75))",opacity:1, transition:"opacity 0.35s ease", display:"block" }}
               />
             </div>
           ) : (
@@ -298,7 +298,7 @@ export default function DetailPage() {
           <div style={{ display:"flex",alignItems:"center",gap:12 }}>
             {/* Reproducir → /streams */}
             <button onClick={playFromDetail}
-              style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 4px 20px rgba(0,0,0,0.5)" }}>
+              style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 3px 12px rgba(0,0,0,0.38)" }}>
               <Play size={16} fill="black" /> {playLabel}
             </button>
           </div>
@@ -322,7 +322,7 @@ export default function DetailPage() {
               <h2 style={{ fontSize:17,fontWeight:700,color:"#fff" }}>Temporada {season}</h2>
               {(data.seasons?.length??0)>1&&(
                 <select value={season} onChange={e=>setSeason(Number(e.target.value))}
-                  style={{ background:"rgba(255,255,255,0.1)",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:999,color:"#fff",fontSize:13,padding:"5px 14px",cursor:"pointer" }}>
+                  style={{ background:"rgba(255,255,255,0.1)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:999,color:"#fff",fontSize:13,padding:"5px 14px",cursor:"pointer" }}>
                   {data.seasons?.map(s=><option key={s.number} value={s.number} style={{background:"#1c1c1e"}}>Temporada {s.number}</option>)}
                 </select>
               )}
@@ -369,7 +369,7 @@ export default function DetailPage() {
                   onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.transform="scale(1.04)"}
                   onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.transform="scale(1)"}
                 >
-                  {r.poster_path?<img src={r.poster_path} alt="" style={{ width:"100%",height:"100%",objectFit:"cover" }} />:<div style={{ width:"100%",height:"100%",background:"#2c2c2e" }}/>}
+                  {r.poster_path?<img src={r.poster_path} alt="" loading="lazy" decoding="async" style={{ width:"100%",height:"100%",objectFit:"cover" }} />:<div style={{ width:"100%",height:"100%",background:"#2c2c2e" }}/>}
                 </div>
               ))}
             </ScrollRow>
@@ -379,7 +379,7 @@ export default function DetailPage() {
 
       {showMore&&(
         <div onClick={()=>setShowMore(false)}
-          style={{ position:"fixed",inset:0,zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(8px)" }}>
+          style={{ position:"fixed",inset:0,zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(3px)",WebkitBackdropFilter:"blur(3px)" }}>
           <div onClick={e=>e.stopPropagation()}
             style={{ background:"rgba(20,20,22,0.95)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:36,maxWidth:500,margin:"0 16px",position:"relative" }}>
             <button onClick={()=>setShowMore(false)} style={{ position:"absolute",top:16,right:16,background:"none",border:"none",color:"rgba(255,255,255,0.5)",cursor:"pointer" }}><X size={18}/></button>
@@ -447,7 +447,7 @@ function ScrollRow({ children, gap = 10 }:{children:ReactNode;gap?:number}) {
           onClick={()=>move("left")}
           title="Anterior"
           aria-label="Anterior"
-          style={{ position:"absolute",left:0,top:"50%",zIndex:3,width:38,height:38,transform:"translate(-30%,-50%)",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.18)",background:"rgba(18,18,18,0.72)",backdropFilter:"blur(18px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
+          style={{ position:"absolute",left:0,top:"50%",zIndex:3,width:38,height:38,transform:"translate(-30%,-50%)",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.18)",background:"rgba(18,18,18,0.72)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
         >
           <ChevronLeft size={18} />
         </button>
@@ -460,7 +460,7 @@ function ScrollRow({ children, gap = 10 }:{children:ReactNode;gap?:number}) {
           onClick={()=>move("right")}
           title="Siguiente"
           aria-label="Siguiente"
-          style={{ position:"absolute",right:0,top:"50%",zIndex:3,width:38,height:38,transform:"translate(30%,-50%)",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.18)",background:"rgba(18,18,18,0.72)",backdropFilter:"blur(18px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
+          style={{ position:"absolute",right:0,top:"50%",zIndex:3,width:38,height:38,transform:"translate(30%,-50%)",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.18)",background:"rgba(18,18,18,0.72)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
         >
           <ChevronRight size={18} />
         </button>
@@ -568,7 +568,7 @@ function CastCard({ member, onPress }:{member:CastMember;onPress:()=>void}) {
   return (
     <div onClick={onPress} style={{ flexShrink:0,width:142,display:"flex",flexDirection:"column",alignItems:"center",gap:8,cursor:"pointer" }}>
       {member.profile_path?(
-        <img src={member.profile_path} alt={member.name} style={{ width:142,height:142,borderRadius:"50%",objectFit:"cover",flexShrink:0 }} />
+        <img src={member.profile_path} alt={member.name} loading="lazy" decoding="async" style={{ width:142,height:142,borderRadius:"50%",objectFit:"cover",flexShrink:0 }} />
       ):(
         <div style={{ width:142,height:142,borderRadius:"50%",background:"#2c2c2e",display:"flex",alignItems:"center",justifyContent:"center",fontSize:40,color:"rgba(255,255,255,0.5)",fontWeight:700,flexShrink:0 }}>
           {member.name.charAt(0)}

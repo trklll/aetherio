@@ -91,14 +91,14 @@ function ContinueCard({ entry, onClick }: { entry: ContinueWatchingEntry; onClic
         event.currentTarget.style.boxShadow = "none";
       }}
     >
-      {image && <img src={image} alt={entry.name} loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />}
+      {image && <img src={image} alt={entry.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />}
       <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.18) 58%, transparent 100%)" }} />
       <div style={{ position: "absolute", left: 10, top: 10, display: "flex", height: 34, width: 34, alignItems: "center", justifyContent: "center", borderRadius: "50%", background: "rgba(255,255,255,0.92)", color: "#000", boxShadow: "0 10px 28px rgba(0,0,0,0.45)" }}>
         <Play size={16} fill="black" />
       </div>
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 10px 11px" }}>
         {logo ? (
-          <img src={logo} alt={entry.name} style={{ maxHeight: 28, maxWidth: 140, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 6 }} />
+          <img src={logo} alt={entry.name} loading="lazy" decoding="async" style={{ maxHeight: 28, maxWidth: 140, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 6 }} />
         ) : (
           <span style={{ display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical", overflow: "hidden", fontSize: 14, fontWeight: 700, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)" }}>
             {entry.name}

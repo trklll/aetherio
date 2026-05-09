@@ -75,7 +75,7 @@ export default function PersonPage() {
         id:          personData.id,
         name:        personData.name,
         biography:   personData.biography ?? "",
-        profile_path:personData.profile_path ? `${IMG}/w300${personData.profile_path}` : undefined,
+        profile_path:personData.profile_path ? `${IMG}/w185${personData.profile_path}` : undefined,
         birthday:    personData.birthday,
         place_of_birth: personData.place_of_birth,
         known_for_department: personData.known_for_department,
@@ -162,6 +162,7 @@ export default function PersonPage() {
             <img
               src={person.profile_path}
               alt={person.name}
+              decoding="async"
               style={{ width:120,height:120,borderRadius:"50%",objectFit:"cover",border:"3px solid rgba(255,255,255,0.15)" }}
             />
           ) : (
@@ -211,7 +212,7 @@ export default function PersonPage() {
       {bioExpanded && (
         <div
           onClick={() => setBioExpanded(false)}
-          style={{ position:"fixed",inset:0,zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(10px)" }}
+          style={{ position:"fixed",inset:0,zIndex:50,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(3px)",WebkitBackdropFilter:"blur(3px)" }}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -221,7 +222,7 @@ export default function PersonPage() {
               style={{ position:"absolute",top:16,right:16,background:"none",border:"none",color:"rgba(255,255,255,0.5)",cursor:"pointer",fontSize:20 }}>✕</button>
             <div style={{ display:"flex",alignItems:"center",gap:16,marginBottom:20 }}>
               {person.profile_path && (
-                <img src={person.profile_path} alt="" style={{ width:56,height:56,borderRadius:"50%",objectFit:"cover" }} />
+                <img src={person.profile_path} alt="" loading="lazy" decoding="async" style={{ width:56,height:56,borderRadius:"50%",objectFit:"cover" }} />
               )}
               <h2 style={{ fontSize:18,fontWeight:700,color:"#fff" }}>{person.name}</h2>
             </div>
@@ -281,6 +282,7 @@ function PosterCard({ item, onClick }: { item: CreditItem; onClick: () => void }
           src={`${IMG}/w185${item.poster_path}`}
           alt={title}
           loading="lazy"
+          decoding="async"
           style={{ width:"100%",height:"100%",objectFit:"cover" }}
         />
       ) : (
@@ -302,7 +304,7 @@ function ScrollArrow({ dir, onClick }: { dir: "left"|"right"; onClick: () => voi
         [dir==="left"?"left":"right"]:-18,
         top:"50%",transform:"translateY(-50%)",zIndex:10,
         width:36,height:36,borderRadius:"50%",
-        background:"rgba(255,255,255,0.12)",backdropFilter:"blur(20px)",
+        background:"rgba(255,255,255,0.12)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",
         border:"1px solid rgba(255,255,255,0.2)",color:"#fff",
         cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
         transition:"background 0.2s",
