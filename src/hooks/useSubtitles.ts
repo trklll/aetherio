@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { getTmdbApiKey } from "../config/apiKeys";
+import { tmdbFetch } from "../config/apiKeys";
 import { matchesPreferredLanguage, resolvePreferredLanguage, usePlaybackPreferences } from "../config/playbackPreferences";
 import { useOriginalLanguage } from "./useOriginalLanguage";
 import { useAddonStore, type InstalledAddon } from "../store/addonStore";
 import type { MediaStream, StreamQuery } from "../types/stream";
 import type { SubtitleSource } from "../types/subtitle";
 
-const TMDB = "https://api.themoviedb.org/3";
 const OPEN_SUBTITLES_PRO_URL = "https://opensubtitlesv3-pro.dexter21767.com/eyJsYW5ncyI6WyJzcGFuaXNoIiwic3BhbmlzaC1sYSJdLCJzb3VyY2UiOiJhbGwiLCJhaVRyYW5zbGF0ZWQiOnRydWUsImF1dG9BZGp1c3RtZW50Ijp0cnVlfQ==/manifest.json";
 const OPEN_SUBTITLES_PRO_ADDON: InstalledAddon = {
   id: "community.opensubtitlesv3.pro",
@@ -56,15 +55,11 @@ function subtitleRequestType(query: StreamQuery) {
 async function resolveImdbId(query: StreamQuery) {
   if (query.id.startsWith("tt")) return query.id;
   if (!query.id.startsWith("tmdb:")) return null;
-  const tmdbKey = getTmdbApiKey();
-  if (!tmdbKey) return null;
 
   const tmdbId = query.id.slice(5);
   const tmdbType = query.type === "movie" ? "movie" : "tv";
-  const response = await fetch(`${TMDB}/${tmdbType}/${tmdbId}/external_ids?api_key=${tmdbKey}`);
-  if (!response.ok) return null;
-
-  const json = await response.json();
+  const json = await tmdbFetch(`/${tmdbType}/${tmdbId}/external_ids`);
+  if (!json) return null;
   return typeof json.imdb_id === "string" && json.imdb_id.startsWith("tt") ? json.imdb_id : null;
 }
 
@@ -92,24 +87,112 @@ function addonHasSubtitles(addon: any) {
   });
 }
 
+function decodeLanguageCandidate(value: unknown) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    return decodeURIComponent(trimmed).trim();
+  } catch {
+    return trimmed;
+  }
+}
+
+function normalizeLanguageValue(value: string) {
+  const lower = value.toLowerCase().replace(/[_\s]+/g, "-");
+  if (!lower) return "";
+  if (lower.startsWith("es")) return "es";
+  if (lower.startsWith("en")) return "en";
+  if (lower.startsWith("ru")) return "ru";
+  if (lower.startsWith("it")) return "it";
+  if (lower.startsWith("pt")) return "pt";
+  if (lower.startsWith("fr")) return "fr";
+  if (lower.startsWith("de")) return "de";
+  if (lower.startsWith("ja") || lower.startsWith("jp")) return "ja";
+  if (lower.startsWith("ko")) return "ko";
+  if (lower.startsWith("zh") || lower.startsWith("cn")) return "zh";
+  return lower;
+}
+
+function resolveLanguageFromText(value: unknown) {
+  const decoded = decodeLanguageCandidate(value);
+  if (!decoded) return "";
+  const queryMatch = decoded.match(/(?:^|[?&])(?:lang|lang_code|language)=([a-zA-Z-]{2,12})/i);
+  if (queryMatch?.[1]) return normalizeLanguageValue(queryMatch[1]);
+  const codeMatch = decoded.match(/\b([a-z]{2,3})(?:-[a-z]{2,4})?\b/i);
+  if (codeMatch?.[0]) return normalizeLanguageValue(codeMatch[0]);
+  const lowered = decoded.toLowerCase();
+  if (/(spanish|espanol|español|castellano|latino)/i.test(lowered)) return "es";
+  if (/(english|ingles|inglés)/i.test(lowered)) return "en";
+  if (/(russian|ruso)/i.test(lowered)) return "ru";
+  if (/(italian|italiano)/i.test(lowered)) return "it";
+  if (/(portuguese|portugues|português|brasil)/i.test(lowered)) return "pt";
+  if (/(french|frances|francais)/i.test(lowered)) return "fr";
+  if (/(german|aleman|alemán|deutsch)/i.test(lowered)) return "de";
+  if (/(japanese|japones|japonés|nihongo)/i.test(lowered)) return "ja";
+  return "";
+}
+
+function resolveSubtitleLanguage(raw: any) {
+  const candidates = [
+    raw.lang_code,
+    raw.iso639_3,
+    raw.language,
+    raw.lang,
+    raw.locale,
+    raw.label,
+    raw.title,
+    raw.name,
+  ];
+  for (const candidate of candidates) {
+    const normalized = resolveLanguageFromText(candidate);
+    if (normalized) return normalized;
+  }
+  if (typeof raw.url === "string") {
+    const fromUrl = resolveLanguageFromText(raw.url);
+    if (fromUrl) return fromUrl;
+    try {
+      const parsed = new URL(raw.url);
+      for (const key of ["lang", "lang_code", "language"]) {
+        const normalized = resolveLanguageFromText(parsed.searchParams.get(key));
+        if (normalized) return normalized;
+      }
+    } catch {
+      // ignore invalid subtitle urls
+    }
+  }
+  return "und";
+}
+
+function cleanSubtitleLabel(raw: any) {
+  const language = resolveSubtitleLanguage(raw);
+  const title = decodeLanguageCandidate(raw.label ?? raw.title ?? raw.name);
+  if (title && !/lang_code=/i.test(title)) {
+    return language && language !== title.toLowerCase() ? `${language} - ${title}` : title;
+  }
+  const legacy = labelFor(raw);
+  if (legacy && !/lang_code=/i.test(legacy)) return legacy;
+  return language || "Subtitulos";
+}
+
 function labelFor(raw: any) {
   const language = raw.lang ?? raw.language ?? raw.lang_code;
   const title = raw.label ?? raw.title ?? raw.name;
   if (language && title && language !== title) return `${language} - ${title}`;
-  return title ?? language ?? "Subtitulos";
+  return title ?? language ?? "Subtítulos";
 }
 
 function normalizeSubtitle(raw: any, addonId: string, addonName: string, index: number): SubtitleSource | null {
   const url = typeof raw.url === "string" ? raw.url : undefined;
   if (!url) return null;
-  const lang = raw.lang_code ?? raw.iso639_3 ?? raw.language ?? raw.lang ?? "und";
+  const lang = resolveSubtitleLanguage(raw);
   return {
     id: [addonId, url, index].join("|"),
     addonId,
     addonName,
     url,
     lang,
-    label: `${labelFor(raw)} - ${addonName}`,
+    label: `${cleanSubtitleLabel(raw)} - ${addonName}`,
     format: raw.format,
   };
 }
@@ -177,7 +260,7 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 8000) {
   }
 }
 
-export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | null): UseSubtitlesResult {
+export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | null, forcedSubtitleValue = ""): UseSubtitlesResult {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
   const playbackPreferences = usePlaybackPreferences();
   const originalLanguage = useOriginalLanguage(query, stream);
@@ -185,6 +268,7 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const videoId = useMemo(() => query ? buildVideoId(query) : "", [query]);
+  const forcedSubtitleUrl = forcedSubtitleValue.startsWith("ext:") ? forcedSubtitleValue.slice(4) : "";
 
   const subtitleLookup = useMemo<SubtitleLookup | null>(() => {
     if (!stream?.behaviorHints) return null;
@@ -264,6 +348,7 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
               const effectiveSubtitleLanguage = resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage);
               const filtered = playbackPreferences.addonSubtitleLoadMode === "preferred" && effectiveSubtitleLanguage
                 ? normalized.filter(subtitle =>
+                  subtitle.url === forcedSubtitleUrl ||
                   matchesPreferredLanguage(subtitle.lang, effectiveSubtitleLanguage) ||
                   matchesPreferredLanguage(subtitle.label, effectiveSubtitleLanguage)
                 )
@@ -297,6 +382,7 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
     return () => { cancelled = true; };
   }, [
     getEnabledAddons,
+    forcedSubtitleUrl,
     playbackPreferences.addonSubtitleLoadMode,
     playbackPreferences.preferredSubtitleLanguage,
     originalLanguage,

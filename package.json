@@ -4,34 +4,47 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run providers:build",
     "dev": "vite",
+    "prebuild": "npm run providers:build",
     "build": "tsc && vite build",
+    "providers:build": "node scripts/build-provider-runtime.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init --ci --skip-targets-install",
+    "android:dev": "tauri android dev",
+    "android:build:apk": "tauri android build --apk",
+    "android:build:apk:fallback": "powershell -ExecutionPolicy Bypass -File scripts/android-build-apk-copy.ps1",
+    "android:build:apk:sideload": "powershell -ExecutionPolicy Bypass -File scripts/android-build-apk-copy.ps1 -SignForSideload"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.100.9",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-deep-link": "^2.4.9",
     "@tauri-apps/plugin-opener": "^2",
-    "axios": "^1.16.0",
+    "axios": "^1.18.1",
+    "cheerio": "^1.2.0",
     "clsx": "^2.1.1",
-    "framer-motion": "^12.38.0",
+    "crypto-js": "^4.2.0",
+    "gsap": "^3.15.0",
     "lucide-react": "^1.14.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.14.2",
-    "tailwind-merge": "^3.5.0",
+    "typescript": "~5.8.3",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/node": "^25.9.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.5.0",
+    "esbuild": "^0.28.1",
+    "knip": "^6.14.2",
     "postcss": "^8.5.13",
     "tailwindcss": "^3.4.19",
-    "typescript": "~5.8.3",
     "vite": "^7.0.4"
   }
 }

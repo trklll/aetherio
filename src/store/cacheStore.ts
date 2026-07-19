@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import type { CatalogRowData, MediaItem } from "../types/ui";
 import { getScopedStorageKey } from "../utils/localProfiles";
 
@@ -20,6 +20,44 @@ interface CacheStore {
 }
 
 export const HOME_CACHE_MAX_AGE = 1000 * 60 * 60 * 24;
+// The starter Home currently includes the base, anime-decade and ten
+// streaming-provider rails. Keep the complete set across app restarts.
+const HOME_CACHE_MAX_ROWS = 32;
+const HOME_CACHE_MAX_ROW_ITEMS = 16;
+const HOME_CACHE_MAX_HERO_ITEMS = 16;
+
+const safeLocalStorage: StateStorage = {
+  getItem: name => {
+    try {
+      return localStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name, value) => {
+    try {
+      localStorage.setItem(name, value);
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        try {
+          localStorage.removeItem(name);
+        } catch {
+          // The cache is optional; failing to clear it should not break rendering.
+        }
+        console.warn("[AETHERIO:CACHE] home cache skipped because localStorage quota is full");
+        return;
+      }
+      console.warn("[AETHERIO:CACHE] home cache persist failed", error);
+    }
+  },
+  removeItem: name => {
+    try {
+      localStorage.removeItem(name);
+    } catch {
+      // Optional cache cleanup.
+    }
+  },
+};
 
 export const useCacheStore = create<CacheStore>()(
   persist(
@@ -55,11 +93,31 @@ export const useCacheStore = create<CacheStore>()(
     }),
     {
       name: getScopedStorageKey("aetherio-home-cache-v1"),
-      partialize: state => ({ home: state.home }),
+      storage: createJSONStorage(() => safeLocalStorage),
+      partialize: state => ({ home: compactHomeCache(state.home) }),
     }
   )
 );
 
 export function isFreshHomeCache(updatedAt: number) {
   return updatedAt > 0 && Date.now() - updatedAt < HOME_CACHE_MAX_AGE;
+}
+
+function compactHomeCache(home: HomeCacheSnapshot | null): HomeCacheSnapshot | null {
+  if (!home) return null;
+  return {
+    ...home,
+    rows: home.rows.slice(0, HOME_CACHE_MAX_ROWS).map(row => ({
+      ...row,
+      items: row.items.slice(0, HOME_CACHE_MAX_ROW_ITEMS),
+    })),
+    heroItems: home.heroItems.slice(0, HOME_CACHE_MAX_HERO_ITEMS),
+  };
+}
+
+function isQuotaExceededError(error: unknown) {
+  return (
+    error instanceof DOMException &&
+    (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")
+  );
 }

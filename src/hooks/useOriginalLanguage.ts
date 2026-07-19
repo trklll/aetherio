@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
-import { getTmdbApiKey } from "../config/apiKeys";
+import { tmdbFetch } from "../config/apiKeys";
 import { useAddonStore, type InstalledAddon } from "../store/addonStore";
 import type { MediaStream, StreamQuery } from "../types/stream";
-
-const TMDB = "https://api.themoviedb.org/3";
 
 export function useOriginalLanguage(query: StreamQuery | null, stream?: MediaStream | null) {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
@@ -45,25 +43,21 @@ export function useOriginalLanguage(query: StreamQuery | null, stream?: MediaStr
 }
 
 async function fetchTmdbOriginalLanguage(query: StreamQuery) {
-  const tmdbKey = getTmdbApiKey();
-  if (!tmdbKey) return null;
-  const tmdbId = await resolveTmdbId(query, tmdbKey);
+  const tmdbId = await resolveTmdbId(query);
   if (!tmdbId) return null;
 
   const tmdbType = query.type === "movie" ? "movie" : "tv";
-  const response = await fetch(`${TMDB}/${tmdbType}/${tmdbId}?api_key=${tmdbKey}`);
-  if (!response.ok) return null;
-  const json = await response.json();
+  const json = await tmdbFetch(`/${tmdbType}/${tmdbId}`);
+  if (!json) return null;
   return extractOriginalLanguage(json);
 }
 
-async function resolveTmdbId(query: StreamQuery, tmdbKey: string) {
+async function resolveTmdbId(query: StreamQuery) {
   if (query.id.startsWith("tmdb:")) return query.id.slice(5);
   if (!query.id.startsWith("tt")) return null;
   const mediaType = query.type === "movie" ? "movie_results" : "tv_results";
-  const response = await fetch(`${TMDB}/find/${query.id}?api_key=${tmdbKey}&external_source=imdb_id`);
-  if (!response.ok) return null;
-  const json = await response.json();
+  const json = await tmdbFetch(`/find/${query.id}`, { params: { external_source: "imdb_id" } });
+  if (!json) return null;
   const id = json[mediaType]?.[0]?.id;
   return id ? String(id) : null;
 }

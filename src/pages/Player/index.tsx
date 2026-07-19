@@ -1,14 +1,41 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { SkipForward } from "lucide-react";
-import { matchesPreferredLanguage, resolvePreferredLanguage, usePlaybackPreferences } from "../../config/playbackPreferences";
+import { ArrowLeft, ExternalLink, SkipForward } from "lucide-react";
+import {
+  matchesPreferredLanguage,
+  resolvePreferredLanguage,
+  savePlaybackPreferences,
+  usePlaybackPreferences,
+} from "../../config/playbackPreferences";
 import { useOriginalLanguage } from "../../hooks/useOriginalLanguage";
 import { useSubtitles } from "../../hooks/useSubtitles";
 import type { MediaStream } from "../../types/stream";
 import type { SubtitleSource } from "../../types/subtitle";
-import { buildContinueWatchingKey, getResumeStartTime, saveContinueWatchingProgress } from "../../utils/continueWatching";
+import {
+  buildContinueWatchingKey,
+  buildMediaKey,
+  getContinueWatchingAudioSelection,
+  getExactResumeForQuery,
+  getResumeStartTime,
+  saveContinueWatchingAudioSelection,
+  saveContinueWatchingProgress,
+  saveNextEpisodePrompt,
+  updateContinueWatchingSelection,
+  type ContinueWatchingEntry,
+} from "../../utils/continueWatching";
 import { sanitizeLogoUrl } from "../../utils/artwork";
+import { readDetailMediaMeta, resolveDetailBackground } from "../../utils/mediaMetadata";
+import { sendTraktScrobble, syncTraktProgressEntry } from "../../trakt";
+import {
+  getPlaybackCapabilities,
+  isAndroidRuntime,
+  openExternalUrl,
+  sendNativePlaybackCommand,
+  setNativeAutocrop,
+  setNativeMpvSurfaceRect,
+  setNativeMpvSurfaceVisible,
+  stopNativePlayback,
+} from "../../runtime/platform";
 import type { ChapterOption, MpvTrack, VideoScaleMode } from "./types";
 import EpisodePanel from "./EpisodePanel";
 import PlayerControls from "./PlayerControls";
@@ -22,23 +49,69 @@ import {
   AUTO_NEXT_SOURCE_KEY,
   SELECTED_ENGINE_KEY,
   SELECTED_MEDIA_META_KEY,
+  SELECTED_PLAYBACK_OVERRIDES_KEY,
   SELECTED_STREAM_KEY,
   buildQuery,
   formatTime,
   getPlaybackTarget,
+  getStreamKind,
   openExternal,
+  playbackOverrideQueryKey,
 } from "./utils";
 
 const DEBUG_AUTOPLAY = false;
 const DEBUG_AUTO_LANG = true;
 const DEBUG_RESUME = true;
-const STARTUP_GATE_HARD_TIMEOUT_MS = 20000;
+const STARTUP_GATE_HARD_TIMEOUT_MS = 3500;
+const LOAD_FAILURE_TIMEOUT_MS = 18000;
+const P2P_LOAD_FAILURE_TIMEOUT_MS = 180000;
+const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 interface MpvAutocropResult {
   enabled: boolean;
   sourceCropApplied?: boolean;
   crop?: string | null;
   warning?: string;
+}
+
+interface SelectedPlaybackOverrides {
+  queryKey?: string;
+  selectedAudio?: string;
+  selectedAudioLabel?: string;
+  selectedAudioLanguage?: string;
+  selectedSubtitle?: string;
+  selectedSubtitleLabel?: string;
+  selectedSubtitleLanguage?: string;
+  forceSubtitleSelection?: boolean;
+}
+
+function ensureOriginalTmdbImage(url?: string) {
+  if (!url) return "";
+  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `${TMDB_IMAGE_BASE}original/`);
+}
+
+function readSelectedMediaResumeTime() {
+  try {
+    const raw = sessionStorage.getItem(SELECTED_MEDIA_META_KEY);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw) as { resumeTime?: number };
+    return Number.isFinite(parsed.resumeTime) ? Math.max(0, Number(parsed.resumeTime)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function readSelectedPlaybackOverrides(query: ReturnType<typeof buildQuery>): SelectedPlaybackOverrides | null {
+  if (!query) return null;
+  try {
+    const raw = sessionStorage.getItem(SELECTED_PLAYBACK_OVERRIDES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SelectedPlaybackOverrides;
+    if (parsed.queryKey !== playbackOverrideQueryKey(query)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 export default function PlayerPage() {
@@ -49,6 +122,7 @@ export default function PlayerPage() {
   const launchStartedAtRef = useRef(0);
   const nextEpisodeAutoKeyRef = useRef("");
   const currentTimeRef = useRef(0);
+  const durationRef = useRef(0);
   const lastProgressTimeRef = useRef(0);
   const lastProgressAtRef = useRef(0);
   const lastContinueSaveAtRef = useRef(0);
@@ -65,6 +139,10 @@ export default function PlayerPage() {
   const autoSubtitleTimerRef = useRef<number | null>(null);
   const selectedMpvAudioRef = useRef("");
   const selectedMpvSubtitleRef = useRef("");
+  const desiredAudioSelectionRef = useRef("");
+  const desiredSubtitleSelectionRef = useRef("");
+  const desiredAudioSelectionSetRef = useRef(false);
+  const desiredSubtitleSelectionSetRef = useRef(false);
   const startupGateActiveRef = useRef(false);
   const startupGatePausedRef = useRef(false);
   const startupGateStartedAtRef = useRef(0);
@@ -77,11 +155,24 @@ export default function PlayerPage() {
   const resumeSeekTargetRef = useRef(0);
   const resumeSeekSettledRef = useRef(true);
   const resumeSeekStartedAtRef = useRef(0);
+  const savedAudioRestoreKeyRef = useRef("");
+  const savedAudioRestoreAttemptsRef = useRef(0);
+  const savedAudioRestoreTimerRef = useRef<number | null>(null);
+  const holdSpeedTimerRef = useRef<number | null>(null);
+  const holdSpeedActiveRef = useRef(false);
+  const ignoreNextScreenClickRef = useRef(false);
+  const nativeSurfaceRef = useRef<HTMLDivElement>(null);
+  const nativeSurfaceRectKeyRef = useRef("");
+  const traktStartedKeyRef = useRef("");
+  const traktStoppedKeyRef = useRef("");
+  const nextEpisodePromptKeyRef = useRef("");
 
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const isP2pStream = getStreamKind(stream) === "p2p";
   const [selectedMediaName, setSelectedMediaName] = useState("");
   const [selectedMediaBackground, setSelectedMediaBackground] = useState("");
   const [selectedMediaLogo, setSelectedMediaLogo] = useState("");
+  const [selectedResumeTime, setSelectedResumeTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [manualPaused, setManualPaused] = useState(false);
   const playbackPreferences = usePlaybackPreferences();
@@ -92,6 +183,9 @@ export default function PlayerPage() {
   const [selectedMpvSubtitle, setSelectedMpvSubtitle] = useState("");
   const [selectedMpvAudio, setSelectedMpvAudio] = useState("");
   const [selectedSpeed, setSelectedSpeed] = useState("1");
+  const [subtitleDelayMs, setSubtitleDelayMs] = useState(0);
+  const [subtitleScalePercent, setSubtitleScalePercent] = useState(100);
+  const [subtitleVerticalPercent, setSubtitleVerticalPercent] = useState(5);
   const [mpvStatus, setMpvStatus] = useState<string | null>(null);
   const [mpvBundled, setMpvBundled] = useState<boolean | null>(null);
   const [mpvTracks, setMpvTracks] = useState<MpvTrack[]>([]);
@@ -105,7 +199,15 @@ export default function PlayerPage() {
   const [mpvCacheBuffering, setMpvCacheBuffering] = useState<number>(0);
   const [stalledPlayback, setStalledPlayback] = useState(false);
   const [videoScaleMode, setVideoScaleMode] = useState<VideoScaleMode>("original");
+  const [loadingOverlayVisible, setLoadingOverlayVisible] = useState(false);
+  const [isLeavingPlayer, setIsLeavingPlayer] = useState(false);
+  const leavingPlayerRef = useRef(false);
+  const loadingOverlayTimerRef = useRef<number | null>(null);
+  const loadingOverlayShownAtRef = useRef(0);
   const manualPausedRef = useRef(false);
+  const seekBufferingRef = useRef(false);
+  const seekStartedAtRef = useRef(0);
+  const [seekBuffering, setSeekBuffering] = useState(false);
 
   const query = useMemo(() => buildQuery(params), [
   params.get("type"),
@@ -116,10 +218,100 @@ export default function PlayerPage() {
   const { episodeOptions, seriesLogoUrl } = useEpisodeMetadata(query);
   const { addonLogoUrl, detailLogoUrl } = usePlayerLogos(query, stream);
   const safeStream = stream ?? null;
-  const isTrailerStream = Boolean(safeStream?.ytId);
+  const isIframeStream = safeStream?.behaviorHints?.scraperPlayback === "iframe";
+  const androidPlayback = isAndroidRuntime();
+  const trailerRequested = params.get("trailer") === "1";
+  const isTrailerStream = trailerRequested || Boolean(safeStream?.ytId);
   const metadataQuery = isTrailerStream ? null : query;
   const originalLanguage = useOriginalLanguage(metadataQuery, safeStream);
-  const { subtitles: addonSubtitles, loading: subtitlesLoading, ready: subtitlesReady } = useSubtitles(metadataQuery, safeStream);
+  const resumeEntry = useMemo(() => getExactResumeForQuery(query), [query]);
+  const savedAudioSelection = useMemo(() => getContinueWatchingAudioSelection(query), [query]);
+  const selectedPlaybackOverrides = useMemo(() => readSelectedPlaybackOverrides(query), [query]);
+  const { subtitles: addonSubtitles, loading: subtitlesLoading, ready: subtitlesReady } = useSubtitles(
+    metadataQuery,
+    safeStream,
+    selectedPlaybackOverrides?.selectedSubtitle ?? resumeEntry?.selectedSubtitle ?? "",
+  );
+  const hasMpvError = !isLeavingPlayer && !androidPlayback && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
+  const nativeSurfaceVisible = !androidPlayback && !isIframeStream && Boolean(stream && playbackStarted && !hasMpvError);
+
+  useEffect(() => {
+    leavingPlayerRef.current = isLeavingPlayer;
+  }, [isLeavingPlayer]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("aetherio-player-window", nativeSurfaceVisible);
+    window.dispatchEvent(new CustomEvent("aetherio-player-transparency", {
+      detail: { transparent: nativeSurfaceVisible },
+    }));
+
+    return () => {
+      document.documentElement.classList.remove("aetherio-player-window");
+      window.dispatchEvent(new CustomEvent("aetherio-player-transparency", {
+        detail: { transparent: false },
+      }));
+    };
+  }, [nativeSurfaceVisible]);
+
+  useEffect(() => {
+    if (androidPlayback) return;
+    const node = nativeSurfaceRef.current;
+    if (!node) return;
+
+    let animationFrame = 0;
+    let disposed = false;
+
+    const syncSurfaceRect = () => {
+      if (disposed) return;
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) return;
+      const scale = window.devicePixelRatio || 1;
+      const payload = {
+        x: Math.round(rect.left * scale),
+        y: Math.round(rect.top * scale),
+        width: Math.max(1, Math.round(rect.width * scale)),
+        height: Math.max(1, Math.round(rect.height * scale)),
+      };
+      const key = `${payload.x}:${payload.y}:${payload.width}:${payload.height}`;
+      if (nativeSurfaceRectKeyRef.current === key) return;
+      nativeSurfaceRectKeyRef.current = key;
+      void setNativeMpvSurfaceRect(payload).catch(error => {
+        console.warn("[AETHERIO:PLAYER:SURFACE] layout sync failed", String(error));
+      });
+    };
+
+    const scheduleSync = () => {
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(syncSurfaceRect);
+    };
+
+    const resizeObserver = new ResizeObserver(scheduleSync);
+    resizeObserver.observe(node);
+    window.addEventListener("resize", scheduleSync);
+    const timers = [
+      window.setTimeout(scheduleSync, 50),
+      window.setTimeout(scheduleSync, 250),
+    ];
+    scheduleSync();
+
+    return () => {
+      disposed = true;
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, [androidPlayback, mpvBundled, mpvStatus, stream]);
+
+  useEffect(() => {
+    if (androidPlayback) return;
+    void setNativeMpvSurfaceVisible(nativeSurfaceVisible).catch(error => {
+      console.warn("[AETHERIO:PLAYER:SURFACE] visibility sync failed", String(error));
+    });
+    return () => {
+      void setNativeMpvSurfaceVisible(false).catch(() => undefined);
+    };
+  }, [androidPlayback, nativeSurfaceVisible]);
 
   function debugLog(event: string, extra?: Record<string, unknown>) {
     if (!DEBUG_AUTOPLAY) return;
@@ -179,15 +371,20 @@ export default function PlayerPage() {
       const parsed = JSON.parse(saved) as MediaStream;
       if (savedMediaMeta) {
         try {
-          const parsedMeta = JSON.parse(savedMediaMeta) as { name?: string; logo?: string; background?: string; poster?: string };
-          const background = parsedMeta.background ?? parsedMeta.poster;
+          const parsedMeta = JSON.parse(savedMediaMeta) as { name?: string; logo?: string; background?: string; poster?: string; resumeTime?: number };
+          const metadataSeed = query ? readDetailMediaMeta(query.type, query.id) : undefined;
+          const background = query
+            ? resolveDetailBackground(query.type, query.id, parsedMeta.background ?? metadataSeed?.background ?? parsedMeta.poster)
+            : parsedMeta.background ?? parsedMeta.poster;
           setSelectedMediaName(typeof parsedMeta.name === "string" ? parsedMeta.name : "");
           setSelectedMediaBackground(typeof background === "string" ? background : "");
           setSelectedMediaLogo(sanitizeLogoUrl(parsedMeta.logo) ?? "");
+          setSelectedResumeTime(Number.isFinite(parsedMeta.resumeTime) ? Math.max(0, Number(parsedMeta.resumeTime)) : 0);
         } catch {
           setSelectedMediaName("");
           setSelectedMediaBackground("");
           setSelectedMediaLogo("");
+          setSelectedResumeTime(0);
         }
       }
       setStream(parsed);
@@ -198,7 +395,7 @@ export default function PlayerPage() {
   }, []);
 
   useEffect(() => {
-    invoke<{ mpvBundled: boolean }>("playback_capabilities")
+    getPlaybackCapabilities()
       .then(result => setMpvBundled(result.mpvBundled))
       .catch(() => setMpvBundled(false));
   }, []);
@@ -210,16 +407,43 @@ export default function PlayerPage() {
     debugLog,
     setCurrentTime,
     setDuration,
-    setPlaying,
+    setPlaying: next => {
+      setPlaying(prev => {
+        if (manualPausedRef.current) return false;
+        return typeof next === "function" ? next(prev) : next;
+      });
+    },
     setMpvFileLoaded,
     setMpvPausedForCache,
     setMpvCacheBuffering,
     setMpvTracks,
-    setSelectedMpvSubtitle,
+    setSelectedMpvSubtitle: next => {
+      setSelectedMpvSubtitle(prev => {
+        const nextValue = typeof next === "function" ? next(prev) : next;
+        const desired = desiredSubtitleSelectionRef.current;
+        if (desiredSubtitleSelectionSetRef.current && desired.startsWith("ext:") && nextValue.startsWith("track:")) {
+          return prev === desired ? prev : desired;
+        }
+        return prev === nextValue ? prev : nextValue;
+      });
+    },
     setSelectedMpvAudio,
     setSelectedSpeed,
     setChapterIndex,
     setChapterOptions,
+    setMpvStatus: next => {
+      if (leavingPlayerRef.current) return;
+      setMpvStatus(next);
+    },
+    onPlaybackRestart: () => {
+      seekBufferingRef.current = false;
+      seekStartedAtRef.current = 0;
+      lastProgressAtRef.current = Date.now();
+      setSeekBuffering(false);
+      setStalledPlayback(false);
+    },
+    isP2pStream,
+    enabled: !androidPlayback && !isIframeStream,
   });
 
   useEffect(() => {
@@ -236,6 +460,9 @@ export default function PlayerPage() {
       startupKickCountRef.current = 0;
     } else {
       mpvFileLoadedAtRef.current = 0;
+      seekBufferingRef.current = false;
+      seekStartedAtRef.current = 0;
+      setSeekBuffering(false);
     }
   }, [mpvFileLoaded]);
 
@@ -243,27 +470,82 @@ export default function PlayerPage() {
     if (mpvFileLoaded) {
       applyVideoScale(videoScaleMode);
       void sendMpvCommand(["set_property", "volume", Math.round(volume * 100)]);
+      const hwdec = playbackPreferences.hardwareDecoding === "disabled"
+        ? "no"
+        : playbackPreferences.hardwareDecoding === "enabled"
+          ? "auto"
+          : "auto-safe";
+      void sendMpvCommand(["set_property", "hwdec", hwdec]);
     }
-  }, [mpvFileLoaded, videoScaleMode, volume]);
+  }, [mpvFileLoaded, playbackPreferences.hardwareDecoding, videoScaleMode, volume]);
+
+  const applySubtitleSettings = useCallback((input?: {
+    delayMs?: number;
+    scalePercent?: number;
+    verticalPercent?: number;
+  }) => {
+    if (!mpvReadyForCommands && !mpvFileLoaded) return;
+    const delayMs = input?.delayMs ?? subtitleDelayMs;
+    const scalePercent = input?.scalePercent ?? subtitleScalePercent;
+    const verticalPercent = input?.verticalPercent ?? subtitleVerticalPercent;
+    const delaySeconds = Number((delayMs / 1000).toFixed(2));
+    const scale = Number((scalePercent / 100).toFixed(2));
+    const subPos = Math.max(0, Math.min(150, 100 - verticalPercent));
+    void sendMpvCommand(["set_property", "sub-delay", delaySeconds]);
+    void sendMpvCommand(["set_property", "sub-scale", scale]);
+    void sendMpvCommand(["set_property", "sub-pos", subPos]);
+    void sendMpvCommand(["set_property", "sub-use-margins", true]);
+  }, [mpvFileLoaded, mpvReadyForCommands, subtitleDelayMs, subtitleScalePercent, subtitleVerticalPercent]);
+
+  useEffect(() => {
+    if (!mpvFileLoaded) return;
+    applySubtitleSettings();
+  }, [applySubtitleSettings, mpvFileLoaded]);
+
+  useEffect(() => () => {
+    if (holdSpeedTimerRef.current !== null) {
+      window.clearTimeout(holdSpeedTimerRef.current);
+      holdSpeedTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (loadingOverlayTimerRef.current !== null) {
+      window.clearTimeout(loadingOverlayTimerRef.current);
+      loadingOverlayTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     currentTimeRef.current = currentTime;
-    if (currentTime > lastProgressTimeRef.current + 0.08) {
+    if (Math.abs(currentTime - lastProgressTimeRef.current) > 0.08) {
       lastProgressTimeRef.current = currentTime;
       lastProgressAtRef.current = Date.now();
       setStalledPlayback(false);
+      if (seekBufferingRef.current && Date.now() - seekStartedAtRef.current > 450) {
+        seekBufferingRef.current = false;
+        seekStartedAtRef.current = 0;
+        setSeekBuffering(false);
+      }
     }
   }, [currentTime]);
 
   useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
     manualPausedRef.current = manualPaused;
     if (manualPaused) {
+      seekBufferingRef.current = false;
+      seekStartedAtRef.current = 0;
+      setSeekBuffering(false);
       setStalledPlayback(false);
       return;
     }
 
     const interval = window.setInterval(() => {
-    const cacheHint = mpvPausedForCache || (mpvCacheBuffering > 5 && mpvCacheBuffering < 95);
+      const cacheHint = mpvPausedForCache;
       const hasStarted = playbackStarted || currentTimeRef.current > 1;
 
       if (!hasStarted) {
@@ -280,7 +562,7 @@ export default function PlayerPage() {
     }, 500);
 
     return () => window.clearInterval(interval);
-  }, [manualPaused, mpvCacheBuffering, mpvFileLoaded, mpvPausedForCache, playbackStarted]);
+  }, [manualPaused, mpvFileLoaded, mpvPausedForCache, playbackStarted]);
 
   useEffect(() => {
     if (!stream || !stalledPlayback || !playbackStarted || manualPaused) return;
@@ -293,7 +575,7 @@ export default function PlayerPage() {
   }, [manualPaused, playbackStarted, stalledPlayback, stream]);
 
   useEffect(() => {
-    if (!stream || manualPaused || playbackStarted || !mpvReadyForCommands || !mpvFileLoaded) return;
+    if (!stream || manualPaused || startupGateActiveRef.current || playbackStarted || !mpvReadyForCommands || !mpvFileLoaded) return;
 
     const interval = window.setInterval(() => {
       if (manualPausedRef.current || currentTimeRef.current > 0.05) return;
@@ -316,9 +598,59 @@ export default function PlayerPage() {
 
   useEffect(() => {
     if (currentTime > 0.05) {
+      startupGateActiveRef.current = false;
+      startupGatePausedRef.current = false;
       setPlaybackStarted(true);
+      setMpvStatus(prev => (
+        prev?.startsWith("MPV no pudo cargar esta fuente") || prev?.startsWith("El torrent no entrego datos")
+          ? null
+          : prev
+      ));
     }
   }, [currentTime]);
+
+  useEffect(() => {
+    if (!mpvFileLoaded) return;
+    setMpvStatus(prev => (
+      prev?.startsWith("MPV no pudo cargar esta fuente") || prev?.startsWith("El torrent no entrego datos")
+        ? null
+        : prev
+    ));
+  }, [mpvFileLoaded]);
+
+  useEffect(() => {
+    if (!stream || !mpvReadyForCommands || !startupGateActiveRef.current || manualPaused) return;
+    const elapsed = Date.now() - startupGateStartedAtRef.current;
+    const delay = Math.max(250, STARTUP_GATE_HARD_TIMEOUT_MS - elapsed);
+    const timer = window.setTimeout(() => {
+      if (!startupGateActiveRef.current || manualPausedRef.current) return;
+      releaseStartupGate("startup gate hard timeout");
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [manualPaused, mpvReadyForCommands, stream]);
+
+  useEffect(() => {
+    if (
+      !stream
+      || !mpvReadyForCommands
+      || mpvFileLoaded
+      || playbackStarted
+      || mpvStatus?.startsWith("MPV no")
+      || mpvStatus?.startsWith("El torrent no entrego datos")
+    ) return;
+    const timer = window.setTimeout(() => {
+      if (lastMpvFileLoadedRef.current || currentTimeRef.current > 0.05) return;
+      startupGateActiveRef.current = false;
+      startupGatePausedRef.current = false;
+      setPlaying(false);
+      setPlaybackStarted(false);
+      setStalledPlayback(false);
+      setMpvStatus(isP2pStream
+        ? "El torrent no entrego datos reproducibles. Puede no tener peers disponibles."
+        : "MPV no pudo cargar esta fuente. Puede estar expirada o bloqueada por el servidor.");
+    }, isP2pStream ? P2P_LOAD_FAILURE_TIMEOUT_MS : LOAD_FAILURE_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [isP2pStream, mpvFileLoaded, mpvReadyForCommands, mpvStatus, playbackStarted, stream]);
 
   useEffect(() => {
     if (!playbackStarted || startupKickCountRef.current === 0) return;
@@ -341,7 +673,7 @@ export default function PlayerPage() {
         addonName: stream?.addonName ?? "Stream",
         url: item.url!,
         lang: item.lang ?? item.language ?? "und",
-        label: item.title ?? item.lang ?? item.language ?? "Subtitulos del stream",
+        label: item.title ?? item.lang ?? item.language ?? "Subtítulos del stream",
       }));
     const seen = new Set<string>();
     return [...embedded, ...addonSubtitles].filter(item => {
@@ -375,16 +707,65 @@ export default function PlayerPage() {
         kind: String(track.type ?? "").toLowerCase(),
       }))
       .filter(track => Number.isFinite(track.parsedId) && (track.kind === "sub" || track.kind === "subtitle" || track.kind.includes("sub")))
-      .map(track => ({
-        value: `track:${track.parsedId}`,
-        label: track.title && track.lang ? `${track.lang} - ${track.title}` : track.title ?? track.lang ?? `Subtitulo ${track.parsedId}`,
-      }));
-    const external = allSubtitles.map(subtitle => ({
-      value: `ext:${subtitle.url}`,
-      label: subtitle.label,
-    }));
+      .map(track => {
+        const languageKey = normalizeSubtitleLanguageKey(track.lang ?? track.title ?? "");
+        return {
+          value: `track:${track.parsedId}`,
+          label: track.title && track.lang ? `${track.lang} - ${track.title}` : track.title ?? track.lang ?? `Subtitulo ${track.parsedId}`,
+          languageKey,
+          languageLabel: formatSubtitleLanguageLabel(languageKey, String(track.lang ?? "")),
+          sourceLabel: "Embebido",
+        };
+      });
+    const external = allSubtitles.map(subtitle => {
+      const languageKey = normalizeSubtitleLanguageKey(subtitle.lang || subtitle.label);
+      return {
+        value: `ext:${subtitle.url}`,
+        label: subtitle.label,
+        languageKey,
+        languageLabel: formatSubtitleLanguageLabel(languageKey, subtitle.lang),
+        sourceLabel: subtitle.addonName || "Externo",
+      };
+    });
     return [...internal, ...external];
   }, [allSubtitles, mpvTracks]);
+
+  const audioSelectionMeta = (value: string) => {
+    const track = findMpvTrackByValue(value, mpvTracks);
+    return {
+      selectedAudio: value,
+      selectedAudioLabel: audioOptions.find(option => option.value === value)?.label ?? "",
+      selectedAudioLanguage: detectPreferredLanguageCode(value, mpvTracks, audioOptions),
+      selectedAudioTrackLang: String(track?.lang ?? ""),
+      selectedAudioTrackTitle: String(track?.title ?? ""),
+    };
+  };
+
+  const subtitleSelectionMeta = (value: string) => ({
+    selectedSubtitle: value,
+    selectedSubtitleLabel: subtitleOptions.find(option => option.value === value)?.label ?? "",
+    selectedSubtitleLanguage: detectPreferredLanguageCode(value, mpvTracks, subtitleOptions),
+  });
+
+  const persistAudioPreference = (value: string) => {
+    const detectedLanguage = detectPreferredLanguageCode(value, mpvTracks, audioOptions);
+    if (!detectedLanguage || detectedLanguage === playbackPreferences.firstAudioLanguage) return;
+    savePlaybackPreferences({
+      ...playbackPreferences,
+      firstAudioLanguage: detectedLanguage,
+    });
+    autoLangLog("audio preference saved", { value, detectedLanguage });
+  };
+
+  const persistSubtitlePreference = (value: string) => {
+    const detectedLanguage = detectPreferredLanguageCode(value, mpvTracks, subtitleOptions);
+    if (!detectedLanguage || detectedLanguage === playbackPreferences.preferredSubtitleLanguage) return;
+    savePlaybackPreferences({
+      ...playbackPreferences,
+      preferredSubtitleLanguage: detectedLanguage,
+    });
+    autoLangLog("subtitle preference saved", { value, detectedLanguage });
+  };
 
   const speedOptions = ["0.5", "0.75", "1", "1.25", "1.5", "2"];
   const normalizedAudioOptions = audioOptions.length > 0
@@ -399,8 +780,8 @@ export default function PlayerPage() {
       active: item.episode === query?.episode,
       onClick: () => {
         if (item.episode === query?.episode) return;
-        void invoke("stop_mpv").catch(() => undefined).finally(() => {
-          navigate(`/streams?type=${query?.type}&id=${encodeURIComponent(query?.id ?? "")}&season=${item.season}&ep=${item.episode}`);
+        void stopNativePlayback().finally(() => {
+          navigate(`/episode?type=${query?.type}&id=${encodeURIComponent(query?.id ?? "")}&season=${item.season}&ep=${item.episode}`);
         });
       },
     }))
@@ -424,6 +805,10 @@ export default function PlayerPage() {
   }, [params]);
 
   function togglePlay() {
+    if (startupGateActiveRef.current) {
+      startupGateActiveRef.current = false;
+      startupGatePausedRef.current = false;
+    }
     if (!playbackStarted && mpvFileLoaded) {
       manualPausedRef.current = false;
       setManualPaused(false);
@@ -456,8 +841,17 @@ export default function PlayerPage() {
 
   function seek(value: number) {
     debugLog("seek() called", { value });
+    seekBufferingRef.current = true;
+    seekStartedAtRef.current = Date.now();
+    lastProgressAtRef.current = Date.now();
+    setSeekBuffering(true);
+    setStalledPlayback(false);
     setCurrentTime(value);
-    void sendMpvCommand(["seek", value, "absolute", "exact"]);
+    void sendMpvCommand(["seek", value, "absolute", "exact"]).catch(() => {
+      seekBufferingRef.current = false;
+      seekStartedAtRef.current = 0;
+      setSeekBuffering(false);
+    });
   }
 
   function jump(offset: number) {
@@ -473,14 +867,29 @@ export default function PlayerPage() {
 
   function applyVideoScale(mode: VideoScaleMode) {
     const isCrop = mode === "crop";
-    void invoke<MpvAutocropResult>("mpv_autocrop", { enabled: isCrop })
+    void setNativeAutocrop(isCrop)
       .then(result => {
-        debugLog("mpv_autocrop resolved", { result });
+        const cropResult = result as MpvAutocropResult;
+        debugLog("mpv_autocrop resolved", { result: cropResult });
+        void sendMpvCommand(["set_property", "video-zoom", 0]);
+        void sendMpvCommand(["set_property", "video-align-x", 0]);
+        void sendMpvCommand(["set_property", "video-align-y", 0]);
+        if (!isCrop) {
+          void sendMpvCommand(["set_property", "panscan", 0]);
+          void sendMpvCommand(["set_property", "video-crop", ""]);
+          return;
+        }
+        if (cropResult.sourceCropApplied) {
+          void sendMpvCommand(["set_property", "panscan", 0]);
+        } else {
+          void sendMpvCommand(["set_property", "video-crop", ""]);
+          void sendMpvCommand(["set_property", "panscan", 0.45]);
+        }
       })
       .catch(error => {
         debugLog("mpv_autocrop fallback", { error: String(error) });
         void sendMpvCommand(["set_property", "video-crop", ""]);
-        void sendMpvCommand(["set_property", "panscan", isCrop ? 1 : 0]);
+        void sendMpvCommand(["set_property", "panscan", isCrop ? 0.45 : 0]);
         void sendMpvCommand(["set_property", "video-zoom", 0]);
         void sendMpvCommand(["set_property", "video-align-x", 0]);
         void sendMpvCommand(["set_property", "video-align-y", 0]);
@@ -494,42 +903,96 @@ export default function PlayerPage() {
   }
 
   async function launchMpv(showOpening = true) {
-    if (!stream) return;
-    if (showOpening) setMpvStatus("Abriendo MPV...");
+    if (!stream || isIframeStream) return;
+    if (showOpening) setMpvStatus(androidPlayback
+      ? "Abriendo reproductor Android TV..."
+      : isP2pStream
+        ? "Preparando stream P2P..."
+        : "Abriendo MPV...");
     launchStartedAtRef.current = Date.now();
-    const { error } = await openExternal(stream);
+    const resumeStartTime = Math.max(resumeSeekTargetRef.current, getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
+    const { error } = await openExternal(stream, undefined, resumeStartTime, query?.episode);
     setMpvReadyForCommands(!error);
-    setPlaying(!error);
+    setPlaying(false);
     setManualPaused(false);
     manualPausedRef.current = false;
-    setMpvStatus(error ? `MPV no inicio: ${error}` : null);
+    setMpvStatus(error ? `${androidPlayback ? "Android TV" : "MPV"} no inicio: ${error}` : null);
+    if (!error) {
+      if (androidPlayback) {
+        startupGateActiveRef.current = false;
+        setMpvFileLoaded(true);
+        setPlaybackStarted(true);
+        setPlaying(true);
+      } else {
+        void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current]);
+        applyVideoScale(videoScaleMode);
+      }
+    }
   }
 
   async function retryMpvPlayback() {
-    setMpvStatus("Reiniciando MPV...");
+    setMpvStatus(androidPlayback
+      ? "Reiniciando reproductor Android TV..."
+      : isP2pStream
+        ? "Reiniciando stream P2P..."
+        : "Reiniciando MPV...");
     await launchMpv(false);
   }
 
   async function sendMpvCommand(command: unknown[]) {
     debugLog("mpv_command send", { command });
     try {
-      await invoke("mpv_command", { command });
+      await sendNativePlaybackCommand(command);
       debugLog("mpv_command ok", { command });
     } catch (error) {
       debugLog("mpv_command error", { command, error: String(error) });
-      setMpvStatus(`MPV: ${String(error)}`);
+      if (!androidPlayback) setMpvStatus(`MPV: ${String(error)}`);
     }
   }
 
+  function releaseStartupGate(reason: string) {
+    startupGateActiveRef.current = false;
+    startupGatePausedRef.current = false;
+    autoLangLog(reason);
+    if (manualPausedRef.current) return;
+    setPlaying(true);
+    setStalledPlayback(false);
+    lastProgressAtRef.current = Date.now();
+    void sendMpvCommand(["set_property", "cache-pause", false]);
+    void sendMpvCommand(["set_property", "pause", false]);
+    void sendMpvCommand(["set_property", "speed", Number(selectedSpeed) || 1.0]);
+  }
+
+  function getStreamsPath() {
+    if (!query?.type || !query?.id) return null;
+    const next = new URLSearchParams({ type: query.type, id: query.id });
+    if (query.season) next.set("season", String(query.season));
+    if (query.episode) next.set("ep", String(query.episode));
+    next.set("fromPlayer", "1");
+    return `/episode?${next.toString()}`;
+  }
+
+  function getDetailPath() {
+    if (!query?.type || !query?.id) return null;
+    return `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}`;
+  }
+
   function goBack() {
-    const detailPath = query?.type && query?.id
-      ? `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}`
-      : null;
-    void invoke("stop_mpv")
-      .catch(() => undefined)
+    leavingPlayerRef.current = true;
+    setIsLeavingPlayer(true);
+    setMpvStatus(null);
+    const detailPath = (trailerRequested || isTrailerStream) ? getDetailPath() : null;
+    const streamsPath = getStreamsPath();
+    saveCurrentProgressNow("goBack");
+    sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
+    void stopNativePlayback()
       .finally(() => {
         if (detailPath) {
           navigate(detailPath, { replace: true });
+          return;
+        }
+        if (streamsPath) {
+          navigate(streamsPath, { replace: true });
           return;
         }
         navigate(-1);
@@ -552,15 +1015,21 @@ export default function PlayerPage() {
     } else {
       sessionStorage.removeItem(AUTO_NEXT_SOURCE_KEY);
     }
-    void invoke("stop_mpv").catch(() => undefined).finally(() => {
+    saveCurrentProgressNow(`navigate-${direction}`);
+    sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
+    void stopNativePlayback().finally(() => {
       const autoplay = direction === "next" ? "&autoplay=1" : "";
-      navigate(`/streams?type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}${autoplay}`);
+      navigate(`/episode?type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}${autoplay}`);
     });
   }
 
   function handleScreenClick(event: MouseEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement | null;
     if (target?.closest("[data-player-interactive]")) return;
+    if (ignoreNextScreenClickRef.current) {
+      ignoreNextScreenClickRef.current = false;
+      return;
+    }
     if (Date.now() - launchStartedAtRef.current < 1200) return;
     wakeControls();
     if (!showFallbackPanel && mpvReadyForCommands && playbackStarted) {
@@ -568,8 +1037,32 @@ export default function PlayerPage() {
     }
   }
 
+  function startHoldToAccelerate(event: PointerEvent<HTMLDivElement>) {
+    wakeControls();
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("[data-player-interactive]")) return;
+    if (!playbackPreferences.holdToAccelerate || showFallbackPanel || manualPaused || !mpvReadyForCommands || !playbackStarted) return;
+    if (holdSpeedTimerRef.current !== null) window.clearTimeout(holdSpeedTimerRef.current);
+    holdSpeedTimerRef.current = window.setTimeout(() => {
+      holdSpeedTimerRef.current = null;
+      holdSpeedActiveRef.current = true;
+      ignoreNextScreenClickRef.current = true;
+      void sendMpvCommand(["set_property", "speed", playbackPreferences.holdToAccelerateSpeed]);
+    }, 260);
+  }
+
+  function stopHoldToAccelerate() {
+    if (holdSpeedTimerRef.current !== null) {
+      window.clearTimeout(holdSpeedTimerRef.current);
+      holdSpeedTimerRef.current = null;
+    }
+    if (!holdSpeedActiveRef.current) return;
+    holdSpeedActiveRef.current = false;
+    void sendMpvCommand(["set_property", "speed", Number(selectedSpeed) || 1.0]);
+  }
+
   useEffect(() => {
-    if (!stream) return;
+    if (!stream || isIframeStream) return;
     const launchKey = getPlaybackTarget(stream);
     if (mpvLaunchKeyRef.current === launchKey) return;
     let cancelled = false;
@@ -583,9 +1076,15 @@ export default function PlayerPage() {
     lastContinueSaveAtRef.current = 0;
     resumeSeekAppliedRef.current = "";
     resumeSeekAttemptsRef.current = 0;
-    resumeSeekTargetRef.current = getResumeStartTime(query);
+    resumeSeekTargetRef.current = Math.max(getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
+    savedAudioRestoreKeyRef.current = "";
+    savedAudioRestoreAttemptsRef.current = 0;
+    if (savedAudioRestoreTimerRef.current) {
+      window.clearTimeout(savedAudioRestoreTimerRef.current);
+      savedAudioRestoreTimerRef.current = null;
+    }
     resumeSeekSettledRef.current = resumeSeekTargetRef.current < 12;
-    resumeSeekStartedAtRef.current = Date.now();
+    resumeSeekStartedAtRef.current = 0;
     resumeLog("session init", {
       launchKey,
       resumeTargetFromStorage: resumeSeekTargetRef.current,
@@ -599,7 +1098,7 @@ export default function PlayerPage() {
     startupKickCountRef.current = 0;
     setStalledPlayback(false);
     setPlaybackStarted(false);
-    startupGateActiveRef.current = !stream.ytId;
+    startupGateActiveRef.current = !androidPlayback && !stream.ytId;
     startupGatePausedRef.current = false;
     startupGateStartedAtRef.current = Date.now();
     startupGateLastAudioApplyAtRef.current = 0;
@@ -607,6 +1106,14 @@ export default function PlayerPage() {
     autoSubtitleAppliedRef.current = false;
     manualAudioSelectionRef.current = false;
     manualSubtitleSelectionRef.current = false;
+    const hasOverrideAudioSelection = Boolean(selectedPlaybackOverrides?.selectedAudioLanguage || selectedPlaybackOverrides?.selectedAudio);
+    const hasOverrideSubtitleSelection = Boolean(selectedPlaybackOverrides?.forceSubtitleSelection);
+    const hasResumeAudioSelection = hasOverrideAudioSelection || Boolean(savedAudioSelection || (resumeEntry && Object.prototype.hasOwnProperty.call(resumeEntry, "selectedAudio")));
+    const hasResumeSubtitleSelection = hasOverrideSubtitleSelection || Boolean(resumeEntry && Object.prototype.hasOwnProperty.call(resumeEntry, "selectedSubtitle"));
+    desiredAudioSelectionRef.current = selectedPlaybackOverrides?.selectedAudio ?? savedAudioSelection?.value ?? resumeEntry?.selectedAudio ?? "";
+    desiredSubtitleSelectionRef.current = hasOverrideSubtitleSelection ? selectedPlaybackOverrides?.selectedSubtitle ?? "" : resumeEntry?.selectedSubtitle ?? "";
+    desiredAudioSelectionSetRef.current = hasResumeAudioSelection;
+    desiredSubtitleSelectionSetRef.current = hasResumeSubtitleSelection;
     autoAudioAttemptsRef.current = 0;
     autoSubtitleAttemptsRef.current = 0;
     if (autoAudioTimerRef.current) {
@@ -623,21 +1130,33 @@ export default function PlayerPage() {
     setPlaying(false);
     setManualPaused(false);
     manualPausedRef.current = false;
-    setMpvStatus("Abriendo MPV...");
-    debugLog("mpv openExternal called", { target: launchKey });
+    setMpvStatus(androidPlayback
+      ? "Abriendo reproductor Android TV..."
+      : isP2pStream
+        ? "Preparando stream P2P..."
+        : "Abriendo MPV...");
+    debugLog("native playback open called", { target: launchKey, androidPlayback });
 
-    void openExternal(stream).then(({ error }) => {
-      if (cancelled) return;
-      setPlaying(!error);
+    const resumeStartTime = resumeSeekTargetRef.current;
+    void openExternal(stream, undefined, resumeStartTime, query?.episode).then(({ error }) => {
+      if (cancelled || leavingPlayerRef.current) return;
+      setPlaying(false);
       setMpvReadyForCommands(!error);
       setManualPaused(false);
       manualPausedRef.current = false;
-      setMpvStatus(error ? `MPV no inicio: ${error}` : null);
+      setMpvStatus(error ? `${androidPlayback ? "Android TV" : "MPV"} no inicio: ${error}` : null);
       if (!error) {
-        void sendMpvCommand(["set_property", "pause", false]);
-        applyVideoScale(videoScaleMode);
+        if (androidPlayback) {
+          startupGateActiveRef.current = false;
+          setMpvFileLoaded(true);
+          setPlaybackStarted(true);
+          setPlaying(true);
+        } else {
+          void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current]);
+          applyVideoScale(videoScaleMode);
+        }
       }
-      debugLog(error ? "mpv openExternal error" : "mpv openExternal resolved", { error });
+      debugLog(error ? "native playback open error" : "native playback open resolved", { error, androidPlayback });
     });
 
     return () => {
@@ -645,6 +1164,10 @@ export default function PlayerPage() {
       if (resumeSeekTimerRef.current) {
         window.clearTimeout(resumeSeekTimerRef.current);
         resumeSeekTimerRef.current = null;
+      }
+      if (savedAudioRestoreTimerRef.current) {
+        window.clearTimeout(savedAudioRestoreTimerRef.current);
+        savedAudioRestoreTimerRef.current = null;
       }
       resumeSeekSettledRef.current = true;
       resumeSeekTargetRef.current = 0;
@@ -656,26 +1179,40 @@ export default function PlayerPage() {
       mpvLaunchKeyRef.current = "";
       mpvRecoveryKeyRef.current = "";
       setStalledPlayback(false);
-      void invoke("stop_mpv").catch(() => undefined);
+      setMpvStatus(null);
+      void stopNativePlayback();
     };
-  }, [stream]);
+  }, [
+    androidPlayback,
+    isIframeStream,
+    query,
+    selectedPlaybackOverrides?.forceSubtitleSelection,
+    selectedPlaybackOverrides?.selectedAudio,
+    selectedPlaybackOverrides?.selectedAudioLanguage,
+    selectedPlaybackOverrides?.selectedSubtitle,
+    selectedResumeTime,
+    stream,
+  ]);
 
   useEffect(() => {
     if (!query?.type || !query?.id) return;
-    const detailPath = `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}`;
+    const returnPath = (trailerRequested || isTrailerStream) ? getDetailPath() : getStreamsPath();
+    if (!returnPath) return;
     window.history.pushState({ aetherioPlayerBackGuard: true }, "");
 
     const onPopState = () => {
-      void invoke("stop_mpv")
-        .catch(() => undefined)
-        .finally(() => navigate(detailPath, { replace: true }));
+      leavingPlayerRef.current = true;
+      setIsLeavingPlayer(true);
+      setMpvStatus(null);
+      void stopNativePlayback()
+        .finally(() => navigate(returnPath, { replace: true }));
     };
 
     window.addEventListener("popstate", onPopState);
     return () => {
       window.removeEventListener("popstate", onPopState);
     };
-  }, [navigate, query?.id, query?.type]);
+  }, [isTrailerStream, navigate, query?.episode, query?.id, query?.season, query?.type, trailerRequested]);
 
   useEffect(() => {
     if (!playbackStarted || !mpvReadyForCommands || !subtitlesReady || !subtitleOptions.length) return;
@@ -683,11 +1220,32 @@ export default function PlayerPage() {
       autoLangLog("subtitle skipped: manual selection");
       return;
     }
-    const preferredLanguage = resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage);
-    const targetSubtitle = pickInitialTrackOption(subtitleOptions, preferredLanguage)?.value ?? "";
+    const overrideSubtitleWasStored = Boolean(selectedPlaybackOverrides?.forceSubtitleSelection);
+    const resumeSubtitleWasStored = overrideSubtitleWasStored || Boolean(resumeEntry && Object.prototype.hasOwnProperty.call(resumeEntry, "selectedSubtitle"));
+    const resumeSubtitle = overrideSubtitleWasStored ? selectedPlaybackOverrides?.selectedSubtitle ?? "" : resumeEntry?.selectedSubtitle ?? "";
+    const resumeSubtitleExists = Boolean(resumeSubtitle) && subtitleOptions.some(option => option.value === resumeSubtitle);
+    const preferredSubtitleLanguages = [
+      resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage),
+      resolvePreferredLanguage(playbackPreferences.secondSubtitleLanguage, originalLanguage),
+    ];
+    const preferredFromSettings = pickInitialTrackOptionFromLanguages(subtitleOptions, preferredSubtitleLanguages);
+    if (resumeSubtitleWasStored && !resumeSubtitle) {
+      autoSubtitleAppliedRef.current = true;
+      desiredSubtitleSelectionRef.current = "";
+      desiredSubtitleSelectionSetRef.current = true;
+      if (selectedMpvSubtitle) {
+        setSelectedMpvSubtitle("");
+        void sendMpvCommand(["set_property", "sid", "no"]);
+      }
+      autoLangLog("subtitle restored: none");
+      return;
+    }
+    const targetSubtitle = overrideSubtitleWasStored
+      ? (resumeSubtitleExists ? resumeSubtitle : "")
+      : preferredFromSettings?.value ?? (resumeSubtitleExists ? resumeSubtitle : "");
     if (!targetSubtitle) {
       autoSubtitleAppliedRef.current = true;
-      autoLangLog("subtitle no target", { preferredLanguage, options: subtitleOptions.length });
+      autoLangLog("subtitle no target", { preferredLanguage: preferredSubtitleLanguages.filter(Boolean).join(","), options: subtitleOptions.length });
       return;
     }
     if (selectedMpvSubtitle === targetSubtitle) {
@@ -702,16 +1260,20 @@ export default function PlayerPage() {
     autoSubtitleAttemptsRef.current += 1;
     autoSubtitleAppliedRef.current = false;
     autoLangLog("subtitle apply", {
-      preferredLanguage,
+      preferredLanguage: preferredSubtitleLanguages.filter(Boolean).join(","),
+      resumeSubtitle,
       targetSubtitle,
       attempt: autoSubtitleAttemptsRef.current,
       options: subtitleOptions.slice(0, 6).map(option => option.label),
     });
     setSelectedMpvSubtitle(targetSubtitle);
+    desiredSubtitleSelectionRef.current = targetSubtitle;
+    desiredSubtitleSelectionSetRef.current = true;
     if (targetSubtitle.startsWith("track:")) {
       void sendMpvCommand(["set_property", "sid", Number(targetSubtitle.slice(6))]);
     } else if (targetSubtitle.startsWith("ext:")) {
       void sendMpvCommand(["sub-add", targetSubtitle.slice(4), "select"]);
+      window.setTimeout(() => applySubtitleSettings(), 160);
     }
     if (autoSubtitleTimerRef.current) window.clearTimeout(autoSubtitleTimerRef.current);
     autoSubtitleTimerRef.current = window.setTimeout(() => {
@@ -728,16 +1290,22 @@ export default function PlayerPage() {
         void sendMpvCommand(["set_property", "sid", Number(targetSubtitle.slice(6))]);
       } else if (targetSubtitle.startsWith("ext:")) {
         void sendMpvCommand(["sub-add", targetSubtitle.slice(4), "select"]);
+        window.setTimeout(() => applySubtitleSettings(), 160);
       }
     }, 380);
   }, [
     mpvReadyForCommands,
     originalLanguage,
     playbackPreferences.preferredSubtitleLanguage,
+    playbackPreferences.secondSubtitleLanguage,
     playbackStarted,
+    resumeEntry?.selectedSubtitle,
+    selectedPlaybackOverrides?.forceSubtitleSelection,
+    selectedPlaybackOverrides?.selectedSubtitle,
     selectedMpvSubtitle,
     subtitleOptions,
     subtitlesReady,
+    applySubtitleSettings,
   ]);
 
   useEffect(() => {
@@ -746,14 +1314,25 @@ export default function PlayerPage() {
       autoLangLog("audio skipped: manual selection");
       return;
     }
-    const targetAudio = pickInitialAudioTrack(
-      mpvTracks,
-      [
-        resolvePreferredLanguage(playbackPreferences.firstAudioLanguage, originalLanguage),
-        resolvePreferredLanguage(playbackPreferences.secondAudioLanguage, originalLanguage),
-      ],
-      audioOptions,
-    )?.value ?? "";
+    const overrideAudioLanguage = resolvePreferredLanguage(selectedPlaybackOverrides?.selectedAudioLanguage ?? "", originalLanguage);
+    const resumeAudio = selectedPlaybackOverrides?.selectedAudio ?? savedAudioSelection?.value ?? resumeEntry?.selectedAudio ?? "";
+    const storedAudio = pickStoredTrackOption(audioOptions, {
+      value: resumeAudio,
+      label: selectedPlaybackOverrides?.selectedAudioLabel ?? savedAudioSelection?.label ?? resumeEntry?.selectedAudioLabel,
+      language: overrideAudioLanguage || savedAudioSelection?.language || resumeEntry?.selectedAudioLanguage,
+      trackLang: savedAudioSelection?.trackLang,
+      trackTitle: savedAudioSelection?.trackTitle,
+    });
+    const targetAudio = storedAudio?.value
+      ? storedAudio.value
+      : (pickInitialAudioTrack(
+          mpvTracks,
+          [
+            resolvePreferredLanguage(playbackPreferences.firstAudioLanguage, originalLanguage),
+            resolvePreferredLanguage(playbackPreferences.secondAudioLanguage, originalLanguage),
+          ],
+          audioOptions,
+        )?.value ?? "");
     if (!targetAudio.startsWith("track:")) {
       autoAudioAppliedRef.current = true;
       autoLangLog("audio no target", {
@@ -778,11 +1357,18 @@ export default function PlayerPage() {
     autoAudioAttemptsRef.current += 1;
     autoAudioAppliedRef.current = false;
     autoLangLog("audio apply", {
+      resumeAudio,
+      resumeAudioLabel: selectedPlaybackOverrides?.selectedAudioLabel ?? savedAudioSelection?.label ?? resumeEntry?.selectedAudioLabel,
+      resumeAudioLanguage: overrideAudioLanguage || savedAudioSelection?.language || resumeEntry?.selectedAudioLanguage,
+      resumeAudioTrackLang: savedAudioSelection?.trackLang,
+      resumeAudioTrackTitle: savedAudioSelection?.trackTitle,
       targetAudio,
       attempt: autoAudioAttemptsRef.current,
       options: audioOptions.slice(0, 6).map(option => option.label),
     });
     setSelectedMpvAudio(targetAudio);
+    desiredAudioSelectionRef.current = targetAudio;
+    desiredAudioSelectionSetRef.current = true;
     void sendMpvCommand(["set_property", "aid", Number(targetAudio.slice(6))]);
     if (autoAudioTimerRef.current) window.clearTimeout(autoAudioTimerRef.current);
     autoAudioTimerRef.current = window.setTimeout(() => {
@@ -805,18 +1391,128 @@ export default function PlayerPage() {
     originalLanguage,
     playbackPreferences.firstAudioLanguage,
     playbackPreferences.secondAudioLanguage,
+    resumeEntry?.selectedAudio,
+    resumeEntry?.selectedAudioLabel,
+    resumeEntry?.selectedAudioLanguage,
+    savedAudioSelection?.label,
+    savedAudioSelection?.language,
+    savedAudioSelection?.trackLang,
+    savedAudioSelection?.trackTitle,
+    savedAudioSelection?.value,
+    selectedPlaybackOverrides?.selectedAudio,
+    selectedPlaybackOverrides?.selectedAudioLabel,
+    selectedPlaybackOverrides?.selectedAudioLanguage,
+    selectedMpvAudio,
+  ]);
+
+  useEffect(() => {
+    if (
+      !mpvReadyForCommands ||
+      !mpvFileLoaded ||
+      !audioOptions.length ||
+      !savedAudioSelection ||
+      selectedPlaybackOverrides?.selectedAudioLanguage ||
+      selectedPlaybackOverrides?.selectedAudio
+    ) return;
+    const storedAudio = pickStoredTrackOption(audioOptions, {
+      value: savedAudioSelection.value,
+      label: savedAudioSelection.label,
+      language: savedAudioSelection.language,
+      trackLang: savedAudioSelection.trackLang,
+      trackTitle: savedAudioSelection.trackTitle,
+    });
+    const targetAudio = storedAudio?.value ?? "";
+    if (!targetAudio.startsWith("track:")) return;
+
+    const restoreKey = [
+      query?.type,
+      query?.id,
+      query?.season ?? "",
+      query?.episode ?? "",
+      targetAudio,
+      savedAudioSelection.updatedAt,
+    ].join(":");
+    if (savedAudioRestoreKeyRef.current !== restoreKey) {
+      savedAudioRestoreKeyRef.current = restoreKey;
+      savedAudioRestoreAttemptsRef.current = 0;
+    }
+    if (savedAudioRestoreAttemptsRef.current >= 10) return;
+    if (selectedMpvAudioRef.current === targetAudio && savedAudioRestoreAttemptsRef.current > 0) return;
+
+    const applySavedAudio = () => {
+      if (savedAudioRestoreAttemptsRef.current >= 10) return;
+      savedAudioRestoreAttemptsRef.current += 1;
+      autoLangLog("saved audio restore enforce", {
+        targetAudio,
+        attempt: savedAudioRestoreAttemptsRef.current,
+        savedAudio: savedAudioSelection.value,
+        savedAudioLabel: savedAudioSelection.label,
+        savedAudioLanguage: savedAudioSelection.language,
+        selectedAudio: selectedMpvAudioRef.current,
+      });
+      setSelectedMpvAudio(targetAudio);
+      desiredAudioSelectionRef.current = targetAudio;
+      desiredAudioSelectionSetRef.current = true;
+      void sendMpvCommand(["set_property", "aid", Number(targetAudio.slice(6))]);
+      if (savedAudioRestoreAttemptsRef.current < 4 && selectedMpvAudioRef.current !== targetAudio) {
+        savedAudioRestoreTimerRef.current = window.setTimeout(applySavedAudio, 700);
+      }
+    };
+
+    if (savedAudioRestoreTimerRef.current) {
+      window.clearTimeout(savedAudioRestoreTimerRef.current);
+      savedAudioRestoreTimerRef.current = null;
+    }
+    applySavedAudio();
+  }, [
+    audioOptions,
+    mpvFileLoaded,
+    mpvReadyForCommands,
+    query?.episode,
+    query?.id,
+    query?.season,
+    query?.type,
+    savedAudioSelection,
+    selectedPlaybackOverrides?.selectedAudio,
+    selectedPlaybackOverrides?.selectedAudioLanguage,
     selectedMpvAudio,
   ]);
 
   useEffect(() => {
     if (!startupGateActiveRef.current || !mpvReadyForCommands) return;
 
-    const preferredSubtitleLanguage = resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage);
-    const preferredSubtitle = pickInitialTrackOption(subtitleOptions, preferredSubtitleLanguage);
-    const preferredAudio = pickInitialAudio(audioOptions, [
-      resolvePreferredLanguage(playbackPreferences.firstAudioLanguage, originalLanguage),
-      resolvePreferredLanguage(playbackPreferences.secondAudioLanguage, originalLanguage),
-    ]);
+    const overrideSubtitleWasStored = Boolean(selectedPlaybackOverrides?.forceSubtitleSelection);
+    const resumeSubtitleWasStored = overrideSubtitleWasStored || Boolean(resumeEntry && Object.prototype.hasOwnProperty.call(resumeEntry, "selectedSubtitle"));
+    const resumeSubtitle = overrideSubtitleWasStored ? selectedPlaybackOverrides?.selectedSubtitle ?? "" : resumeEntry?.selectedSubtitle ?? "";
+    const overrideAudioLanguage = resolvePreferredLanguage(selectedPlaybackOverrides?.selectedAudioLanguage ?? "", originalLanguage);
+    const resumeAudio = selectedPlaybackOverrides?.selectedAudio ?? savedAudioSelection?.value ?? resumeEntry?.selectedAudio ?? "";
+    const storedAudio = pickStoredTrackOption(audioOptions, {
+      value: resumeAudio,
+      label: selectedPlaybackOverrides?.selectedAudioLabel ?? savedAudioSelection?.label ?? resumeEntry?.selectedAudioLabel,
+      language: overrideAudioLanguage || savedAudioSelection?.language || resumeEntry?.selectedAudioLanguage,
+      trackLang: savedAudioSelection?.trackLang,
+      trackTitle: savedAudioSelection?.trackTitle,
+    });
+    const preferredSubtitleLanguages = [
+      resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage),
+      resolvePreferredLanguage(playbackPreferences.secondSubtitleLanguage, originalLanguage),
+    ];
+    const preferredSubtitleFromSettings = pickInitialTrackOptionFromLanguages(subtitleOptions, preferredSubtitleLanguages);
+    const preferredSubtitle = overrideSubtitleWasStored
+      ? (resumeSubtitle && subtitleOptions.some(option => option.value === resumeSubtitle) ? { value: resumeSubtitle, label: resumeSubtitle } : null)
+      : preferredSubtitleFromSettings
+      ? preferredSubtitleFromSettings
+      : resumeSubtitleWasStored && !resumeSubtitle
+      ? null
+      : resumeSubtitle && subtitleOptions.some(option => option.value === resumeSubtitle)
+      ? { value: resumeSubtitle, label: resumeSubtitle }
+      : null;
+    const preferredAudio = storedAudio
+      ? storedAudio
+      : pickInitialAudio(audioOptions, [
+          resolvePreferredLanguage(playbackPreferences.firstAudioLanguage, originalLanguage),
+          resolvePreferredLanguage(playbackPreferences.secondAudioLanguage, originalLanguage),
+        ]);
 
     if (!startupGatePausedRef.current) {
       startupGatePausedRef.current = true;
@@ -829,11 +1525,16 @@ export default function PlayerPage() {
         ? true
         : selectedMpvAudioRef.current === preferredAudio.value || autoAudioAttemptsRef.current >= 8;
 
+    const preferredSubtitleValue = preferredSubtitle?.value ?? "";
     const subtitleSettled = !subtitlesReady
       ? false
-      : !preferredSubtitle?.value
+      : !preferredSubtitleValue
         ? true
-        : selectedMpvSubtitleRef.current === preferredSubtitle.value || autoSubtitleAttemptsRef.current >= 8;
+        : preferredSubtitleValue.startsWith("ext:")
+          ? selectedMpvSubtitleRef.current === preferredSubtitleValue ||
+            (autoSubtitleAttemptsRef.current > 0 && selectedMpvSubtitleRef.current.startsWith("track:")) ||
+            autoSubtitleAttemptsRef.current >= 4
+          : selectedMpvSubtitleRef.current === preferredSubtitleValue || autoSubtitleAttemptsRef.current >= 8;
 
     const audioTargetExists = Boolean(preferredAudio?.value?.startsWith("track:"));
     const subtitleTargetExists = Boolean(preferredSubtitle?.value);
@@ -851,11 +1552,32 @@ export default function PlayerPage() {
         void sendMpvCommand(["set_property", "aid", Number((preferredAudio?.value ?? "").slice(6))]);
       }
     }
+    if (!subtitleSettled && subtitleTargetExists && autoSubtitleAttemptsRef.current < 12) {
+      autoSubtitleAttemptsRef.current += 1;
+      const targetSubtitle = preferredSubtitle?.value ?? "";
+      autoLangLog("startup gate subtitle enforce", {
+        attempt: autoSubtitleAttemptsRef.current,
+        selectedSubtitle: selectedMpvSubtitleRef.current,
+        targetSubtitle,
+      });
+      desiredSubtitleSelectionRef.current = targetSubtitle;
+      desiredSubtitleSelectionSetRef.current = true;
+      if (targetSubtitle.startsWith("track:")) {
+        void sendMpvCommand(["set_property", "sid", Number(targetSubtitle.slice(6))]);
+      } else if (targetSubtitle.startsWith("ext:")) {
+        setSelectedMpvSubtitle(targetSubtitle);
+        void sendMpvCommand(["sub-add", targetSubtitle.slice(4), "select"]);
+      }
+    }
 
-    const timedOut = Date.now() - startupGateStartedAtRef.current > STARTUP_GATE_HARD_TIMEOUT_MS;
+    const hardTimedOut = Date.now() - startupGateStartedAtRef.current > STARTUP_GATE_HARD_TIMEOUT_MS;
+    const mustHoldForFileLoad = !mpvFileLoaded && !hardTimedOut;
     const mustHoldForAudio = audioTargetExists && !audioSettled;
     const mustHoldForSubtitle = subtitleTargetExists && !subtitleSettled;
-    if (!timedOut && (mustHoldForAudio || mustHoldForSubtitle)) return;
+    const mustHoldForAudioDiscovery = mpvFileLoaded && audioOptions.length === 0 && !hardTimedOut;
+    const mustHoldForSubtitleDiscovery = !subtitlesReady && !hardTimedOut;
+    const timedOut = hardTimedOut && !mustHoldForAudio && !mustHoldForSubtitle;
+    if (mustHoldForFileLoad || mustHoldForAudioDiscovery || mustHoldForSubtitleDiscovery || mustHoldForAudio || mustHoldForSubtitle) return;
 
     startupGateActiveRef.current = false;
     startupGatePausedRef.current = false;
@@ -864,13 +1586,20 @@ export default function PlayerPage() {
       subtitleSettled,
       audioTargetExists,
       subtitleTargetExists,
+      fileLoadPending: mustHoldForFileLoad,
+      audioDiscoveryPending: mustHoldForAudioDiscovery,
+      subtitleDiscoveryPending: mustHoldForSubtitleDiscovery,
       timedOut,
       selectedAudio: selectedMpvAudioRef.current,
       selectedSubtitle: selectedMpvSubtitleRef.current,
       targetAudio: preferredAudio?.value ?? "",
       targetSubtitle: preferredSubtitle?.value ?? "",
+      resumeAudio,
+      resumeSubtitle,
     });
     if (!manualPausedRef.current) {
+      setPlaying(true);
+      lastProgressAtRef.current = Date.now();
       void sendMpvCommand(["set_property", "pause", false]);
     }
   }, [
@@ -881,6 +1610,21 @@ export default function PlayerPage() {
     playbackPreferences.firstAudioLanguage,
     playbackPreferences.preferredSubtitleLanguage,
     playbackPreferences.secondAudioLanguage,
+    playbackPreferences.secondSubtitleLanguage,
+    resumeEntry?.selectedAudio,
+    resumeEntry?.selectedAudioLabel,
+    resumeEntry?.selectedAudioLanguage,
+    savedAudioSelection?.label,
+    savedAudioSelection?.language,
+    savedAudioSelection?.trackLang,
+    savedAudioSelection?.trackTitle,
+    savedAudioSelection?.value,
+    resumeEntry?.selectedSubtitle,
+    selectedPlaybackOverrides?.forceSubtitleSelection,
+    selectedPlaybackOverrides?.selectedAudio,
+    selectedPlaybackOverrides?.selectedAudioLabel,
+    selectedPlaybackOverrides?.selectedAudioLanguage,
+    selectedPlaybackOverrides?.selectedSubtitle,
     selectedMpvAudio,
     selectedMpvSubtitle,
     subtitleOptions,
@@ -910,8 +1654,11 @@ export default function PlayerPage() {
     };
   }, [controlsActive]);
 
-const mediaTitle = selectedMediaName || query?.id || "Reproduccion";
-const { activeSegment: activeSkipSegment } = useSkipIntro(query, mediaTitle, currentTime);
+const mediaTitle = selectedMediaName || resumeEntry?.name || query?.id || "Reproduccion";
+const { activeSegment: activeSkipSegment } = useSkipIntro(query, mediaTitle, currentTime, {
+  enabled: playbackPreferences.skipSegmentsEnabled,
+  animeSkipEnabled: playbackPreferences.animeSkipEnabled,
+});
 const playbackTarget = getPlaybackTarget(stream);
 const currentEpisodeIndex = episodeOptions.findIndex(episode => episode.episode === query?.episode);
 const currentEpisode = currentEpisodeIndex >= 0 ? episodeOptions[currentEpisodeIndex] : null;
@@ -919,6 +1666,155 @@ const canGoPrevEpisode = currentEpisodeIndex > 0;
 const canGoNextEpisode = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodeOptions.length - 1;
 const isMovie = query?.type === "movie";
 const showPanelToggle = !isMovie && panelItems.length > 0;
+
+function buildTraktEntrySnapshot(): ContinueWatchingEntry | null {
+  if (!query || !stream || isTrailerStream) return null;
+  const current = Math.max(0, currentTimeRef.current);
+  const totalDuration = Math.max(0, durationRef.current);
+  const completed = totalDuration > 0 && (current / totalDuration >= 0.92 || totalDuration - current <= 90);
+  const behaviorBackground = typeof stream.behaviorHints?.background === "string" ? stream.behaviorHints.background : "";
+  const behaviorPoster = typeof stream.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
+  const background = !isMovie && currentEpisode?.still
+    ? currentEpisode.still
+    : selectedMediaBackground || behaviorBackground || behaviorPoster || undefined;
+  return {
+    key: buildContinueWatchingKey(query),
+    mediaKey: buildMediaKey(query.type, query.id),
+    type: query.type,
+    id: query.id,
+    name: mediaTitle,
+    logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
+    background,
+    poster: behaviorPoster || undefined,
+    episodeStill: !isMovie ? currentEpisode?.still : undefined,
+    season: query.season,
+    episode: query.episode,
+    episodeName: currentEpisode?.name,
+    currentTime: current,
+    duration: totalDuration,
+    updatedAt: Date.now(),
+    completed,
+    source: "local",
+    streamId: stream.id,
+    streamName: stream.title ?? stream.name,
+  };
+}
+
+function sendCurrentTraktPlaybackEvent(action: "start" | "pause" | "stop") {
+  const entry = buildTraktEntrySnapshot();
+  if (!entry) return;
+  void sendTraktScrobble(action, entry);
+}
+
+function saveUpcomingEpisodePrompt() {
+  if (!query || isMovie || !canGoNextEpisode) return;
+  const nextEpisode = episodeOptions[currentEpisodeIndex + 1];
+  if (!nextEpisode) return;
+  const promptKey = `${query.type}:${query.id}:${nextEpisode.season}:${nextEpisode.episode}`;
+  if (nextEpisodePromptKeyRef.current === promptKey) return;
+  nextEpisodePromptKeyRef.current = promptKey;
+  saveNextEpisodePrompt({
+    query: {
+      type: query.type,
+      id: query.id,
+      season: nextEpisode.season,
+      episode: nextEpisode.episode,
+    },
+    name: mediaTitle,
+    logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
+    background: nextEpisode.still || undefined,
+    episodeStill: nextEpisode.still || undefined,
+    poster: typeof stream?.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : undefined,
+    episodeName: nextEpisode.name,
+    entryKind: "next",
+    source: "local",
+  });
+}
+
+function saveCurrentProgressNow(reason: string) {
+  if (!query || !stream || isTrailerStream) return null;
+  const current = Math.max(currentTimeRef.current, currentTime);
+  const totalDuration = Math.max(durationRef.current, duration);
+  if (!current || current < 5) return null;
+  const pendingResume = !resumeSeekSettledRef.current && resumeSeekTargetRef.current >= 12;
+  if (pendingResume && current < Math.max(12, resumeSeekTargetRef.current - 2)) {
+    resumeLog("save blocked: pending resume", { reason });
+    return null;
+  }
+
+  const behaviorBackground = typeof stream.behaviorHints?.background === "string" ? stream.behaviorHints.background : "";
+  const behaviorPoster = typeof stream.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
+  const continueBackground = isMovie
+    ? selectedMediaBackground || behaviorBackground || behaviorPoster || undefined
+    : currentEpisode?.still || undefined;
+  const savedEntry = saveContinueWatchingProgress({
+    query,
+    stream,
+    name: mediaTitle,
+    logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
+    background: continueBackground,
+    poster: behaviorPoster || undefined,
+    episodeStill: !isMovie ? currentEpisode?.still : undefined,
+    episodeName: currentEpisode?.name,
+    currentTime: current,
+    duration: totalDuration,
+    selectedAudio: desiredAudioSelectionSetRef.current ? desiredAudioSelectionRef.current : selectedMpvAudioRef.current,
+    selectedAudioLabel: audioSelectionMeta(desiredAudioSelectionSetRef.current ? desiredAudioSelectionRef.current : selectedMpvAudioRef.current).selectedAudioLabel,
+    selectedAudioLanguage: audioSelectionMeta(desiredAudioSelectionSetRef.current ? desiredAudioSelectionRef.current : selectedMpvAudioRef.current).selectedAudioLanguage,
+    selectedSubtitle: desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current,
+    selectedSubtitleLabel: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLabel,
+    selectedSubtitleLanguage: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLanguage,
+  });
+  if (savedEntry?.completed) saveUpcomingEpisodePrompt();
+  void syncTraktProgressEntry(savedEntry);
+  resumeLog("progress saved", { reason });
+  return savedEntry;
+}
+
+function shouldStopTraktPlayback() {
+  const totalDuration = durationRef.current;
+  if (!totalDuration || totalDuration < 60) return false;
+  const current = currentTimeRef.current;
+  return current / totalDuration >= 0.9 || totalDuration - current <= 90;
+}
+
+useEffect(() => {
+  if (!playbackStarted || !query || !stream || isTrailerStream) return;
+  const key = `${buildContinueWatchingKey(query)}:${stream.id}`;
+  if (traktStartedKeyRef.current === key) return;
+  traktStartedKeyRef.current = key;
+  traktStoppedKeyRef.current = "";
+  sendCurrentTraktPlaybackEvent("start");
+}, [isTrailerStream, playbackStarted, query, stream]);
+
+useEffect(() => {
+  if (!manualPaused || !playbackStarted) return;
+  sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
+}, [manualPaused, playbackStarted]);
+
+useEffect(() => {
+  if (!playbackStarted || !query || !stream || isTrailerStream || !shouldStopTraktPlayback()) return;
+  const key = `${buildContinueWatchingKey(query)}:${stream.id}`;
+  if (traktStoppedKeyRef.current === key) return;
+  traktStoppedKeyRef.current = key;
+  saveUpcomingEpisodePrompt();
+  sendCurrentTraktPlaybackEvent("stop");
+}, [currentTime, isTrailerStream, playbackStarted, query, stream]);
+
+useEffect(() => {
+  if (!playbackStarted || manualPaused || !query || !stream || isTrailerStream) return;
+  const interval = window.setInterval(() => {
+    const entry = buildTraktEntrySnapshot();
+    if (!entry) return;
+    void sendTraktScrobble("start", entry);
+  }, 12000);
+  return () => window.clearInterval(interval);
+}, [isTrailerStream, manualPaused, playbackStarted, query, stream]);
+
+useEffect(() => () => {
+  saveCurrentProgressNow("unmount");
+  sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
+}, [isTrailerStream, query?.episode, query?.id, query?.season, query?.type, stream?.id]);
 
 useEffect(() => {
   if (!query || !stream || isTrailerStream) return;
@@ -935,24 +1831,37 @@ useEffect(() => {
   lastContinueSaveAtRef.current = now;
   const behaviorBackground = typeof stream.behaviorHints?.background === "string" ? stream.behaviorHints.background : "";
   const behaviorPoster = typeof stream.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
-  saveContinueWatchingProgress({
+  const continueBackground = isMovie
+    ? selectedMediaBackground || behaviorBackground || behaviorPoster || undefined
+    : currentEpisode?.still || undefined;
+  const savedEntry = saveContinueWatchingProgress({
     query,
     stream,
     name: mediaTitle,
     logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
-    background: selectedMediaBackground || behaviorBackground || behaviorPoster || undefined,
+    background: continueBackground,
     poster: behaviorPoster || undefined,
+    episodeStill: !isMovie ? currentEpisode?.still : undefined,
     episodeName: currentEpisode?.name,
     currentTime,
     duration,
+    selectedAudio: desiredAudioSelectionSetRef.current ? desiredAudioSelectionRef.current : selectedMpvAudioRef.current,
+    selectedAudioLabel: audioSelectionMeta(desiredAudioSelectionSetRef.current ? desiredAudioSelectionRef.current : selectedMpvAudioRef.current).selectedAudioLabel,
+    selectedAudioLanguage: audioSelectionMeta(desiredAudioSelectionSetRef.current ? desiredAudioSelectionRef.current : selectedMpvAudioRef.current).selectedAudioLanguage,
+    selectedSubtitle: desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current,
+    selectedSubtitleLabel: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLabel,
+    selectedSubtitleLanguage: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLanguage,
   });
+  void syncTraktProgressEntry(savedEntry);
   resumeLog("progress saved", { nearEnd, saveIntervalMs: sinceLastSaveMs });
 }, [
   addonLogoUrl,
   currentEpisode?.name,
+  currentEpisode?.still,
   currentTime,
   detailLogoUrl,
   duration,
+  isMovie,
   isTrailerStream,
   mediaTitle,
   query,
@@ -964,6 +1873,10 @@ useEffect(() => {
 
 useEffect(() => {
   if (!query || !stream || isTrailerStream) return;
+  if (!mpvReadyForCommands || !mpvFileLoaded) {
+    resumeLog("resume waiting for mpv readiness");
+    return;
+  }
   const seekKey = `${buildContinueWatchingKey(query)}:${stream.id}`;
   const resumeTime = resumeSeekTargetRef.current;
   if (resumeTime <= 0) {
@@ -972,6 +1885,11 @@ useEffect(() => {
     return;
   }
   if (resumeSeekSettledRef.current) return;
+
+  if (!resumeSeekStartedAtRef.current) {
+    resumeSeekStartedAtRef.current = Date.now();
+    resumeLog("resume timer armed");
+  }
 
   const elapsed = Date.now() - resumeSeekStartedAtRef.current;
   if (elapsed > 22000) {
@@ -1060,6 +1978,82 @@ useEffect(() => {
   query?.type,
 ]);
 
+const mpvError = hasMpvError;
+const showFallbackPanel = Boolean(mpvError) && !isLeavingPlayer;
+const playerVisuallyReady = playbackStarted || (mpvReadyForCommands && mpvFileLoaded && playing);
+const bufferingActive = seekBuffering || stalledPlayback || mpvPausedForCache;
+const bufferingSignal = !manualPaused
+  && !showFallbackPanel
+  && ((playbackStarted && bufferingActive) || (mpvFileLoaded && bufferingActive));
+const initialPlaybackLoading = !playerVisuallyReady;
+const showPrePlaybackBackdrop = !showFallbackPanel && !playbackStarted && !mpvError;
+
+useEffect(() => {
+  if (loadingOverlayTimerRef.current !== null) {
+    window.clearTimeout(loadingOverlayTimerRef.current);
+    loadingOverlayTimerRef.current = null;
+  }
+  if (!playbackPreferences.showLoadingOverlay || manualPaused) {
+    setLoadingOverlayVisible(false);
+    return;
+  }
+  const shouldShowNow = (showPrePlaybackBackdrop && initialPlaybackLoading) || bufferingSignal;
+  if (shouldShowNow) {
+    loadingOverlayShownAtRef.current = Date.now();
+    setLoadingOverlayVisible(true);
+    return;
+  }
+  const elapsed = Date.now() - loadingOverlayShownAtRef.current;
+  if (elapsed < 280) {
+    loadingOverlayTimerRef.current = window.setTimeout(() => {
+      setLoadingOverlayVisible(false);
+    }, 280 - elapsed);
+    return;
+  }
+  setLoadingOverlayVisible(false);
+}, [
+  bufferingSignal,
+  initialPlaybackLoading,
+  manualPaused,
+  playbackPreferences.showLoadingOverlay,
+  showPrePlaybackBackdrop,
+]);
+
+if (isIframeStream && playbackTarget) {
+  return (
+    <div className="relative h-screen w-screen overflow-hidden bg-black text-white">
+      <iframe
+        src={playbackTarget}
+        title={stream?.title ?? stream?.addonName ?? "Reproductor web"}
+        className="absolute inset-0 h-full w-full border-0 bg-black"
+        allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+        allowFullScreen
+        referrerPolicy="strict-origin-when-cross-origin"
+      />
+      <div className="absolute left-5 top-5 z-20 flex gap-2">
+        <button
+          type="button"
+          onClick={goBack}
+          className="flex h-11 w-11 items-center justify-center rounded-md border border-white/16 bg-black/72 text-white backdrop-blur-md gsap-transition hover:bg-black/88"
+          title="Volver"
+          aria-label="Volver"
+        >
+          <ArrowLeft size={20} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void openExternalUrl(playbackTarget)}
+          className="flex h-11 w-11 items-center justify-center rounded-md border border-white/16 bg-black/72 text-white backdrop-blur-md gsap-transition hover:bg-black/88"
+          title="Abrir en el navegador"
+          aria-label="Abrir en el navegador"
+        >
+          <ExternalLink size={19} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 if (!stream) {
   return (
     <div className="flex h-screen flex-col items-center justify-center gap-4 bg-black text-white">
@@ -1070,39 +2064,42 @@ if (!stream) {
     </div>
   );
 }
-  const mpvError = mpvBundled === false || mpvStatus?.startsWith("MPV no");
-  const showFallbackPanel = Boolean(mpvError);
   const selectedSubtitleValue = selectedMpvSubtitle;
   const currentMetaTitle = isMovie ? mediaTitle : (currentEpisode?.name ?? mediaTitle);
-  const currentOverview = currentEpisode?.overview?.trim() || "Sin descripcion disponible para este episodio.";
+  const currentOverview = currentEpisode?.overview?.trim() || "Sin descripción disponible para este episodio.";
   const behaviorBackground = typeof stream?.behaviorHints?.background === "string" ? stream.behaviorHints.background : "";
   const behaviorPoster = typeof stream?.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
   const loadingArtwork =
     selectedMediaLogo
+    || sanitizeLogoUrl(resumeEntry?.logo)
     || detailLogoUrl
     || addonLogoUrl
     || seriesLogoUrl
     || null;
-  const backgroundArtwork =
+  const resumeBackground = resumeEntry?.background || resumeEntry?.poster || "";
+  const backgroundArtwork = ensureOriginalTmdbImage(
     selectedMediaBackground
+    || resumeBackground
     || behaviorBackground
     || behaviorPoster
-    || "";
-  const playerVisuallyReady = playbackStarted || (mpvReadyForCommands && mpvFileLoaded && duration > 0);
-  const bufferingActive = playerVisuallyReady && playbackStarted && !manualPaused && (mpvPausedForCache || (mpvCacheBuffering > 5 && mpvCacheBuffering < 95) || stalledPlayback);
-  const initialPlaybackLoading = !playerVisuallyReady;
-  const showPrePlaybackBackdrop = !showFallbackPanel && !playerVisuallyReady && !mpvError;
-  const shouldShowLoading = !showFallbackPanel && !manualPaused && !mpvError && ((initialPlaybackLoading && !mpvFileLoaded) || bufferingActive);
+    || "",
+  );
+  const controlsReady = !androidPlayback && (playbackStarted || (mpvReadyForCommands && mpvFileLoaded));
+  const nativeSurfaceStyle: CSSProperties = { inset: 0 };
+  const playerCursor = !androidPlayback && playbackStarted && !controlsActive ? "none" : "default";
   const playerShellClassName = !showFallbackPanel
-    ? "relative h-screen w-screen overflow-hidden bg-transparent text-white"
+    ? `relative h-screen w-screen overflow-hidden ${nativeSurfaceVisible ? "bg-transparent" : "bg-black"} text-white`
     : "relative h-screen w-screen overflow-hidden bg-[#101014] text-white";
   
   return (
     <div
       className={playerShellClassName}
-      style={{ fontFamily: "Inter, system-ui, sans-serif" }}
+      style={{ cursor: playerCursor, fontFamily: "Inter, system-ui, sans-serif" }}
       onPointerMove={() => wakeControls()}
-      onPointerDown={() => wakeControls()}
+      onPointerDown={startHoldToAccelerate}
+      onPointerUp={stopHoldToAccelerate}
+      onPointerCancel={stopHoldToAccelerate}
+      onPointerLeave={stopHoldToAccelerate}
       onClick={handleScreenClick}
     >
       {showPrePlaybackBackdrop ? (
@@ -1123,9 +2120,17 @@ if (!stream) {
       {showPrePlaybackBackdrop && !backgroundArtwork ? (
         <div className="pointer-events-none absolute inset-0 bg-[#101014]" />
       ) : null}
+      {!showFallbackPanel && !androidPlayback ? (
+        <div
+          ref={nativeSurfaceRef}
+          className="pointer-events-none absolute overflow-hidden"
+          style={nativeSurfaceStyle}
+          aria-hidden="true"
+        />
+      ) : null}
       {showFallbackPanel ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black px-8 text-center">
-          <div className="pointer-events-auto liquid-glass-dark max-w-lg rounded-lg p-6 opacity-95 transition-opacity duration-300 hover:opacity-100">
+          <div className="pointer-events-auto liquid-glass-dark max-w-lg rounded-lg p-6 opacity-95 gsap-transition hover:opacity-100">
             <h1 className="mb-3 text-xl font-black">libmpv interno</h1>
             {mpvBundled === false && (
               <p className="mb-4 rounded-md bg-white/10 px-4 py-3 text-xs text-white/62">
@@ -1134,25 +2139,41 @@ if (!stream) {
             )}
             {mpvStatus && <p className="mb-4 text-xs text-white/58">{mpvStatus}</p>}
             <button onClick={() => void retryMpvPlayback()} className="rounded-md bg-white px-5 py-2.5 font-bold text-black">
-              Reintentar reproduccion
+              Reintentar reproducción
             </button>
             {playbackTarget && <p className="mt-4 break-all text-xs text-white/32">{playbackTarget}</p>}
           </div>
         </div>
-      ) : (
-        <div className="pointer-events-none absolute inset-0 bg-transparent" />
-      )}
+      ) : null}
+      {androidPlayback && !showFallbackPanel ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/72 px-[5vw] text-center">
+          <div className="liquid-glass-dark max-w-xl rounded-lg p-6">
+            <h1 className="mb-3 text-xl font-black">Reproductor Android TV</h1>
+            <p className="mb-5 text-sm text-white/62">
+              {mpvStatus || "El reproductor nativo se abre en pantalla completa dentro del APK."}
+            </p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <button data-player-interactive onClick={() => void retryMpvPlayback()} className="rounded-md bg-white px-5 py-2.5 font-bold text-black">
+                Reabrir
+              </button>
+              <button data-player-interactive onClick={goBack} className="rounded-md border border-white/18 px-5 py-2.5 font-bold text-white">
+                Volver
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
-      <PlayerLoadingOverlay visible={shouldShowLoading} artwork={loadingArtwork} title={mediaTitle} />
+      <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} />
 
-      {activeSkipSegment && mpvReadyForCommands ? (
+      {!androidPlayback && playbackPreferences.skipSegmentsEnabled && activeSkipSegment && mpvReadyForCommands && playbackStarted ? (
         <button
           data-player-interactive
           type="button"
-          className="absolute z-40 flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-2.5 text-sm font-black text-black shadow-[0_18px_56px_rgba(0,0,0,0.62)] transition hover:scale-[1.03]"
+          className="absolute z-40 flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-2.5 text-sm font-black text-black shadow-[0_18px_56px_rgba(0,0,0,0.62)] gsap-transition hover:scale-[1.03]"
           style={{
-            right: "max(24px, calc((100vw - min(1240px, calc(100vw - 32px))) / 2 + 20px))",
-            bottom: controlsActive ? 196 : 116,
+            right: "max(32px, calc((100vw - min(1240px, calc(100vw - 32px))) / 2 + 24px))",
+            bottom: controlsActive ? 166 : 44,
           }}
           onClick={event => {
             event.stopPropagation();
@@ -1165,7 +2186,7 @@ if (!stream) {
       ) : null}
 
       <EpisodePanel
-        visible={showEpisodePanel && showPanelToggle}
+        visible={!androidPlayback && playbackStarted && showEpisodePanel && showPanelToggle}
         title={title}
         streamName={mediaTitle}
         seriesLogoUrl={seriesLogoUrl}
@@ -1180,7 +2201,7 @@ if (!stream) {
       />
 
       <PlayerControls
-        active={controlsActive}
+        active={controlsReady && controlsActive}
         currentMetaTitle={currentMetaTitle}
         title={title}
         currentTime={currentTime}
@@ -1195,9 +2216,13 @@ if (!stream) {
         subtitleOptions={subtitleOptions}
         speedOptions={speedOptions}
         subtitlesLoading={subtitlesLoading}
+        subtitleDelayMs={subtitleDelayMs}
+        subtitleScalePercent={subtitleScalePercent}
+        subtitleVerticalPercent={subtitleVerticalPercent}
         showPanelToggle={showPanelToggle}
         showEpisodePanel={showEpisodePanel}
         hasEpisodeOptions={episodeOptions.length > 0}
+        controlsLocked={false}
         canGoPrevEpisode={canGoPrevEpisode}
         canGoNextEpisode={canGoNextEpisode}
         onControlsEnter={holdControls}
@@ -1209,7 +2234,19 @@ if (!stream) {
         onAudioChange={value => {
           manualAudioSelectionRef.current = true;
           autoLangLog("audio manual change", { value });
+          const audioMeta = audioSelectionMeta(value);
           setSelectedMpvAudio(value);
+          desiredAudioSelectionRef.current = value;
+          desiredAudioSelectionSetRef.current = true;
+          saveContinueWatchingAudioSelection(query, {
+            value,
+            label: audioMeta.selectedAudioLabel,
+            language: audioMeta.selectedAudioLanguage,
+            trackLang: audioMeta.selectedAudioTrackLang,
+            trackTitle: audioMeta.selectedAudioTrackTitle,
+          });
+          updateContinueWatchingSelection(query, audioMeta);
+          persistAudioPreference(value);
           if (!value) {
             void sendMpvCommand(["set_property", "aid", "no"]);
             return;
@@ -1222,17 +2259,38 @@ if (!stream) {
           manualSubtitleSelectionRef.current = true;
           autoLangLog("subtitle manual change", { value });
           setSelectedMpvSubtitle(value);
+          desiredSubtitleSelectionRef.current = value;
+          desiredSubtitleSelectionSetRef.current = true;
+          updateContinueWatchingSelection(query, subtitleSelectionMeta(value));
+          persistSubtitlePreference(value);
           if (!value) {
             void sendMpvCommand(["set_property", "sid", "no"]);
             return;
           }
           if (value.startsWith("track:")) {
             void sendMpvCommand(["set_property", "sid", Number(value.slice(6))]);
+            window.setTimeout(() => applySubtitleSettings(), 80);
             return;
           }
           if (value.startsWith("ext:")) {
             void sendMpvCommand(["sub-add", value.slice(4), "select"]);
+            window.setTimeout(() => applySubtitleSettings(), 160);
           }
+        }}
+        onSubtitleDelayChange={next => {
+          const value = Math.max(-5000, Math.min(5000, next));
+          setSubtitleDelayMs(value);
+          applySubtitleSettings({ delayMs: value });
+        }}
+        onSubtitleScaleChange={next => {
+          const value = Math.max(50, Math.min(200, next));
+          setSubtitleScalePercent(value);
+          applySubtitleSettings({ scalePercent: value });
+        }}
+        onSubtitleVerticalChange={next => {
+          const value = Math.max(0, Math.min(50, next));
+          setSubtitleVerticalPercent(value);
+          applySubtitleSettings({ verticalPercent: value });
         }}
         onSpeedChange={value => {
           setSelectedSpeed(value);
@@ -1246,9 +2304,12 @@ if (!stream) {
   );
 }
 
-function pickInitialTrackOption(options: { value: string; label: string }[], preferredLanguage: string) {
+function pickInitialTrackOption(options: { value: string; label: string; languageKey?: string }[], preferredLanguage: string) {
   const preferred = preferredLanguage
-    ? options.find(option => matchesPreferredLanguage(option.label, preferredLanguage))
+    ? options.find(option => (
+      matchesPreferredLanguage(option.label, preferredLanguage)
+      || (option.languageKey && matchesPreferredLanguage(option.languageKey, preferredLanguage))
+    ))
     : null;
   if (preferred) return preferred;
   return (
@@ -1257,6 +2318,18 @@ function pickInitialTrackOption(options: { value: string; label: string }[], pre
     options[0] ??
     null
   );
+}
+
+function pickInitialTrackOptionFromLanguages(options: { value: string; label: string; languageKey?: string }[], preferredLanguages: string[]) {
+  for (const preferredLanguage of preferredLanguages) {
+    if (!preferredLanguage) continue;
+    const matched = options.find(option => (
+      matchesPreferredLanguage(option.label, preferredLanguage)
+      || (option.languageKey && matchesPreferredLanguage(option.languageKey, preferredLanguage))
+    ));
+    if (matched) return matched;
+  }
+  return pickInitialTrackOption(options, "");
 }
 
 function pickInitialAudio(options: { value: string; label: string }[], preferredLanguages: string[]) {
@@ -1292,4 +2365,124 @@ function pickInitialAudioTrack(
   }
 
   return pickInitialAudio(audioOptions, preferredLanguages);
+}
+
+function pickStoredTrackOption(
+  options: { value: string; label: string }[],
+  stored: { value?: string; label?: string; language?: string; trackLang?: string; trackTitle?: string },
+) {
+  const storedValue = stored.value ?? "";
+  const storedLabel = normalizeOptionText(stored.label);
+  const storedLanguage = stored.language ?? "";
+  const storedTrackLang = normalizeOptionText(stored.trackLang);
+  const storedTrackTitle = normalizeOptionText(stored.trackTitle);
+  const byValue = storedValue ? options.find(option => option.value === storedValue) : null;
+
+  if (byValue && (!storedLabel || normalizeOptionText(byValue.label) === storedLabel)) return byValue;
+  if (storedTrackLang || storedTrackTitle) {
+    const byTrackParts = options.find(option => {
+      const label = normalizeOptionText(option.label);
+      return (
+        (!storedTrackLang || label.includes(storedTrackLang)) &&
+        (!storedTrackTitle || label.includes(storedTrackTitle))
+      );
+    });
+    if (byTrackParts) return byTrackParts;
+  }
+  if (storedLabel) {
+    const byExactLabel = options.find(option => normalizeOptionText(option.label) === storedLabel);
+    if (byExactLabel) return byExactLabel;
+    const byContainedLabel = options.find(option => {
+      const label = normalizeOptionText(option.label);
+      return label.includes(storedLabel) || storedLabel.includes(label);
+    });
+    if (byContainedLabel) return byContainedLabel;
+  }
+  if (storedLanguage) {
+    const byLanguage = options.find(option => matchesPreferredLanguage(option.label, storedLanguage));
+    if (byLanguage) return byLanguage;
+  }
+  return byValue ?? null;
+}
+
+function findMpvTrackByValue(value: string, tracks: MpvTrack[]) {
+  if (!value.startsWith("track:")) return null;
+  const trackId = Number(value.slice(6));
+  if (!Number.isFinite(trackId)) return null;
+  return tracks.find(track => Number(track.id) === trackId) ?? null;
+}
+
+function normalizeOptionText(value: string | null | undefined) {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function normalizeSubtitleLanguageKey(value: string) {
+  const normalized = normalizeOptionText(value);
+  if (!normalized) return "other";
+  const queryMatch = normalized.match(/(?:^|[?&])(?:lang|lang_code|language)=([a-z-]{2,12})/i);
+  if (queryMatch?.[1]) return normalizeSubtitleLanguageKey(queryMatch[1]);
+  if (/(^|[^a-z])(spanish|espanol|espa\u00f1ol|castellano|latino|spa|es|es-419)($|[^a-z])/i.test(normalized)) return "es";
+  if (/(^|[^a-z])(english|ingles|ingl\u00e9s|eng|en)($|[^a-z])/i.test(normalized)) return "en";
+  if (/(^|[^a-z])(russian|ruso|rus|ru)($|[^a-z])/i.test(normalized)) return "ru";
+  if (/(^|[^a-z])(italian|italiano|ita|it)($|[^a-z])/i.test(normalized)) return "it";
+  if (/(^|[^a-z])(portuguese|portugues|portugu\u00eas|por|pt|pt-br)($|[^a-z])/i.test(normalized)) return "pt";
+  if (/(^|[^a-z])(french|frances|francais|fra|fr)($|[^a-z])/i.test(normalized)) return "fr";
+  if (/(^|[^a-z])(german|aleman|alem\u00e1n|deu|ger|de)($|[^a-z])/i.test(normalized)) return "de";
+  if (/(^|[^a-z])(japanese|japones|japon\u00e9s|jpn|ja|jp)($|[^a-z])/i.test(normalized)) return "ja";
+  if (/(^|[^a-z])(korean|coreano|kor|ko)($|[^a-z])/i.test(normalized)) return "ko";
+  if (/(^|[^a-z])(chinese|chino|zho|zh)($|[^a-z])/i.test(normalized)) return "zh";
+  const codeMatch = normalized.match(/\b([a-z]{2,3})(?:-[a-z]{2,4})?\b/);
+  return codeMatch?.[1] ? codeMatch[1] : "other";
+}
+
+function formatSubtitleLanguageLabel(languageKey: string, fallback = "") {
+  const key = normalizeSubtitleLanguageKey(languageKey);
+  if (key === "es") return "Espanol";
+  if (key === "en") return "English";
+  if (key === "ru") return "Russian";
+  if (key === "it") return "Italiano";
+  if (key === "pt") return "Portugues";
+  if (key === "fr") return "Francais";
+  if (key === "de") return "Deutsch";
+  if (key === "ja") return "Japanese";
+  if (key === "ko") return "Korean";
+  if (key === "zh") return "Chinese";
+  const text = (fallback || "").trim();
+  if (!text) return "Otro";
+  return text.length > 22 ? `${text.slice(0, 22)}...` : text;
+}
+
+const KNOWN_LANGUAGE_CODES = ["spa", "eng", "jpn", "kor", "por", "fra", "deu", "ita", "zho", "rus"] as const;
+
+function detectPreferredLanguageCode(
+  selectedValue: string,
+  tracks: MpvTrack[],
+  options: { value: string; label: string; languageKey?: string }[],
+) {
+  const byTrack = detectLanguageFromTrack(selectedValue, tracks);
+  if (byTrack) return byTrack;
+  const selectedOption = options.find(option => option.value === selectedValue);
+  if (selectedOption?.languageKey && selectedOption.languageKey !== "other") return selectedOption.languageKey;
+  return detectLanguageFromText(selectedOption?.label ?? "");
+}
+
+function detectLanguageFromTrack(selectedValue: string, tracks: MpvTrack[]) {
+  if (!selectedValue.startsWith("track:")) return "";
+  const trackId = Number(selectedValue.slice(6));
+  if (!Number.isFinite(trackId)) return "";
+  const track = tracks.find(item => Number(item.id) === trackId);
+  if (!track) return "";
+  return detectLanguageFromText(`${track.lang ?? ""} ${track.title ?? ""}`);
+}
+
+function detectLanguageFromText(value: string) {
+  for (const language of KNOWN_LANGUAGE_CODES) {
+    if (matchesPreferredLanguage(value, language)) return language;
+  }
+  return "";
 }

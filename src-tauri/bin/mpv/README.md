@@ -1,14 +1,14 @@
-# Internal MPV Runtime
+# Internal libmpv Runtime
 
-Place the Windows MPV runtime here before packaging. The bundled `mpv.exe`
-is launched as an internal child process and embedded into the Tauri window with
-`--wid=<HWND>`:
+Place the Windows libmpv runtime here before packaging. Aetherio loads
+`libmpv-2.dll` through the libmpv C API inside the Tauri process and injects
+the Tauri window HWND with the `wid` option:
 
-- `mpv.exe`
-- the DLL files distributed with the same MPV build
-- `yt-dlp.exe` for resolving YouTube trailer URLs inside the internal MPV player
+- `libmpv-2.dll`
+- the DLL files distributed with the same libmpv/MPV build
+- `yt-dlp.exe` for resolving YouTube trailer URLs inside libmpv
 
-At runtime Aetherio loads this bundled copy and injects the Tauri window HWND
-into MPV so native video renders behind the transparent React controls.
+`mpv.exe` is no longer used for playback and should not be bundled for the
+player path. The app now requires `libmpv-2.dll`.
 
 This folder is included in the Tauri bundle through `tauri.conf.json`.

@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { useAddonStore } from "../../store/addonStore";
 import { Puzzle, Plus, Trash2, ToggleLeft, ToggleRight, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
@@ -84,7 +84,7 @@ export default function AddonsPage() {
   }
 
   return (
-    <PageContainer className="flex flex-col h-full py-8 animate-fadeIn overflow-y-auto">
+    <PageContainer className="flex flex-col h-full py-8 gsap-fade-in overflow-y-auto">
 
       {/* Header */}
       <div className="flex items-center gap-3 mb-8">
@@ -104,15 +104,15 @@ export default function AddonsPage() {
             onChange={e => setUrl(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleInstall()}
             placeholder="https://v3-cinemeta.strem.io/manifest.json"
-            className="flex-1 bg-bg-surface border border-glass-border rounded-card px-4 py-3 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-colors text-sm"
+            className="flex-1 bg-bg-surface border border-glass-border rounded-card px-4 py-3 text-text-primary placeholder-text-muted focus:outline-none focus:border-accent gsap-transition text-sm"
           />
           <button
             onClick={handleInstall}
             disabled={isInstalling || !url.trim()}
-            className="flex items-center gap-2 px-5 py-3 bg-accent hover:bg-accent-dark text-white font-semibold rounded-card transition-all duration-fast disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-5 py-3 bg-accent hover:bg-accent-dark text-white font-semibold rounded-card gsap-transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isInstalling
-              ? <Loader2 size={16} className="animate-spin" />
+              ? <Loader2 size={16} className="gsap-spin" />
               : <Plus size={16} />}
             {isInstalling ? "Instalando..." : "Instalar"}
           </button>
@@ -128,7 +128,7 @@ export default function AddonsPage() {
         <div className="max-w-2xl mb-6">
           <button
             onClick={() => setShowLog(v => !v)}
-            className="flex items-center gap-2 text-xs text-text-muted hover:text-text-secondary mb-2 transition-colors"
+            className="flex items-center gap-2 text-xs text-text-muted hover:text-text-secondary mb-2 gsap-transition"
           >
             {showLog ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
             Log de instalación ({log.length} líneas)
@@ -150,7 +150,7 @@ export default function AddonsPage() {
 
       {/* Addons instalados */}
       <div className="max-w-2xl">
-        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-4">
+        <h2 className="text-xs font-semibold text-text-muted mb-4">
           Instalados ({addons.length})
         </h2>
 
@@ -165,7 +165,7 @@ export default function AddonsPage() {
         ) : (
           <div className="flex flex-col gap-3">
             {addons.map(addon => (
-              <div key={addon.id} className="glass rounded-glass p-4 flex items-center gap-4 animate-fadeIn">
+              <div key={addon.id} className="glass rounded-glass p-4 flex items-center gap-4 gsap-fade-in">
                 {addon.logo ? (
                   <img src={addon.logo} alt="" className="w-10 h-10 rounded-lg object-contain bg-bg-surface" />
                 ) : (
@@ -176,7 +176,7 @@ export default function AddonsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-text-primary truncate">{addon.name}</p>
                   <p className="text-xs text-text-muted truncate">
-                    {addon.manifest?.types?.join(" · ")} · v{addon.version}
+                    {addon.scope === "profile" ? "Personal · " : addon.bundled ? "Global · Integrado · " : "Global · "}{addon.manifest?.types?.join(" · ")} · v{addon.version}
                   </p>
                   {addon.description && (
                     <p className="text-xs text-text-secondary truncate mt-0.5">{addon.description}</p>
@@ -185,18 +185,20 @@ export default function AddonsPage() {
                 <div className="flex items-center gap-3 shrink-0">
                   <button
                     onClick={() => addon.enabled ? disableAddon(addon.id) : enableAddon(addon.id)}
-                    className={`transition-colors ${addon.enabled ? "text-accent" : "text-text-muted"}`}
+                    className={`gsap-transition ${addon.enabled ? "text-accent" : "text-text-muted"}`}
                     title={addon.enabled ? "Desactivar" : "Activar"}
                   >
                     {addon.enabled ? <ToggleRight size={26} /> : <ToggleLeft size={26} />}
                   </button>
-                  <button
-                    onClick={() => removeAddon(addon.id)}
-                    className="text-text-muted hover:text-red-400 transition-colors"
-                    title="Eliminar"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+                  {!addon.bundled ? (
+                    <button
+                      onClick={() => removeAddon(addon.id)}
+                      className="text-text-muted hover:text-red-400 gsap-transition"
+                      title="Eliminar"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ))}

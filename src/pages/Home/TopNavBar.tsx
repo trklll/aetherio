@@ -1,8 +1,8 @@
-﻿import { useNavigate, useLocation } from "react-router-dom";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Search, ChevronLeft } from "lucide-react";
 import clsx from "clsx";
 import { toggleWindowFullscreen } from "../../utils/windowControls";
+import { closeWindow, minimizeWindow } from "../../runtime/platform";
 
 const NAV = [
   { label: "Inicio",     path: "/home" },
@@ -33,7 +33,7 @@ export default function TopNavBar({ showBack = false }: Props) {
           {showBack ? (
             <button
               onClick={() => navigate(-1)}
-              className="flex items-center gap-1 text-white/80 hover:text-white text-sm font-medium transition-colors"
+              className="flex items-center gap-1 text-white/80 hover:text-white text-sm font-medium gsap-transition"
             >
               <ChevronLeft size={18} />
               Volver
@@ -62,7 +62,7 @@ export default function TopNavBar({ showBack = false }: Props) {
               key={item.path}
               onClick={() => navigate(item.path)}
               className={clsx(
-                "px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-fast",
+                "px-4 py-1.5 rounded-full text-sm font-medium gsap-transition",
                 pathname === item.path
                   ? "bg-white text-gray-900 shadow"
                   : "text-white/85 hover:text-white hover:bg-white/15"
@@ -74,7 +74,7 @@ export default function TopNavBar({ showBack = false }: Props) {
 
           <button
             onClick={() => navigate("/search")}
-            className="p-1.5 ml-0.5 text-white/75 hover:text-white transition-colors rounded-full hover:bg-white/15"
+            className="p-1.5 ml-0.5 text-white/75 hover:text-white gsap-transition rounded-full hover:bg-white/15"
           >
             <Search size={15} />
           </button>
@@ -82,18 +82,18 @@ export default function TopNavBar({ showBack = false }: Props) {
 
         <div className="w-28 flex items-center justify-end gap-2">
           <button
-            onClick={() => getCurrentWindow().minimize()}
-            className="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors shadow"
+            onClick={minimizeWindow}
+            className="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-300 gsap-transition shadow"
             title="Minimizar"
           />
           <button
             onClick={toggleWindowFullscreen}
-            className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 transition-colors shadow"
+            className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 gsap-transition shadow"
             title="Pantalla completa"
           />
           <button
-            onClick={() => getCurrentWindow().close()}
-            className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 transition-colors shadow"
+            onClick={closeWindow}
+            className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 gsap-transition shadow"
             title="Cerrar"
           />
         </div>

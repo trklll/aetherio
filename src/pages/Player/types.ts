@@ -1,6 +1,13 @@
 export interface MpvLaunchResult {
-  pid: number;
+  pid?: number | null;
+  hostPid?: number;
+  backend?: string;
   logPath?: string;
+  bridgeLogPath?: string;
+  libmpvPath?: string;
+  runtimePath?: string;
+  resolvedTarget?: string;
+  p2pLogPath?: string;
 }
 
 export interface MpvTrack {
@@ -28,7 +35,7 @@ export interface MpvStatusSnapshot {
 
 export interface MpvEventPayload {
   event?: string;
-  property?: string;
+  property?: unknown;
   target?: string;
   snapshot?: MpvStatusSnapshot;
 }
@@ -61,6 +68,9 @@ export interface PlayerPanelItem {
 export interface SelectOption {
   value: string;
   label: string;
+  languageKey?: string;
+  languageLabel?: string;
+  sourceLabel?: string;
 }
 
 export type VideoScaleMode = "original" | "crop";

@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getApiKeys, getTmdbApiKey } from "../../config/apiKeys";
+import { getApiKeys, tmdbFetch } from "../../config/apiKeys";
+import { invokeCommand } from "../../runtime/platform";
 import type { StreamQuery } from "../../types/stream";
-import { TMDB } from "./utils";
 
 export interface SkipSegment {
   id: string;
@@ -10,6 +9,11 @@ export interface SkipSegment {
   kind: "intro" | "recap";
   start: number;
   end: number;
+}
+
+interface SkipIntroOptions {
+  enabled: boolean;
+  animeSkipEnabled: boolean;
 }
 
 interface IntroDbSegment {
@@ -127,15 +131,10 @@ function legacyAnimeSkipSegment(timestamps: any[]): SkipSegment | null {
 async function resolveImdbId(query: StreamQuery) {
   if (query.id.startsWith("tt")) return query.id;
   if (!query.id.startsWith("tmdb:")) return null;
-  const tmdbKey = getTmdbApiKey();
-  if (!tmdbKey) return null;
-
   const tmdbId = query.id.slice(5);
   const tmdbType = query.type === "movie" ? "movie" : "tv";
-  const response = await fetch(`${TMDB}/${tmdbType}/${tmdbId}/external_ids?api_key=${tmdbKey}`);
-  if (!response.ok) return null;
-  const json = await response.json();
-  return typeof json.imdb_id === "string" && json.imdb_id.startsWith("tt") ? json.imdb_id : null;
+  const json = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}/external_ids`);
+  return typeof json?.imdb_id === "string" && json.imdb_id.startsWith("tt") ? json.imdb_id : null;
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
@@ -160,7 +159,7 @@ async function loadIntroDbSegments(query: StreamQuery): Promise<SkipSegment[]> {
   if (!query.season || !query.episode || query.type === "movie") return [];
   const imdbId = await resolveImdbId(query);
   if (!imdbId) return [];
-  const json = await invoke<Record<string, unknown>>("fetch_introdb_segments", {
+  const json = await invokeCommand<Record<string, unknown>>("fetch_introdb_segments", {
     imdbId,
     season: query.season,
     episode: query.episode,
@@ -282,18 +281,18 @@ async function loadAnimeSegments(query: StreamQuery, mediaTitle: string): Promis
   return loadAnimeSkipSegmentsByTitle(query, mediaTitle).catch(() => []);
 }
 
-export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, currentTime: number) {
+export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, currentTime: number, options: SkipIntroOptions) {
   const [segments, setSegments] = useState<SkipSegment[]>([]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
-      if (!query || query.type === "movie") {
+      if (!options.enabled || !query || query.type === "movie") {
         setSegments([]);
         return;
       }
-      const cacheKey = `${query.type}|${query.id}|${query.season ?? "-"}|${query.episode ?? "-"}|${mediaTitle}`;
+      const cacheKey = `${query.type}|${query.id}|${query.season ?? "-"}|${query.episode ?? "-"}|${mediaTitle}|anime:${options.animeSkipEnabled ? "1" : "0"}`;
       const cached = skipSegmentCache.get(cacheKey);
       if (cached) {
         setSegments(cached);
@@ -302,7 +301,7 @@ export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, curr
 
       const [introDbSegments, animeSkipSegments] = await Promise.all([
         loadIntroDbSegments(query).catch(() => []),
-        loadAnimeSegments(query, mediaTitle).catch(() => []),
+        options.animeSkipEnabled ? loadAnimeSegments(query, mediaTitle).catch(() => []) : Promise.resolve([]),
       ]);
 
       if (!cancelled) {
@@ -321,7 +320,7 @@ export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, curr
     return () => {
       cancelled = true;
     };
-  }, [query, mediaTitle]);
+  }, [query, mediaTitle, options.enabled, options.animeSkipEnabled]);
 
   const activeSegment = useMemo(() => (
     segments.find(segment => currentTime >= Math.max(0, segment.start - 8) && currentTime < segment.end - 0.5) ?? null

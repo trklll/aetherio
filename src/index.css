@@ -1,4 +1,6 @@
-﻿@tailwind base;
+﻿@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
+
+@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -6,13 +8,62 @@
 
 html,body,#root{
   height:100%;width:100%;overflow:hidden;
-  background:transparent;color:#fff;
+  background:#1f1f1f;color:#fff;
   font-family:"Inter",system-ui,sans-serif;
+  font-optical-sizing:auto;
+  font-style:normal;
+  font-synthesis:none;
+  text-rendering:optimizeLegibility;
   -webkit-font-smoothing:antialiased;
   -moz-osx-font-smoothing:grayscale;
   --app-safe-top:24px;
   --app-safe-x:32px;
   --app-shell-nav-height:88px;
+}
+
+*,input,button,textarea,select{
+  font-family:"Inter",system-ui,sans-serif;
+  font-optical-sizing:auto;
+}
+
+html.aetherio-player-window,
+html.aetherio-player-window body,
+html.aetherio-player-window #root{
+  background:transparent;
+}
+
+html.aetherio-android-tv,
+html.aetherio-android-tv body,
+html.aetherio-android-tv #root{
+  --app-safe-top:5vh;
+  --app-safe-x:5vw;
+  --app-shell-nav-height:104px;
+  background:#0d0d0d;
+}
+
+html.aetherio-android-tv button,
+html.aetherio-android-tv a,
+html.aetherio-android-tv input,
+html.aetherio-android-tv select,
+html.aetherio-android-tv textarea,
+html.aetherio-android-tv [tabindex]{
+  -webkit-tap-highlight-color:transparent;
+}
+
+html.aetherio-android-tv button:focus-visible,
+html.aetherio-android-tv a:focus-visible,
+html.aetherio-android-tv input:focus-visible,
+html.aetherio-android-tv select:focus-visible,
+html.aetherio-android-tv textarea:focus-visible,
+html.aetherio-android-tv [tabindex]:focus-visible{
+  outline:3px solid rgba(255,255,255,0.82);
+  outline-offset:4px;
+  box-shadow:0 0 0 7px rgba(255,255,255,0.16);
+}
+
+html.aetherio-android-tv .scroll-row{
+  scroll-padding-left:var(--app-safe-x);
+  scroll-padding-right:var(--app-safe-x);
 }
 
 ::-webkit-scrollbar{width:3px;height:3px;}
@@ -24,20 +75,20 @@ html,body,#root{
   background:rgba(255,255,255,0.10);
   backdrop-filter:blur(12px) saturate(150%);
   -webkit-backdrop-filter:blur(12px) saturate(150%);
-  border:1px solid rgba(255,255,255,0.14);
-  box-shadow:0 2px 12px rgba(0,0,0,0.32),inset 0 1px 0 rgba(255,255,255,0.08);
+  border:1px solid rgba(225,230,238,0.09);
+  box-shadow:0 2px 12px rgba(0,0,0,0.32),inset 0 1px 0 rgba(255,255,255,0.045);
 }
 .liquid-glass-dark{
   background:rgba(0,0,0,0.65);
   backdrop-filter:blur(14px) saturate(165%);
   -webkit-backdrop-filter:blur(14px) saturate(165%);
-  border:1px solid rgba(255,255,255,0.10);
+  border:1px solid rgba(225,230,238,0.08);
 }
 .liquid-glass-pill{
   background:rgba(255,255,255,0.12);
   backdrop-filter:blur(10px) saturate(145%);
   -webkit-backdrop-filter:blur(10px) saturate(145%);
-  border:1px solid rgba(255,255,255,0.16);
+  border:1px solid rgba(225,230,238,0.09);
   border-radius:999px;
 }
 .hero-gradient-bottom{
@@ -49,7 +100,6 @@ html,body,#root{
 .skeleton{
   background:linear-gradient(90deg,#1c1c1e 25%,#2c2c2e 50%,#1c1c1e 75%);
   background-size:200% 100%;
-  animation:shimmer 1.8s infinite linear;
 }
 .scroll-row{
   display:flex;gap:12px;
@@ -63,17 +113,231 @@ html,body,#root{
 .line-clamp-2{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .line-clamp-3{overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;}
 
-@keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
-@keyframes ratingCue{0%{opacity:0;transform:translateY(-10px);}12%{opacity:1;transform:translateY(0);}78%{opacity:1;transform:translateY(0);}100%{opacity:0;transform:translateY(-10px);}}
-@keyframes aetherioBreathing{0%,100%{transform:scale(1);opacity:0.92;}50%{transform:scale(1.08);opacity:1;}}
+.detail-page-scale{
+  width:83.333333%;
+  transform:scale(1.2);
+  transform-origin:top left;
+}
+.detail-page-scale .detail-page-hero{
+  left:0 !important;
+  width:100% !important;
+  margin-left:0 !important;
+}
 
-.aetherio-rating-cue{animation:ratingCue 7s ease forwards;}
-.aetherio-breathe{animation:aetherioBreathing 2.2s ease-in-out infinite;}
+/* Keep the PickStreams backdrop on the same resize/crop surface as Detail.
+   Only the decorative background is scaled so fixed player handoff UI remains
+   anchored to the viewport. */
+.pick-streams-background{
+  width:83.333333%;
+  height:calc(92vh + var(--app-shell-nav-height) - 150px);
+  min-height:450px;
+  transform:scale(1.2);
+  transform-origin:top left;
+}
+
+.home-page-scale{
+  width:83.333333%;
+  transform:scale(1.2);
+  transform-origin:top left;
+}
+.home-page-scale .home-page-hero{
+  left:0 !important;
+  width:100% !important;
+  margin-left:0 !important;
+}
+
+.detail-episode-card{
+  position:relative;
+  flex:0 0 302px;
+  width:302px;
+  height:306px;
+  border-radius:14px;
+  outline:none;
+}
+.detail-episode-card:hover,
+.detail-episode-card:focus-visible,
+.detail-episode-card:focus-within{
+  transform:translateY(-3px);
+}
+.detail-episode-card__image{
+  transform:scale(1);
+}
+.detail-episode-card:hover .detail-episode-card__image,
+.detail-episode-card:focus-visible .detail-episode-card__image,
+.detail-episode-card:focus-within .detail-episode-card__image{
+  transform:scale(1.035);
+}
+.detail-episode-card:focus-visible .detail-episode-card__media{
+  box-shadow:0 0 0 2px rgba(255,255,255,0.86),0 14px 34px rgba(0,0,0,0.34);
+}
+.detail-episode-card__media{
+  position:relative;
+  width:100%;
+  height:196px;
+  overflow:hidden;
+  border-radius:14px;
+  background:#2b2b2d;
+  box-shadow:0 10px 28px rgba(0,0,0,0.18);
+}
+.detail-episode-card__image,
+.detail-episode-card__placeholder{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+.detail-episode-card__placeholder{background:#2b2b2d;}
+.detail-episode-card__scrim{
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background:linear-gradient(to bottom,transparent 52%,rgba(0,0,0,0.52) 100%);
+}
+.detail-episode-card__runtime{
+  position:absolute;
+  right:12px;
+  bottom:12px;
+  max-width:220px;
+  overflow:hidden;
+  color:rgba(255,255,255,0.94);
+  font-size:13px;
+  font-weight:700;
+  line-height:1;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  text-shadow:0 1px 4px rgba(0,0,0,0.85);
+}
+.detail-episode-card__progress{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  height:3px;
+  overflow:hidden;
+  background:rgba(255,255,255,0.22);
+}
+.detail-episode-card__progress>div{
+  height:100%;
+  border-radius:0 999px 999px 0;
+  background:rgba(255,255,255,0.94);
+}
+.detail-episode-card__watched{
+  position:absolute;
+  top:10px;
+  right:10px;
+  width:28px;
+  height:28px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:50%;
+  color:#050607;
+  background:rgba(255,255,255,0.92);
+}
+.detail-episode-card__menu{
+  position:absolute;
+  top:10px;
+  left:10px;
+  width:36px;
+  height:28px;
+  padding:0 0 9px;
+  border:1px solid rgba(255,255,255,0.16);
+  border-radius:999px;
+  color:rgba(255,255,255,0.9);
+  background:rgba(5,6,7,0.62);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  font-size:21px;
+  font-weight:700;
+  line-height:1;
+  letter-spacing:1px;
+  cursor:pointer;
+  opacity:0;
+}
+.detail-episode-card:hover .detail-episode-card__menu,
+.detail-episode-card:focus-within .detail-episode-card__menu,
+.detail-episode-card__menu:focus-visible{opacity:1;}
+.detail-episode-card__menu:hover,
+.detail-episode-card__menu:focus-visible{
+  background:rgba(5,6,7,0.84);
+  outline:1px solid rgba(255,255,255,0.72);
+  outline-offset:1px;
+}
+.detail-episode-card__copy{padding-top:18px;}
+.detail-episode-card__eyebrow{
+  color:rgba(255,255,255,0.6);
+  font-size:12px;
+  font-weight:800;
+  line-height:13px;
+}
+.detail-episode-card__title{
+  margin-top:5px;
+  overflow:hidden;
+  color:#fff;
+  font-size:17px;
+  font-weight:850;
+  line-height:19px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.detail-episode-card__overview{
+  display:-webkit-box;
+  margin-top:6px;
+  overflow:hidden;
+  color:rgba(255,255,255,0.6);
+  font-size:13px;
+  font-weight:400;
+  line-height:16.5px;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+}
+
+.aetherio-page-curtain{
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:1400;
+  background:linear-gradient(90deg, rgba(0,0,0,0.34) 0%, rgba(0,0,0,0.58) 42%, rgba(0,0,0,0.84) 100%);
+}
 
 @media (max-width: 640px){
   html,body,#root{
     --app-safe-top:18px;
     --app-safe-x:18px;
     --app-shell-nav-height:80px;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1120px){
+  .episode-page-layout{
+    grid-template-columns:minmax(0,1fr) !important;
+    align-items:start !important;
+    gap:22px !important;
+    padding-top:8px;
+  }
+  .episode-hero-main{
+    align-items:center !important;
+    text-align:center;
+  }
+  .episode-media-card{
+    max-width:min(560px,calc(100vw - 64px)) !important;
+    margin-left:auto;
+    margin-right:auto;
+  }
+  .episode-hero-copy{
+    display:flex;
+    max-width:min(760px,calc(100vw - 64px)) !important;
+    flex-direction:column;
+    align-items:center;
+    padding-left:0 !important;
+  }
+  .episode-hero-copy h1,
+  .episode-hero-copy h2,
+  .episode-hero-copy p{
+    text-align:center;
+  }
+  .episode-metadata,
+  .episode-actions{
+    justify-content:center;
   }
 }

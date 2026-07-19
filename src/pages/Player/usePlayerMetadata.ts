@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { getTmdbApiKey } from "../../config/apiKeys";
+import { tmdbFetch } from "../../config/apiKeys";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaStream, StreamQuery } from "../../types/stream";
 import { readCachedLogo, sanitizeLogoUrl } from "../../utils/artwork";
 import type { EpisodeOption } from "./types";
-import { IMG, TMDB, getDetailLogoKey, resolveTmdbId } from "./utils";
+import { IMG, getDetailLogoKey, resolveTmdbId } from "./utils";
 
 export function useEpisodeMetadata(query: StreamQuery | null) {
   const [episodeOptions, setEpisodeOptions] = useState<EpisodeOption[]>([]);
@@ -22,15 +22,11 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
       try {
         const tmdbId = await resolveTmdbId(query.type, query.id);
         if (!tmdbId) return;
-        const tmdbKey = getTmdbApiKey();
-        if (!tmdbKey) return;
-        const [seasonResponse, detailsResponse] = await Promise.all([
-          fetch(`${TMDB}/tv/${tmdbId}/season/${query.season}?api_key=${tmdbKey}&language=es-ES`),
-          fetch(`${TMDB}/tv/${tmdbId}?api_key=${tmdbKey}&language=es-ES&append_to_response=images&include_image_language=es,null,en`),
+        const [seasonJson, detailsJson] = await Promise.all([
+          tmdbFetch<any>(`/tv/${tmdbId}/season/${query.season}`, { params: { language: "es-ES" } }),
+          tmdbFetch<any>(`/tv/${tmdbId}`, { params: { language: "es-ES", append_to_response: "images", include_image_language: "es,null,en" } }),
         ]);
-        if (!seasonResponse.ok) return;
-        const seasonJson = await seasonResponse.json();
-        const detailsJson = detailsResponse.ok ? await detailsResponse.json() : null;
+        if (!seasonJson) return;
         if (cancelled) return;
 
         const logos = detailsJson?.images?.logos ?? [];

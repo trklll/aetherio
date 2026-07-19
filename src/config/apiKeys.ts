@@ -1,5 +1,7 @@
 import { getScopedStorageKey } from "../utils/localProfiles";
 
+const APP_TMDB_API_KEY = (import.meta.env.VITE_TMDB_API_KEY as string | undefined)?.trim() ?? "";
+
 export interface ApiKeys {
   tmdbApiKey: string;
   introDbApiKey: string;
@@ -41,7 +43,44 @@ export function saveApiKeys(keys: ApiKeys) {
 }
 
 export function getTmdbApiKey() {
-  return getApiKeys().tmdbApiKey;
+  return getApiKeys().tmdbApiKey || APP_TMDB_API_KEY;
+}
+
+const TMDB_BASE = "https://api.themoviedb.org/3";
+
+export async function validateTmdbApiKey(apiKey: string) {
+  const normalized = apiKey.trim();
+  if (!normalized) return false;
+  try {
+    const url = new URL(`${TMDB_BASE}/configuration`);
+    url.searchParams.set("api_key", normalized);
+    const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { params?: Record<string, string> }): Promise<T | null> {
+  const key = getTmdbApiKey();
+  if (!key) return null;
+  const url = new URL(path.startsWith("http") ? path : `${TMDB_BASE}${path}`);
+  url.searchParams.set("api_key", key);
+  if (init?.params) {
+    for (const [k, v] of Object.entries(init.params)) {
+      url.searchParams.set(k, v);
+    }
+  }
+  const { params: _params, ...fetchInit } = init ?? {};
+  const response = await fetch(url.toString(), {
+    ...fetchInit,
+    headers: {
+      "Accept": "application/json",
+      ...fetchInit.headers,
+    },
+  });
+  if (!response.ok) return null;
+  return response.json() as Promise<T>;
 }
 
 function getApiKeysStorageKey() {

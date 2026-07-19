@@ -1,0 +1,499 @@
+{
+  "source": "https://files.catbox.moe/b9qdk6.json",
+  "version": "1.1.0",
+  "exportDate": "2026-04-28T14:09:22Z",
+  "notes": {
+    "fallback": "The original active Dolby Vision image returned HTTP 404, so that rule uses the downloaded dolby-vision.png alternative.",
+    "unavailable": "The inactive BAD rule image returned HTTP 404 and has no local file."
+  },
+  "entries": [
+    {
+      "pattern": "\\bAnime Web T5\\b",
+      "name": null,
+      "file": "./anime-web-t5.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/zfnqgLhY/Chat-GPT-Image-Jan-28-2026-at-01-54-01-AM-2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bAnime Web T1\\b",
+      "name": null,
+      "file": "./anime-web-t1.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/qvGTBfHv/Chat-GPT-Image-Jan-28-2026-at-01-36-48-AM-3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:Dooky|DRACULA|GNOMiSSiON|NINJACENTRAL|ROCCaT|SiGMA|SLiGNOME|SwAgLaNdEr|T4H|ViSiON)\\b).*",
+      "name": "🌐WEB 3",
+      "file": "./web-tier-3.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bAnime Web T3\\b",
+      "name": null,
+      "file": "./anime-web-t3.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/8cG4zYVq/Chat-GPT-Image-Jan-28-2026-at-01-38-52-AM-3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bsdr\\b",
+      "name": "SDR",
+      "file": "./sdr.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/SDR.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bAnime Web T4\\b",
+      "name": null,
+      "file": "./anime-web-t4.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/cCTqcwxm/Chat-GPT-Image-Jan-28-2026-at-01-43-21-AM-2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\b(dv|dovi|dolby[ ._-]?vision)\\b",
+      "name": "DV",
+      "file": "./dolby-vision.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/Yuno-XC/iOS-projects/main/Pi7_413940-Dolby%20Vision%20Horizontal-8ebe69-original-1641854911-3.png",
+      "status": "fallback"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bBlu[-_]?Ray\\b)(?!.*\\bRemux\\b)(?!.*\\bWEB[-_.]?(?:DL|Rip)\\b)(?=.*\\b(?:BHDStudio|hallowed|HiFi|HONE|LoRD|SPHD|WEBDV|playHD)\\b).*",
+      "name": "💿 BLU-RAY 3",
+      "file": "./bluray-tier-3.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:3cTWeB|BTW|Chotab|Cinefeel|CiT|Coo7|dB|DEEP|END|ETHiCS|FC|Flights|iJP|iKA|iT00NZ|JETIX|KHN|KiMCHI|LAZY|MiU|MZABI|NPMS|NYH|orbitron|PHOENiX|playWEB|PSiG|ROCCaT|RTFM|SA89|SbR|SDCC|SIGMA|SMURF|SPiRiT|TVSmash|WELP|XEBEC|4KBEC|CEBEX)\\b).*",
+      "name": null,
+      "file": "./web-tier-2.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bRemux\\b.*\\b(ATELiER|Flights|NCmt|playBD|SiCFoI|SURFINBIRD|TEPES|12GaugeShotgun|decibeL|EPSiLON|HiFi|KRaLiMaRKo|PTer|TRiToN)\\b",
+      "name": "📀 REMUX 2",
+      "file": "./remux-tier-2.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*[^0-9]6[ .][0-1]\\b)(?!.*[^0-9][7-8][ .][0-1]\\b)(?!.*[^0-9]5[ .][0-1]\\b)(?!.*(?<!repac)[^0-9][1-4][ .][0-1]\\b|\\\\b(Stereo|Mono)\\\\b)",
+      "name": "6.1 CH",
+      "file": "./audio-6.1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/61.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bhdr(?![ .\\-_]?10)(?![ .\\-_]?(?:\\+|plus))\\b",
+      "name": "HDR",
+      "file": "./hdr.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jmxd/Kometa/refs/heads/main/overlays/images/media_info/codec/HDR.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:ABBIE|AJP69|APEX|PAXA|PEXA|XEPA|BLUTONiUM|CasStudio|CMRG|CRFW|CRUD|CtrlHD|FLUX|GNOME|HONE|KiNGS|Kitsune|monkee|NOSiViD|NTb|NTG|QOQ|RTN|SiC|TEPES|T6D|TOMMY|ViSUM)\\b).*",
+      "name": null,
+      "file": "./web-tier-1.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i:(d(?:olby)?[ .\\-_]?d(?:igital)?[ .\\-_]?(?:p(?:lus)?|\\+)(?:[ .\\-_]?(?:5[ .\\-_]?1|7[ .\\-_]?1))?)|e[ .\\-_]?ac[ .\\-_]?3)",
+      "name": "DOLBY DIGITAL +",
+      "file": "./dolby-digital-plus.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/DDPLUS.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*[^0-9]5[ .][0-1]\\b)(?!.*[^0-9]6[ .][0-1]\\b)(?!.*[^0-9][7-8][ .][0-1]\\b)(?!.*(?<!repac)[^0-9][1-4][ .][0-1]\\b|\\\\b(Stereo|Mono)\\\\b)",
+      "name": "5.1 CH",
+      "file": "./audio-5.1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/51.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bBAD\\b",
+      "name": null,
+      "file": null,
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/Yuno-XC/iOS-projects/main/ChatGPT%20Image%20Feb%204%2C%202026%20at%2011_32_45%20PM-2.png",
+      "status": "unavailable"
+    },
+    {
+      "pattern": "(?i:(?:\\bRemux\\b.*\\b(3L|BiZKiT|BLURANiUM|CiNEPHiLES|FraMeSToR|PmP|PiRAMiDHEAD|ZQ)\\b|-BMF|-WiLDCAT))",
+      "name": null,
+      "file": "./remux-tier-1.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bAnime Web T2\\b",
+      "name": null,
+      "file": "./anime-web-t2.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/TwvTKNDB/IMG-9699.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bIMAX\\b",
+      "name": null,
+      "file": "./imax.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/WprTM83s/Pi7-imax-2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bWeb T2\\b",
+      "name": "🌐 WEB 2",
+      "file": "./web-tier-2.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)true[ .\\-_]?hd",
+      "name": "TRUEHD",
+      "file": "./truehd.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/TrueHD.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bRemux T1\\b",
+      "name": "📀 REMUX 1",
+      "file": "./remux-tier-1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bBluray T3\\b",
+      "name": "💿 BLU-RAY 3",
+      "file": "./bluray-tier-3.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\b(bd|hd|m)?2160[pi]?\\b|\\b4k\\b|\\bu(ltra)?[ ._-]?hd\\b|\\b3840\\s?x\\s?\\d{4}\\b",
+      "name": "2160p",
+      "file": "./2160p.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/4k.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bRemux\\b.*\\b(3L|BiZKiT|BLURANiUM|CiNEPHiLES|FraMeSToR|PiRAMiDHEAD|PmP|ZQ)\\b|-BMF|-WiLDCAT/i",
+      "name": "📀 REMUX 1",
+      "file": "./remux-tier-1.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*\\b(dts[-_.: ]?x7?)\\b(?![-_. ]?(26[456])))(?!.*\\bDTS[ .]?[1-9]\\b)(?!.*\\bDD[^a-z+]\\b)(?!.*\\b(ac-?3)\\b)(?!.*\\bDD[P+]\\b)(?!.*\\b(e[-_. ]?ac-?3)\\b)(?!.*\\bTrue[ .-]?HD\\b)(?!.*\\bATMOS(\\\\b|\\\\d)\\b)(?!.*\\bFLAC\\b)(?!.*\\bAAC\\b)(?!.*\\b(l?)PCM\\b)",
+      "name": "DTS-X",
+      "file": "./dts-x.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/dtsx.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*\\bBlu[-_]?Ray\\b)(?!.*\\bRemux\\b)(?!.*\\bWEB[-_.]?(?:DL|Rip)\\b)(?=.*(?:\\b(?:BBQ|c0kE|CRiSC|CtrlHD|Dariush|decibeL|D-Z0N3|EbP|EDPH|LolHD|MainFrame|NCmt|NTb|PTer|TayTO|TDD|TnP|VietHD|ZoroSenpai|W4NK3R|ZQ)\\b|-BMF)).*",
+      "name": "💿 BLU-RAY 1",
+      "file": "./bluray-tier-1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bRemux\\b.*\\b(iFT|NTb|PTP|SumVision|TOA)\\b",
+      "name": null,
+      "file": "./remux-tier-3.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bHDR[ .\\-_]?10[ .\\-_]?(plus|\\+)\\b",
+      "name": "HDR10+",
+      "file": "./hdr10-plus.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/HDR10Plus.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\b(bd|hd|m)?720[pi]?\\b|\\b1280\\s?x\\s?\\d{3,4}\\b",
+      "name": "720p",
+      "file": "./720p.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/720p.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bBluray T1\\b",
+      "name": "💿 BLU-RAY 1",
+      "file": "./bluray-tier-1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bWeb T3\\b",
+      "name": "🌐WEB 3",
+      "file": "./web-tier-3.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:ABBIE|AJP69|APEX|PAXA|PEXA|XEPA|BLUTONiUM|CasStudio|CMRG|CRFW|CRUD|CtrlHD|FLUX|GNOME|HONE|KiNGS|Kitsune|monkee|NOSiViD|NTb|NTG|QOQ|RTN|SiC|TEPES|TheFarm|T6D|TOMMY|ViSUM)\\b).*",
+      "name": "🌐 WEB 1",
+      "file": "./web-tier-1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:3cTWeB|BTW|BYNDR|Chotab|Cinefeel|CiT|Coo7|dB|DEEP|END|ETHiCS|FC|Flights|iJP|iKA|iT00NZ|JETIX|KHN|KiMCHI|LAZY|MiU|MZABI|NPMS|NYH|orbitron|PHOENiX|playWEB|PSiG|RAWR|ROCCaT|RTFM|SA89|SbR|SDCC|SIGMA|SMURF|SPiRiT|TVSmash|WELP|XEBEC|4KBEC|CEBEX)\\b).*",
+      "name": "🌐 WEB 2",
+      "file": "./web-tier-2.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bAnime Web T6\\b",
+      "name": null,
+      "file": "./anime-web-t6.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/Cx6Gpkq4/IMG-9701.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bRemux T3\\b",
+      "name": "📀 REMUX 3",
+      "file": "./remux-tier-3.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^ (?=.*\\bDTS(?:\\b|\\d)) (?!.*\\b(?:dts[-_. ]?(?:ma|hd(?:[-_. ]?ma)?|xll))(?:\\b|\\d)) (?!.*dts[-. ]?(?:es|(?:hd[. ]?)?(?:hr|hi))) (?!.*(?:\\bDD[P+]|(?:\\be[-_. ]?ac-?3\\b))) (?!.*(?:True[ .-]?HD|\\bATMOS(?:\\b|\\d))) (?!.*(?:\\bDD[^a-z+]|(?<!e-)\\b(?:ac-?3)\\b)) (?!.*\\b(?:dts[-_.: ]?x7?)\\b(?![-_. ]?(?:26[456]))) (?!.*\\bFLAC(?:\\b|\\d)) (?!.*\\bAAC(?:\\b|\\d)) (?!.*\\b(?:l?)PCM(?:\\b|\\d)) .*$",
+      "name": "DTS",
+      "file": "./dts.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/dts.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:DRACULA|GNOMiSSiON|NINJACENTRAL|SiGMA|SLiGNOME|SwAgLaNdEr|T4H|ViSiON)\\b).*",
+      "name": null,
+      "file": "./web-tier-3.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bRemux T2\\b",
+      "name": "📀 REMUX 2",
+      "file": "./remux-tier-2.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\b(dv|dovi|dolby[ .]?v(ision)?)\\b(?!.*\\b(HDR(10)?(P(lus)?)?|HLG|SDR)\\b)",
+      "name": "DV",
+      "file": "./dolby-vision.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/DV.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*\\bDD[^a-z+]|(?<!e-)\\b(ac-?3)\\b)(?!.*\\bDD[P+]|(e[-_. ]?ac-?3)\\b)(?!.*\\b(True[ .-]?HD|ATMOS)(\\b|\\d))(?!.*\\bDTS(\\b|\\d))(?!.*\\bFLAC(\\b|\\d))(?!.*\\bAAC(\\b|\\d))(?!.*\\b(l?)PCM(\\b|\\d)) ",
+      "name": "DOLBY DIGITAL",
+      "file": "./dolby-digital.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/DD.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?:^|[.\\s_\\-\\[\\]])HDR(?:\\s*10)?(?=[.\\s_\\-\\[\\]]|$)",
+      "name": null,
+      "file": "./hdr10.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/HDR10.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bBluray T2\\b",
+      "name": "💿 BLU-RAY 2",
+      "file": "./bluray-tier-2.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bBlu[-_]?Ray\\b)(?!.*\\bRemux\\b)(?!.*\\bWEB[-_.]?(?:DL|Rip)\\b)(?=.*\\b(?:ATELiER|EA|HiDt|HiSD|HQMUX|iFT|QOQ|SA89|sbR)\\b).*",
+      "name": "💿 BLU-RAY 2",
+      "file": "./bluray-tier-2.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*\\b(dts[-_. ]?(ma|hd([-_. ]?ma)?|xll))(\\b|\\d))(?!.*\\b(True[ .-]?HD|ATMOS)(\\b|\\d))(?!.*\\bDD[P+]|(e[-_. ]?ac-?3)\\b)(?!.*\\bDD[^a-z+]|(?<!e-)\\b(ac-?3)\\b)(?!.*\\b(dts[-_.: ]?x7?)\\b(?![-_. ]?(26[456])))(?!.*\\bFLAC(\\b|\\d))(?!.*\\bAAC(\\b|\\d))(?!.*\\b(l?)PCM(\\b|\\d))(?!.*dts[-. ]?(es|(hd[. ]?)?(hr|hi)))",
+      "name": "DTS-HD MA",
+      "file": "./dts-hd-ma.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/dtsHDMA.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\b(2160p)\\b)(?=.*\\b(FraMeSToR|HQMUX|SiCFoI)\\b)(?!.*\\b(DV|DoVi|Dolby[ .]?V(ision)?|HDR10(?!\\+|Plus)|HDR10\\+|HDR10Plus|HLG|PQ|SDR(?!\\d))\\b)",
+      "name": "HDR (UNDEFINED)",
+      "file": "./hdr10.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/HDR10.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*[^0-9][7-8][ .][0-1]\\b)(?!.*[^0-9]5[ .][0-1]\\b)(?!.*[^0-9]6[ .][0-1]\\b)(?!.*(?<!repac)[^0-9][1-4][ .][0-1]|\\\\b(Stereo|Mono)\\\\b)",
+      "name": "7.1 CH",
+      "file": "./audio-7.1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/71.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bRemux\\b.*\\b(Flights|NCmt|playBD|SiCFoI|SURFINBIRD|TEPES|decibeL|EPSiLON|HiFi|KRaLiMaRKo|PTer|TRiToN)\\b",
+      "name": null,
+      "file": "./remux-tier-2.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?:^|[.\\s_\\-\\[\\]])HDR\\s*10\\s*(?:\\+|plus)(?=[.\\s_\\-\\[\\]]|$)",
+      "name": "HDR10+",
+      "file": "./hdr10-plus.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/HDR10Plus.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bWEB[-_.]?(?:DL|RIP)\\b)(?=.*\\b(?:DEFLATE|INFLATE)\\b).*",
+      "name": "🎭WEB SCENE",
+      "file": "./web-scene.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/WebScene.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\b(bd|hd|m)?1080[pi]?\\b|\\b1920\\s?x\\s?\\d{3,4}\\b",
+      "name": "1080p",
+      "file": "./1080p.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/1080p.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)(?=.*(^|[.\\s_\\-])atmos([.\\s_\\-]|$))(?=.*ddp|dd\\+|e-?ac3|eac3)",
+      "name": "ATMOS",
+      "file": "./atmos-ddp.png",
+      "enabled": true,
+      "sourceUrl": "https://i.postimg.cc/FHSB6W2B/IMG-9692.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\batmos\\b",
+      "name": "ATMOS",
+      "file": "./atmos.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Atmos.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bBlu[-_]?Ray\\b)(?!.*\\bRemux\\b)(?!.*\\bWEB[-_.]?(?:DL|Rip)\\b)(?=.*\\b(?:BHDStudio|hallowed|HONE|LoRD|SPHD|WEBDV|playHD)\\b).*",
+      "name": null,
+      "file": "./bluray-tier-3.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray3.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bdts[ .\\-_]?hd(?![ .\\-_]?ma)\\b",
+      "name": "DTS-HD",
+      "file": "./dts-hd.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/dtsHD.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bHDR[ .\\-_]?10(?![ .\\-_]?(?:\\+|plus))\\b",
+      "name": "HDR10",
+      "file": "./hdr10.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/HDR10.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bBlu[-_]?Ray\\b)(?!.*\\bRemux\\b)(?!.*\\bWEB[-_.]?(?:DL|Rip)\\b)(?=.*(?:\\b(?:BBQ|c0kE|Chotab|CRiSC|CtrlHD|D-Z0N3|Dariush|decibeL|DON|EbP|EDPH|Geek|LolHD|MainFrame|NCmt|NTb|PTer|TayTO|TDD|TnP|VietHD|W4NK3R|ZQ)\\b|-BMF)).*",
+      "name": null,
+      "file": "./bluray-tier-1.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)^(?=.*\\bBlu[-_]?Ray\\b)(?!.*\\bRemux\\b)(?!.*\\bWEB[-_.]?(?:DL|Rip)\\b)(?=.*\\b(?:EA|HiDt|HiSD|HQMUX|iFT|QOQ|SA89|sbR)\\b).*",
+      "name": null,
+      "file": "./bluray-tier-2.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Blue-Ray2.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\bRemux\\b.*\\b(3L|BiZKiT|BLURANiUM|CiNEPHiLES|FraMeSToR|PmP|ZQ)\\b|-BMF|-WiLDCAT",
+      "name": null,
+      "file": "./remux-tier-1.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "/\\bRemux\\b.*\\b(3L|BiZKiT|BLURANiUM|CiNEPHiLES|FraMeSToR|PiRAMiDHEAD|PmP|ZQ)\\b|-BMF|-WiLDCAT/i",
+      "name": "📀 REMUX 1",
+      "file": "./remux-tier-1.png",
+      "enabled": false,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/json-files/refs/heads/main/mousa.m%20icons/REMUX1.png",
+      "status": "downloaded"
+    },
+    {
+      "pattern": "\\bWeb T1\\b",
+      "name": "🌐 WEB 1",
+      "file": "./web-tier-1.png",
+      "enabled": true,
+      "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web1.png",
+      "status": "downloaded"
+    }
+  ]
+}

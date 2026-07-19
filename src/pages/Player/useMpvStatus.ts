@@ -1,12 +1,11 @@
 import { useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { getNativePlaybackStatus, listenPlatformEvent } from "../../runtime/platform";
 import type { ChapterOption, MpvStatusSnapshot, MpvTrack } from "./types";
 
 interface MpvEventPayload {
   event?: string;
-  property?: string;
+  property?: unknown;
   target?: string;
   snapshot?: MpvStatusSnapshot;
 }
@@ -28,6 +27,10 @@ interface UseMpvStatusArgs {
   setSelectedSpeed: Dispatch<SetStateAction<string>>;
   setChapterIndex: Dispatch<SetStateAction<number | null>>;
   setChapterOptions: Dispatch<SetStateAction<ChapterOption[]>>;
+  setMpvStatus?: Dispatch<SetStateAction<string | null>>;
+  onPlaybackRestart?: () => void;
+  isP2pStream?: boolean;
+  enabled?: boolean;
 }
 
 export function useMpvStatus({
@@ -47,6 +50,10 @@ export function useMpvStatus({
   setSelectedSpeed,
   setChapterIndex,
   setChapterOptions,
+  setMpvStatus,
+  onPlaybackRestart,
+  isP2pStream = false,
+  enabled = true,
 }: UseMpvStatusArgs) {
   useEffect(() => {
     let cancelled = false;
@@ -143,24 +150,38 @@ export function useMpvStatus({
       setMpvCacheBuffering(0);
     }
 
+    if (!enabled) {
+      resetMpvState();
+      return () => {
+        cancelled = true;
+        resetMpvState();
+      };
+    }
+
     const syncMpvStatus = async () => {
       try {
-        const status = await invoke<MpvStatusSnapshot>("mpv_status");
+        const status = await getNativePlaybackStatus();
         applyStatus(status);
       } catch {
         if (!cancelled) resetMpvState();
       }
     };
 
-    const unlistenPromise = listen<MpvEventPayload>("mpv-event", event => {
+    const unlistenPromise = listenPlatformEvent<MpvEventPayload>("mpv-event", event => {
       if (event.payload.event) debugLog("mpv event", { event: event.payload.event, property: event.payload.property });
+      if (event.payload.event === "playback-restart") onPlaybackRestart?.();
+      if (event.payload.event === "end-file" && !lastMpvFileLoadedRef.current) {
+        setMpvStatus?.(isP2pStream
+          ? "El torrent no entrego datos reproducibles. Puede no tener peers disponibles."
+          : "MPV no pudo cargar esta fuente. Puede estar expirada o bloqueada por el servidor.");
+      }
       if (event.payload.snapshot) applyStatus(event.payload.snapshot);
     });
 
     void syncMpvStatus();
     const interval = window.setInterval(() => {
       void syncMpvStatus();
-    }, 1000);
+    }, 300);
 
     return () => {
       cancelled = true;
@@ -168,5 +189,5 @@ export function useMpvStatus({
       void unlistenPromise.then(unlisten => unlisten());
       resetMpvState();
     };
-  }, []);
+  }, [enabled, isP2pStream]);
 }

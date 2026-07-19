@@ -18,6 +18,11 @@ export interface MediaStream {
   ytId?: string;
   infoHash?: string;
   fileIdx?: number;
+  size?: number;
+  folderSize?: number;
+  indexer?: string;
+  duration?: number;
+  languages?: string[];
   sources?: string[];
   behaviorHints?: {
     filename?: string;

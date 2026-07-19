@@ -1,39 +1,29 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
-import { Search, X, Puzzle, Settings } from "lucide-react";
+import { Search, X } from "lucide-react";
 import clsx from "clsx";
-import { getTmdbApiKey } from "../../config/apiKeys";
+import { useAddonStore } from "../../store/addonStore";
 import {
   getActiveProfile,
   getProfileInitial,
   LOCAL_PROFILES_CHANGED_EVENT,
   type LocalProfile,
 } from "../../utils/localProfiles";
+import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { searchMedia, type UnifiedSearchResult } from "../../utils/searchProviders";
 
 const NAV_ITEMS = [
   { label: "Inicio", to: "/home", type: null },
-  { label: "Peliculas", to: "/home?type=movie", type: "movie" },
-  { label: "Series", to: "/home?type=series", type: "series" },
-  { label: "Anime", to: "/home?type=anime", type: "anime" },
   { label: "Biblioteca", to: "/library", type: null },
 ];
-
-interface Suggestion {
-  id: number;
-  title: string;
-  media_type: "movie" | "tv";
-  poster_path?: string;
-  release_date?: string;
-  first_air_date?: string;
-}
 
 export default function TopNav() {
   const navigate = useNavigate();
   const location = useLocation();
+  const addons = useAddonStore(state => state.addons);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestions, setSuggestions] = useState<UnifiedSearchResult[]>([]);
   const [showSugg, setShowSugg] = useState(false);
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
   const inputRef = useRef<HTMLInputElement>(null);
@@ -69,25 +59,14 @@ export default function TopNav() {
       return;
     }
     try {
-      const tmdbKey = getTmdbApiKey();
-      if (!tmdbKey) {
-        setSuggestions([]);
-        setShowSugg(false);
-        return;
-      }
-      const res = await fetch(
-        `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(q)}&language=es-ES&page=1`
-      );
-      const data = await res.json();
-      const filtered = (data.results ?? [])
-        .filter((r: any) => r.media_type === "movie" || r.media_type === "tv")
-        .slice(0, 6);
+      const filtered = await searchMedia(q, addons, 6);
       setSuggestions(filtered);
       setShowSugg(filtered.length > 0);
     } catch {
       setSuggestions([]);
+      setShowSugg(false);
     }
-  }, []);
+  }, [addons]);
 
   function handleInput(val: string) {
     setQuery(val);
@@ -101,11 +80,10 @@ export default function TopNav() {
     navigate(`/search?q=${encodeURIComponent(q.trim())}`);
   }
 
-  function handleSuggestion(s: Suggestion) {
-    const type = s.media_type === "movie" ? "movie" : "series";
-    const id = `tmdb:${s.id}`;
+  function handleSuggestion(s: UnifiedSearchResult) {
+    writeDetailMediaMeta(s);
     closeSearch();
-    navigate(`/detail/${type}/${id}`);
+    navigate(`/detail/${encodeURIComponent(s.type)}/${encodeURIComponent(s.id)}`);
   }
 
   useEffect(() => {
@@ -135,9 +113,9 @@ export default function TopNav() {
         <button
           onClick={() => {
             closeSearch();
-            navigate("/settings?tab=profile");
+            navigate("/settings?tab=account");
           }}
-          className="w-8 h-8 rounded-full bg-white flex items-center justify-center shrink-0 mr-2 hover:scale-105 transition-transform"
+          className="w-8 h-8 rounded-full bg-white flex items-center justify-center shrink-0 mr-2 hover:scale-105 gsap-transition"
           title="Perfil"
         >
           {profile?.avatarDataUrl ? (
@@ -147,54 +125,38 @@ export default function TopNav() {
           )}
         </button>
 
-        <AnimatePresence>
-          {!searching && (
-            <motion.div
-              className="flex items-center gap-0.5"
-              initial={{ opacity: 0, width: 0 }}
-              animate={{ opacity: 1, width: "auto" }}
-              exit={{ opacity: 0, width: 0 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-            >
-              {NAV_ITEMS.map(({ label, to }) => (
-                <button
-                  key={to}
-                  onClick={() => navigate(to)}
-                  className={clsx(
-                    "px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200 whitespace-nowrap",
-                    isActive(to)
-                      ? "bg-atv-selected text-white font-semibold"
-                      : "text-atv-secondary hover:text-white hover:bg-atv-hover"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {!searching && (
+          <div className="flex items-center gap-0.5 aetherio-nav-pop">
+            {NAV_ITEMS.map(({ label, to }) => (
+              <button
+                key={to}
+                onClick={() => navigate(to)}
+                className={clsx(
+                  "px-4 py-1.5 rounded-full text-sm font-medium gsap-transition whitespace-nowrap",
+                  isActive(to)
+                    ? "bg-atv-selected text-white font-semibold"
+                    : "text-atv-secondary hover:text-white hover:bg-atv-hover"
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
-        <AnimatePresence>
-          {searching && (
-            <motion.div
-              className="flex items-center"
-              initial={{ opacity: 0, width: 0 }}
-              animate={{ opacity: 1, width: 320 }}
-              exit={{ opacity: 0, width: 0 }}
-              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <Search size={15} className="text-atv-secondary shrink-0 ml-1 mr-2" />
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={e => handleInput(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleSearch()}
-                placeholder="Buscar peliculas, series, anime..."
-                className="flex-1 bg-transparent text-sm text-white placeholder-atv-secondary focus:outline-none min-w-0"
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {searching && (
+          <div className="flex items-center aetherio-nav-pop" style={{ width: 320 }}>
+            <Search size={15} className="text-atv-secondary shrink-0 ml-1 mr-2" />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={e => handleInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleSearch()}
+              placeholder="Buscar contenido..."
+              className="flex-1 bg-transparent text-sm text-white placeholder-atv-secondary focus:outline-none min-w-0"
+            />
+          </div>
+        )}
 
         <div className="w-px h-4 bg-white/10 mx-2 shrink-0" />
 
@@ -202,67 +164,43 @@ export default function TopNav() {
           {!searching ? (
             <button
               onClick={openSearch}
-              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
+              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition"
+              title="Buscar"
             >
               <Search size={15} />
             </button>
           ) : (
             <button
               onClick={closeSearch}
-              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
+              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition"
+              title="Cerrar busqueda"
             >
               <X size={15} />
             </button>
           )}
-          <button
-            onClick={() => {
-              closeSearch();
-              navigate("/addons");
-            }}
-            className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
-            title="Add-ons"
-          >
-            <Puzzle size={15} />
-          </button>
-          <button
-            onClick={() => {
-              closeSearch();
-              navigate("/settings");
-            }}
-            className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover transition-all duration-200"
-            title="Ajustes"
-          >
-            <Settings size={15} />
-          </button>
         </div>
       </div>
 
-      <AnimatePresence>
-        {searching && showSugg && suggestions.length > 0 && (
-          <motion.div
-            className="absolute top-[56px] liquid-glass-dark rounded-lg2 overflow-hidden min-w-[320px]"
-            initial={{ opacity: 0, y: -8, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.97 }}
-          transition={{ duration: 0.18, ease: "easeOut" }}
-            style={{ boxShadow: "0 10px 28px rgba(0,0,0,0.56)" }}
-          >
+      {searching && showSugg && suggestions.length > 0 && (
+        <div
+          className="absolute top-[56px] liquid-glass-dark rounded-lg2 overflow-hidden min-w-[320px] aetherio-nav-pop"
+          style={{ boxShadow: "0 10px 28px rgba(0,0,0,0.56)" }}
+        >
             {suggestions.map((s, i) => {
-              const title = s.title ?? (s as any).name ?? "";
-              const year = (s.release_date ?? s.first_air_date ?? "").slice(0, 4);
-              const typeLabel = s.media_type === "movie" ? "Pelicula" : "Serie";
+              const title = s.name ?? "Sin titulo";
+              const poster = s.poster ?? s.background;
               return (
                 <button
-                  key={s.id}
+                  key={s.key}
                   onClick={() => handleSuggestion(s)}
                   className={clsx(
-                    "w-full flex items-center gap-3 px-4 py-3 hover:bg-atv-hover transition-colors text-left",
+                    "w-full flex items-center gap-3 px-4 py-3 hover:bg-atv-hover gsap-transition text-left",
                     i < suggestions.length - 1 && "border-b border-white/5"
                   )}
                 >
-                  {s.poster_path ? (
+                  {poster ? (
                     <img
-                      src={`https://image.tmdb.org/t/p/w92${s.poster_path}`}
+                      src={poster}
                       alt=""
                       loading="lazy"
                       decoding="async"
@@ -273,7 +211,9 @@ export default function TopNav() {
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-white truncate">{title}</p>
-                    <p className="text-xs text-atv-secondary">{typeLabel}{year ? ` · ${year}` : ""}</p>
+                    <p className="text-xs text-atv-secondary truncate">
+                      {s.mediaLabel}{s.year ? ` · ${s.year}` : ""}{s.sourceName ? ` · ${s.sourceName}` : ""}
+                    </p>
                   </div>
                   <Search size={13} className="text-atv-muted shrink-0" />
                 </button>
@@ -281,13 +221,12 @@ export default function TopNav() {
             })}
             <button
               onClick={() => handleSearch()}
-              className="w-full px-4 py-3 text-sm text-atv-secondary hover:text-white hover:bg-atv-hover transition-colors text-left border-t border-white/5"
+              className="w-full px-4 py-3 text-sm text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition text-left border-t border-white/5"
             >
               Ver todos los resultados de "<span className="text-white">{query}</span>"
             </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,7 +4,13 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { queryClient } from "./queryClient";
+import { installAndroidTvRemoteNavigation, installRuntimeDocumentClasses } from "./runtime/platform";
+import { installGsapAnimations } from "./utils/motion";
 import "./index.css";
+
+installRuntimeDocumentClasses();
+installAndroidTvRemoteNavigation();
+installGsapAnimations();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

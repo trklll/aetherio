@@ -1,11 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
-import { getTmdbApiKey } from "../../config/apiKeys";
+import { tmdbFetch } from "../../config/apiKeys";
+import { isAndroidRuntime, openNativePlayback } from "../../runtime/platform";
 import type { MediaStream, StreamKind, StreamQuery } from "../../types/stream";
-import type { MpvLaunchResult } from "./types";
+import { getDirectPlaybackUrl, hasP2pPlayback } from "../../utils/playableMedia";
 
 export const SELECTED_STREAM_KEY = "aetherio-selected-stream";
 export const SELECTED_ENGINE_KEY = "aetherio-selected-engine";
 export const SELECTED_MEDIA_META_KEY = "aetherio-selected-media-meta";
+export const SELECTED_PLAYBACK_OVERRIDES_KEY = "aetherio-selected-playback-overrides";
 export const AUTO_NEXT_SOURCE_KEY = "aetherio-auto-next-source";
 export const TMDB = "https://api.themoviedb.org/3";
 export const IMG = "https://image.tmdb.org/t/p";
@@ -16,10 +17,8 @@ export function getDetailLogoKey(type?: string | null, id?: string | null) {
 }
 
 export function getStreamKind(stream: MediaStream | null): StreamKind {
-  const url = (stream?.url ?? stream?.externalUrl ?? "").toLowerCase();
-  if (stream?.infoHash || url.startsWith("magnet:") || url.startsWith("stremio:")) return "p2p";
-  if (url.startsWith("http://") || url.startsWith("https://")) return "https";
-  if (url) return "external";
+  if (getDirectPlaybackUrl(stream)) return "https";
+  if (hasP2pPlayback(stream)) return "p2p";
   return "unknown";
 }
 
@@ -35,16 +34,35 @@ export function formatTime(value: number) {
 
 export function getPlaybackTarget(stream: MediaStream | null | undefined) {
   if (!stream) return "";
-  return (
-    stream.url ??
-    stream.externalUrl ??
-    (stream.ytId ? `https://www.youtube.com/watch?v=${stream.ytId}` : undefined) ??
-    (stream.infoHash ? `magnet:?xt=urn:btih:${stream.infoHash}` : undefined) ??
-    ""
-  );
+  const directUrl = getDirectPlaybackUrl(stream);
+  const magnet = directUrl ? "" : buildMagnetTarget(stream);
+  return directUrl
+    || magnet
+    || (stream.ytId ? `https://www.youtube.com/watch?v=${stream.ytId}` : "")
+    || "";
 }
 
-function extractHttpHeaders(stream: MediaStream): Record<string, string> {
+function buildMagnetTarget(stream: MediaStream) {
+  const directMagnet = [stream.url, ...(stream.sources ?? [])]
+    .find(value => typeof value === "string" && /^(?:magnet:|stremio:)/i.test(value));
+  if (directMagnet) return directMagnet;
+  if (!stream.infoHash) return "";
+
+  const magnet = new URLSearchParams();
+  magnet.set("xt", `urn:btih:${stream.infoHash}`);
+  for (const source of stream.sources ?? []) {
+    const tracker = source.replace(/^tracker:/i, "").trim();
+    if (/^https?:\/\//i.test(tracker) || /^udp:\/\//i.test(tracker)) {
+      magnet.append("tr", tracker);
+    }
+  }
+  if (stream.title || stream.behaviorHints?.filename) {
+    magnet.set("dn", String(stream.behaviorHints?.filename ?? stream.title));
+  }
+  return `magnet:?${magnet.toString()}`;
+}
+
+export function extractHttpHeaders(stream: MediaStream): Record<string, string> {
   const hints = stream.behaviorHints as Record<string, unknown> | undefined;
   if (!hints) return {};
 
@@ -75,24 +93,49 @@ function extractHttpHeaders(stream: MediaStream): Record<string, string> {
   return headers;
 }
 
-export async function openExternal(stream: MediaStream, subtitle?: string) {
+export async function openExternal(stream: MediaStream, subtitle?: string, startTime = 0, episode?: number) {
   const target = getPlaybackTarget(stream);
   if (!target) return { result: null, error: "La fuente no tiene URL reproducible." };
-  if (stream.infoHash || target.toLowerCase().startsWith("magnet:") || target.toLowerCase().startsWith("stremio:")) {
-    return {
-      result: null,
-      error: "P2P/torrent esta desactivado por ahora. Usa una fuente HTTP directa.",
-    };
-  }
+  const normalizedStartTime = Number.isFinite(startTime) ? Math.max(0, startTime) : 0;
   try {
     const headers = extractHttpHeaders(stream);
-    const result = await invoke<MpvLaunchResult>("open_mpv", {
+    const requestedBackend = isAndroidRuntime() ? "android-media3" : "mpv";
+    console.info("[AETHERIO:PLAYER:OPEN_NATIVE] request", {
+      backend: requestedBackend,
+      streamId: stream.id,
+      addonId: stream.addonId,
+      fileIdx: stream.fileIdx,
+      episode,
+      startTime: normalizedStartTime,
+      hasSubtitle: Boolean(subtitle?.trim()),
+      hasHeaders: Object.keys(headers).length > 0,
+      targetPrefix: target.slice(0, 240),
+    });
+    const result = await openNativePlayback({
       target,
       subtitle,
       headers: Object.keys(headers).length ? headers : undefined,
+      fileIdx: stream.fileIdx,
+      episode,
+      startTime: normalizedStartTime > 0 ? normalizedStartTime : undefined,
+    });
+    console.info("[AETHERIO:PLAYER:OPEN_NATIVE] response", {
+      requestedBackend,
+      streamId: stream.id,
+      backend: result?.backend,
+      resolvedTarget: result?.resolvedTarget,
+      logPath: result?.logPath,
+      bridgeLogPath: result?.bridgeLogPath,
+      p2pLogPath: result?.p2pLogPath,
     });
     return { result, error: null };
   } catch (error) {
+    console.error("[AETHERIO:PLAYER:OPEN_NATIVE] error", {
+      backend: isAndroidRuntime() ? "android-media3" : "mpv",
+      streamId: stream.id,
+      error: String(error),
+      targetPrefix: target.slice(0, 240),
+    });
     return { result: null, error: String(error) };
   }
 }
@@ -106,19 +149,26 @@ export function buildQuery(params: URLSearchParams): StreamQuery | null {
   return {
     type,
     id,
-    season: Number.isFinite(season) && season > 0 ? season : undefined,
+    season: Number.isFinite(season) && season >= 0 ? season : undefined,
     episode: Number.isFinite(episode) && episode > 0 ? episode : undefined,
   };
+}
+
+export function playbackOverrideQueryKey(query: StreamQuery | null | undefined) {
+  if (!query?.type || !query.id) return "";
+  return [
+    query.type,
+    query.id,
+    query.season ?? "",
+    query.episode ?? "",
+  ].join(":");
 }
 
 export async function resolveTmdbId(type: string, id: string) {
   if (id.startsWith("tmdb:")) return Number(id.slice(5));
   if (!id.startsWith("tt")) return null;
-  const tmdbKey = getTmdbApiKey();
-  if (!tmdbKey) return null;
   const mediaType = type === "movie" ? "movie_results" : "tv_results";
-  const response = await fetch(`${TMDB}/find/${id}?api_key=${tmdbKey}&external_source=imdb_id&language=es-ES`);
-  if (!response.ok) return null;
-  const json = await response.json();
+  const json = await tmdbFetch(`/find/${id}`, { params: { external_source: "imdb_id", language: "es-ES" } });
+  if (!json) return null;
   return json[mediaType]?.[0]?.id ?? null;
 }

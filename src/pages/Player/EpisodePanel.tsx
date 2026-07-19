@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, ListVideo } from "lucide-react";
 import type { EpisodeOption, PlayerPanelItem } from "./types";
 
@@ -30,14 +31,34 @@ export default function EpisodePanel({
   onClose,
   onNavigateEpisode,
 }: EpisodePanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && panelRef.current?.contains(target)) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [visible, onClose]);
+
   if (!visible) return null;
 
   return (
-    <div className="absolute inset-y-4 right-5 z-50 w-[410px] max-w-[calc(100vw-40px)]">
+    <div
+      ref={panelRef}
+      className="absolute z-40 w-[390px] max-w-[calc(100vw-40px)]"
+      style={{ top: "calc(var(--app-safe-top) + 62px)", right: "var(--app-safe-x)", bottom: 126 }}
+    >
       <div
-        className="liquid-glass-dark flex h-full flex-col rounded-[24px] p-5 shadow-[0_34px_90px_rgba(0,0,0,0.76)]"
+        className="flex h-full flex-col rounded-[28px] border border-white/[0.075] p-5 shadow-[0_34px_90px_rgba(0,0,0,0.76)]"
         style={{
-          backgroundColor: "rgba(0,0,0,0.72)",
+          background: "linear-gradient(135deg, rgba(64,64,64,0.52), rgba(28,28,30,0.74))",
+          backdropFilter: "blur(24px) saturate(190%)",
+          WebkitBackdropFilter: "blur(24px) saturate(190%)",
+          boxShadow: "0 34px 90px rgba(0,0,0,0.76), inset 0 1px 0 rgba(255,255,255,0.055)",
         }}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
@@ -48,14 +69,14 @@ export default function EpisodePanel({
           </div>
           <button
             onClick={onClose}
-            className="flex h-11 w-11 items-center justify-center rounded-full border border-white/16 bg-white/12 text-white/90 transition hover:bg-white/20"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.075] bg-white/[0.075] text-white/90 gsap-transition hover:bg-white/13"
             title="Cerrar panel"
           >
             <ChevronRight size={18} />
           </button>
         </div>
 
-        <div className="liquid-glass mb-4 rounded-2xl p-4">
+        <div className="mb-4 rounded-2xl border border-white/[0.065] bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           <div className="mb-2 flex items-center justify-between text-white/75">
             <span className="text-sm font-semibold">{title}</span>
             <span className="text-sm">{currentEpisode?.airDate ?? ""}</span>
@@ -68,7 +89,7 @@ export default function EpisodePanel({
             <button
               onClick={() => onNavigateEpisode("prev")}
               disabled={!canGoPrevEpisode}
-              className="liquid-glass flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-35"
+              className="flex items-center justify-center gap-2 rounded-2xl border border-white/[0.065] bg-white/[0.065] px-4 py-3 text-sm font-semibold text-white gsap-transition hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-35"
             >
               <ChevronLeft size={16} />
               Anterior
@@ -76,7 +97,7 @@ export default function EpisodePanel({
             <button
               onClick={() => onNavigateEpisode("next")}
               disabled={!canGoNextEpisode}
-              className="liquid-glass flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-35"
+              className="flex items-center justify-center gap-2 rounded-2xl border border-white/[0.065] bg-white/[0.065] px-4 py-3 text-sm font-semibold text-white gsap-transition hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-35"
             >
               Siguiente
               <ChevronRight size={16} />
@@ -89,10 +110,10 @@ export default function EpisodePanel({
             <button
               key={item.key}
               onClick={item.onClick}
-              className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-4 text-left transition ${
+              className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-4 text-left gsap-transition ${
                 item.active
-                  ? "liquid-glass border-white/28 bg-white/16"
-                  : "liquid-glass-dark border-white/14 hover:border-white/20 hover:bg-white/12"
+                  ? "border-white/[0.12] bg-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                  : "border-white/[0.06] bg-white/[0.045] hover:border-white/[0.095] hover:bg-white/[0.08]"
               }`}
             >
               <div className="relative h-28 w-48 overflow-hidden rounded-xl">

@@ -1,6 +1,7 @@
 import { type ChangeEvent, type FormEvent, useState } from "react";
 import { Lock, UserRound } from "lucide-react";
 import ProfileAvatar from "../components/profile/ProfileAvatar";
+import aetherioLogo from "../assets/aetheriologo.png";
 import {
   createLocalProfile,
   getLocalProfiles,
@@ -25,14 +26,14 @@ export default function ProfileOnboarding() {
     }
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim()) {
       setError("Escribe un nombre para crear la cuenta.");
       return;
     }
     const isFirstProfile = getLocalProfiles().length === 0;
-    createLocalProfile(
+    await createLocalProfile(
       { name, pin, avatarDataUrl },
       { makeActive: true, adoptCurrentData: isFirstProfile }
     );
@@ -52,7 +53,7 @@ export default function ProfileOnboarding() {
     <main className="flex min-h-screen items-center justify-center bg-[#1f1f1f] px-6 py-10 text-white">
       <form onSubmit={submit} className="liquid-glass-dark w-full max-w-md rounded-lg p-6 shadow-2xl">
         <div className="mb-6 flex items-center gap-4">
-          <ProfileAvatar profile={previewProfile} className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-white text-black" />
+          <img src={aetherioLogo} alt="Aetherio" className="h-16 w-16 rounded-2xl object-contain" />
           <div>
             <h1 className="text-2xl font-black text-white">Crear cuenta local</h1>
             <p className="mt-1 text-sm text-white/56">Tus series, ajustes y add-ons se guardaran en este equipo.</p>
@@ -91,7 +92,10 @@ export default function ProfileOnboarding() {
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-white/86">Foto de perfil</span>
+            <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold text-white/86">
+              <ProfileAvatar profile={previewProfile} className="relative flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-white text-black text-xs" />
+              Foto de perfil
+            </span>
             <input
               type="file"
               accept="image/*"
@@ -103,7 +107,7 @@ export default function ProfileOnboarding() {
 
         {error ? <p className="mt-4 text-sm font-semibold text-red-300">{error}</p> : null}
 
-        <button type="submit" className="mt-6 w-full rounded-full bg-white px-5 py-3 text-sm font-black text-black transition hover:bg-white/86">
+        <button type="submit" className="mt-6 w-full rounded-full bg-white px-5 py-3 text-sm font-black text-black gsap-transition hover:bg-white/86">
           Entrar
         </button>
       </form>

@@ -1,4 +1,6 @@
-﻿export interface MediaItem {
+import type { MdbListRatings } from "../config/mdblist";
+
+export interface MediaItem {
   id: string;
   type: string;
   name: string;
@@ -12,6 +14,7 @@
   genres?: string[];
   runtime?: string;
   heroGroup?: string;
+  mdbListRatings?: MdbListRatings;
 }
 
 export interface CatalogRowData {
@@ -20,5 +23,7 @@ export interface CatalogRowData {
   catalogId: string;
   type: string;
   name: string;
+  subtitle?: string;
+  extraParams?: Record<string, string>;
   items: MediaItem[];
 }

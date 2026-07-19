@@ -4,15 +4,27 @@ import { getScopedStorageKey } from "../utils/localProfiles";
 
 export type SourceSelectionMode = "manual" | "first";
 export type AddonSubtitleLoadMode = "preferred" | "all";
+export type HardwareDecodingMode = "auto" | "enabled" | "disabled";
+export type NextEpisodeThresholdMode = "percentage";
 export const ORIGINAL_LANGUAGE_VALUE = "original";
 
 export interface PlaybackPreferences {
+  showLoadingOverlay: boolean;
+  holdToAccelerate: boolean;
+  holdToAccelerateSpeed: number;
   firstAudioLanguage: string;
   secondAudioLanguage: string;
+  secondSubtitleLanguage: string;
   reuseLastLink: boolean;
   lastLinkCacheHours: number;
   sourceSelectionMode: SourceSelectionMode;
+  hardwareDecoding: HardwareDecodingMode;
+  skipSegmentsEnabled: boolean;
+  animeSkipEnabled: boolean;
+  introDbSubmissionEnabled: boolean;
   autoPlayNextEpisode: boolean;
+  preferBingeGroup: boolean;
+  nextEpisodeThresholdMode: NextEpisodeThresholdMode;
   nextEpisodeThresholdPercent: number;
   preferredSubtitleLanguage: string;
   addonSubtitleLoadMode: AddonSubtitleLoadMode;
@@ -28,12 +40,22 @@ export const PLAYBACK_PREFERENCES_CHANGED_EVENT = "aetherio-playback-preferences
 const LAST_LINK_STORAGE_KEY = "aetherio-last-links";
 
 export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
+  showLoadingOverlay: true,
+  holdToAccelerate: true,
+  holdToAccelerateSpeed: 2,
   firstAudioLanguage: "spa",
   secondAudioLanguage: "eng",
+  secondSubtitleLanguage: "",
   reuseLastLink: false,
   lastLinkCacheHours: 24,
   sourceSelectionMode: "manual",
+  hardwareDecoding: "auto",
+  skipSegmentsEnabled: true,
+  animeSkipEnabled: false,
+  introDbSubmissionEnabled: false,
   autoPlayNextEpisode: true,
+  preferBingeGroup: true,
+  nextEpisodeThresholdMode: "percentage",
   nextEpisodeThresholdPercent: 99,
   preferredSubtitleLanguage: "spa",
   addonSubtitleLoadMode: "preferred",
@@ -42,7 +64,7 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
 export const LANGUAGE_OPTIONS = [
   { value: "", label: "Sin preferencia" },
   { value: ORIGINAL_LANGUAGE_VALUE, label: "Original" },
-  { value: "spa", label: "Espanol" },
+  { value: "spa", label: "Español" },
   { value: "eng", label: "Ingles" },
   { value: "jpn", label: "Japones" },
   { value: "kor", label: "Coreano" },
@@ -55,7 +77,7 @@ export const LANGUAGE_OPTIONS = [
 ];
 
 const LANGUAGE_ALIASES: Record<string, string[]> = {
-  spa: ["spa", "es", "esp", "es-419", "lat", "la", "spanish", "espanol", "español", "latino", "castellano"],
+  spa: ["spa", "es", "esp", "es-419", "lat", "la", "spanish", "espanol","español", "latino", "castellano"],
   eng: ["eng", "en", "english", "ingles", "inglés"],
   jpn: ["jpn", "ja", "jp", "japanese", "japones", "japonés"],
   kor: ["kor", "ko", "korean", "coreano"],
@@ -79,6 +101,13 @@ Object.assign(LANGUAGE_ALIASES, {
   zh: LANGUAGE_ALIASES.zho,
   ru: LANGUAGE_ALIASES.rus,
 });
+
+LANGUAGE_ALIASES.spa.push("es-la", "latam", "latin", "latin american", "español");
+LANGUAGE_ALIASES.eng.push("inglés");
+LANGUAGE_ALIASES.jpn.push("japonés");
+LANGUAGE_ALIASES.por.push("portugués");
+LANGUAGE_ALIASES.fra.push("francés");
+LANGUAGE_ALIASES.deu.push("alemán");
 
 export function getPlaybackPreferences(): PlaybackPreferences {
   try {
@@ -171,12 +200,22 @@ export function getCachedLastLink(cacheKey: string, cacheHours: number) {
 
 function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>): PlaybackPreferences {
   return {
+    showLoadingOverlay: typeof preferences.showLoadingOverlay === "boolean" ? preferences.showLoadingOverlay : DEFAULT_PLAYBACK_PREFERENCES.showLoadingOverlay,
+    holdToAccelerate: typeof preferences.holdToAccelerate === "boolean" ? preferences.holdToAccelerate : DEFAULT_PLAYBACK_PREFERENCES.holdToAccelerate,
+    holdToAccelerateSpeed: clampFloat(preferences.holdToAccelerateSpeed, 1, 4, DEFAULT_PLAYBACK_PREFERENCES.holdToAccelerateSpeed),
     firstAudioLanguage: normalizeLanguage(preferences.firstAudioLanguage, DEFAULT_PLAYBACK_PREFERENCES.firstAudioLanguage),
     secondAudioLanguage: normalizeLanguage(preferences.secondAudioLanguage, DEFAULT_PLAYBACK_PREFERENCES.secondAudioLanguage),
+    secondSubtitleLanguage: normalizeLanguage(preferences.secondSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.secondSubtitleLanguage),
     reuseLastLink: typeof preferences.reuseLastLink === "boolean" ? preferences.reuseLastLink : DEFAULT_PLAYBACK_PREFERENCES.reuseLastLink,
     lastLinkCacheHours: clampNumber(preferences.lastLinkCacheHours, 1, 720, DEFAULT_PLAYBACK_PREFERENCES.lastLinkCacheHours),
     sourceSelectionMode: preferences.sourceSelectionMode === "first" ? "first" : "manual",
+    hardwareDecoding: normalizeHardwareDecoding(preferences.hardwareDecoding),
+    skipSegmentsEnabled: typeof preferences.skipSegmentsEnabled === "boolean" ? preferences.skipSegmentsEnabled : DEFAULT_PLAYBACK_PREFERENCES.skipSegmentsEnabled,
+    animeSkipEnabled: typeof preferences.animeSkipEnabled === "boolean" ? preferences.animeSkipEnabled : DEFAULT_PLAYBACK_PREFERENCES.animeSkipEnabled,
+    introDbSubmissionEnabled: typeof preferences.introDbSubmissionEnabled === "boolean" ? preferences.introDbSubmissionEnabled : DEFAULT_PLAYBACK_PREFERENCES.introDbSubmissionEnabled,
     autoPlayNextEpisode: typeof preferences.autoPlayNextEpisode === "boolean" ? preferences.autoPlayNextEpisode : DEFAULT_PLAYBACK_PREFERENCES.autoPlayNextEpisode,
+    preferBingeGroup: typeof preferences.preferBingeGroup === "boolean" ? preferences.preferBingeGroup : DEFAULT_PLAYBACK_PREFERENCES.preferBingeGroup,
+    nextEpisodeThresholdMode: "percentage",
     nextEpisodeThresholdPercent: clampNumber(preferences.nextEpisodeThresholdPercent, 50, 100, DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdPercent),
     preferredSubtitleLanguage: normalizeLanguage(preferences.preferredSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.preferredSubtitleLanguage),
     addonSubtitleLoadMode: preferences.addonSubtitleLoadMode === "all" ? "all" : "preferred",
@@ -186,6 +225,11 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
 function normalizeLanguage(value: unknown, fallback: string) {
   if (typeof value !== "string") return fallback;
   return value.trim().toLowerCase();
+}
+
+function normalizeHardwareDecoding(value: unknown): HardwareDecodingMode {
+  if (value === "enabled" || value === "disabled") return value;
+  return "auto";
 }
 
 function normalizeLanguageText(value: string | null | undefined) {
@@ -200,6 +244,12 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+function clampFloat(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function readLastLinkCache() {

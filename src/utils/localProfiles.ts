@@ -4,11 +4,15 @@ const PROFILES_STORAGE_KEY = "aetherio-local-profiles-v1";
 const ACTIVE_PROFILE_ID_KEY = "aetherio-active-profile-id";
 
 const SCOPED_STORAGE_KEYS = [
-  "aetherio-addons",
   "aetherio-api-keys",
+  "aetherio-mdblist-settings-v1",
   "aetherio-playback-preferences",
   "aetherio-last-links",
   "aetherio-continue-watching-v1",
+  "aetherio-continue-watching-audio-selection-v1",
+  "aetherio-trakt-auth-v1",
+  "aetherio-trakt-queue-v1",
+  "aetherio-trakt-sync-v1",
 ];
 
 export interface LocalProfile {
@@ -57,13 +61,13 @@ export function getScopedStorageKey(baseKey: string) {
   return activeId ? `aetherio-profile:${activeId}:${baseKey}` : baseKey;
 }
 
-export function createLocalProfile(input: LocalProfileInput, options?: { makeActive?: boolean; adoptCurrentData?: boolean }) {
+export async function createLocalProfile(input: LocalProfileInput, options?: { makeActive?: boolean; adoptCurrentData?: boolean }) {
   const profiles = getLocalProfiles();
   const now = Date.now();
   const profile: LocalProfile = {
     id: createProfileId(),
     name: normalizeName(input.name),
-    pin: normalizePin(input.pin),
+    pin: input.pin ? await hashPin(input.pin) : undefined,
     avatarDataUrl: normalizeAvatar(input.avatarDataUrl),
     createdAt: now,
     updatedAt: now,
@@ -78,18 +82,22 @@ export function createLocalProfile(input: LocalProfileInput, options?: { makeAct
   return profile;
 }
 
-export function updateLocalProfile(id: string, input: LocalProfileInput) {
+export async function updateLocalProfile(id: string, input: LocalProfileInput) {
   const profiles = getLocalProfiles();
-  const updated = profiles.map(profile => {
-    if (profile.id !== id) return profile;
-    return {
+  const updated = [];
+  for (const profile of profiles) {
+    if (profile.id !== id) {
+      updated.push(profile);
+      continue;
+    }
+    updated.push({
       ...profile,
       name: normalizeName(input.name),
-      pin: normalizePin(input.pin),
+      pin: input.pin ? await hashPin(input.pin) : profile.pin,
       avatarDataUrl: normalizeAvatar(input.avatarDataUrl),
       updatedAt: Date.now(),
-    };
-  });
+    });
+  }
   writeProfiles(updated);
   return updated.find(profile => profile.id === id) ?? null;
 }
@@ -144,9 +152,18 @@ function normalizeName(name: string) {
   return normalized || "Usuario";
 }
 
-function normalizePin(pin: string | undefined) {
-  const normalized = pin?.trim() ?? "";
-  return normalized || undefined;
+const PIN_SALT = "aetherio-profile-v1";
+
+export async function hashPin(pin: string): Promise<string> {
+  const data = new TextEncoder().encode(`${PIN_SALT}:${pin}`);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = new Uint8Array(hashBuffer);
+  return Array.from(hashArray).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function verifyPin(pin: string, hash: string): Promise<boolean> {
+  const pinHash = await hashPin(pin);
+  return pinHash === hash;
 }
 
 function normalizeAvatar(avatarDataUrl: string | undefined) {
