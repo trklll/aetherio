@@ -26,6 +26,9 @@ refs_/
 # Generated provider bundle (rebuilt by npm scripts)
 public/nuvio-provider-deps.js
 
+# MPV runtime downloaded by scripts/install-mpv.ps1
+src-tauri/bin/mpv/libmpv-2.dll
+
 # Local command output accidentally created as a file
 src-tauri/2
 
