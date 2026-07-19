@@ -11,8 +11,26 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
 target
 src-tauri/target
+
+# Local tooling, reference checkouts, and generated test output
+.codegraph/
+.playwright-cli/
+output/
+refs_/
+
+# Generated provider bundle (rebuilt by npm scripts)
+public/nuvio-provider-deps.js
+
+# Local command output accidentally created as a file
+src-tauri/2
+
+# Native build crash reports
+hs_err_pid*.log
 
 # Editor directories and files
 .vscode/*
