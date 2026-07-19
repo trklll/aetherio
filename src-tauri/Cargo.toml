@@ -33,6 +33,8 @@ base64 = "0.22"
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
+tauri-plugin-process = "2"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 librqbit = { version = "8.1.1", default-features = false, features = ["http-api", "default-tls", "tracing-subscriber-utils"] }
+tauri-plugin-updater = "2"
