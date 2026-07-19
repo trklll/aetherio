@@ -1,8 +1,8 @@
 param(
   [string]$ArchivePath,
   [string]$DevArchivePath,
-  [string]$Url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260412/mpv-x86_64-20260412-git-062f4bf.7z",
-  [string]$DevUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260412/mpv-dev-x86_64-20260412-git-062f4bf.7z"
+  [string]$Url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-x86_64-20260610-git-304426c.7z",
+  [string]$DevUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-20260610-git-304426c.7z"
 )
 
 $ErrorActionPreference = "Stop"
