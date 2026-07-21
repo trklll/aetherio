@@ -9,19 +9,6 @@ import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork";
 import { gsap, tweenTo } from "../../utils/motion";
 
-function heroSubtitle(item: MediaItem): string {
-  const group = (item.heroGroup ?? "").toLowerCase();
-  if (group.includes("popular movie") || group.includes("película")) return "Película popular";
-  if (group.includes("popular series") || group.includes("serie")) return "Serie popular";
-  if (group.includes("anime")) return "Anime en emisión";
-  if (group.includes("transmitiendo") || group.includes("airing")) return "Transmitiendo hoy";
-  if (group.includes("cartelera") || group.includes("theater")) return "En cartelera";
-  if (group.includes("televisión") || group.includes("tv")) return "En televisión";
-  if (item.type === "anime") return "Anime";
-  if (item.type === "series") return "Serie";
-  return "Destacado";
-}
-
 interface Props {
   item: MediaItem;
   items: MediaItem[];

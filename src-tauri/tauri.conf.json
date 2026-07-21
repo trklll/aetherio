@@ -1,6 +1,6 @@
 {
   "productName": "aetherio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.aetherio",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -51,6 +51,18 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "licenseFile": "nsis/LICENSE.txt",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "nsis/header.bmp",
+        "sidebarImage": "nsis/sidebar.bmp",
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "startMenuFolder": "Aetherio"
+      }
+    },
     "resources": [
       "bin/mpv"
     ],

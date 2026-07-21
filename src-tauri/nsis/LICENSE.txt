@@ -1,0 +1,49 @@
+ACUERDO DE LICENCIA DE SOFTWARE - AETHERIO
+
+Copyright (c) 2026 Trkll. Todos los derechos reservados.
+
+Este es un acuerdo legal entre usted (en adelante, "Usuario") y Trkll (en adelante,
+"Licenciante") para el uso del software Aetherio (en adelante, "Software").
+
+1. CONCESIÓN DE LICENCIA
+   El Licenciante otorga al Usuario una licencia no exclusiva, no transferible y
+   personal para instalar y usar el Software en dispositivos de su propiedad para
+   fines personales y no comerciales.
+
+2. RESTRICCIONES
+   El Usuario NO podrá:
+   a) Distribuir, copiar, modificar, descompilar, realizar ingeniería inversa o
+      crear trabajos derivados del Software.
+   b) Vender, alquilar, arrendar, sublicenciar o transferir el Software a terceros.
+   c) Usar el Software para actividades ilegales o que infrinjan derechos de autor.
+   d) Eliminar o alterar cualquier aviso de derechos de autor o propiedad
+      intelectual del Software.
+
+3. PROPIEDAD INTELECTUAL
+   El Software y todos los derechos de propiedad intelectual relacionados son y
+   seguirán siendo propiedad exclusiva del Licenciante. Esta licencia no le otorga
+   ningún derecho de propiedad sobre el Software.
+
+4. PRIVACIDAD
+   El Software puede recopilar datos de uso anónimos para mejorar el servicio.
+   No se recopila información personal identificable sin consentimiento explícito.
+
+5. GARANTÍA LIMITADA
+   El Software se proporciona "TAL CUAL", sin garantía de ningún tipo, expresa o
+   implícita, incluyendo pero no limitado a las garantías de comerciabilidad,
+   idoneidad para un propósito particular y no infracción.
+
+6. LIMITACIÓN DE RESPONSABILIDAD
+   En ningún caso el Licenciante será responsable por daños directos, indirectos,
+   incidentales, especiales, consecuentes o punitivos que resulten del uso o la
+   imposibilidad de uso del Software.
+
+7. TERMINACIÓN
+   Esta licencia termina automáticamente si el Usuario incumple cualquiera de sus
+   términos. Al terminar, el Usuario debe destruir todas las copias del Software.
+
+8. LEGISLACIÓN APLICABLE
+   Este acuerdo se rige por las leyes de la República Argentina. Cualquier disputa
+   será resuelta ante los tribunales competentes de la Ciudad de Buenos Aires.
+
+Al instalar y usar el Software, el Usuario acepta los términos de este acuerdo.

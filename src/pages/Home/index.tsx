@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
-  applyContentOrientationToItems,
   applyHomeCatalogPreferences,
-  matchesContentOrientation,
   useHomePreferences,
 } from "../../config/homePreferences";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
