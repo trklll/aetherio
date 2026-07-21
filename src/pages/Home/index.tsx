@@ -6,7 +6,6 @@ import {
 } from "../../config/homePreferences";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
-import { useRefreshRate } from "../../hooks/useRefreshRate";
 import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import CatalogRow from "./CatalogRow";
@@ -123,33 +122,19 @@ function normalizeProviderIdentity(value: string) {
 }
 
 function HomeHero({ items }: { items: MediaItem[] }) {
-  const [heroIndex, setHeroIndex] = useState(0);
-  const { frameMs } = useRefreshRate();
+  const [heroItem, setHeroItem] = useState<MediaItem | null>(null);
 
   useEffect(() => {
     if (!items.length) {
-      setHeroIndex(0);
+      setHeroItem(null);
       return;
     }
-    setHeroIndex(Math.floor(Math.random() * items.length));
+    setHeroItem(items[Math.floor(Math.random() * items.length)]);
   }, [items]);
 
-  useEffect(() => {
-    if (items.length < 2) return;
-    const delay = Math.round(frameMs * Math.max(1, Math.round(6500 / frameMs)));
-    const timer = window.setInterval(() => {
-      setHeroIndex(index => {
-        const next = Math.floor(Math.random() * items.length);
-        return items.length > 1 && next === index ? (next + 1) % items.length : next;
-      });
-    }, delay);
-    return () => window.clearInterval(timer);
-  }, [frameMs, items.length]);
+  if (!heroItem) return null;
 
-  const hero = items[heroIndex % Math.max(1, items.length)];
-  if (!hero) return null;
-
-  return <HeroSection item={hero} items={items} activeIndex={heroIndex} onSelect={setHeroIndex} />;
+  return <HeroSection item={heroItem} />;
 }
 
 function Skeleton() {

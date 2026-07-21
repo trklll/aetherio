@@ -1,5 +1,7 @@
 import type { MdbListRatings } from "../config/mdblist";
 
+export type TrailerSource = "netflix" | "crunchyroll" | "hbo" | "disney" | "youtube" | "tmdb";
+
 export interface MediaItem {
   id: string;
   type: string;
@@ -16,6 +18,8 @@ export interface MediaItem {
   certification?: string;
   heroGroup?: string;
   mdbListRatings?: MdbListRatings;
+  trailerKey?: string;
+  trailerSource?: TrailerSource;
 }
 
 export interface CatalogRowData {

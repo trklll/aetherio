@@ -11,6 +11,7 @@ import {
   resolveAnilistToTmdb,
 } from "../services/anilist";
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService";
+import { fetchYouTubeClip } from "../services/youtubeClips";
 import type { InstalledAddon } from "../store/addonStore";
 import { isFreshHomeCache, useCacheStore } from "../store/cacheStore";
 import type { CatalogRowData, MediaItem } from "../types/ui";
@@ -850,6 +851,12 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
 
     void preloadStarterHomeImages(rows, heroItems);
   }, [heroItems, heroQuery.data, heroQuery.isLoading, rows, usingStarterRows]);
+
+  useEffect(() => {
+    for (const item of heroItems) {
+      setTimeout(() => void fetchYouTubeClip(item), 0);
+    }
+  }, [heroItems]);
 
   return {
     rows,
