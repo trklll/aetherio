@@ -1,22 +1,31 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { getTmdbApiKey, tmdbFetch } from "../config/apiKeys";
 import { getMdbListSettings } from "../config/mdblist";
+import {
+  fetchAnilistAiringAnime,
+  fetchAnilistMostFavorites,
+  fetchAnilistTopAnime,
+  fetchAnilistTopAiring,
+  fetchAnilistActionAnime,
+  resolveAnilistToTmdb,
+} from "../services/anilist";
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService";
 import type { InstalledAddon } from "../store/addonStore";
 import { isFreshHomeCache, useCacheStore } from "../store/cacheStore";
 import type { CatalogRowData, MediaItem } from "../types/ui";
+import { matchesContentOrientation, type ContentOrientation } from "../config/homePreferences";
 import { sanitizeLogoUrl } from "../utils/artwork";
 import { resolveDetailBackground } from "../utils/mediaMetadata";
 import { readHomeCardArtwork } from "../utils/homeCardArtwork";
 import { ensureOriginalTmdbImage, pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork";
 
 const HERO_GROUP_FETCH_LIMIT = 7;
-const HERO_TOTAL_LIMIT = 7;
-const HOME_ROWS_STALE_TIME = 1000 * 60 * 30;
-const HOME_HERO_STALE_TIME = 1000 * 60 * 20;
-const HOME_GC_TIME = 1000 * 60 * 60 * 6;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v5";
+const HERO_TOTAL_LIMIT = 15;
+const HOME_ROWS_STALE_TIME = Infinity;
+const HOME_HERO_STALE_TIME = Infinity;
+const HOME_GC_TIME = 1000 * 60 * 60 * 24;
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v13";
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
 const HOME_RAIL_ITEM_LIMIT = 18;
@@ -234,19 +243,91 @@ async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPat
   }
 }
 
+async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]> {
+  const CONCURRENCY = 6;
+  const results: MediaItem[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const i = nextIndex++;
+      const item = items[i];
+      const tmdbId = Number(item.id.replace("tmdb:", ""));
+      if (!Number.isFinite(tmdbId)) {
+        results[i] = item;
+        continue;
+      }
+      const tmdbType = item.type === "movie" ? "movie" : "tv";
+      try {
+        const artwork = await tmdbArtwork(tmdbType, tmdbId);
+        results[i] = { ...item, logo: artwork.logo ?? item.logo };
+      } catch {
+        results[i] = item;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
+  return results;
+}
+
 async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anime", group: string): Promise<MediaItem> {
   const tmdbType = type === "movie" ? "movie" : "tv";
-  const artwork = await tmdbArtwork(tmdbType, item.id, item.backdrop_path);
+  const appendTo = type === "movie" ? "images,release_dates" : "images,content_ratings";
+  const detail = await tmdbFetch<any>(`/${tmdbType}/${item.id}`, {
+    params: { append_to_response: appendTo, include_image_language: "es,en,null" },
+  });
+
+  let logo: string | undefined;
+  let background: string | undefined;
+  let runtime: string | undefined;
+  let genres: string[] | undefined;
+  let certification: string | undefined;
+
+  if (detail) {
+    const images = detail.images;
+    if (images) {
+      const logoData = images.logos?.find((l: any) => l.iso_639_1 === "es")
+        ?? images.logos?.find((l: any) => l.iso_639_1 === "en")
+        ?? images.logos?.[0];
+      logo = tmdbImageUrl(logoData?.file_path, "w500");
+      background = pickPreferredTmdbBackdrop(images.backdrops, item.backdrop_path);
+    }
+
+    const mins = type === "movie" ? detail.runtime : detail.episode_run_time?.[0];
+    if (typeof mins === "number" && mins > 0) {
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      runtime = `${h}h ${m.toString().padStart(2, "0")}min`;
+    }
+
+    const genreList = detail.genres;
+    if (Array.isArray(genreList) && genreList.length) {
+      genres = genreList.map((g: any) => g.name);
+    }
+
+    if (type === "movie") {
+      const us = detail.release_dates?.results?.find((r: any) => r.iso_3166_1 === "US");
+      certification = us?.release_dates?.[0]?.certification || undefined;
+    } else {
+      const us = detail.content_ratings?.results?.find((r: any) => r.iso_3166_1 === "US");
+      certification = us?.rating || undefined;
+    }
+  }
+
   return {
     id: `tmdb:${item.id}`,
     type,
     name: item.title ?? item.name ?? "Sin titulo",
     poster: tmdbImageUrl(item.poster_path, "w500"),
-    background: artwork.background ?? tmdbImageUrl(item.backdrop_path, "original"),
-    logo: sanitizeLogoUrl(artwork.logo),
+    background: background ?? tmdbImageUrl(item.backdrop_path, "original"),
+    logo: sanitizeLogoUrl(logo),
     description: item.overview,
     rating: typeof item.vote_average === "number" && item.vote_average > 0 ? item.vote_average.toFixed(1) : undefined,
     year: yearFrom(item.release_date ?? item.first_air_date),
+    genres,
+    runtime,
+    certification,
     heroGroup: group,
   } as MediaItem;
 }
@@ -280,9 +361,10 @@ function interleaveGroups(groups: MediaItem[][]) {
   return mixed;
 }
 
-function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []) {
+function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = [], contentOrientation?: ContentOrientation) {
   const merged: MediaItem[] = [];
   const seen = new Set<string>();
+  let animeCount = 0;
 
   const add = (item: MediaItem, group?: string) => {
     const key = `${item.type}:${item.id}`;
@@ -290,6 +372,7 @@ function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []
     const background = ensureOriginalTmdbImage(resolveDetailBackground(item.type, item.id, item.background));
     if (!background || isAetherioDefaultArtwork(background)) return;
     seen.add(key);
+    if (item.type === "anime") animeCount++;
     merged.push({
       ...item,
       background,
@@ -298,16 +381,36 @@ function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []
     });
   };
 
-  const sourceRows = rows.slice(0, 4);
-  if (sourceRows.length) {
-    for (const row of sourceRows) {
-      for (const item of row.items.slice(0, 8)) {
+  if (contentOrientation === "anime") {
+    for (const row of rows) {
+      if (!matchesContentOrientation(row.type, "anime")) continue;
+      if (merged.length >= HERO_TOTAL_LIMIT) break;
+      for (const item of row.items) {
+        if (merged.length >= HERO_TOTAL_LIMIT) break;
         add(item, row.name);
       }
     }
+  } else {
+    const isWestern = (t: string) => matchesContentOrientation(t, "movies-series");
+
+    const sourceRows = rows.slice(0, 4);
+    for (const row of sourceRows) {
+      if (contentOrientation === "movies-series" && !isWestern(row.type)) continue;
+      if (contentOrientation === "both" && row.type === "anime" && animeCount >= 5) continue;
+      for (const item of row.items.slice(0, 8)) {
+        if (contentOrientation === "both" && item.type === "anime" && animeCount >= 5) break;
+        if (merged.length >= HERO_TOTAL_LIMIT) break;
+        add(item, row.name);
+      }
+    }
+
+    for (const item of tmdbItems) {
+      if (merged.length >= HERO_TOTAL_LIMIT) break;
+      if (contentOrientation === "movies-series" && !isWestern(item.type)) continue;
+      add(item, item.heroGroup);
+    }
   }
 
-  for (const item of tmdbItems) add(item, item.heroGroup);
   return merged
     .sort((a, b) => heroRandomValue(a) - heroRandomValue(b))
     .slice(0, HERO_TOTAL_LIMIT);
@@ -357,77 +460,56 @@ export async function fetchHomeRows(addons: InstalledAddon[]) {
 
   const rows = await Promise.all(rowTasks);
   const addonRows = rows.filter((row): row is CatalogRowData => row !== null);
-  return addonRows.length ? addonRows : fetchAetherioStarterRows();
+  const baseRows = addonRows.length ? addonRows : await fetchTmdbStarterRows();
+
+  const animeRows = await fetchAnimeRows();
+  if (!animeRows.length) return baseRows;
+
+  const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
+  const filteredAnimeRows = animeRows.map(row => ({
+    ...row,
+    items: row.items.filter(item => !baseItemIds.has(`${item.type}:${item.id}`)),
+  })).filter(row => row.items.length > 0);
+
+  if (!filteredAnimeRows.length) return baseRows;
+
+  const resolvedAnimeRows = await Promise.all(
+    filteredAnimeRows.map(async row => ({
+      ...row,
+      items: await resolveAnilistToTmdb(row.items),
+    })),
+  );
+
+  const allEnriched = await enrichAllItemsWithLogos([
+    ...baseRows.flatMap(r => r.items),
+    ...resolvedAnimeRows.flatMap(r => r.items),
+  ]);
+
+  let offset = 0;
+  const enrichedBase = baseRows.map(row => {
+    const items = allEnriched.slice(offset, offset + row.items.length);
+    offset += row.items.length;
+    return { ...row, items };
+  });
+  const enrichedAnime = resolvedAnimeRows.map(row => {
+    const items = allEnriched.slice(offset, offset + row.items.length);
+    offset += row.items.length;
+    return { ...row, items };
+  });
+
+  return [...enrichedBase, ...enrichedAnime];
 }
 
-async function fetchAetherioStarterRows(): Promise<CatalogRowData[]> {
-  const animeBase = { with_genres: "16", with_original_language: "ja" };
-  const currentSeason = currentAnimeSeasonWindow();
+async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
   const requests: TmdbHomeRailRequest[] = [
-    // El orden replica la base usada por el perfil de desarrollo trkldev.
     { id: "tmdb.top_series", title: "Popular - Series", type: "series", path: "/tv/popular" },
     { id: "tmdb.trending_movie", title: "Tendencias - Películas", type: "movie", path: "/trending/movie/day" },
     { id: "tmdb.top_movie", title: "Popular - Películas", type: "movie", path: "/movie/popular" },
     { id: "tmdb.trending_series", title: "Tendencias - Series", type: "series", path: "/trending/tv/day" },
-    {
-      id: "mal.airing_anime",
-      title: "Emitiéndose ahora - Anime",
-      type: "anime",
-      path: "/discover/tv",
-      params: { ...animeBase, sort_by: "first_air_date.desc", "air_date.gte": isoDate(-45), "air_date.lte": isoDate(7) },
-    },
-    {
-      id: "mal.schedule_anime",
-      title: "Estrenos de hoy - Anime",
-      type: "anime",
-      path: "/discover/tv",
-      params: { ...animeBase, sort_by: "popularity.desc", "air_date.gte": isoDate(), "air_date.lte": isoDate() },
-    },
-    {
-      id: "mal.seasons_anime",
-      title: `${currentSeason.label} - Anime`,
-      type: "anime",
-      path: "/discover/tv",
-      params: {
-        ...animeBase,
-        sort_by: "popularity.desc",
-        "first_air_date.gte": currentSeason.start,
-        "first_air_date.lte": currentSeason.end,
-      },
-    },
-    ...animeDecadeRequests(),
-    {
-      id: "mal.genres_anime",
-      title: "Anime de acción",
-      type: "anime",
-      path: "/discover/tv",
-      params: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10759" },
-    },
-    {
-      id: "mal.top_series_anime",
-      title: "Top Series - Anime",
-      type: "anime",
-      path: "/discover/tv",
-      params: { ...animeBase, sort_by: "vote_average.desc", "vote_count.gte": "200" },
-    },
-    {
-      id: "mal.most_favorites_anime",
-      title: "Las favoritas - Anime",
-      type: "anime",
-      path: "/discover/tv",
-      params: { ...animeBase, sort_by: "vote_count.desc" },
-    },
-    {
-      id: "mal.most_popular_anime",
-      title: "Más popular - Anime",
-      type: "anime",
-      path: "/discover/tv",
-      params: { ...animeBase, sort_by: "popularity.desc" },
-    },
     ...streamingProviderRequests(),
   ];
 
-  const rows = await Promise.all(requests.map(async (request): Promise<CatalogRowData | null> => {
+  const tmdbRows = await Promise.all(requests.map(async (request): Promise<CatalogRowData | null> => {
     const results = await fetchStarterTmdbResults(request);
     const seen = new Set<string>();
     const items = results
@@ -450,7 +532,90 @@ async function fetchAetherioStarterRows(): Promise<CatalogRowData[]> {
     } satisfies CatalogRowData;
   }));
 
-  return rows.filter((row): row is CatalogRowData => row !== null);
+  const validRows = tmdbRows.filter((row): row is CatalogRowData => row !== null);
+  if (!validRows.length) return [];
+
+  const allItems = validRows.flatMap(row => row.items);
+  const enrichedItems = await enrichAllItemsWithLogos(allItems);
+
+  let offset = 0;
+  return validRows.map(row => {
+    const items = enrichedItems.slice(offset, offset + row.items.length);
+    offset += row.items.length;
+    return { ...row, items };
+  });
+}
+
+async function fetchAnimeRows(): Promise<CatalogRowData[]> {
+  const animeBase = { with_genres: "16", with_original_language: "ja" };
+
+  const animeRowsData = await Promise.all([
+    {
+      id: "mal.airing_anime",
+      title: "Emitiéndose",
+      fetch: fetchAnilistAiringAnime,
+      tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) },
+    },
+    {
+      id: "mal.top_anime",
+      title: "Lo mejor del Anime",
+      fetch: fetchAnilistTopAnime,
+      tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" },
+    },
+    {
+      id: "mal.most_favorites_anime",
+      title: "Las favoritas - Anime",
+      fetch: fetchAnilistMostFavorites,
+      tmdb: { sort_by: "vote_count.desc" },
+    },
+    {
+      id: "mal.top_airing_anime",
+      title: "Top Series - Anime",
+      fetch: fetchAnilistTopAiring,
+      tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) },
+    },
+    {
+      id: "mal.action_anime",
+      title: "Anime de acción",
+      fetch: fetchAnilistActionAnime,
+      tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10759" },
+    },
+  ].map(async (entry): Promise<CatalogRowData | null> => {
+    let items: MediaItem[] = [];
+    let source = "MAL";
+
+    try {
+      items = await entry.fetch();
+    } catch {}
+
+    if (!items.length) {
+      source = "TMDB";
+      try {
+        const tmdbParams: Record<string, string> = { language: "es-ES", page: "1", ...animeBase };
+        for (const [k, v] of Object.entries(entry.tmdb)) {
+          if (v != null) tmdbParams[k] = String(v);
+        }
+        const results = await tmdbFetch<any>("/discover/tv", { params: tmdbParams });
+        items = (Array.isArray(results?.results) ? results.results : [])
+          .map((item: any) => normalizeTmdbCatalogItem(item, "anime", entry.title))
+          .filter((item: MediaItem | null): item is MediaItem => item != null);
+      } catch {}
+    }
+
+    const unique = items.filter((item, index, list) => list.findIndex(i => i.id === item.id) === index);
+    if (!unique.length) return null;
+    return {
+      addonId: "aetherio-starter",
+      addonName: "Aetherio",
+      catalogId: entry.id,
+      type: "anime",
+      name: entry.title,
+      subtitle: `Actualizado con ${source}`,
+      items: unique.slice(0, HOME_RAIL_ITEM_LIMIT),
+    } satisfies CatalogRowData;
+  }));
+
+  return animeRowsData.filter((row): row is CatalogRowData => row !== null);
 }
 
 async function fetchStarterTmdbResults(request: TmdbHomeRailRequest) {
@@ -472,40 +637,6 @@ async function fetchStarterTmdbResults(request: TmdbHomeRailRequest) {
   }
 
   return [];
-}
-
-function currentAnimeSeasonWindow() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const startMonth = Math.floor(month / 3) * 3;
-  const seasonNames = ["Invierno", "Primavera", "Verano", "Otoño"];
-  const start = new Date(Date.UTC(year, startMonth, 1)).toISOString().slice(0, 10);
-  const end = new Date(Date.UTC(year, startMonth + 3, 0)).toISOString().slice(0, 10);
-  return { start, end, label: `${seasonNames[startMonth / 3]} ${year}` };
-}
-
-function animeDecadeRequests(): TmdbHomeRailRequest[] {
-  return [
-    { id: "mal.80sDecade_anime", title: "Lo mejor de los 80 - Anime", start: 1980, end: 1989 },
-    { id: "mal.90sDecade_anime", title: "Lo mejor de los 90 - Anime", start: 1990, end: 1999 },
-    { id: "mal.00sDecade_anime", title: "Lo mejor de los 2000 - Anime", start: 2000, end: 2009 },
-    { id: "mal.10sDecade_anime", title: "Lo mejor de los 2010 - Anime", start: 2010, end: 2019 },
-    { id: "mal.20sDecade_anime", title: "Lo mejor de los 2020 - Anime", start: 2020, end: 2029 },
-  ].map(decade => ({
-    id: decade.id,
-    title: decade.title,
-    type: "anime" as const,
-    path: "/discover/tv",
-    params: {
-      sort_by: "vote_average.desc",
-      with_genres: "16",
-      with_original_language: "ja",
-      "vote_count.gte": "100",
-      "first_air_date.gte": `${decade.start}-01-01`,
-      "first_air_date.lte": `${decade.end}-12-31`,
-    },
-  }));
 }
 
 function streamingProviderRequests(): TmdbHomeRailRequest[] {
@@ -569,23 +700,37 @@ function companyParams(companyIds: string[]) {
 
 export async function fetchHomeHero() {
   try {
-    const [movies, series, anime] = await Promise.all([
+    const [movies, series] = await Promise.all([
       tmdbFetch("/movie/popular", { params: { language: "es-ES", page: "1", region: "US" } }),
       tmdbFetch("/tv/popular", { params: { language: "es-ES", page: "1" } }),
-      tmdbFetch("/discover/tv", { params: { language: "es-ES", page: "1", sort_by: "popularity.desc", with_genres: "16", with_original_language: "ja", air_date_gte: isoDate(-45), air_date_lte: isoDate(7) } }),
     ]);
 
-    const [movieItems, seriesItems, animeItems] = await Promise.all([
-      Promise.all(((movies as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => normalizeTmdbHeroItem(item, "movie", "Popular Movies"))),
-      Promise.all(((series as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => normalizeTmdbHeroItem(item, "series", "Popular Series"))),
-      Promise.all(((anime as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => normalizeTmdbHeroItem(item, "anime", "Animes en emisión"))),
-    ]);
+    const rawHeroItems = [
+      ...((movies as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "movie" as const, group: "Popular Movies" })),
+      ...((series as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "series" as const, group: "Popular Series" })),
+    ];
 
-    return enrichHeroRatings(interleaveGroups([movieItems, seriesItems, animeItems]));
+    const HERO_BATCH = 4;
+    const heroItems: MediaItem[] = [];
+    for (let i = 0; i < rawHeroItems.length; i += HERO_BATCH) {
+      const batch = rawHeroItems.slice(i, i + HERO_BATCH);
+      const results = await Promise.allSettled(
+        batch.map(({ item, type, group }) => normalizeTmdbHeroItem(item, type, group))
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled") heroItems.push(r.value);
+      }
+    }
+
+    const movieItems = heroItems.filter(item => item.heroGroup === "Popular Movies");
+    const seriesItems = heroItems.filter(item => item.heroGroup === "Popular Series");
+
+    return enrichHeroRatings(interleaveGroups([movieItems, seriesItems]));
   } catch {
     return [];
   }
 }
+
 
 async function enrichHeroRatings(items: MediaItem[]) {
   const settings = getMdbListSettings();
@@ -647,13 +792,12 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
   });
 }
 
-export function useHomeCatalogs(addons: InstalledAddon[]) {
+export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const queryClient = useQueryClient();
   const rowsSignature = enabledAddonSignature(addons);
   const currentHeroSignature = heroSignature();
   const initialRows = cachedRows(rowsSignature);
   const initialHero = cachedHero(currentHeroSignature);
-  const [starterImagesReady, setStarterImagesReady] = useState(false);
 
   const rowsQuery = useQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
@@ -662,6 +806,8 @@ export function useHomeCatalogs(addons: InstalledAddon[]) {
     initialDataUpdatedAt: initialRows ? useCacheStore.getState().home?.rowsUpdatedAt : undefined,
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
+    refetchOnMount: !initialRows,
+    refetchOnWindowFocus: false,
   });
 
   const heroQuery = useQuery({
@@ -671,6 +817,8 @@ export function useHomeCatalogs(addons: InstalledAddon[]) {
     initialDataUpdatedAt: initialHero ? useCacheStore.getState().home?.heroUpdatedAt : undefined,
     staleTime: HOME_HERO_STALE_TIME,
     gcTime: HOME_GC_TIME,
+    refetchOnMount: !initialHero,
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
@@ -690,37 +838,24 @@ export function useHomeCatalogs(addons: InstalledAddon[]) {
   }, [addons, queryClient]);
 
   const rows = rowsQuery.data ?? [];
-  const heroItems = useMemo(() => mergeHeroItems(heroQuery.data ?? [], rows), [heroQuery.data, rows]);
+  const heroItems = useMemo(() => mergeHeroItems(heroQuery.data ?? [], rows, contentOrientation), [heroQuery.data, rows, contentOrientation]);
   const usingStarterRows = rows.length > 0 && rows.every(row => row.addonId === "aetherio-starter");
 
   useEffect(() => {
     if (!usingStarterRows) {
-      setStarterImagesReady(true);
       preloadHomeImages(rows, heroItems);
       return;
     }
-    if (heroQuery.isLoading && !heroQuery.data) {
-      setStarterImagesReady(false);
-      return;
-    }
+    if (heroQuery.isLoading && !heroQuery.data) return;
 
-    let cancelled = false;
-    setStarterImagesReady(false);
-    void preloadStarterHomeImages(rows, heroItems).then(() => {
-      if (!cancelled) setStarterImagesReady(true);
-    });
-
-    return () => {
-      cancelled = true;
-    };
+    void preloadStarterHomeImages(rows, heroItems);
   }, [heroItems, heroQuery.data, heroQuery.isLoading, rows, usingStarterRows]);
 
   return {
     rows,
     heroItems,
     loading: (rowsQuery.isLoading && !rowsQuery.data)
-      || (usingStarterRows && heroQuery.isLoading && !heroQuery.data)
-      || (usingStarterRows && !starterImagesReady),
+      || (usingStarterRows && heroQuery.isLoading && !heroQuery.data),
   };
 }
 
@@ -807,8 +942,8 @@ function preloadImage(url: string) {
       if (decode) void decode.then(done).catch(done);
       else done();
     };
-    image.onerror = done;
+    image.onerror = () => done();
     image.src = url;
-    if (image.complete) done();
+    if (image.complete && image.naturalWidth > 0) done();
   });
 }

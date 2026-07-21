@@ -7,6 +7,7 @@ import {
   useHomePreferences,
 } from "../../config/homePreferences";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
+import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useRefreshRate } from "../../hooks/useRefreshRate";
 import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
@@ -23,8 +24,18 @@ export type { CatalogRowData, MediaItem };
 export default function HomePage() {
   const location = useLocation();
   const addons = useAddonStore(s => s.addons);
-  const { rows, heroItems, loading } = useHomeCatalogs(addons);
   const homePreferences = useHomePreferences();
+  const { rows, heroItems, loading } = useHomeCatalogs(addons, homePreferences.contentOrientation);
+  const { gradient } = useProfileGradient();
+
+  useEffect(() => {
+    if (gradient) {
+      document.documentElement.style.setProperty("--aetherio-page-bg", gradient)
+    }
+    return () => {
+      document.documentElement.style.removeProperty("--aetherio-page-bg")
+    }
+  }, [gradient])
 
   const typeFilter = new URLSearchParams(location.search).get("type");
   const visibleRows = useMemo(
@@ -40,22 +51,14 @@ export default function HomePage() {
     () => buildStreamingProviderGroups(filteredRows),
     [filteredRows],
   );
-  const orientedHeroItems = useMemo(
-    () => {
-      const oriented = applyContentOrientationToItems(heroItems, homePreferences.contentOrientation);
-      if (homePreferences.contentOrientation === "both") return oriented;
-      const preferred = oriented.filter(item => matchesContentOrientation(item.type, homePreferences.contentOrientation));
-      return preferred.length ? preferred : oriented;
-    },
-    [heroItems, homePreferences.contentOrientation],
-  );
+  const orientedHeroItems = heroItems;
 
   if (loading) return <Skeleton />;
 
   return (
-    <div className="home-page-scale relative flex min-h-full flex-col bg-black">
+    <div className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
       {!typeFilter && <HomeHero items={orientedHeroItems} />}
-      <div className="relative flex min-h-full flex-col bg-[#1f1f1f]">
+      <div className="relative flex min-h-full flex-col">
         {!typeFilter && <ContinueWatchingRow />}
         {filteredRows.length ? (
           filteredRows.map((row, i) => {

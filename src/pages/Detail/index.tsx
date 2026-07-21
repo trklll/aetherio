@@ -337,6 +337,14 @@ function parseMediaIds(id: string) {
     const trakt = Number(id.split(":")[1]);
     return Number.isFinite(trakt) && trakt > 0 ? { trakt } : {};
   }
+  if (id.toLowerCase().startsWith("mal:")) {
+    const mal = Number(id.split(":")[1]);
+    return Number.isFinite(mal) && mal > 0 ? { mal } : {};
+  }
+  if (id.toLowerCase().startsWith("anilist:")) {
+    const anilist = Number(id.split(":")[1]);
+    return Number.isFinite(anilist) && anilist > 0 ? { anilist } : {};
+  }
   return {};
 }
 
@@ -930,6 +938,7 @@ export default function DetailPage() {
 
     try {
       let tmdbId:number|null = null;
+      let resolvedType: string | null = null;
       if (mediaId.startsWith("tt")) {
         const fd = await tmdbFetch<any>(`/find/${mediaId}`, { params: { external_source: "imdb_id", language: "es-ES" } });
         const rs = fd?.movie_results?.length ? fd.movie_results : fd?.tv_results ?? [];
@@ -938,14 +947,18 @@ export default function DetailPage() {
         tmdbId = parseInt(mediaId.replace("tmdb:",""),10);
       }
       if (!tmdbId && d.name) {
-        const searchType = t==="movie" ? "movie" : "tv";
-        const sd=await tmdbFetch<any>(`/search/${searchType}`, { params: { query: d.name, language: "es-ES" } })
-          ?? await tmdbFetch<any>(`/search/${searchType}`, { params: { query: d.name, language: "en-US" } });
-        tmdbId=sd?.results?.[0]?.id??null;
+        const isAnime = t === "anime";
+        const searchTypes = t === "movie" ? ["movie"] : isAnime ? ["tv", "movie"] : ["tv"];
+        for (const searchType of searchTypes) {
+          const sd = await tmdbFetch<any>(`/search/${searchType}`, { params: { query: d.name, language: "es-ES" } })
+            ?? await tmdbFetch<any>(`/search/${searchType}`, { params: { query: d.name, language: "en-US" } });
+          tmdbId = sd?.results?.[0]?.id ?? null;
+          if (tmdbId) { if (isAnime) resolvedType = searchType; break; }
+        }
       }
       if (!tmdbId) { await finishWithRatings(d); return; }
 
-      const ep2 = t==="movie" ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
+      const ep2 = (t === "movie" || resolvedType === "movie") ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
       const [mainEs,imgRes,mainEn]=await Promise.all([
         tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
         tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
@@ -987,7 +1000,7 @@ export default function DetailPage() {
       if (shouldUseTmdbArtwork && preferredBackdrop && (!d.backdrop || isTmdbImageUrl(d.backdrop))) d.backdrop=preferredBackdrop;
       if (backgroundOverride) d.backdrop = backgroundOverride;
       if (shouldUseTmdbArtwork&&!d.poster&&main.poster_path)     d.poster=`${IMG}/w780${main.poster_path}`;
-      if (!d.description) d.description=main.overview;
+      if (!d.description||t==="anime") d.description=main.overview;
       if (!d.year) d.year=parseInt((main.release_date??main.first_air_date??"").slice(0,4),10)||undefined;
       if (!d.genres?.length) d.genres=main.genres?.map((g:any)=>g.name);
       if (!d.name) d.name=main.title??main.name??"";
@@ -1783,6 +1796,7 @@ export default function DetailPage() {
                   key={ep.id}
                   scrollKey={getEpisodeKey(ep.season, ep.episode)}
                   ep={ep}
+                  fallbackImage={data.backdrop ?? undefined}
                   locked={isEpisodeLocked(ep)}
                   progressEntry={episodeProgressMap.get(`${ep.season}:${ep.episode}`)}
                   seasonMarked={curSeason.episodes.filter(item => !isEpisodeLocked(item)).every(item => episodeProgressMap.get(`${item.season}:${item.episode}`)?.completed)}
@@ -1814,6 +1828,7 @@ export default function DetailPage() {
                   key={ep.id}
                   scrollKey={getEpisodeKey(ep.season, ep.episode)}
                   ep={ep}
+                  fallbackImage={data.backdrop ?? undefined}
                   locked={isEpisodeLocked(ep)}
                   progressEntry={episodeProgressMap.get(`${ep.season}:${ep.episode}`)}
                   seasonMarked={specialSeason!.episodes.filter(item => !isEpisodeLocked(item)).every(item => episodeProgressMap.get(`${item.season}:${item.episode}`)?.completed)}
@@ -2346,17 +2361,21 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
       <div
         ref={rowRef}
         style={{
-          display:"flex",
+          display: "flex",
           gap,
-          overflowX:"auto",
-          width:"calc(100% + 24px)",
-          margin:"-14px -12px -20px",
-          padding:"14px 12px 20px",
-          scrollPaddingInline:0,
-          scrollbarWidth:"none",
+          overflowX: "auto",
+          overflowY: "visible",
+          margin: "0 calc(-1 * var(--app-safe-x))",
+          paddingTop: 20,
+          paddingBottom: 20,
+          paddingLeft: "var(--app-safe-x)",
+          paddingRight: 0,
+          scrollPaddingInline: 0,
+          scrollbarWidth: "none",
         }}
       >
         {children}
+        <div aria-hidden="true" style={{ flex: `0 0 var(--app-safe-x)`, width: "var(--app-safe-x)", height: 1 }} />
       </div>
       {canScrollRight ? (
         <button
@@ -2377,6 +2396,7 @@ function EpCard({
   scrollKey,
   locked,
   progressEntry,
+  fallbackImage,
   onPlay,
   onMarkWatched,
   seasonMarked,
@@ -2387,7 +2407,7 @@ function EpCard({
   onMarkPreviousSeasonUnwatched,
   onShowTraktComments,
   onMarkUnwatched,
-}:{ep:Episode; scrollKey:string; locked?:boolean; progressEntry?: ContinueWatchingEntry; onPlay:()=>void; onMarkWatched:()=>void; seasonMarked:boolean; previousMarked:boolean; onMarkSeasonWatched:()=>void; onMarkSeasonUnwatched:()=>void; onMarkPreviousSeasonWatched:()=>void; onMarkPreviousSeasonUnwatched:()=>void; onShowTraktComments:()=>void; onMarkUnwatched:(entry: ContinueWatchingEntry)=>void}) {
+}:{ep:Episode; scrollKey:string; locked?:boolean; progressEntry?: ContinueWatchingEntry; fallbackImage?:string; onPlay:()=>void; onMarkWatched:()=>void; seasonMarked:boolean; previousMarked:boolean; onMarkSeasonWatched:()=>void; onMarkSeasonUnwatched:()=>void; onMarkPreviousSeasonWatched:()=>void; onMarkPreviousSeasonUnwatched:()=>void; onShowTraktComments:()=>void; onMarkUnwatched:(entry: ContinueWatchingEntry)=>void}) {
   const watched = Boolean(progressEntry?.completed);
   const progress = progressEntry ? progressPercent(progressEntry) : 0;
   const showProgress = !watched && progress > 0.5;
@@ -2423,8 +2443,8 @@ function EpCard({
       style={{ opacity:locked ? 0.58 : 1, cursor:locked ? "not-allowed" : "pointer" }}
     >
       <div className="detail-episode-card__media">
-        {ep.still ? (
-          <img className="detail-episode-card__image" src={ep.still} alt="" loading="lazy" decoding="async" />
+        {(ep.still ?? fallbackImage) ? (
+          <img className="detail-episode-card__image" src={ep.still ?? fallbackImage} alt="" loading="lazy" decoding="async" />
         ) : (
           <div className="detail-episode-card__placeholder" />
         )}

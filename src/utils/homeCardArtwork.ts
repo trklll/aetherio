@@ -1,6 +1,6 @@
 import { getScopedStorageKey } from "./localProfiles";
 
-export type HomeCardArtworkMode = "background" | "poster";
+export type HomeCardArtworkMode = "background" | "poster" | "logo";
 
 const HOME_CARD_ARTWORK_KEY = "aetherio-home-card-artwork-v1";
 export const HOME_CARD_ARTWORK_CHANGED_EVENT = "aetherio-home-card-artwork-changed";

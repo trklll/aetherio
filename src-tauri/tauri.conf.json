@@ -1,7 +1,7 @@
 {
   "productName": "aetherio",
   "version": "0.1.0",
-  "identifier": "com.administrator.aetherio",
+  "identifier": "com.aetherio",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' ipc: http://ipc.localhost https://api.trakt.tv https://api.themoviedb.org https://api.mdblist.com https://api.introdb.app https://image.tmdb.org https://torrentio.strem.fun ws://localhost:*; img-src 'self' data: https://image.tmdb.org https://torrentio.strem.fun; font-src 'self' https://fonts.gstatic.com; media-src 'self' https://*; frame-src https://*; worker-src 'self' blob:; child-src 'self' blob: https://*"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' ipc: http://ipc.localhost https://api.trakt.tv https://api.themoviedb.org https://api.mdblist.com https://api.introdb.app https://image.tmdb.org https://torrentio.strem.fun ws://localhost:*; img-src 'self' data: https://image.tmdb.org/* https://torrentio.strem.fun; font-src 'self' https://fonts.gstatic.com; media-src 'self' https://*; frame-src https://*; worker-src 'self' blob:; child-src 'self' blob: https://*"
     }
   },
   "plugins": {

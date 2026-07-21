@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play } from "lucide-react";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist";
@@ -7,7 +7,20 @@ import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork";
-import { tweenTo } from "../../utils/motion";
+import { gsap, tweenTo } from "../../utils/motion";
+
+function heroSubtitle(item: MediaItem): string {
+  const group = (item.heroGroup ?? "").toLowerCase();
+  if (group.includes("popular movie") || group.includes("película")) return "Película popular";
+  if (group.includes("popular series") || group.includes("serie")) return "Serie popular";
+  if (group.includes("anime")) return "Anime en emisión";
+  if (group.includes("transmitiendo") || group.includes("airing")) return "Transmitiendo hoy";
+  if (group.includes("cartelera") || group.includes("theater")) return "En cartelera";
+  if (group.includes("televisión") || group.includes("tv")) return "En televisión";
+  if (item.type === "anime") return "Anime";
+  if (item.type === "series") return "Serie";
+  return "Destacado";
+}
 
 interface Props {
   item: MediaItem;
@@ -18,20 +31,15 @@ interface Props {
 
 export default function HeroSection({ item, items, activeIndex, onSelect }: Props) {
   const navigate = useNavigate();
-  const indicatorRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const mdbListSettings = useMdbListSettings();
-  const [mdbListRatings, setMdbListRatings] = useState<MdbListRatings | null>(item.mdbListRatings ?? null);
-  const bg = ensureOriginalTmdbImage(item.background) ?? "";
-  const logo = sanitizeLogoUrl(item.logo);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const prevActiveRef = useRef(activeIndex);
+  const [displayItem, setDisplayItem] = useState(item);
 
-  useEffect(() => {
-    indicatorRefs.current.forEach((indicator, index) => {
-      tweenTo(indicator, {
-        width: index === activeIndex ? 24 : 7,
-        backgroundColor: index === activeIndex ? "#fff" : "rgba(255,255,255,0.34)",
-      }, 0.32);
-    });
-  }, [activeIndex, items.length]);
+  const bg = ensureOriginalTmdbImage(displayItem.background) ?? "";
+  const logo = sanitizeLogoUrl(displayItem.logo);
+  const [mdbListRatings, setMdbListRatings] = useState<MdbListRatings | null>(displayItem.mdbListRatings ?? null);
+
   useEffect(() => {
     if (!mdbListSettings.enabled || !mdbListSettings.apiKey.trim()) {
       setMdbListRatings(null);
@@ -39,13 +47,13 @@ export default function HeroSection({ item, items, activeIndex, onSelect }: Prop
     }
 
     let cancelled = false;
-    setMdbListRatings(item.mdbListRatings ?? null);
-    if (item.mdbListRatings) return;
+    setMdbListRatings(displayItem.mdbListRatings ?? null);
+    if (displayItem.mdbListRatings) return;
     void fetchMdbListRatingsForMedia({
       settings: mdbListSettings,
-      mediaType: item.type,
-      mediaId: item.id,
-      imdbId: item.id,
+      mediaType: displayItem.type,
+      mediaId: displayItem.id,
+      imdbId: displayItem.id,
     }).then(ratings => {
       if (!cancelled) setMdbListRatings(ratings);
     });
@@ -53,90 +61,158 @@ export default function HeroSection({ item, items, activeIndex, onSelect }: Prop
     return () => {
       cancelled = true;
     };
-  }, [item.id, item.type, item.mdbListRatings, mdbListSettings]);
+  }, [displayItem.id, displayItem.type, displayItem.mdbListRatings, mdbListSettings]);
+
+  useEffect(() => {
+    prevActiveRef.current = activeIndex;
+    setDisplayItem(item);
+  }, [items]);
+
+  useLayoutEffect(() => {
+    if (activeIndex === prevActiveRef.current) return;
+    const dir = activeIndex > prevActiveRef.current ? 1 : -1;
+    prevActiveRef.current = activeIndex;
+
+    const card = cardRef.current;
+    if (!card) {
+      setDisplayItem(item);
+      return;
+    }
+
+    gsap.killTweensOf(card);
+
+    gsap.to(card, {
+      x: -60 * dir,
+      duration: 0.18,
+      ease: "power2.in",
+      onComplete: () => {
+        setDisplayItem(item);
+        requestAnimationFrame(() => {
+          gsap.set(card, { x: 60 * dir });
+          requestAnimationFrame(() => {
+            gsap.to(card, {
+              x: 0,
+              duration: 0.28,
+              ease: "power3.out",
+            });
+          });
+        });
+      },
+    });
+  }, [activeIndex, item]);
 
   const openDetail = () => {
     writeDetailMediaMeta({
-      id: item.id,
-      type: item.type,
-      name: item.name,
-      poster: item.poster,
-      background: item.background,
-      logo: item.logo,
-      description: item.description,
-      year: item.year,
-      mdbListRatings: mdbListRatings ?? item.mdbListRatings,
+      id: displayItem.id,
+      type: displayItem.type,
+      name: displayItem.name,
+      poster: displayItem.poster,
+      background: displayItem.background,
+      logo: displayItem.logo,
+      description: displayItem.description,
+      year: displayItem.year,
+      mdbListRatings: mdbListRatings ?? displayItem.mdbListRatings,
     });
-    navigate(`/detail/${encodeURIComponent(item.type)}/${encodeURIComponent(item.id)}`);
+    navigate(`/detail/${encodeURIComponent(displayItem.type)}/${encodeURIComponent(displayItem.id)}`);
   };
 
+  const prevIndex = items.length > 1 ? (activeIndex - 1 + items.length) % items.length : -1;
+  const nextIndex = items.length > 1 ? (activeIndex + 1) % items.length : -1;
+
   return (
-    <div className="home-page-hero" style={{ position: "relative", width: "100vw", left: "50%", marginLeft: "-50vw", height: "calc(88vh + var(--app-shell-nav-height) - 140px)", minHeight: 420, marginTop: "calc(-1 * var(--app-shell-nav-height))", flexShrink: 0, overflow: "hidden" }}>
-      {bg && (
-        <img
-          key={`${item.id}-${bg}`}
-          className="aetherio-hero-image"
-          src={bg}
-          alt=""
-          decoding="async"
-          fetchPriority="high"
-          onAnimationEnd={event => { event.currentTarget.style.willChange = "auto"; }}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top", willChange: "opacity, transform" }}
-        />
-      )}
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.42) 42%,rgba(0,0,0,0.08) 70%)", pointerEvents: "none" }} />
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top,rgba(31,31,31,1) 0%,rgba(31,31,31,0.62) 20%,rgba(31,31,31,0.08) 55%,transparent 78%)", pointerEvents: "none" }} />
-
-      <div
-        key={item.id}
-        className="aetherio-hero-content"
-        onAnimationEnd={event => { event.currentTarget.style.willChange = "auto"; }}
-        style={{ position: "absolute", bottom: 0, left: 0, padding: "0 var(--app-safe-x) 36px", maxWidth: 540, willChange: "opacity, transform" }}
-      >
-          <p style={{ marginBottom: 10, fontSize: 12, fontWeight: 800, color: "rgba(255,255,255,0.58)", letterSpacing: 0 }}></p>
-          {logo ? (
-            <img
-              src={logo}
-              alt={item.name}
-              decoding="async"
-              style={{ maxHeight: 104, maxWidth: 330, objectFit: "contain", marginBottom: 14, filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.72))" }}
-            />
-          ) : (
-            <div style={{ minHeight: 86, marginBottom: 14 }} />
-          )}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-            {item.year && <span style={{ fontSize: 14, color: "rgba(255,255,255,0.62)" }}>{item.year}</span>}
-            {item.genres?.slice(0, 2).map(g => <span key={g} style={{ fontSize: 14, color: "rgba(255,255,255,0.54)" }}>· {g}</span>)}
-          </div>
-          {item.description && (
-            <p style={{ fontSize: 15, color: "rgba(255,255,255,0.68)", lineHeight: 1.6, marginBottom: 18, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-              {item.description}
-            </p>
-          )}
-          <button
-            onClick={openDetail}
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 30px", background: "#fff", color: "#000", fontWeight: 800, borderRadius: 999, fontSize: 15, border: "none", cursor: "pointer", boxShadow: "0 3px 12px rgba(0,0,0,0.38)" }}
-            onMouseEnter={event => { tweenTo(event.currentTarget, { opacity: 0.88 }); }}
-            onMouseLeave={event => { tweenTo(event.currentTarget, { opacity: 1 }); }}
+    <div style={{ flexShrink: 0, paddingBottom: 24, width: "100%", overflow: "hidden" }}>
+      <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center", alignItems: "center", height: "clamp(340px, 42vw, 680px)", gap: 10 }}>
+        {prevIndex >= 0 && (
+          <div
+            onClick={() => onSelect(prevIndex)}
+            style={{ position: "absolute", left: 0, width: "88%", height: "78%", top: "11%", borderRadius: 16, overflow: "hidden", cursor: "pointer", flexShrink: 0 }}
           >
-            <Play size={16} fill="black" /> Reproducir
-          </button>
-      </div>
-
-      {items.length > 1 && (
-        <div style={{ position: "absolute", left: "50%", bottom: 24, transform: "translateX(-50%)", display: "flex", gap: 7, alignItems: "center" }}>
-          {items.map((entry, i) => (
-            <button
-              key={`${entry.id}-${i}`}
-              ref={element => { indicatorRefs.current[i] = element; }}
-              onClick={() => onSelect(i)}
-              style={{ borderRadius: 999, background: "rgba(255,255,255,0.34)", width: 7, height: 7, border: "none", cursor: "pointer", padding: 0 }}
-              title={entry.name}
-              aria-label={entry.name}
+            {ensureOriginalTmdbImage(items[prevIndex].background) && (
+              <img src={ensureOriginalTmdbImage(items[prevIndex].background)!} alt="" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }} />
+            )}
+          </div>
+        )}
+        <div
+          ref={cardRef}
+          style={{ position: "relative", width: "88%", height: "100%", borderRadius: 16, overflow: "hidden", flexShrink: 0, zIndex: 1, boxShadow: "0 8px 50px rgba(0,0,0,0.65)" }}
+        >
+          {bg && (
+            <img
+              key={`${displayItem.id}-${bg}`}
+              src={bg}
+              alt=""
+              decoding="async"
+              fetchPriority="high"
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
             />
-          ))}
+          )}
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.15) 25%, transparent 45%, transparent 55%, rgba(0,0,0,0.08) 80%, rgba(0,0,0,0.25) 100%)" }} />
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.02) 50%, rgba(0,0,0,0.15) 75%, rgba(0,0,0,0.50) 100%)" }} />
+          <div
+            key={displayItem.id}
+            style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 42px 22px 36px", display: "flex", alignItems: "flex-end" }}
+          >
+            <div style={{ maxWidth: 560 }}>
+              {logo ? (
+                <img
+                  src={logo}
+                  alt={displayItem.name}
+                  decoding="async"
+                  style={{ maxHeight: 140, maxWidth: 1024, objectFit: "contain", marginBottom: 8, transformOrigin: "left center", filter: "drop-shadow(0 2px 12px rgba(0,0,0,0.7))" }}
+                />
+              ) : (
+                <h2 style={{ fontSize: 26, fontWeight: 800, color: "#fff", marginBottom: 4, lineHeight: 1.1 }}>
+                  {displayItem.name}
+                </h2>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 8, flexWrap: "wrap" }}>
+                {displayItem.genres?.[0] ? (
+                  <>
+                    <span style={{ fontSize: 13, color: "rgba(255,255,255,0.55)" }}>{displayItem.genres[0]}</span>
+                    {(displayItem.year || displayItem.runtime || displayItem.certification) && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</span>}
+                  </>
+                ) : null}
+                {displayItem.year ? (
+                  <>
+                    <span style={{ fontSize: 13, color: "rgba(255,255,255,0.55)" }}>{displayItem.year}</span>
+                    {(displayItem.runtime || displayItem.certification) && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</span>}
+                  </>
+                ) : null}
+                {displayItem.runtime ? (
+                  <>
+                    <span style={{ fontSize: 13, color: "rgba(255,255,255,0.55)" }}>{displayItem.runtime}</span>
+                    {displayItem.certification && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</span>}
+                  </>
+                ) : null}
+                {displayItem.certification && <span style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>{displayItem.certification}</span>}
+              </div>
+              {displayItem.description && (
+                <p style={{ fontSize: 14, color: "rgba(255,255,255,0.65)", lineHeight: 1.4, marginBottom: 12, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                  {displayItem.description}
+                </p>
+              )}
+              <button
+                onClick={openDetail}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 26px", background: "#fff", color: "#000", fontWeight: 800, borderRadius: 999, fontSize: 14, border: "none", cursor: "pointer", boxShadow: "0 3px 12px rgba(0,0,0,0.38)" }}
+                onMouseEnter={event => { tweenTo(event.currentTarget, { opacity: 0.88 }); }}
+                onMouseLeave={event => { tweenTo(event.currentTarget, { opacity: 1 }); }}
+              >
+                <Play size={15} fill="black" /> Reproducir
+              </button>
+            </div>
+          </div>
         </div>
-      )}
+        {nextIndex >= 0 && (
+          <div
+            onClick={() => onSelect(nextIndex)}
+            style={{ position: "absolute", right: 0, width: "88%", height: "78%", top: "11%", borderRadius: 16, overflow: "hidden", cursor: "pointer", flexShrink: 0 }}
+          >
+            {ensureOriginalTmdbImage(items[nextIndex].background) && (
+              <img src={ensureOriginalTmdbImage(items[nextIndex].background)!} alt="" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }} />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

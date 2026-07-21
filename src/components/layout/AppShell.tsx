@@ -189,7 +189,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         height: "100vh",
         width: "100vw",
         overflow: "hidden",
-        background: isPlayer && playerTransparent ? "transparent" : isPlayer ? "#000" : "#1f1f1f",
+        background: `${isPlayer && playerTransparent ? "transparent" : isPlayer ? "#000" : "transparent"}`,
         color: "#fff",
       }}
     >

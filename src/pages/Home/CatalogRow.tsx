@@ -20,18 +20,19 @@ import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
 const VERTICAL_CARD = { width: 180, height: 271 };
-const RANKED_CARD = { width: 304, height: 252 };
-const RANKED_DOUBLE_CARD = { width: 372, height: 252 };
-const RANKED_POSTER = { width: 168, height: 252, singleLeft: 136, doubleLeft: 204 };
-const GAP = 10;
+const RANKED_CARD = { width: 248, height: 252 };
+const RANKED_DOUBLE_CARD = { width: 298, height: 252 };
+const RANKED_POSTER = { width: 168, height: 252, singleLeft: 80, doubleLeft: 130 };
+const HORIZONTAL_GAP = 22;
+const RANKED_GAP = 10;
 const ROW_SHADOW_GUTTER = 32;
 
 function isTrendingRow(row: Pick<CatalogRowData, "catalogId" | "name">) {
-  const value = `${row.catalogId} ${row.name}`
+  const name = row.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
-  return value.includes("trending") || value.includes("tendencia");
+  return name.includes("trending") || name.includes("tendencia") || name.startsWith("top ");
 }
 
 function homeRailTitle(title: string, type: string) {
@@ -78,7 +79,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const virtualWindow = useHorizontalVirtualWindow({
     itemCount: row.items.length,
     itemWidth: cardSize.width,
-    gap: GAP,
+    gap: ranked ? RANKED_GAP : HORIZONTAL_GAP,
     overscan: 4,
   });
   const visibleStart = ranked ? 0 : virtualWindow.start;
@@ -178,7 +179,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   }, []);
 
   const scroll = useCallback((dir: "left" | "right") => {
-    scrollByGsap(scrollRef.current, dir === "right" ? (cardSize.width + GAP) * 3 : -(cardSize.width + GAP) * 3);
+    scrollByGsap(scrollRef.current, dir === "right" ? (cardSize.width + (ranked ? RANKED_GAP : HORIZONTAL_GAP)) * 3 : -(cardSize.width + (ranked ? RANKED_GAP : HORIZONTAL_GAP)) * 3);
   }, [cardSize.width]);
 
   const { scrollRef } = virtualWindow;
@@ -189,11 +190,11 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   }, [hovered, showLeft, showRight]);
 
   return (
-    <section style={{ paddingLeft: embedded ? 0 : 48, paddingRight: embedded ? 0 : 48 }}>
+    <section style={{ paddingLeft: 0, paddingRight: 0 }}>
       {!hideHeader ? (
         <button
           onClick={openCatalog}
-          style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14, background: "none", border: "none", cursor: "pointer", paddingLeft: 48, paddingRight: 48 }}
         >
           <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>{title}</span>
           <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} />
@@ -249,12 +250,12 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             overflowX: "auto",
             overflowY: "hidden",
             marginTop: embedded ? -12 : -18,
-            marginLeft: -ROW_SHADOW_GUTTER,
-            marginRight: -ROW_SHADOW_GUTTER,
-            paddingLeft: ROW_SHADOW_GUTTER,
-            paddingRight: ROW_SHADOW_GUTTER,
-            paddingTop: ROW_SHADOW_GUTTER,
-            paddingBottom: ROW_SHADOW_GUTTER + 4,
+            marginLeft: 0,
+            marginRight: 0,
+            paddingLeft: embedded ? 0 : 48,
+            paddingRight: embedded ? 0 : 48,
+            paddingTop: ROW_SHADOW_GUTTER + 8,
+            paddingBottom: ROW_SHADOW_GUTTER + 8,
             scrollbarWidth: "none",
           }}
         >
@@ -262,7 +263,14 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
           {visibleItems.map((item, offset) => {
             const idx = visibleStart + offset;
             return (
-              <div key={`${item.id}-${row.catalogId}-${idx}`} style={{ flex: "0 0 auto", marginRight: idx === row.items.length - 1 ? 0 : GAP }}>
+              <div
+                key={`${item.id}-${row.catalogId}-${idx}`}
+                style={{
+                  flex: "0 0 auto",
+                  paddingLeft: idx === 0 ? 10 : 0,
+                  marginRight: idx === row.items.length - 1 ? 0 : ranked ? RANKED_GAP : HORIZONTAL_GAP,
+                }}
+              >
                 <CinematicCard
                   item={item}
                   type={row.type}
@@ -323,6 +331,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const airingSchedule = useAiringSchedule(type, item.id, scheduleNearViewport);
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
+  const [logoPickerOpen, setLogoPickerOpen] = useState(false);
   const [, setArtworkVersion] = useState(0);
   const detailBackground = resolveDetailBackground(type, item.id, item.background);
   const ranked = typeof rank === "number";
@@ -333,7 +342,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const image = effectivePosterLayout === "vertical"
     ? cardPoster ?? cardBackground ?? ""
     : cardBackground ?? cardPoster ?? "";
-  const logo = sanitizeLogoUrl(item.logo);
+  const logo = readHomeCardArtwork("logo", type, item.id) || sanitizeLogoUrl(item.logo);
   const doubleDigitRank = ranked && rank >= 10;
   const rankedPosterLeft = doubleDigitRank ? RANKED_POSTER.doubleLeft : RANKED_POSTER.singleLeft;
   const cardSize = ranked
@@ -403,6 +412,23 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     setArtworkPickerOpen(false);
   }, [artworkMode, detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, type]);
 
+  const applyCardLogo = useCallback((url: string) => {
+    writeHomeCardArtwork("logo", type, item.id, url);
+    writeDetailMediaMeta({
+      id: item.id,
+      type,
+      name: item.name,
+      poster: item.poster,
+      background: detailBackground,
+      logo: url,
+      description: item.description,
+      year: item.year,
+    });
+    setLogoPickerOpen(false);
+  }, [detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, type]);
+
+  const isHorizontal = effectivePosterLayout !== "vertical" && !ranked;
+
   const artworkControls = (
     <>
       <ContextMenu
@@ -411,11 +437,18 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         onClose={() => setMenuOpen(false)}
         placement="below-start"
         width={238}
-        items={[{
-          label: artworkMode === "poster" ? "Elegir póster de la card" : "Elegir fondo de la card",
-          icon: <ImageIcon size={15} />,
-          onSelect: () => setArtworkPickerOpen(true),
-        }]}
+        items={[
+          {
+            label: artworkMode === "poster" ? "Elegir póster de la card" : "Elegir fondo de la card",
+            icon: <ImageIcon size={15} />,
+            onSelect: () => setArtworkPickerOpen(true),
+          },
+          ...(isHorizontal ? [{
+            label: "Elegir logo de la card",
+            icon: <ImageIcon size={15} />,
+            onSelect: () => setLogoPickerOpen(true),
+          }] : []),
+        ]}
       />
       <CardArtworkPicker
         open={artworkPickerOpen}
@@ -426,6 +459,17 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         onSelect={applyCardArtwork}
         onClose={() => setArtworkPickerOpen(false)}
       />
+      {isHorizontal && (
+        <CardArtworkPicker
+          open={logoPickerOpen}
+          item={item}
+          type={type}
+          mode="logo"
+          currentUrl={logo}
+          onSelect={applyCardLogo}
+          onClose={() => setLogoPickerOpen(false)}
+        />
+      )}
     </>
   );
 
@@ -465,12 +509,10 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             bottom: 0,
             width: rankedPosterLeft,
             textAlign: "right",
-            fontFamily: "inherit",
+            fontFamily: "'Inter', sans-serif",
             fontSize: 176,
             lineHeight: 0.86,
             fontWeight: 800,
-            fontVariantNumeric: "tabular-nums",
-            fontFeatureSettings: "'tnum' 1",
             letterSpacing: -5,
             color: "rgba(10,12,16,0.92)",
             WebkitTextStroke: "2px rgba(255,255,255,0.30)",
@@ -524,7 +566,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               data-card-artwork
               src={image}
               alt={item.name}
-              loading="lazy"
               decoding="async"
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }}
             />
@@ -550,14 +591,10 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       onContextMenu={openArtworkMenu}
       style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, borderRadius: 10, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", boxShadow: "0 12px 28px rgba(0,0,0,0.28)" }}
       onMouseEnter={e => {
-        tweenTo(e.currentTarget, { y: -3, zIndex: 5, boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-        const img = (e.currentTarget as HTMLDivElement).querySelector("img");
-        if (img) tweenTo(img, { scale: 1.04 });
+        tweenTo(e.currentTarget, { scale: 1.05, zIndex: 5, boxShadow: "0 20px 42px rgba(0,0,0,0.48)" }, 0.32);
       }}
       onMouseLeave={e => {
-        tweenTo(e.currentTarget, { y: 0, zIndex: 1, boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-        const img = (e.currentTarget as HTMLDivElement).querySelector("img");
-        if (img) tweenTo(img, { scale: 1 });
+        tweenTo(e.currentTarget, { scale: 1, zIndex: 1, boxShadow: "0 12px 28px rgba(0,0,0,0.28)" }, 0.32);
       }}
     >
       {watched ? (
@@ -584,15 +621,14 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         </div>
       ) : null}
       {airingSchedule ? <AiringScheduleBadge label={airingSchedule.label} watched={watched} compact={posterLayout === "vertical"} /> : null}
-      {image && <img src={image} alt={item.name} loading="lazy" decoding="async"
+      {image && <img src={image} alt={item.name} decoding="async"
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} />}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "45%", background: "linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px" }}>
         {logo ? (
           <img src={logo} alt={item.name}
-            loading="lazy"
             decoding="async"
-            style={{ maxHeight: 40, maxWidth: 172, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
+            style={{ maxHeight: 48, maxWidth: 206, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
         ) : (
           <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
             {item.name}

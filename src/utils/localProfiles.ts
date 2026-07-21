@@ -110,6 +110,25 @@ export function setActiveProfile(id: string) {
   return true;
 }
 
+function clearScopedData(profileId: string) {
+  for (const key of SCOPED_STORAGE_KEYS) {
+    localStorage.removeItem(`aetherio-profile:${profileId}:${key}`);
+  }
+}
+
+export function deleteLocalProfile(id: string) {
+  const profiles = getLocalProfiles();
+  const filtered = profiles.filter(p => p.id !== id);
+  if (filtered.length === profiles.length) return false;
+  writeProfiles(filtered);
+  clearScopedData(id);
+  const activeId = getActiveProfileId();
+  if (activeId === id) {
+    localStorage.removeItem(ACTIVE_PROFILE_ID_KEY);
+  }
+  return true;
+}
+
 export function readImageFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

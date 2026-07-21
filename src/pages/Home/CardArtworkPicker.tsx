@@ -138,12 +138,12 @@ export default function CardArtworkPicker({
         const data = await tmdbFetch<any>(`/${tmdbMediaType(type)}/${tmdbId}/images`, {
           params: { include_image_language: "es,en,null" },
         });
-        const images = mode === "poster" ? data?.posters : data?.backdrops;
+        const images = mode === "poster" ? data?.posters : mode === "logo" ? data?.logos : data?.backdrops;
         const fetched = (Array.isArray(images) ? images : [])
           .filter(image => typeof image?.file_path === "string")
           .map((image, index): ArtworkOption => ({
             url: `${TMDB_IMAGE_BASE}/original${image.file_path}`,
-            preview: `${TMDB_IMAGE_BASE}/${mode === "poster" ? "w342" : "w780"}${image.file_path}`,
+            preview: `${TMDB_IMAGE_BASE}/${mode === "poster" ? "w342" : mode === "logo" ? "w500" : "w780"}${image.file_path}`,
             label: `TMDB ${index + 1}`,
             score: imageScore(image),
           }))
@@ -165,12 +165,16 @@ export default function CardArtworkPicker({
     return () => { cancelled = true; };
   }, [currentUrl, item, mode, open, type]);
 
-  const title = mode === "poster" ? "Póster de la card" : "Fondo de la card";
+  const title = mode === "poster" ? "Póster de la card" : mode === "logo" ? "Logo de la card" : "Fondo de la card";
   const description = mode === "poster"
     ? "Elige el póster vertical que se mostrará en las rows del Home."
+    : mode === "logo"
+    ? "Elige el logo que se mostrará en las cards del Home."
     : "Elige el fondo horizontal que se mostrará en las rows del Home.";
   const gridStyle = useMemo(() => mode === "poster"
     ? { gridTemplateColumns: "repeat(auto-fill, minmax(138px, 1fr))" }
+    : mode === "logo"
+    ? { gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }
     : { gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }, [mode]);
 
   if (!open) return null;

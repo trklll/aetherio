@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import {
@@ -17,6 +17,7 @@ import {
   RadioTower,
   RefreshCw,
   Save,
+  Trash2,
   Unlink,
   UserRound,
 } from "lucide-react";
@@ -52,12 +53,14 @@ import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData } from "../../types/ui";
 import {
   createLocalProfile,
+  deleteLocalProfile,
   getActiveProfile,
   getLocalProfiles,
   LOCAL_PROFILES_CHANGED_EVENT,
   readImageFileAsDataUrl,
   setActiveProfile,
   updateLocalProfile,
+  verifyPin,
   type LocalProfile,
 } from "../../utils/localProfiles";
 import {
@@ -267,6 +270,23 @@ export default function SettingsPage() {
     window.location.reload();
   }
 
+  function deleteProfile(profile: LocalProfile) {
+    deleteLocalProfile(profile.id);
+    const remaining = getLocalProfiles();
+    if (profile.id === activeProfile?.id) {
+      if (remaining.length > 0) {
+        setActiveProfile(remaining[0].id);
+      }
+      setActiveProfileState(getActiveProfile());
+      setProfileName(remaining[0]?.name ?? "");
+      setProfilePin(remaining[0]?.pin ?? "");
+      setProfileAvatar(remaining[0]?.avatarDataUrl);
+      setSaved(false);
+      setProfileError("");
+    }
+    setProfiles(remaining);
+  }
+
   return (
     <PageContainer className="min-h-screen py-5 lg:py-8">
       <div className="mx-auto grid max-w-[1360px] grid-cols-1 gap-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-8">
@@ -332,7 +352,9 @@ export default function SettingsPage() {
               onCreateProfile={createProfile}
               onStartProfileQuickStart={() => navigate("/quick-start/profile")}
               onSwitchProfile={switchProfile}
+              onDeleteProfile={deleteProfile}
               onKeyChange={updateKey}
+              onNavigateToProfiles={() => navigate("/profiles")}
               onMdbListChange={updateMdbList}
               onSaveIntegrations={saveIntegrations}
             />
@@ -398,9 +420,11 @@ function AccountPanel({
   onCreateProfile,
   onStartProfileQuickStart,
   onSwitchProfile,
+  onDeleteProfile,
   onKeyChange,
   onMdbListChange,
   onSaveIntegrations,
+  onNavigateToProfiles,
 }: {
   view: AccountView;
   profiles: LocalProfile[];
@@ -426,7 +450,9 @@ function AccountPanel({
   onCreateProfile: () => void;
   onStartProfileQuickStart: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
+  onDeleteProfile: (profile: LocalProfile) => void;
   onKeyChange: (name: keyof ApiKeys, value: string) => void;
+  onNavigateToProfiles: () => void;
   onMdbListChange: (patch: Partial<MdbListSettings>) => void;
   onSaveIntegrations: () => void;
 }) {
@@ -507,6 +533,7 @@ function AccountPanel({
         <PillBlock>
           <NavRow title="Administrar Perfiles" description="Cambiar nombre, PIN, avatar y perfil activo." onClick={() => onViewChange("manage-profiles")} />
           <NavRow title="Crear perfiles" description="Agregar otro perfil local con el Quick Start." onClick={onStartProfileQuickStart} />
+          <NavRow title="Cambiar perfil" description="Volver a la pantalla de selección de perfiles." onClick={onNavigateToProfiles} />
         </PillBlock>
       </PanelScaffold>
     );
@@ -528,6 +555,7 @@ function AccountPanel({
           onChooseProfileImage={onChooseProfileImage}
           onSaveProfile={onSaveProfile}
           onSwitchProfile={onSwitchProfile}
+          onDeleteProfile={onDeleteProfile}
         />
       </PanelScaffold>
     );
@@ -755,6 +783,7 @@ function ManageProfiles({
   onChooseProfileImage,
   onSaveProfile,
   onSwitchProfile,
+  onDeleteProfile,
 }: {
   profiles: LocalProfile[];
   activeProfile: LocalProfile | null;
@@ -768,10 +797,40 @@ function ManageProfiles({
   onChooseProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
   onSaveProfile: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
+  onDeleteProfile: (profile: LocalProfile) => void;
 }) {
   const activePreview = activeProfile
     ? { ...activeProfile, name: profileName, pin: profilePin, avatarDataUrl: profileAvatar }
     : null;
+
+  const [confirmDelete, setConfirmDelete] = useState<LocalProfile | null>(null);
+  const [deletePin, setDeletePin] = useState("");
+  const [deletePinError, setDeletePinError] = useState("");
+  const [deletePinVerifying, setDeletePinVerifying] = useState(false);
+  const deletePinRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (confirmDelete) deletePinRef.current?.focus();
+  }, [confirmDelete]);
+
+  async function handleDeletePinSubmit() {
+    if (!confirmDelete) return;
+    setDeletePinVerifying(true);
+    setDeletePinError("");
+    if (confirmDelete.pin) {
+      const valid = await verifyPin(deletePin, confirmDelete.pin);
+      if (!valid) {
+        setDeletePinVerifying(false);
+        setDeletePinError("PIN incorrecto");
+        return;
+      }
+    }
+    onDeleteProfile(confirmDelete);
+    setConfirmDelete(null);
+    setDeletePin("");
+    setDeletePinError("");
+    setDeletePinVerifying(false);
+  }
 
   return (
     <div className="grid gap-5">
@@ -802,26 +861,101 @@ function ManageProfiles({
       <PillBlock title="Perfiles en este equipo">
         {profiles.map(profile => {
           const isActive = profile.id === activeProfile?.id;
+          const isOnlyProfile = profiles.length <= 1;
           return (
             <PillRow key={profile.id} title={profile.name} description={profile.pin ? "PIN activo" : "Sin PIN"} leading={<ProfileAvatar profile={profile} className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-white text-black" />}>
-              <button
-                type="button"
-                onClick={() => onSwitchProfile(profile)}
-                disabled={isActive}
-                className={clsx(
-                  "flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-xs font-black gsap-transition",
-                  isActive ? "bg-white/12 text-white/44" : "bg-white text-black hover:bg-white/86",
-                )}
-              >
-                <LogIn size={14} />
-                {isActive ? "Activo" : "Entrar"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onSwitchProfile(profile)}
+                  disabled={isActive}
+                  className={clsx(
+                    "flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-xs font-black gsap-transition",
+                    isActive ? "bg-white/12 text-white/44" : "bg-white text-black hover:bg-white/86",
+                  )}
+                >
+                  <LogIn size={14} />
+                  {isActive ? "Activo" : "Entrar"}
+                </button>
+                {!isActive || !isOnlyProfile ? (
+                  <button
+                    type="button"
+                    onClick={() => { setConfirmDelete(profile); setDeletePin(""); setDeletePinError(""); }}
+                    className="flex shrink-0 items-center gap-2 rounded-full border border-white/12 px-4 py-2 text-xs font-black text-white/44 gsap-transition hover:border-red-500/60 hover:bg-red-500/12 hover:text-red-300"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
+              </div>
             </PillRow>
           );
         })}
       </PillBlock>
 
       {profileError ? <p className="text-sm font-semibold text-red-300">{profileError}</p> : null}
+
+      {confirmDelete ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={() => { setConfirmDelete(null); setDeletePin(""); setDeletePinError(""); }}
+        >
+          <div
+            className="mx-4 w-full max-w-sm rounded-[24px] border border-white/10 bg-[#2a2a2d] p-6 shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/20 text-red-400">
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <p className="text-base font-black text-white">Eliminar perfil</p>
+                <p className="text-sm font-medium text-white/50">Esta acción no se puede deshacer.</p>
+              </div>
+            </div>
+            <p className="mb-4 text-sm leading-6 text-white/60">
+              ¿Estás seguro de eliminar el perfil <span className="font-bold text-white">{confirmDelete.name}</span>? Todos los datos
+              locales asociados se borrarán permanentemente.
+            </p>
+            {confirmDelete.pin ? (
+              <div className="mb-4">
+                <label className="mb-1.5 block text-xs font-bold text-white/50">PIN del perfil</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={deletePinRef}
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={8}
+                    value={deletePin}
+                    onChange={e => { setDeletePin(e.target.value.replace(/\D/g, "")); setDeletePinError(""); }}
+                    onKeyDown={e => { if (e.key === "Enter") void handleDeletePinSubmit(); }}
+                    placeholder="Introduce el PIN"
+                    autoComplete="off"
+                    className="w-full rounded-full border border-white/12 bg-white px-4 py-2.5 text-sm font-semibold text-black outline-none placeholder:text-black/38 focus:border-white/42"
+                  />
+                </div>
+                {deletePinError ? <p className="mt-2 text-xs font-bold text-red-300">{deletePinError}</p> : null}
+              </div>
+            ) : null}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setConfirmDelete(null); setDeletePin(""); setDeletePinError(""); }}
+                className="flex-1 rounded-full border border-white/12 px-4 py-2.5 text-sm font-bold text-white/68 gsap-transition hover:bg-white/10"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeletePinSubmit()}
+                disabled={deletePinVerifying || (!!confirmDelete.pin && !deletePin.trim())}
+                className="flex-1 rounded-full bg-red-500 px-4 py-2.5 text-sm font-black text-white gsap-transition hover:bg-red-400 disabled:opacity-40"
+              >
+                {deletePinVerifying ? "Verificando..." : "Eliminar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

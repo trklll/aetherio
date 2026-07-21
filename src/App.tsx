@@ -3,8 +3,9 @@ import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAddonStore } from "./store/addonStore";
 import AppShell from "./components/layout/AppShell";
-import { getActiveProfile, hasActiveLocalProfile } from "./utils/localProfiles";
+import { getActiveProfile, getLocalProfiles, hasActiveLocalProfile } from "./utils/localProfiles";
 import { prefetchHomeData } from "./hooks/useCatalogs";
+import { useFullscreen } from "./hooks/useFullscreen";
 import { completeTraktAuthorization, TRAKT_AUTH_CHANGED_EVENT, type TraktAuthEventDetail } from "./trakt";
 import { getCurrentDeepLinks, listenOpenUrls } from "./runtime/platform";
 import { hasCompletedQuickStart } from "./config/quickStart";
@@ -25,6 +26,7 @@ const PersonPage = lazy(() => import("./pages/Person"));
 const EntityPage = lazy(() => import("./pages/Entity"));
 const SearchPage = lazy(() => import("./pages/Search"));
 const QuickStart = lazy(() => import("./pages/QuickStart"));
+const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -34,8 +36,11 @@ export default function App() {
   const activeProfile = getActiveProfile();
   const isCreatingProfile = location.pathname === "/quick-start/profile";
   const [quickStartCompleted, setQuickStartCompleted] = useState(() => hasCompletedQuickStart());
+  const profiles = getLocalProfiles();
   const addons = useAddonStore(s => s.addons);
   const enabledAddons = useMemo(() => addons.filter(addon => addon.enabled), [addons]);
+
+  useFullscreen();
 
   useEffect(() => {
     if (!hasProfile || !enabledAddons.length) return;
@@ -89,7 +94,7 @@ export default function App() {
     };
   }, [navigate]);
 
-  if (isCreatingProfile || !hasProfile || !quickStartCompleted) {
+  if (isCreatingProfile || profiles.length === 0 || (!hasProfile && !quickStartCompleted)) {
     return (
       <Suspense fallback={<RouteFallback />}>
         <QuickStart
@@ -104,6 +109,15 @@ export default function App() {
       </Suspense>
     );
   }
+
+  if (!hasProfile || location.pathname === "/profiles") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <ProfileSelection />
+      </Suspense>
+    );
+  }
+
   const defaultRoute = addons.length === 0 ? "/addons" : "/home";
 
   return (

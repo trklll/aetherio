@@ -42,6 +42,22 @@ export function saveApiKeys(keys: ApiKeys) {
   window.dispatchEvent(new CustomEvent(API_KEYS_CHANGED_EVENT, { detail: normalized }));
 }
 
+export function getApiKeysForProfile(profileId: string): ApiKeys {
+  try {
+    const key = `aetherio-profile:${profileId}:${API_KEYS_STORAGE_KEY}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return EMPTY_API_KEYS;
+    const parsed = JSON.parse(raw) as Partial<ApiKeys>;
+    return {
+      tmdbApiKey: typeof parsed.tmdbApiKey === "string" ? parsed.tmdbApiKey.trim() : "",
+      introDbApiKey: typeof parsed.introDbApiKey === "string" ? parsed.introDbApiKey.trim() : "",
+      animeSkipClientId: typeof parsed.animeSkipClientId === "string" ? parsed.animeSkipClientId.trim() : "",
+    };
+  } catch {
+    return EMPTY_API_KEYS;
+  }
+}
+
 export function getTmdbApiKey() {
   return getApiKeys().tmdbApiKey || APP_TMDB_API_KEY;
 }

@@ -13,6 +13,7 @@ export interface MediaItem {
   year?: number;
   genres?: string[];
   runtime?: string;
+  certification?: string;
   heroGroup?: string;
   mdbListRatings?: MdbListRatings;
 }

@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import clsx from "clsx";
 import {
   Check,
@@ -9,16 +9,18 @@ import {
   ExternalLink,
   KeyRound,
   Library,
+  Lock,
   PlayCircle,
   Puzzle,
   Search,
   Settings,
+  Share2,
   Sparkles,
   UserRound,
 } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
 import ProfileAvatar from "../components/profile/ProfileAvatar";
-import { EMPTY_API_KEYS, getApiKeys, saveApiKeys, validateTmdbApiKey, type ApiKeys } from "../config/apiKeys";
+import { EMPTY_API_KEYS, getApiKeys, getApiKeysForProfile, saveApiKeys, validateTmdbApiKey, type ApiKeys } from "../config/apiKeys";
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
   getPlaybackPreferences,
@@ -39,6 +41,7 @@ import {
   createLocalProfile,
   getLocalProfiles,
   readImageFileAsDataUrl,
+  verifyPin,
   type LocalProfile,
 } from "../utils/localProfiles";
 import mugiwaraSeekLogo from "../assets/mugiwara-seeklogo.png";
@@ -529,6 +532,42 @@ function ApiStep({
   validating: boolean;
   onChange: (next: ApiKeys) => void;
 }) {
+  const profilesWithKeys = useMemo(() => {
+    const all = getLocalProfiles();
+    return all.filter(p => {
+      const k = getApiKeysForProfile(p.id);
+      return k.tmdbApiKey || k.introDbApiKey || k.animeSkipClientId;
+    });
+  }, []);
+
+  const [sharing, setSharing] = useState<{ profile: LocalProfile; pin: string; error: string } | null>(null);
+  const pinRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (sharing) pinRef.current?.focus();
+  }, [sharing]);
+
+  async function handleShare(profile: LocalProfile) {
+    if (!profile.pin) {
+      const k = getApiKeysForProfile(profile.id);
+      onChange(k);
+      return;
+    }
+    setSharing({ profile, pin: "", error: "" });
+  }
+
+  async function submitSharingPin() {
+    if (!sharing) return;
+    const valid = await verifyPin(sharing.pin, sharing.profile.pin!);
+    if (!valid) {
+      setSharing(prev => prev ? { ...prev, pin: "", error: "PIN incorrecto" } : null);
+      return;
+    }
+    const k = getApiKeysForProfile(sharing.profile.id);
+    onChange(k);
+    setSharing(null);
+  }
+
   const integrations: Array<{
     key: keyof ApiKeys;
     title: string;
@@ -602,6 +641,79 @@ function ApiStep({
             />
           </div>
         ))}
+
+        {profilesWithKeys.length > 0 ? (
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.055] p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Share2 size={15} className="text-white/46" />
+              <h3 className="text-sm font-black text-white/78">Compartir claves desde otro perfil</h3>
+            </div>
+            <p className="mb-4 text-xs font-medium leading-5 text-white/46">
+              Selecciona un perfil que ya tenga claves configuradas y tráelas aquí. Si tiene PIN, ingrésalo para autorizar.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              {profilesWithKeys.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => void handleShare(p)}
+                  disabled={sharing !== null}
+                  className="gsap-transition flex items-center gap-2.5 rounded-full border border-white/12 px-3.5 py-2 text-xs font-bold text-white/68 hover:bg-white/10 hover:text-white disabled:opacity-40"
+                >
+                  <ProfileAvatar profile={p} className="h-7 w-7 shrink-0 overflow-hidden rounded-full bg-white/20 text-[10px] font-black text-black" />
+                  {p.name}
+                  {p.pin ? <Lock size={12} className="text-white/34" /> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {sharing ? (
+          <div className="rounded-[24px] border border-white/12 bg-white/[0.08] p-5">
+            <div className="flex items-center gap-3 mb-3">
+              <ProfileAvatar profile={sharing.profile} className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white/20 text-sm font-black text-black" />
+              <div>
+                <p className="text-sm font-black text-white">{sharing.profile.name}</p>
+                <p className="text-xs font-medium text-white/46">Introduce el PIN para compartir sus claves</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                ref={pinRef}
+                type="password"
+                inputMode="numeric"
+                maxLength={8}
+                value={sharing.pin}
+                onChange={e =>
+                  setSharing(prev => prev ? { ...prev, pin: e.target.value.replace(/\D/g, ""), error: "" } : null)
+                }
+                onKeyDown={e => { if (e.key === "Enter") void submitSharingPin(); }}
+                placeholder="PIN"
+                className="w-full rounded-full border border-white/12 bg-white px-4 py-2.5 text-sm font-semibold text-black outline-none placeholder:text-black/38 focus:border-white/42"
+              />
+              <button
+                type="button"
+                onClick={() => void submitSharingPin()}
+                disabled={!sharing.pin.trim()}
+                className="shrink-0 rounded-full bg-white px-4 py-2.5 text-sm font-black text-black disabled:opacity-40"
+              >
+                <Check size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setSharing(null)}
+                className="shrink-0 rounded-full border border-white/12 px-4 py-2.5 text-sm font-bold text-white/68 hover:bg-white/10"
+              >
+                Cancelar
+              </button>
+            </div>
+            {sharing.error ? (
+              <p className="mt-2 text-xs font-bold text-red-300">{sharing.error}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {validating ? <p className="text-sm font-bold text-white/62">Comprobando la clave con TMDB...</p> : null}
         {error ? <p role="alert" className="text-sm font-bold text-red-300">{error}</p> : null}
       </div>

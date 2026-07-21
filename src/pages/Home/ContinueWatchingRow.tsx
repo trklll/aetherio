@@ -261,8 +261,8 @@ export default function ContinueWatchingRow() {
             marginRight: -ROW_SHADOW_GUTTER,
             paddingLeft: ROW_SHADOW_GUTTER,
             paddingRight: ROW_SHADOW_GUTTER,
-            paddingTop: ROW_SHADOW_GUTTER,
-            paddingBottom: ROW_SHADOW_GUTTER + 4,
+            paddingTop: ROW_SHADOW_GUTTER - 8,
+            paddingBottom: ROW_SHADOW_GUTTER - 4,
             scrollbarWidth: "none",
           }}
         >
