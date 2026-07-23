@@ -582,7 +582,6 @@ function AccountPanel({
     return (
       <PanelScaffold title="Integraciones" onBack={() => onViewChange("overview")}>
         <PillBlock>
-          <NavRow title="Enriquecimiento TMDB" description="Activa busqueda, logos, trailers y metadata visual con una API key de TMDB." onClick={() => onViewChange("tmdb")} />
           <NavRow title="MDBList" description="Configura ratings externos para la pantalla de detalle." onClick={() => onViewChange("mdblist")} />
           <NavRow title="IntroDB" description="Busca segmentos de intro y resumen para mostrar botones de salto cuando existan." onClick={() => onViewChange("introdb")} />
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
@@ -638,17 +637,8 @@ function AccountPanel({
     );
   }
 
-  if (view === "tmdb" || view === "introdb" || view === "anime-skip") {
+  if (view === "introdb" || view === "anime-skip") {
     const details = {
-      tmdb: {
-        title: "Enriquecimiento TMDB",
-        description: "Usa TMDB para busqueda, imagenes, trailers, logos y metadata adicional.",
-        key: "tmdbApiKey" as const,
-        label: "TMDB API Key",
-        docsUrl: "https://www.themoviedb.org/settings/api",
-        docsLabel: "Obtener API",
-        placeholder: "Tu clave de The Movie Database",
-      },
       introdb: {
         title: "IntroDB",
         description: "IntroDB permite resolver segmentos de intro y resumen cuando hay coincidencias por episodio.",

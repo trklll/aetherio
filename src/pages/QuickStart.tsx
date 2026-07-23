@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
 import ProfileAvatar from "../components/profile/ProfileAvatar";
-import { EMPTY_API_KEYS, getApiKeys, getApiKeysForProfile, saveApiKeys, validateTmdbApiKey, type ApiKeys } from "../config/apiKeys";
+import { EMPTY_API_KEYS, getApiKeys, getApiKeysForProfile, saveApiKeys, type ApiKeys } from "../config/apiKeys";
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
   getPlaybackPreferences,
@@ -65,9 +65,6 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
   const [profileError, setProfileError] = useState("");
   const [creatingProfile, setCreatingProfile] = useState(false);
   const [keys, setKeys] = useState<ApiKeys>(() => useFreshDefaults ? { ...EMPTY_API_KEYS } : getApiKeys());
-  const [apiError, setApiError] = useState("");
-  const [validatingApi, setValidatingApi] = useState(false);
-  const [validatedTmdbKey, setValidatedTmdbKey] = useState("");
   const [playback, setPlayback] = useState<PlaybackPreferences>(() => useFreshDefaults ? { ...DEFAULT_PLAYBACK_PREFERENCES } : getPlaybackPreferences());
   const [homePreferences, setHomePreferences] = useState<HomePreferences>(() => useFreshDefaults
     ? { ...DEFAULT_HOME_PREFERENCES, catalogOrder: [], hiddenCatalogKeys: [] }
@@ -122,41 +119,16 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
     onComplete(destination);
   }
 
-  async function requireValidTmdbKey() {
-    const tmdbApiKey = keys.tmdbApiKey.trim();
-    if (!tmdbApiKey) {
-      setApiError("La API key de TMDB es obligatoria para continuar.");
-      return false;
-    }
-    if (validatedTmdbKey === tmdbApiKey) return true;
-
-    setValidatingApi(true);
-    setApiError("");
-    const valid = await validateTmdbApiKey(tmdbApiKey);
-    setValidatingApi(false);
-    if (!valid) {
-      setApiError("No pudimos validar esta API key. Revisa que sea una clave v3 válida de TMDB.");
-      return false;
-    }
-    setValidatedTmdbKey(tmdbApiKey);
-    return true;
-  }
-
   async function continueToNextStep() {
     if (currentStep === "profile") {
       await createProfileAndContinue();
       return;
     }
-    if (currentStep === "apis" && !await requireValidTmdbKey()) return;
     setStep(current => Math.min(steps.length - 1, current + 1));
   }
 
   async function skip() {
     if (!profile) return;
-    if (!await requireValidTmdbKey()) {
-      setStep(steps.indexOf("apis"));
-      return;
-    }
     persistSelections();
     completeQuickStart();
     onComplete(installedAddons > 0 ? "/home" : "/addons");
@@ -218,12 +190,8 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
           {currentStep === "apis" ? (
             <ApiStep
               keys={keys}
-              error={apiError}
-              validating={validatingApi}
               onChange={next => {
                 setKeys(next);
-                setApiError("");
-                setValidatedTmdbKey("");
               }}
             />
           ) : null}
@@ -245,14 +213,12 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
             <button
               type="button"
               onClick={() => void continueToNextStep()}
-              disabled={creatingProfile || validatingApi || (currentStep === "apis" && !keys.tmdbApiKey.trim())}
+              disabled={creatingProfile}
               className="gsap-transition flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-black text-black disabled:opacity-55 hover:bg-white/82"
             >
               {currentStep === "profile"
                 ? (creatingProfile ? "Creando perfil..." : "Crear perfil y continuar")
-                : currentStep === "apis" && validatingApi
-                  ? "Validando TMDB..."
-                  : "Continuar"}
+                : "Continuar"}
               <ChevronRight size={17} />
             </button>
           ) : (
@@ -523,20 +489,16 @@ function PlaybackStep({
 
 function ApiStep({
   keys,
-  error,
-  validating,
   onChange,
 }: {
   keys: ApiKeys;
-  error: string;
-  validating: boolean;
   onChange: (next: ApiKeys) => void;
 }) {
   const profilesWithKeys = useMemo(() => {
     const all = getLocalProfiles();
     return all.filter(p => {
       const k = getApiKeysForProfile(p.id);
-      return k.tmdbApiKey || k.introDbApiKey || k.animeSkipClientId;
+      return k.introDbApiKey || k.animeSkipClientId;
     });
   }, []);
 
@@ -577,14 +539,6 @@ function ApiStep({
     important?: boolean;
   }> = [
     {
-      key: "tmdbApiKey",
-      title: "TMDB API Key",
-      description: "Activa búsqueda, imágenes, logos, trailers y metadata enriquecida.",
-      placeholder: "Pega tu API key de TMDB",
-      url: "https://www.themoviedb.org/settings/api",
-      important: true,
-    },
-    {
       key: "introDbApiKey",
       title: "IntroDB API Key",
       description: "Opcional. Permite colaborar enviando segmentos de intro y resumen.",
@@ -606,7 +560,7 @@ function ApiStep({
         icon={<KeyRound size={22} />}
         eyebrow="Integraciones"
         title="Conecta los servicios importantes."
-        description="La API key de TMDB es obligatoria porque alimenta el Home, la búsqueda y la metadata. IntroDB y Anime Skip siguen siendo opcionales."
+        description="IntroDB y Anime Skip son opcionales. Las integraciones están disponibles para enriquecer tu experiencia de reproducción."
       />
 
       <div className="grid gap-3">
@@ -713,9 +667,6 @@ function ApiStep({
             ) : null}
           </div>
         ) : null}
-
-        {validating ? <p className="text-sm font-bold text-white/62">Comprobando la clave con TMDB...</p> : null}
-        {error ? <p role="alert" className="text-sm font-bold text-red-300">{error}</p> : null}
       </div>
     </div>
   );

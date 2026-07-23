@@ -7,11 +7,13 @@ import UpdatePopup from "./components/updater/UpdatePopup";
 import { queryClient } from "./queryClient";
 import { installAndroidTvRemoteNavigation, installRuntimeDocumentClasses } from "./runtime/platform";
 import { installGsapAnimations } from "./utils/motion";
+import { initBuiltinTmdbKey } from "./config/apiKeys";
 import "./index.css";
 
 installRuntimeDocumentClasses();
 installAndroidTvRemoteNavigation();
 installGsapAnimations();
+initBuiltinTmdbKey();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
