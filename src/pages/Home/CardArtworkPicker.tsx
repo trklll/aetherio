@@ -54,19 +54,24 @@ async function resolveTmdbId(item: MediaItem, type: string) {
     if (Number.isFinite(found) && found > 0) return found;
   }
 
-  const result = await tmdbFetch<any>(`/search/${tmdbMediaType(type)}`, {
-    params: {
-      query: item.name,
-      language: "es-ES",
-      ...(item.year
-        ? type === "movie"
-          ? { year: String(item.year) }
-          : { first_air_date_year: String(item.year) }
-        : {}),
-    },
-  });
-  const found = Number(result?.results?.[0]?.id);
-  return Number.isFinite(found) && found > 0 ? found : null;
+  const tmdbMediaType = type === "movie" ? "movie" : "tv";
+  const searchParams: Record<string, string> = {
+    query: item.name,
+    language: "es-ES",
+  };
+  if (item.year) {
+    if (tmdbMediaType === "movie") searchParams.year = String(item.year);
+    else searchParams.first_air_date_year = String(item.year);
+  }
+  let result = await tmdbFetch<any>(`/search/${tmdbMediaType}`, { params: searchParams });
+  let found = Number(result?.results?.[0]?.id);
+  if (Number.isFinite(found) && found > 0) return found;
+  if (tmdbMediaType === "tv") {
+    result = await tmdbFetch<any>(`/search/movie`, { params: searchParams });
+    found = Number(result?.results?.[0]?.id);
+    if (Number.isFinite(found) && found > 0) return found;
+  }
+  return null;
 }
 
 function optionFromUrl(url: string | undefined, label: string): ArtworkOption | null {
@@ -135,9 +140,14 @@ export default function CardArtworkPicker({
       try {
         const tmdbId = await resolveTmdbId(item, type);
         if (!tmdbId) throw new Error("No se pudo identificar este medio en TMDB.");
-        const data = await tmdbFetch<any>(`/${tmdbMediaType(type)}/${tmdbId}/images`, {
+        let data = await tmdbFetch<any>(`/${tmdbMediaType(type)}/${tmdbId}/images`, {
           params: { include_image_language: "es,en,null" },
         });
+        if (!data && tmdbMediaType(type) === "tv") {
+          data = await tmdbFetch<any>(`/movie/${tmdbId}/images`, {
+            params: { include_image_language: "es,en,null" },
+          });
+        }
         const images = mode === "poster" ? data?.posters : mode === "logo" ? data?.logos : data?.backdrops;
         const fetched = (Array.isArray(images) ? images : [])
           .filter(image => typeof image?.file_path === "string")

@@ -22,7 +22,7 @@ export function selectEngine(stream: MediaStream, query: StreamQuery): EngineDec
   const target = (stream.url ?? stream.externalUrl ?? "").toLowerCase();
   const text = sourceText(stream);
 
-  if (stream.infoHash || target.startsWith("magnet:") || target.startsWith("stremio:")) {
+  if (stream.infoHash || target.startsWith("magnet:")) {
     return { engine: "mpv", reason: "P2P/torrent requiere motor nativo", confidence: "high" };
   }
   if (target.endsWith(".m3u8") || target.includes(".m3u8?")) {

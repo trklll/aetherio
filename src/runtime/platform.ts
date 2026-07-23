@@ -14,6 +14,8 @@ export interface PlaybackOpenRequest {
   fileIdx?: number;
   episode?: number;
   startTime?: number;
+  privateTorrent?: boolean;
+  providerSessionKey?: string;
 }
 
 export interface PlaybackCapabilities {
@@ -232,6 +234,8 @@ export async function openNativePlayback(request: PlaybackOpenRequest): Promise<
     fileIdx: request.fileIdx,
     episode: request.episode,
     startTime: request.startTime,
+    privateTorrent: request.privateTorrent,
+    providerSessionKey: request.providerSessionKey,
   });
 }
 

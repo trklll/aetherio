@@ -89,7 +89,7 @@ const MEDIA_FIELDS = `
 export async function fetchAnilistAiringAnime(): Promise<MediaItem[]> {
   const { season, seasonYear } = anilistSeason();
   const result = await anilistQuery<AniListPage>(
-    `query ($season: Season, $seasonYear: Int) {
+    `query ($season: MediaSeason, $seasonYear: Int) {
       Page(page: 1, perPage: 25) {
         media(status: RELEASING, type: ANIME, season: $season, seasonYear: $seasonYear, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
@@ -149,6 +149,109 @@ export async function fetchAnilistActionAnime(): Promise<MediaItem[]> {
         }
       }
     }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistAdventureAnime(): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query {
+      Page(page: 1, perPage: 25) {
+        media(genre: "Adventure", type: ANIME, sort: POPULARITY_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistComedyAnime(): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query {
+      Page(page: 1, perPage: 25) {
+        media(genre: "Comedy", type: ANIME, sort: SCORE_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistDramaAnime(): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query {
+      Page(page: 1, perPage: 25) {
+        media(genre: "Drama", type: ANIME, sort: POPULARITY_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistRomanceAnime(): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query {
+      Page(page: 1, perPage: 25) {
+        media(genre: "Romance", type: ANIME, sort: POPULARITY_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistFantasyAnime(): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query {
+      Page(page: 1, perPage: 25) {
+        media(genre: "Fantasy", type: ANIME, sort: SCORE_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistSciFiAnime(): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query {
+      Page(page: 1, perPage: 25) {
+        media(genre: "Sci-Fi", type: ANIME, sort: POPULARITY_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+function prevAnilistSeason(): { season: string; seasonYear: number } {
+  const { season, seasonYear } = anilistSeason();
+  const order = ["WINTER", "SPRING", "SUMMER", "FALL"];
+  const idx = order.indexOf(season);
+  const prevIdx = (idx - 1 + order.length) % order.length;
+  const prevSeason = order[prevIdx];
+  const prevYear = idx === 0 ? seasonYear - 1 : seasonYear;
+  return { season: prevSeason, seasonYear: prevYear };
+}
+
+export async function fetchAnilistLastYearBestAnime(): Promise<MediaItem[]> {
+  const { season, seasonYear } = prevAnilistSeason();
+  const result = await anilistQuery<AniListPage>(
+    `query ($season: MediaSeason, $seasonYear: Int) {
+      Page(page: 1, perPage: 25) {
+        media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: SCORE_DESC) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+    { season, seasonYear },
   );
   return (result?.data?.Page?.media ?? []).map(mediaToItem);
 }
@@ -265,6 +368,13 @@ async function searchTmdbAnime(
 
 const TMDB_CONCURRENCY = 5;
 
+export function stripSeasonPattern(name: string): string | null {
+  const cleaned = name.trim();
+  const match = cleaned.match(/^(.*?)\s+(?:(?:Season|Part|Cour|Saga)\s+\d+|S\d{1,2}|\d+(?:st|nd|rd|th)\s+Season)\s*$/i);
+  if (match && match[1].trim().length > 0) return match[1].trim();
+  return null;
+}
+
 export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaItem[]> {
   const anilistItems = items.filter(
     (item): item is AnilistEnrichedItem =>
@@ -273,6 +383,7 @@ export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaIte
   if (!anilistItems.length) return items;
 
   const resolved = new Map<number, { tmdbId: number; poster?: string; background?: string }>();
+  const seasonBaseNames = new Map<number, string>();
   let nextIndex = 0;
 
   async function worker() {
@@ -280,8 +391,19 @@ export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaIte
       const i = nextIndex++;
       const item = anilistItems[i];
       try {
-        const tmdb = await searchTmdbAnime(item._english, item._romaji, item.year);
-        if (tmdb && tmdb.tmdbId > 0) resolved.set(item._anilistId, tmdb);
+        const baseName = stripSeasonPattern(item._romaji) ?? (item._english ? stripSeasonPattern(item._english) : null);
+        if (baseName) {
+          seasonBaseNames.set(item._anilistId, baseName);
+          const tmdb = await searchTmdbAnime(baseName, baseName, item.year);
+          if (tmdb && tmdb.tmdbId > 0) {
+            resolved.set(item._anilistId, tmdb);
+          }
+        } else {
+          const tmdb = await searchTmdbAnime(item._english, item._romaji, item.year);
+          if (tmdb && tmdb.tmdbId > 0) {
+            resolved.set(item._anilistId, tmdb);
+          }
+        }
       } catch {}
     }
   }
@@ -289,6 +411,7 @@ export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaIte
   await Promise.all(Array.from({ length: Math.min(TMDB_CONCURRENCY, anilistItems.length) }, worker));
 
   const seenTmdbIds = new Set<number>();
+  const seenBaseKeys = new Set<string>();
 
   return items.reduce<MediaItem[]>((acc, item) => {
     if (!item.id.startsWith("anilist:")) {
@@ -299,9 +422,15 @@ export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaIte
     const tmdb = resolved.get(enriched._anilistId);
     if (tmdb && tmdb.tmdbId > 0 && !seenTmdbIds.has(tmdb.tmdbId)) {
       seenTmdbIds.add(tmdb.tmdbId);
+      const baseName = seasonBaseNames.get(enriched._anilistId);
+      const finalName = baseName ?? item.name;
+      const dedupKey = (stripSeasonPattern(finalName) ?? finalName).toLowerCase().trim();
+      if (seenBaseKeys.has(dedupKey)) return acc;
+      seenBaseKeys.add(dedupKey);
       acc.push({
         ...item,
         id: `tmdb:${tmdb.tmdbId}`,
+        name: finalName,
         poster: tmdb.poster ?? item.poster,
         background: tmdb.background ?? item.background,
       });

@@ -48,13 +48,17 @@ export default function HomePage() {
     () => buildStreamingProviderGroups(filteredRows),
     [filteredRows],
   );
-  const orientedHeroItems = heroItems;
+
+  const animeHeroItems = useMemo(() => heroItems.filter(i => i.type === "anime"), [heroItems]);
+  const seriesMovieHeroItems = useMemo(() => heroItems.filter(i => i.type !== "anime"), [heroItems]);
 
   if (loading) return <Skeleton />;
 
   return (
     <div className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
-      {!typeFilter && <HomeHero items={orientedHeroItems} />}
+      {!typeFilter && (
+        <SplitHero animeItems={animeHeroItems} seriesMovieItems={seriesMovieHeroItems} />
+      )}
       <div className="relative flex min-h-full flex-col">
         {!typeFilter && <ContinueWatchingRow />}
         {filteredRows.length ? (
@@ -76,6 +80,61 @@ export default function HomePage() {
           })
         ) : (
           <Empty typeFilter={typeFilter} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; seriesMovieItems: MediaItem[] }) {
+  const [animeIndex, setAnimeIndex] = useState(0);
+  const [smIndex, setSmIndex] = useState(0);
+
+  useEffect(() => {
+    if (animeItems.length) setAnimeIndex(Math.floor(Math.random() * animeItems.length));
+  }, [animeItems]);
+
+  useEffect(() => {
+    if (seriesMovieItems.length) setSmIndex(Math.floor(Math.random() * seriesMovieItems.length));
+  }, [seriesMovieItems]);
+
+  const animeItem = animeItems[animeIndex % Math.max(1, animeItems.length)];
+  const smItem = seriesMovieItems[smIndex % Math.max(1, seriesMovieItems.length)];
+
+  if (!animeItems.length && !seriesMovieItems.length) return <HomeHero items={[]} />;
+  if (!animeItems.length) return <HomeHero items={seriesMovieItems} />;
+  if (!seriesMovieItems.length) return <HomeHero items={animeItems} />;
+
+  return (
+    <div className="flex flex-col gap-1 md:flex-row">
+      <div className="flex-1">
+        {animeItem && (
+          <HeroSection
+            key="anime-hero"
+            item={animeItem}
+            items={animeItems}
+            activeIndex={animeIndex}
+            onSelect={setAnimeIndex}
+            onVideoEnd={() => {
+              if (animeItems.length < 2) return;
+              setAnimeIndex(i => (i + 1) % animeItems.length);
+            }}
+          />
+        )}
+      </div>
+      <div className="flex-1">
+        {smItem && (
+          <HeroSection
+            key="series-movie-hero"
+            item={smItem}
+            items={seriesMovieItems}
+            activeIndex={smIndex}
+            onSelect={setSmIndex}
+            onVideoEnd={() => {
+              if (seriesMovieItems.length < 2) return;
+              setSmIndex(i => (i + 1) % seriesMovieItems.length);
+            }}
+          />
         )}
       </div>
     </div>
@@ -122,19 +181,25 @@ function normalizeProviderIdentity(value: string) {
 }
 
 function HomeHero({ items }: { items: MediaItem[] }) {
-  const [heroItem, setHeroItem] = useState<MediaItem | null>(null);
+  const [heroIndex, setHeroIndex] = useState(0);
 
   useEffect(() => {
     if (!items.length) {
-      setHeroItem(null);
+      setHeroIndex(0);
       return;
     }
-    setHeroItem(items[Math.floor(Math.random() * items.length)]);
+    setHeroIndex(Math.floor(Math.random() * items.length));
   }, [items]);
 
-  if (!heroItem) return null;
+  const handleVideoEnd = () => {
+    if (items.length < 2) return;
+    setHeroIndex(index => (index + 1) % items.length);
+  };
 
-  return <HeroSection item={heroItem} />;
+  const hero = items[heroIndex % Math.max(1, items.length)];
+  if (!hero) return null;
+
+  return <HeroSection item={hero} items={items} activeIndex={heroIndex} onSelect={setHeroIndex} onVideoEnd={handleVideoEnd} />;
 }
 
 function Skeleton() {

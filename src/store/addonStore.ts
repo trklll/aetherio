@@ -35,7 +35,7 @@ export const TORRENTIO_LATINO_MANIFEST_URL = "https://torrentio.strem.fun/langua
 
 const TORRENTIO_LATINO_ADDON: InstalledAddon = {
   id: "com.stremio.torrentio.addon",
-  name: "Torrentio Latino",
+  name: "Torrentio",
   description: "Torrentio configurado para priorizar resultados en español latino.",
   logo: "https://torrentio.strem.fun/images/logo_v1.png",
   url: TORRENTIO_LATINO_MANIFEST_URL,

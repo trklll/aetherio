@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { Image as ImageIcon, MoreHorizontal, Play, X, ChevronLeft, ChevronRight, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
@@ -579,9 +579,10 @@ function getSearchReturnPath(params: URLSearchParams) {
   return query ? `/search?q=${encodeURIComponent(query)}` : "/search";
 }
 
-function findDisplayEpisodeForEntry(data: DetailData, entry: ContinueWatchingEntry) {
+function findDisplayEpisodeForEntry(data: DetailData, entry: ContinueWatchingEntry, episodeByKey?: Map<string, Episode>) {
   if (typeof entry.season !== "number" || !entry.episode || !data.seasons?.length) return null;
-  const exact = data.seasons
+  const exactKey = `${entry.season}:${entry.episode}`;
+  const exact = episodeByKey?.get(exactKey) ?? data.seasons
     .flatMap(season => season.episodes)
     .find(episode => episode.season === entry.season && episode.episode === entry.episode);
   if (exact) return exact;
@@ -688,7 +689,7 @@ export default function DetailPage() {
   const [loading, setLoading]   = useState(true);
   const [season, setSeason]     = useState(1);
   const [showMore, setShowMore] = useState(false);
-  const [, setProgressVersion] = useState(0);
+  const [progressVersion, setProgressVersion] = useState(0);
   const [logoStatus, setLogoStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [cachedLogo, setCachedLogo] = useState<string | null>(() => readCachedLogo(getDetailLogoKey(type, id)));
   const [commentsMode, setCommentsMode] = useState<TraktCommentsMode>("title");
@@ -699,11 +700,6 @@ export default function DetailPage() {
   const [detailMenuOpen, setDetailMenuOpen] = useState(false);
   const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
-  const completedMediaKeys = new Set(
-    readPlaybackStateEntries()
-      .filter(entry => entry.completed)
-      .map(entry => entry.mediaKey),
-  );
   const popupOpenTimerRef = useRef<number | null>(null);
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const detailMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -859,13 +855,13 @@ export default function DetailPage() {
         year: next.year,
         mdbListRatings: next.mdbListRatings,
       });
-      await Promise.all([
+      setData(next);
+      setLoading(false);
+      void Promise.all([
         preloadImage(next.backdrop),
         preloadImage(next.poster),
         preloadImage(next.logo),
       ]);
-      setData(next);
-      setLoading(false);
     };
     const finishWithRatings = async (next: DetailData) => {
       if (!fullMdbListSettings.enabled || !fullMdbListSettings.apiKey.trim()) {
@@ -958,12 +954,21 @@ export default function DetailPage() {
       }
       if (!tmdbId) { await finishWithRatings(d); return; }
 
-      const ep2 = (t === "movie" || resolvedType === "movie") ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
-      const [mainEs,imgRes,mainEn]=await Promise.all([
+      let ep2 = (t === "movie" || resolvedType === "movie") ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
+      let [mainEs,imgRes,mainEn]=await Promise.all([
         tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
         tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
         tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
       ]);
+      if (!mainEs && !mainEn && ep2.startsWith("/tv/")) {
+        ep2 = `/movie/${tmdbId}`;
+        [mainEs,imgRes,mainEn]=await Promise.all([
+          tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
+          tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
+          tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
+        ]);
+        resolvedType = "movie";
+      }
       const main=mainEs ?? mainEn;
       const imgs=imgRes ?? {};
       if (!main) { await finishWithRatings(d); return; }
@@ -1080,31 +1085,47 @@ export default function DetailPage() {
       }
 
       if (t!=="movie"&&main.seasons&&(!d.seasons?.length || !hasRegularEpisodes(d.seasons))) {
-        const seasons=[];
-        for (const s of (main.seasons??[]).filter((s:any)=>s.season_number>=0)) {
-          try {
-            const sd2=await tmdbFetch<any>(`/tv/${tmdbId}/season/${s.season_number}`, { params: { language: "es-ES" } })
-              ?? await tmdbFetch<any>(`/tv/${tmdbId}/season/${s.season_number}`, { params: { language: "en-US" } });
-            if (!sd2) continue;
-            seasons.push({ number:s.season_number, episodes:(sd2.episodes??[]).map((e:any)=>({ id:`${tmdbId}:${s.season_number}:${e.episode_number}`, episode:e.episode_number, season:s.season_number, name:e.name, overview:e.overview, still:e.still_path?`${IMG}/original${e.still_path}`:undefined, runtime:e.runtime, airDate:e.air_date })) });
-          } catch {}
+        const seasonResults = await Promise.allSettled(
+          (main.seasons ?? []).filter((s: any) => s.season_number >= 0).map(async (s: any) => {
+            try {
+              const sd2 = await tmdbFetch<any>(`/tv/${tmdbId}/season/${s.season_number}`, { params: { language: "es-ES" } })
+                ?? await tmdbFetch<any>(`/tv/${tmdbId}/season/${s.season_number}`, { params: { language: "en-US" } });
+              if (!sd2) return null;
+              return { number: s.season_number, episodes: (sd2.episodes ?? []).map((e: any) => ({ id: `${tmdbId}:${s.season_number}:${e.episode_number}`, episode: e.episode_number, season: s.season_number, name: e.name, overview: e.overview, still: e.still_path ? `${IMG}/original${e.still_path}` : undefined, runtime: e.runtime, airDate: e.air_date })) };
+            } catch { return null; }
+          }),
+        );
+        const seasons: Array<{ number: number; episodes: Episode[] }> = [];
+        for (const r of seasonResults) {
+          if (r.status === "fulfilled" && r.value) seasons.push(r.value);
         }
-        d.seasons=mergeSeasons(d.seasons, seasons);
+        d.seasons = mergeSeasons(d.seasons, seasons);
       }
     } catch(e){ console.warn("TMDB:",e); }
 
     await finishWithRatings(d);
   }
 
-  const episodeProgressMap = (() => {
+  const playbackEntries = useMemo(() => readPlaybackStateEntries(), [progressVersion]);
+
+  const episodeByKey = useMemo(() => {
+    const map = new Map<string, Episode>();
+    if (!data?.seasons) return map;
+    for (const season of data.seasons) {
+      for (const ep of season.episodes) {
+        map.set(`${ep.season}:${ep.episode}`, ep);
+      }
+    }
+    return map;
+  }, [data?.seasons]);
+
+  const episodeProgressMap = useMemo(() => {
     if (!data || data.type === "movie") return new Map<string, ContinueWatchingEntry>();
     const map = new Map<string, ContinueWatchingEntry>();
-    const playbackEntries = readPlaybackStateEntries();
-    const allSeriesEntries = playbackEntries.filter(entry => normalizedMediaType(entry.type) === normalizedMediaType(data.type));
     for (const entry of playbackEntries) {
       if (!detailEntryMatches(data, entry)) continue;
       if (typeof entry.season !== "number" || !entry.episode) continue;
-      const displayEpisode = findDisplayEpisodeForEntry(data, entry);
+      const displayEpisode = findDisplayEpisodeForEntry(data, entry, episodeByKey);
       const key = getEpisodeKey(displayEpisode?.season ?? entry.season, displayEpisode?.episode ?? entry.episode);
       if (!key) continue;
       const existing = map.get(key);
@@ -1117,34 +1138,46 @@ export default function DetailPage() {
         map.set(key, entry);
       }
     }
-    console.info("[AETHERIO:DETAIL:PROGRESS]", {
-      media: data.name,
-      id: data.id,
-      ids: data.ids,
-      aliases: data.aliases,
-      matchedEpisodes: map.size,
-      seriesEntries: allSeriesEntries.length,
-      sample: allSeriesEntries.slice(0, 8).map(entry => ({
-        id: entry.id,
-        name: entry.name,
-        season: entry.season,
-        episode: entry.episode,
-        completed: entry.completed,
-        progress: progressPercent(entry),
-      })),
-    });
     return map;
-  })();
+  }, [data, playbackEntries]);
 
-  const resumeEntry = (() => {
+  const completedEpisodeKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const [key, entry] of episodeProgressMap) {
+      if (entry.completed) keys.add(key);
+    }
+    return keys;
+  }, [episodeProgressMap]);
+
+  const seasonMarkedMap = useMemo(() => {
+    const map = new Map<number, boolean>();
+    if (!data?.seasons) return map;
+    for (const season of data.seasons) {
+      const unlocked = season.episodes.filter(item => !isEpisodeLocked(item));
+      const allCompleted = unlocked.length > 0 && unlocked.every(item => completedEpisodeKeys.has(`${item.season}:${item.episode}`));
+      map.set(season.number, allCompleted);
+    }
+    return map;
+  }, [data?.seasons, completedEpisodeKeys]);
+
+  const completedMediaKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const entry of playbackEntries) {
+      if (entry.completed) keys.add(entry.mediaKey);
+    }
+    return keys;
+  }, [playbackEntries]);
+
+  const resumeEntry = useMemo(() => {
     if (!data) return null;
-    return readPlaybackStateEntries()
+    return playbackEntries
       .filter(entry => detailEntryMatches(data, entry) && isResumableDetailEntry(entry))
       .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
-  })();
-  const focusEpisodeEntry = (() => {
+  }, [data, playbackEntries]);
+
+  const focusEpisodeEntry = useMemo(() => {
     if (!data) return null;
-    const matched = readPlaybackStateEntries()
+    const matched = playbackEntries
       .filter(entry => detailEntryMatches(data, entry) && typeof entry.season === "number" && Boolean(entry.episode));
     return (
       matched
@@ -1155,8 +1188,9 @@ export default function DetailPage() {
         .sort((a, b) => b.updatedAt - a.updatedAt)[0] ??
       null
     );
-  })();
-  const focusDisplayEpisode = data && focusEpisodeEntry ? findDisplayEpisodeForEntry(data, focusEpisodeEntry) : null;
+  }, [data, playbackEntries]);
+
+  const focusDisplayEpisode = data && focusEpisodeEntry ? findDisplayEpisodeForEntry(data, focusEpisodeEntry, episodeByKey) : null;
   const focusTargetEpisode = (() => {
     if (!data) return null;
     const regular = (data.seasons ?? [])
@@ -1244,7 +1278,7 @@ export default function DetailPage() {
   const playLabel = resumeEntry ? `Continuar ${formatResumeTime(resumeEntry.currentTime)}` : "Reproducir";
   const playableEpisodes = regularSeasons.flatMap(item => item.episodes).filter(item => !isEpisodeLocked(item));
   const showMarkedWatched = isMovie
-    ? readPlaybackStateEntries().some(entry => detailEntryMatches(detailData, entry) && entry.completed)
+    ? playbackEntries.some(entry => detailEntryMatches(detailData, entry) && entry.completed)
     : playableEpisodes.length > 0 && playableEpisodes.every(item => episodeProgressMap.get(getEpisodeKey(item.season, item.episode))?.completed);
 
   function markEpisodeFromCard(episode: Episode) {
@@ -1457,7 +1491,7 @@ export default function DetailPage() {
       .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
 
     if (latestEntry) {
-      const displayEpisode = findDisplayEpisodeForEntry(current, latestEntry);
+      const displayEpisode = findDisplayEpisodeForEntry(current, latestEntry, episodeByKey);
       const currentSeason = displayEpisode?.season ?? latestEntry.season;
       const currentEpisode = displayEpisode?.episode ?? latestEntry.episode;
       const currentName = displayEpisode?.name ?? latestEntry.episodeName;
@@ -1570,8 +1604,8 @@ export default function DetailPage() {
       {/* HERO full-bleed */}
       <div className="detail-page-hero" ref={heroRef} style={{ position:"relative", width:"100vw", left:"50%", marginLeft:"-50vw", height:"calc(92vh + var(--app-shell-nav-height) - 150px)", minHeight:450, marginTop:"calc(-1 * var(--app-shell-nav-height))", overflow:"hidden" }}>
         {(data.backdrop??data.poster)&&(
-          <img src={data.backdrop??data.poster} alt=""
-            style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"center top" }} />
+          <img src={data.backdrop??data.poster} alt="" width="1920" height="1080"
+            style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"center top",aspectRatio:"1920/1080" }} />
         )}
         <div style={{ position:"absolute",inset:0,background:"linear-gradient(to right,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.4) 40%,transparent 65%)",pointerEvents:"none" }} />
         <div style={{ position:"absolute",inset:0,background:"linear-gradient(to top,rgba(31,31,31,1) 0%,rgba(31,31,31,0.55) 22%,transparent 52%)",pointerEvents:"none" }} />
@@ -1799,7 +1833,7 @@ export default function DetailPage() {
                   fallbackImage={data.backdrop ?? undefined}
                   locked={isEpisodeLocked(ep)}
                   progressEntry={episodeProgressMap.get(`${ep.season}:${ep.episode}`)}
-                  seasonMarked={curSeason.episodes.filter(item => !isEpisodeLocked(item)).every(item => episodeProgressMap.get(`${item.season}:${item.episode}`)?.completed)}
+                  seasonMarked={seasonMarkedMap.get(curSeason.number) ?? false}
                   previousMarked={arePreviousEpisodesMarked(ep.season, ep.episode)}
                   onPlay={()=>goToStreams(ep.season,ep.episode,ep.name)}
                   onMarkWatched={() => markEpisodeFromCard(ep)}
@@ -1831,8 +1865,8 @@ export default function DetailPage() {
                   fallbackImage={data.backdrop ?? undefined}
                   locked={isEpisodeLocked(ep)}
                   progressEntry={episodeProgressMap.get(`${ep.season}:${ep.episode}`)}
-                  seasonMarked={specialSeason!.episodes.filter(item => !isEpisodeLocked(item)).every(item => episodeProgressMap.get(`${item.season}:${item.episode}`)?.completed)}
-                  previousMarked={specialSeason!.episodes.filter(item => item.episode < ep.episode).every(item => episodeProgressMap.get(`${item.season}:${item.episode}`)?.completed)}
+                  seasonMarked={seasonMarkedMap.get(0) ?? false}
+                  previousMarked={arePreviousEpisodesMarked(ep.season, ep.episode)}
                   onPlay={()=>goToStreams(ep.season,ep.episode,ep.name)}
                   onMarkWatched={() => markEpisodeFromCard(ep)}
                   onMarkSeasonWatched={() => markSeasonAsWatched(ep.season)}

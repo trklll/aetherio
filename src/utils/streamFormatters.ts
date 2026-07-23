@@ -58,16 +58,75 @@ const FORMATTER_ASSET_META: Record<string, FormatterAssetMeta> = {
   "audio-7.1.png": { id: "channels-7.1", label: "7.1 canales", category: "channels", order: 300 },
   "audio-6.1.png": { id: "channels-6.1", label: "6.1 canales", category: "channels", order: 301 },
   "audio-5.1.png": { id: "channels-5.1", label: "5.1 canales", category: "channels", order: 302 },
+  "codec-h264.png": { id: "codec-h264", label: "H.264", category: "video", order: 130 },
+  "codec-h265.png": { id: "codec-h265", label: "H.265", category: "video", order: 131 },
+  "codec-hevc.png": { id: "codec-hevc", label: "HEVC", category: "video", order: 132 },
+  "codec-av1.png": { id: "codec-av1", label: "AV1", category: "video", order: 133 },
+  "codec-avc.png": { id: "codec-avc", label: "AVC", category: "video", order: 134 },
+  "codec-aac.png": { id: "codec-aac", label: "AAC", category: "audio", order: 240 },
+  "codec-flac.png": { id: "codec-flac", label: "FLAC", category: "audio", order: 241 },
+  "codec-opus.png": { id: "codec-opus", label: "Opus", category: "audio", order: 242 },
+  "codec-vorbis.png": { id: "codec-vorbis", label: "Vorbis", category: "audio", order: 243 },
+  "codec-mp3.png": { id: "codec-mp3", label: "MP3", category: "audio", order: 244 },
+  "resolution-480p.png": { id: "resolution-480p", label: "480p", category: "video", order: 103 },
+  "resolution-360p.png": { id: "resolution-360p", label: "360p", category: "video", order: 104 },
+  "resolution-576p.png": { id: "resolution-576p", label: "576p", category: "video", order: 105 },
+  "fhd.png": { id: "fhd", label: "FHD", category: "video", order: 106 },
+  "uhd.png": { id: "uhd", label: "UHD", category: "video", order: 107 },
+  "video-mpeg4.png": { id: "codec-mpeg4", label: "MPEG-4", category: "video", order: 135 },
+  "video-vp9.png": { id: "codec-vp9", label: "VP9", category: "video", order: 136 },
+  "audio-2.0.png": { id: "channels-2.0", label: "2.0 canales", category: "channels", order: 303 },
+  "audio-mono.png": { id: "channels-mono", label: "Mono", category: "channels", order: 304 },
+};
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+const formatterTextMeta: Record<string, FormatterAssetMeta> = {
+  "h.264": { id: "codec-h264", label: "H.264", category: "video", order: 130 },
+  "h.265": { id: "codec-h265", label: "H.265", category: "video", order: 131 },
+  "hevc": { id: "codec-hevc", label: "HEVC", category: "video", order: 132 },
+  "av1": { id: "codec-av1", label: "AV1", category: "video", order: 133 },
+  "avc": { id: "codec-avc", label: "AVC", category: "video", order: 134 },
+  "aac": { id: "codec-aac", label: "AAC", category: "audio", order: 240 },
+  "flac": { id: "codec-flac", label: "FLAC", category: "audio", order: 241 },
+  "opus": { id: "codec-opus", label: "Opus", category: "audio", order: 242 },
+  "vorbis": { id: "codec-vorbis", label: "Vorbis", category: "audio", order: 243 },
+  "mp3": { id: "codec-mp3", label: "MP3", category: "audio", order: 244 },
+  "mpeg-4": { id: "codec-mpeg4", label: "MPEG-4", category: "video", order: 135 },
+  "vp9": { id: "codec-vp9", label: "VP9", category: "video", order: 136 },
+  "dts": { id: "dts", label: "DTS", category: "audio", order: 223 },
+  "dolby digital": { id: "dolby-digital", label: "Dolby Digital", category: "audio", order: 231 },
+  "dolby digital +": { id: "dolby-digital-plus", label: "Dolby Digital Plus", category: "audio", order: 230 },
+  "dolby vision": { id: "dolby-vision", label: "Dolby Vision", category: "video", order: 120 },
+  "truehd": { id: "truehd", label: "Dolby TrueHD", category: "audio", order: 210 },
+  "dts-x": { id: "dts-x", label: "DTS:X", category: "audio", order: 220 },
+  "dts-hd ma": { id: "dts-hd-ma", label: "DTS-HD MA", category: "audio", order: 221 },
+  "dts-hd": { id: "dts-hd", label: "DTS-HD", category: "audio", order: 222 },
+  "atmos": { id: "atmos", label: "Dolby Atmos", category: "audio", order: 201 },
+  "hdr": { id: "hdr", label: "HDR", category: "video", order: 123 },
+  "hdr10": { id: "hdr10", label: "HDR10", category: "video", order: 122 },
+  "hdr10+": { id: "hdr10-plus", label: "HDR10+", category: "video", order: 121 },
+  "imax": { id: "imax", label: "IMAX", category: "video", order: 110 },
 };
 
 const compiledFormatters = formatterManifest.entries.flatMap(entry => {
-  if (!entry.file) return [];
+  if (!entry.file) {
+    if (!entry.name) return [];
+    const textMeta = formatterTextMeta[entry.name.toLowerCase()] ?? { id: slugify(entry.name), label: entry.name, category: "source" as StreamFormatCategory, order: 500 };
+    try {
+      return [{ regex: compileFormatterPattern(entry.pattern), badge: { ...textMeta, imageUrl: "" } }];
+    } catch {
+      return [];
+    }
+  }
   const fileName = entry.file.replace(/^\.\//, "");
   const meta = FORMATTER_ASSET_META[fileName];
   const imageUrl = formatterAssetUrls[`../assets/stream-tags/${fileName}`];
-  if (!meta || !imageUrl) return [];
+  if (!meta) return [];
   try {
-    return [{ regex: compileFormatterPattern(entry.pattern), badge: { ...meta, imageUrl } }];
+    return [{ regex: compileFormatterPattern(entry.pattern), badge: { ...meta, imageUrl: imageUrl ?? "" } }];
   } catch {
     return [];
   }

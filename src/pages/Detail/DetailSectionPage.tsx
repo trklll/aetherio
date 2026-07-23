@@ -65,7 +65,7 @@ export default function DetailSectionPage() {
       setLoading(true);
       setError("");
       try {
-        const tmdbType = type === "movie" ? "movie" : "tv";
+        let tmdbType = type === "movie" ? "movie" : "tv";
         const tmdbId = await resolveTmdbId(type, id, params.get("title"));
         if (!tmdbId) {
           setError("No se encontró este título en TMDB.");
@@ -77,8 +77,14 @@ export default function DetailSectionPage() {
           : sectionKind === "cast"
             ? "credits,images"
             : "similar,recommendations,images";
-        const data = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES", append_to_response: append } })
-          ?? await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "en-US", append_to_response: append } });
+        let data = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES", append_to_response: append } });
+        if (!data && tmdbType === "tv") {
+          tmdbType = "movie";
+          data = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES", append_to_response: append } });
+        }
+        if (!data) {
+          data = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "en-US", append_to_response: append } });
+        }
         if (!data) {
           setError("No se pudo cargar la sección.");
           return;

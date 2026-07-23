@@ -2,12 +2,22 @@
 import { useAddonStore } from "../store/addonStore";
 import { tmdbFetch } from "../config/apiKeys";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream";
-import { isPlayableMediaStream } from "../utils/playableMedia";
-import { streamSpanishPriority } from "../utils/streamLanguagePriority";
+import {
+  getMagnetBtih,
+  isPlayableMediaStream,
+  isValidMagnetUri,
+  normalizeBtih,
+} from "../utils/playableMedia";
+import { sortStreamsForPlayback } from "../utils/streamPlaybackRanking";
+import {
+  extractByteSizeFromText,
+  extractReportedSeedersFromText,
+  normalizeSeederCount,
+} from "../utils/torrentHealth";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
-const STREAM_CACHE = new Map<string, { streams: MediaStream[]; updatedAt: number }>();
+const STREAM_CACHE = new Map<string, { streams: MediaStream[]; updatedAt: number; complete: true }>();
 const IMDB_ID_CACHE = new Map<string, Promise<string | null>>();
 
 export interface UseStreamsResult {
@@ -22,11 +32,17 @@ export interface UseStreamsResult {
 // No solo compara URLs: un mismo recurso puede llegar de distintos addons
 // con URL identica, hash identico, o titulo+calidad identicos.
 function contentFingerprint(s: MediaStream): string {
-  // Prioridad: url exacta > infoHash+fileIdx > titulo normalizado
-  if (s.url)      return `url:${s.url.toLowerCase().trim()}`;
-  if (s.infoHash) return `hash:${s.infoHash.toLowerCase()}:${s.fileIdx ?? 0}`;
-  const magnet = (s.sources ?? []).find(item => /^magnet:/i.test(item));
-  if (magnet) return `magnet:${magnet.toLowerCase().trim()}:${s.fileIdx ?? 0}`;
+  // Mantener "auto" separado del indice cero: no representan el mismo archivo
+  // en torrents multifichero.
+  const fileKey = typeof s.fileIdx === "number" && Number.isInteger(s.fileIdx) && s.fileIdx >= 0
+    ? `idx:${s.fileIdx}`
+    : "auto";
+  const url = s.url?.trim();
+  if (url && !isValidMagnetUri(url)) return `url:${url.toLowerCase()}`;
+  const infoHash = normalizeBtih(s.infoHash)
+    ?? getMagnetBtih(url)
+    ?? (s.sources ?? []).map(getMagnetBtih).find(Boolean);
+  if (infoHash) return `hash:${infoHash}:${fileKey}`;
   if (s.ytId)     return `yt:${s.ytId}`;
   // Fallback: normalizar titulo + addon para no perder fuentes distintas
   const title = (s.title ?? s.name ?? "").toLowerCase().replace(/\s+/g, "");
@@ -40,43 +56,44 @@ function dedupeStreams(streams: MediaStream[]): MediaStream[] {
     if (!seen.has(fp)) {
       seen.set(fp, s);
     } else {
-      // Preferir el que tenga mas metadata completa
       const existing = seen.get(fp)!;
-      const score = (x: MediaStream) =>
-        (x.title ? 1 : 0) + (x.description ? 1 : 0) +
-        (x.behaviorHints?.videoSize ? 1 : 0) + (x.subtitles?.length ? 1 : 0);
-      if (score(s) > score(existing)) seen.set(fp, s);
+      const mergeText = (current: string | undefined, incoming: string | undefined) => current?.trim() ? current : incoming;
+      const mergeStrings = (current: string[] | undefined, incoming: string[] | undefined, caseInsensitive = true) => {
+        const merged = [...(current ?? []), ...(incoming ?? [])]
+          .filter((value, index, values) => values.findIndex(candidate => (
+            caseInsensitive ? candidate.toLowerCase() === value.toLowerCase() : candidate === value
+          )) === index);
+        return merged.length ? merged : undefined;
+      };
+      const subtitles = [...(existing.subtitles ?? []), ...(s.subtitles ?? [])]
+        .filter((subtitle, index, values) => {
+          const key = subtitle.url ?? subtitle.id ?? [subtitle.lang, subtitle.language, subtitle.title].filter(Boolean).join("|");
+          return values.findIndex(candidate => (
+            candidate.url ?? candidate.id ?? [candidate.lang, candidate.language, candidate.title].filter(Boolean).join("|")
+          ) === key) === index;
+        });
+      seen.set(fp, {
+        ...existing,
+        title: mergeText(existing.title, s.title),
+        description: mergeText(existing.description, s.description),
+        url: mergeText(existing.url, s.url),
+        externalUrl: mergeText(existing.externalUrl, s.externalUrl),
+        ytId: mergeText(existing.ytId, s.ytId),
+        infoHash: normalizeBtih(existing.infoHash) ?? normalizeBtih(s.infoHash),
+        seeders: s.seeders ?? existing.seeders,
+        fileIdx: existing.fileIdx ?? s.fileIdx,
+        size: s.size ?? existing.size,
+        folderSize: s.folderSize ?? existing.folderSize,
+        indexer: mergeText(existing.indexer, s.indexer),
+        duration: s.duration ?? existing.duration,
+        languages: mergeStrings(existing.languages, s.languages),
+        sources: mergeStrings(existing.sources, s.sources, false),
+        behaviorHints: { ...(existing.behaviorHints ?? {}), ...(s.behaviorHints ?? {}) },
+        subtitles: subtitles.length ? subtitles : undefined,
+      });
     }
   }
   return Array.from(seen.values());
-}
-
-function playbackScore(stream: MediaStream): number {
-  const hints = stream.behaviorHints ?? {};
-  const notWebReady = Boolean(hints.notWebReady);
-  const lowerName = (stream.name ?? "").toLowerCase();
-  const hasDirectUrl = typeof stream.url === "string" && /^https?:\/\//i.test(stream.url);
-  const hasHttpSource = (stream.sources ?? []).some(item => /^https?:\/\//i.test(item));
-  const hasTorrentSignals =
-    Boolean(stream.infoHash) ||
-    (stream.sources ?? []).some(item => /^magnet:/i.test(item));
-
-  let score = 0;
-  if (hasDirectUrl) score += 50;
-  if (hasTorrentSignals) score += 38;
-  if (hasHttpSource) score += 20;
-  if (stream.subtitles?.length) score += 8;
-  if (typeof hints.videoSize === "number" && hints.videoSize > 0) score += 4;
-  if (notWebReady) score -= 100;
-  if (lowerName.includes("cam")) score -= 12;
-  return score;
-}
-
-function sortStreamsForPlayback(streams: MediaStream[]): MediaStream[] {
-  return [...streams].sort((a, b) => {
-    const languagePriority = streamSpanishPriority(b) - streamSpanishPriority(a);
-    return languagePriority || playbackScore(b) - playbackScore(a);
-  });
 }
 
 function buildStreamId(q: StreamQuery): string {
@@ -146,14 +163,6 @@ function streamRequestTypes(addon: any, queryType: string) {
   return candidates.filter((type, index) => candidates.indexOf(type) === index && addonSupportsType(addon, type));
 }
 
-function hasP2pStream(streams: MediaStream[]) {
-  return streams.some(stream =>
-    Boolean(stream.infoHash) ||
-    /^(magnet:|stremio:)/i.test(stream.url ?? "") ||
-    (stream.sources ?? []).some(source => /^(magnet:|stremio:)/i.test(source))
-  );
-}
-
 async function fetchStreamPayload(url: string, attempts = 2) {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -174,6 +183,12 @@ async function fetchStreamPayload(url: string, attempts = 2) {
 function positiveNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function streamText(raw: any, behaviorHints?: Record<string, unknown>) {
+  return [raw.name, raw.title, raw.description, behaviorHints?.filename]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" | ");
 }
 
 function optionalText(value: unknown) {
@@ -243,16 +258,35 @@ function normalizeSubtitles(value: unknown): MediaStream["subtitles"] {
 }
 
 function normalizeStream(raw: any, addonId: string, addonName: string, idx: number): MediaStream | null {
-  const url         = typeof raw.url         === "string" ? raw.url         : undefined;
+  const rawUrl      = typeof raw.url         === "string" ? raw.url.trim()  : undefined;
+  const url         = rawUrl && (!/^magnet:/i.test(rawUrl) || isValidMagnetUri(rawUrl)) ? rawUrl : undefined;
   const externalUrl = typeof raw.externalUrl === "string" ? raw.externalUrl : undefined;
   const ytId        = typeof raw.ytId        === "string" ? raw.ytId        : undefined;
-  const infoHash    = typeof raw.infoHash    === "string" ? raw.infoHash    : undefined;
-  const sources     = Array.isArray(raw.sources) ? raw.sources.filter((item: unknown) => typeof item === "string") : undefined;
+  const infoHash    = normalizeBtih(raw.infoHash);
+  const sources     = Array.isArray(raw.sources)
+    ? raw.sources.flatMap((item: unknown) => {
+        if (typeof item !== "string" || !item.trim()) return [];
+        const target = item.trim();
+        return !/^magnet:/i.test(target) || isValidMagnetUri(target) ? [target] : [];
+      })
+    : undefined;
   const behaviorHints = raw.behaviorHints && typeof raw.behaviorHints === "object"
     ? raw.behaviorHints as Record<string, unknown>
     : undefined;
-  const numericFileIdx = Number(raw.fileIdx);
-  const sourceTarget = sources?.find((item: string) => /^(magnet:|stremio:|https?:\/\/)/i.test(item));
+  const numericFileIdx = typeof raw.fileIdx === "number"
+    ? raw.fileIdx
+    : typeof raw.fileIdx === "string" && raw.fileIdx.trim()
+      ? Number(raw.fileIdx)
+      : Number.NaN;
+  const renderedText = streamText(raw, behaviorHints);
+  const reportedSeeders = normalizeSeederCount(raw.seeders)
+    ?? normalizeSeederCount(behaviorHints?.seeders)
+    ?? extractReportedSeedersFromText(renderedText);
+  const reportedSize = positiveNumber(raw.size)
+    ?? positiveNumber(behaviorHints?.videoSize)
+    ?? positiveNumber(behaviorHints?.size)
+    ?? extractByteSizeFromText(renderedText);
+  const sourceTarget = sources?.find((item: string) => /^(magnet:|https?:\/\/)/i.test(item));
   const stream = {
     id: [addonId, url ?? infoHash ?? ytId ?? externalUrl ?? sourceTarget ?? "", idx].join("|"),
     addonId,
@@ -265,8 +299,9 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
     externalUrl: undefined,
     ytId,
     infoHash,
-    fileIdx:      Number.isFinite(numericFileIdx) && numericFileIdx >= 0 ? numericFileIdx : undefined,
-    size:         positiveNumber(raw.size ?? behaviorHints?.videoSize ?? behaviorHints?.size),
+    seeders:      reportedSeeders,
+    fileIdx:      Number.isInteger(numericFileIdx) && numericFileIdx >= 0 ? numericFileIdx : undefined,
+    size:         reportedSize,
     folderSize:   positiveNumber(raw.folderSize ?? behaviorHints?.folderSize),
     indexer:      optionalText(raw.indexer ?? behaviorHints?.indexer),
     duration:     positiveNumber(raw.duration ?? behaviorHints?.duration),
@@ -280,7 +315,7 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
 }
 
 export function useStreams(query: StreamQuery | null): UseStreamsResult {
-  const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+  const configuredAddons = useAddonStore(s => s.addons);
   const [streams, setStreams] = useState<MediaStream[]>([]);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -299,16 +334,18 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     }
 
     let cancelled = false;
-    const addons = getEnabledAddons().filter(addonHasStreams);
+    const addons = configuredAddons.filter(addon => addon.enabled).filter(addonHasStreams);
     const addonsFingerprint = addons
       .map(addon => addon.id || addon.url)
       .sort()
       .join("|");
     const cacheKey = `${query.type}:${streamId}:${addonsFingerprint}`;
-    const cached = STREAM_CACHE.get(cacheKey);
-    const cachedStreams = cached?.streams.filter(isPlayableMediaStream);
-    const cachedIsFresh = cached ? Date.now() - cached.updatedAt < STREAM_CACHE_TTL_MS : false;
-    const cachedLooksComplete = Boolean(cachedStreams?.length && hasP2pStream(cachedStreams));
+    const cachedEntry = STREAM_CACHE.get(cacheKey);
+    const cachedIsFresh = cachedEntry ? Date.now() - cachedEntry.updatedAt < STREAM_CACHE_TTL_MS : false;
+    if (cachedEntry && !cachedIsFresh) STREAM_CACHE.delete(cacheKey);
+    const cachedStreams = cachedIsFresh
+      ? cachedEntry?.streams.filter(isPlayableMediaStream)
+      : undefined;
 
     accRef.current = cachedStreams ? [...cachedStreams] : [];
     setStreams(cachedStreams ? [...cachedStreams] : []);
@@ -320,7 +357,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
       return;
     }
 
-    if (cachedStreams && cachedIsFresh && cachedLooksComplete && tick === 0) {
+    if (cachedStreams?.length && cachedEntry?.complete) {
       setLoading(false);
       return;
     }
@@ -328,17 +365,33 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     // ── Non-blocking: lanzar todos en paralelo, actualizar UI al ir llegando ──
     let pending = addons.length;
     let pendingRequests = 0;
+    let failedRequests = 0;
+
+    function finishIfDone() {
+      if (cancelled || pending !== 0 || pendingRequests !== 0) return;
+      setLoading(false);
+      if (failedRequests === 0 && accRef.current.length > 0) {
+        STREAM_CACHE.set(cacheKey, {
+          streams: [...accRef.current],
+          updatedAt: Date.now(),
+          complete: true,
+        });
+      } else {
+        // No convertir respuestas vacias o parciales en un resultado final.
+        STREAM_CACHE.delete(cacheKey);
+      }
+    }
 
     function onAddonDone() {
       if (cancelled) return;
       pending--;
-      if (pending === 0 && pendingRequests === 0) setLoading(false);
+      finishIfDone();
     }
 
     function onRequestDone() {
       if (cancelled) return;
       pendingRequests--;
-      if (pending === 0 && pendingRequests === 0) setLoading(false);
+      finishIfDone();
     }
 
     for (const addon of addons) {
@@ -371,11 +424,12 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
                 type,
                 rawCount: rawStreams.length,
                 acceptedCount: fresh.length,
-                p2pCount: fresh.filter(item => item.infoHash || (item.sources ?? []).some(source => /^(magnet:|stremio:)/i.test(source))).length,
+                p2pCount: fresh.filter(item => item.infoHash || (item.sources ?? []).some(source => /^magnet:/i.test(source))).length,
                 sample: rawStreams.slice(0, 3).map((item: any) => ({
                   name: item?.name,
                   hasUrl: typeof item?.url === "string",
                   hasInfoHash: typeof item?.infoHash === "string",
+                  seeders: item?.seeders ?? item?.behaviorHints?.seeders,
                   sources: Array.isArray(item?.sources) ? item.sources.slice(0, 3) : undefined,
                 })),
               });
@@ -383,10 +437,10 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
             if (!fresh.length) return;
             // Merge + dedup incremental
             accRef.current = sortStreamsForPlayback(dedupeStreams([...accRef.current, ...fresh]));
-            STREAM_CACHE.set(cacheKey, { streams: [...accRef.current], updatedAt: Date.now() });
             setStreams([...accRef.current]);
           })
           .catch(error => {
+            if (!cancelled) failedRequests++;
             if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] error", { addonId: addon.id, type, error: String(error) });
           })
           .finally(onRequestDone);
@@ -395,7 +449,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     }
 
     return () => { cancelled = true; };
-  }, [getEnabledAddons, query, streamId, tick]);
+  }, [configuredAddons, query, streamId, tick]);
 
   return {
     streams,
@@ -404,7 +458,8 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     streamId,
     reload: () => {
       if (query && streamId) {
-        const addonsFingerprint = getEnabledAddons()
+        const addonsFingerprint = configuredAddons
+          .filter(addon => addon.enabled)
           .filter(addonHasStreams)
           .map(addon => addon.id || addon.url)
           .sort()

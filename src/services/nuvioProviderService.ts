@@ -2,7 +2,15 @@ import { tmdbFetch } from "../config/apiKeys";
 import { invokeCommand, isTauriRuntime } from "../runtime/platform";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream";
 
-const PROVIDER_MANIFEST_SOURCES = [
+interface ProviderManifestSource {
+  key: string;
+  fallbackName: string;
+  url: string;
+  custom?: boolean;
+}
+
+const CUSTOM_PROVIDER_REPOSITORIES_KEY = "aetherio-custom-provider-repositories";
+const PROVIDER_MANIFEST_SOURCES: readonly ProviderManifestSource[] = [
   {
     key: "yoruix",
     fallbackName: "Yoru",
@@ -20,9 +28,14 @@ const PROVIDER_MANIFEST_SOURCES = [
   },
 ] as const;
 const PROVIDER_MANIFEST_URLS = PROVIDER_MANIFEST_SOURCES.map(source => source.url);
-const PROVIDER_CONCURRENCY = 10;
-const PROVIDER_TIMEOUT_MS = 30_000;
+const PROVIDER_CONCURRENCY = 14;
+const PROVIDER_TIMEOUT_MS = 15_000;
 const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
+const OKRU_SIGNED_RESULT_CACHE_TTL_MS = 30 * 1000;
+const SIGNED_RESULT_CACHE_TTL_MS = 2 * 60 * 1000;
+const EMPTY_PROVIDER_CACHE_TTL_MS = 90 * 1000;
+const FAILED_PROVIDER_COOLDOWN_MS = 20 * 1000;
+const DEBUG_PROVIDERS = import.meta.env.DEV;
 
 interface ProviderHttpRequest {
   url: string;
@@ -30,6 +43,7 @@ interface ProviderHttpRequest {
   headers?: Record<string, string>;
   body?: string;
   bodyBase64?: boolean;
+  sessionKey?: string;
 }
 
 interface ProviderHttpResponse {
@@ -84,7 +98,23 @@ export interface NuvioProviderRepositoryInfo {
   version?: string;
   manifestUrl: string;
   scrapers: NuvioProviderScraperInfo[];
+  custom?: boolean;
   error?: string;
+}
+
+export interface ProviderStreamOrigin {
+  kind: "cloudstream";
+  repositoryName: string;
+  repositoryUrl: string;
+  pluginName: string;
+  language: string;
+}
+
+export interface ProviderBatchStatus {
+  providerCount: number;
+  failedProviderCount: number;
+  streamCount: number;
+  fromCache: boolean;
 }
 
 interface RawProviderStream {
@@ -114,9 +144,54 @@ type WorkerMessage =
 
 const scriptCache = new Map<string, Promise<string>>();
 const manifestCache = new Map<string, Promise<ProviderManifest>>();
-const resultCache = new Map<string, { streams: MediaStream[]; updatedAt: number }>();
+const resultCache = new Map<string, { streams: MediaStream[]; updatedAt: number; ttlMs: number }>();
+type ProviderExecutionStatus = "success" | "empty" | "error";
+interface ProviderExecutionCacheEntry {
+  streams: MediaStream[];
+  status: ProviderExecutionStatus;
+  updatedAt: number;
+  ttlMs: number;
+}
+interface ProviderRuntimeHealth {
+  successes: number;
+  failures: number;
+  totalDurationMs: number;
+  lastSuccessAt: number;
+}
+const providerExecutionCache = new Map<string, ProviderExecutionCacheEntry>();
+const providerRuntimeHealth = new Map<string, ProviderRuntimeHealth>();
 let repositoriesPromise: Promise<NuvioProviderRepositoryInfo[]> | null = null;
 let definitionsPromise: Promise<ProviderDefinition[]> | null = null;
+
+function customRepositoryKey(url: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < url.length; index += 1) {
+    hash ^= url.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `custom-${(hash >>> 0).toString(36)}`;
+}
+
+export function getCustomNuvioProviderRepositoryUrls(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CUSTOM_PROVIDER_REPOSITORIES_KEY) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string" && /^https?:\/\//i.test(value))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function providerManifestSources(): ProviderManifestSource[] {
+  const custom = getCustomNuvioProviderRepositoryUrls().map(url => ({
+    key: customRepositoryKey(url),
+    fallbackName: new URL(url).hostname,
+    url,
+    custom: true,
+  }));
+  return [...PROVIDER_MANIFEST_SOURCES, ...custom];
+}
 
 const WORKER_PRELUDE = String.raw`
 "use strict";
@@ -129,11 +204,14 @@ function require(name) {
 }
 const module = { exports: {} };
 const exports = module.exports;
-const process = { env: {} };
 let __httpSequence = 0;
 const __httpPending = new Map();
 
 class ProviderBuffer extends Uint8Array {
+  static isBuffer(value) {
+    return value instanceof ProviderBuffer || value instanceof Uint8Array;
+  }
+
   static from(value, encoding) {
     if (typeof value === "string") {
       const mode = String(encoding || "utf8").toLowerCase();
@@ -192,11 +270,25 @@ async function __body(value) {
   if (typeof value === "string") return { body: value, bodyBase64: false };
   if (value instanceof URLSearchParams) return { body: value.toString(), bodyBase64: false };
   let bytes;
-  if (value instanceof Blob) bytes = new Uint8Array(await value.arrayBuffer());
+  let contentType;
+  if (typeof FormData !== "undefined" && value instanceof FormData) {
+    const encoded = new Request("https://aetherio.invalid/form", { method: "POST", body: value });
+    contentType = encoded.headers.get("content-type") || undefined;
+    bytes = new Uint8Array(await encoded.arrayBuffer());
+  }
+  else if (value instanceof Blob) {
+    contentType = value.type || undefined;
+    bytes = new Uint8Array(await value.arrayBuffer());
+  }
   else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
   else if (ArrayBuffer.isView(value)) bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   else return { body: String(value), bodyBase64: false };
-  return { body: ProviderBuffer.from(bytes).toString("base64"), bodyBase64: true };
+  return { body: ProviderBuffer.from(bytes).toString("base64"), bodyBase64: true, contentType };
+}
+
+function __abortError() {
+  try { return new DOMException("The operation was aborted", "AbortError"); }
+  catch (_) { const error = new Error("The operation was aborted"); error.name = "AbortError"; return error; }
 }
 
 globalThis.fetch = async function providerFetch(input, init) {
@@ -205,9 +297,23 @@ globalThis.fetch = async function providerFetch(input, init) {
   const url = inputRequest ? inputRequest.url : String(input);
   const headers = Object.assign({}, __headers(inputRequest && inputRequest.headers), __headers(options.headers));
   const serializedBody = await __body(options.body !== undefined ? options.body : inputRequest && inputRequest.body);
+  if (serializedBody.contentType && !Object.keys(headers).some(key => key.toLowerCase() === "content-type")) {
+    headers["content-type"] = serializedBody.contentType;
+  }
+  const signal = options.signal || (inputRequest && inputRequest.signal);
+  if (signal && signal.aborted) throw __abortError();
   const id = ++__httpSequence;
   const responseData = await new Promise((resolve, reject) => {
-    __httpPending.set(id, { resolve, reject });
+    const onAbort = () => {
+      __httpPending.delete(id);
+      reject(__abortError());
+    };
+    const cleanup = () => signal && signal.removeEventListener("abort", onAbort);
+    __httpPending.set(id, {
+      resolve(value) { cleanup(); resolve(value); },
+      reject(error) { cleanup(); reject(error); }
+    });
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
     postMessage({
       type: "http-request",
       id,
@@ -215,7 +321,10 @@ globalThis.fetch = async function providerFetch(input, init) {
         url,
         method: String(options.method || (inputRequest && inputRequest.method) || "GET"),
         headers
-      }, serializedBody)
+      }, {
+        body: serializedBody.body,
+        bodyBase64: serializedBody.bodyBase64
+      })
     });
   });
   const binary = atob(responseData.bodyBase64 || "");
@@ -287,7 +396,7 @@ async function fetchText(url: string): Promise<string> {
 
 export async function getNuvioProviderRepositories(): Promise<NuvioProviderRepositoryInfo[]> {
   if (repositoriesPromise) return repositoriesPromise;
-  repositoriesPromise = Promise.all(PROVIDER_MANIFEST_SOURCES.map(async source => {
+  repositoriesPromise = Promise.all(providerManifestSources().map(async source => {
     try {
       const manifest = await loadManifest(source.url);
       return {
@@ -296,6 +405,7 @@ export async function getNuvioProviderRepositories(): Promise<NuvioProviderRepos
         name: manifest.name,
         version: manifest.version,
         manifestUrl: source.url,
+        custom: source.custom,
         scrapers: manifest.scrapers.map(scraper => ({
           key: `${source.key}:${scraper.id}`,
           id: scraper.id,
@@ -314,6 +424,7 @@ export async function getNuvioProviderRepositories(): Promise<NuvioProviderRepos
         ownerName: source.fallbackName,
         name: source.fallbackName,
         manifestUrl: source.url,
+        custom: source.custom,
         scrapers: [],
         error: error instanceof Error ? error.message : String(error),
       } satisfies NuvioProviderRepositoryInfo;
@@ -326,13 +437,38 @@ export async function refreshNuvioProviderRepositories() {
   repositoriesPromise = null;
   definitionsPromise = null;
   manifestCache.clear();
-  resultCache.clear();
+  scriptCache.clear();
+  clearNuvioProviderResultCache();
   return getNuvioProviderRepositories();
+}
+
+export function clearNuvioProviderResultCache() {
+  resultCache.clear();
+  providerExecutionCache.clear();
+}
+
+export async function addNuvioProviderRepository(rawUrl: string) {
+  const url = new URL(rawUrl.trim());
+  if (!/^https?:$/.test(url.protocol)) throw new Error("El repositorio debe usar HTTP o HTTPS.");
+  url.hash = "";
+  const normalized = url.toString();
+  await loadManifest(normalized, true);
+  const urls = getCustomNuvioProviderRepositoryUrls();
+  if (!urls.includes(normalized)) {
+    localStorage.setItem(CUSTOM_PROVIDER_REPOSITORIES_KEY, JSON.stringify([...urls, normalized]));
+  }
+  await refreshNuvioProviderRepositories();
+}
+
+export async function removeNuvioProviderRepository(url: string) {
+  const urls = getCustomNuvioProviderRepositoryUrls().filter(candidate => candidate !== url);
+  localStorage.setItem(CUSTOM_PROVIDER_REPOSITORIES_KEY, JSON.stringify(urls));
+  return refreshNuvioProviderRepositories();
 }
 
 async function loadDefinitions(): Promise<ProviderDefinition[]> {
   if (definitionsPromise) return definitionsPromise;
-  definitionsPromise = Promise.allSettled(PROVIDER_MANIFEST_SOURCES.map(async source => {
+  definitionsPromise = Promise.allSettled(providerManifestSources().map(async source => {
     const manifest = await loadManifest(source.url);
     return manifest.scrapers
       .filter(scraper => scraper.enabled !== false && scraper.supportsExternalPlayer !== false)
@@ -352,12 +488,20 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
   return definitionsPromise;
 }
 
-function loadManifest(url: string): Promise<ProviderManifest> {
+function loadManifest(url: string, refresh = false): Promise<ProviderManifest> {
+  if (refresh) manifestCache.delete(url);
   const cached = manifestCache.get(url);
   if (cached) return cached;
   const pending = fetchText(url)
     .then(text => {
-      const manifest = JSON.parse(text) as ProviderManifest;
+      const parsed = JSON.parse(text) as unknown;
+      if (
+        Array.isArray(parsed)
+        || (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).pluginLists))
+      ) {
+        throw new Error("Este es un repositorio CloudStream .cs3. Esas extensiones Android no pueden ejecutarse en Aetherio Desktop; usa una conversión compatible con Nuvio JS.");
+      }
+      const manifest = parsed as ProviderManifest;
       if (!manifest.name || !Array.isArray(manifest.scrapers)) throw new Error("Invalid provider manifest");
       return manifest;
     })
@@ -384,11 +528,11 @@ async function runProvider(definition: ProviderDefinition, args: unknown[]): Pro
   const source = await loadScript(definition.scriptUrl);
   const dependencyUrl = new URL("nuvio-provider-deps.js", window.location.href).toString();
   const blob = new Blob([
-    `globalThis.window = globalThis; globalThis.global = globalThis; importScripts(${JSON.stringify(dependencyUrl)});\n`,
+    `globalThis.window = globalThis; globalThis.global = globalThis; globalThis.XMLHttpRequest = undefined; var process = globalThis.process = globalThis.process || { env: {} }; importScripts(${JSON.stringify(dependencyUrl)});\n`,
     WORKER_PRELUDE,
-    "\n",
+    "\n(function runProviderModule(process) {\n",
     source,
-    "\n",
+    "\n}).call(globalThis, globalThis.process);\n",
     WORKER_POSTLUDE,
   ], { type: "text/javascript" });
   const workerUrl = URL.createObjectURL(blob);
@@ -408,11 +552,15 @@ async function runProvider(definition: ProviderDefinition, args: unknown[]): Pro
       () => finish(() => reject(new Error(`Provider ${definition.key} timed out`))),
       PROVIDER_TIMEOUT_MS,
     );
-    worker.onerror = event => finish(() => reject(new Error(event.message || `Provider ${definition.key} failed`)));
+    worker.onerror = event => finish(() => reject(new Error(
+      [event.message || `Provider ${definition.key} failed`, event.filename, event.lineno, event.colno]
+        .filter(Boolean)
+        .join(" @ "),
+    )));
     worker.onmessage = event => {
       const message = event.data as WorkerMessage;
       if (message.type === "http-request") {
-        void providerHttp(message.request)
+        void providerHttp({ ...message.request, sessionKey: definition.key })
           .then(response => worker.postMessage({ type: "http-response", id: message.id, response }))
           .catch(error => worker.postMessage({ type: "http-response", id: message.id, error: String(error) }));
         return;
@@ -480,15 +628,20 @@ function normalizeLanguageList(value: unknown): string[] {
     .filter((item, index, values) => item && values.findIndex(value => value.toLowerCase() === item.toLowerCase()) === index);
 }
 
-function normalizeStreams(definition: ProviderDefinition, streams: RawProviderStream[]): MediaStream[] {
+function normalizeStreams(
+  definition: ProviderDefinition,
+  streams: RawProviderStream[],
+  origin?: ProviderStreamOrigin,
+): MediaStream[] {
   return streams.flatMap((raw, index) => {
     const url = [raw.url, raw.externalUrl].find(value => typeof value === "string" && /^https?:\/\//i.test(value.trim()));
     if (typeof url !== "string") return [];
     const parsedUrl = new URL(url);
     if (parsedUrl.hostname === "log.info") return [];
     const knownMediaUrl = /\.(?:m3u8|mp4|mkv|mpd|webm|avi)(?:$|[?#])/i.test(parsedUrl.pathname + parsedUrl.search);
+    const supportedEmbedUrl = parsedUrl.hostname === "ok.ru" || parsedUrl.hostname.endsWith(".ok.ru");
     const explicitlyDirect = raw.type === "direct" || raw.verified === true;
-    if (!knownMediaUrl && (!explicitlyDirect || raw.verified === false)) return [];
+    if (!knownMediaUrl && !supportedEmbedUrl && (!explicitlyDirect || raw.verified === false)) return [];
     const hints = raw.behaviorHints && typeof raw.behaviorHints === "object"
       ? raw.behaviorHints as Record<string, unknown>
       : {};
@@ -510,7 +663,9 @@ function normalizeStreams(definition: ProviderDefinition, streams: RawProviderSt
     return [{
       id: `provider|${definition.key}|${index}|${url}`,
       addonId: `nuvio-provider:${definition.key}`,
-      addonName: `${definition.ownerName} · ${definition.repositoryName}`,
+      addonName: origin
+        ? `Cloudstream · ${origin.repositoryName}`
+        : `${definition.ownerName} · ${definition.repositoryName}`,
       name: providerName,
       title: rawTitle ?? providerName,
       description: [quality, ...(definition.scraper.contentLanguage ?? [])].filter(Boolean).join(" · ") || definition.scraper.description,
@@ -528,10 +683,138 @@ function normalizeStreams(definition: ProviderDefinition, streams: RawProviderSt
         providerId: definition.scraper.id,
         providerOwner: definition.ownerName,
         providerRepository: definition.repositoryName,
+        providerHttpSessionKey: definition.key,
+        sourceOrigin: origin?.kind ?? "nuvio",
+        cloudstreamRepository: origin?.repositoryName,
+        cloudstreamRepositoryUrl: origin?.repositoryUrl,
+        cloudstreamPlugin: origin?.pluginName,
+        cloudstreamLanguage: origin?.language,
         scraperPlayback: "direct",
+        scraperResolvedDirect: true,
       },
     } satisfies MediaStream];
   });
+}
+
+function isSignedOkruUrl(value?: string) {
+  if (!value) return false;
+  try {
+    return new URL(value).hostname.toLowerCase().endsWith("okcdn.ru");
+  } catch {
+    return false;
+  }
+}
+
+function isLikelySignedMediaUrl(value?: string) {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    const signedKeys = [
+      "token",
+      "expires",
+      "expiry",
+      "exp",
+      "signature",
+      "sig",
+      "auth",
+      "hdnts",
+      "policy",
+      "key-pair-id",
+    ];
+    return signedKeys.some(key => url.searchParams.has(key));
+  } catch {
+    return false;
+  }
+}
+
+function providerResultCacheTtl(streams: MediaStream[]) {
+  if (streams.some(stream => isSignedOkruUrl(stream.url))) return OKRU_SIGNED_RESULT_CACHE_TTL_MS;
+  if (streams.some(stream => isLikelySignedMediaUrl(stream.url))) return SIGNED_RESULT_CACHE_TTL_MS;
+  return RESULT_CACHE_TTL_MS;
+}
+
+function providerExecutionCacheKey(
+  definition: ProviderDefinition,
+  query: StreamQuery,
+  tmdbId: number,
+  mediaType: string,
+  title: string | undefined,
+  origin: ProviderStreamOrigin | undefined,
+) {
+  return [
+    definition.key,
+    tmdbId,
+    mediaType,
+    query.season ?? "",
+    query.episode ?? "",
+    title ?? "",
+    origin?.repositoryUrl ?? "nuvio",
+    origin?.pluginName ?? "",
+  ].join("|");
+}
+
+function readProviderExecutionCache(key: string) {
+  const cached = providerExecutionCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.updatedAt >= cached.ttlMs) {
+    providerExecutionCache.delete(key);
+    return null;
+  }
+  return cached;
+}
+
+function updateProviderRuntimeHealth(providerKey: string, succeeded: boolean, durationMs: number) {
+  const current = providerRuntimeHealth.get(providerKey) ?? {
+    successes: 0,
+    failures: 0,
+    totalDurationMs: 0,
+    lastSuccessAt: 0,
+  };
+  current.totalDurationMs += durationMs;
+  if (succeeded) {
+    current.successes += 1;
+    current.lastSuccessAt = Date.now();
+  } else {
+    current.failures += 1;
+  }
+  providerRuntimeHealth.set(providerKey, current);
+}
+
+function providerRuntimePriority(definition: ProviderDefinition) {
+  const health = providerRuntimeHealth.get(definition.key);
+  if (!health) return 0;
+  const attempts = health.successes + health.failures;
+  const averageDuration = attempts ? health.totalDurationMs / attempts : PROVIDER_TIMEOUT_MS;
+  return (health.successes * 100) - (health.failures * 35) - Math.min(30, averageDuration / 500);
+}
+
+function providerLogContext(definition: ProviderDefinition, origin?: ProviderStreamOrigin) {
+  return {
+    providerKey: definition.key,
+    providerId: definition.scraper.id,
+    providerName: definition.scraper.name,
+    origin: origin?.kind ?? "nuvio",
+    repository: origin?.repositoryName ?? definition.repositoryName,
+    repositoryUrl: origin?.repositoryUrl ?? definition.manifestUrl,
+    cloudstreamPlugin: origin?.pluginName,
+    cloudstreamLanguage: origin?.language,
+  };
+}
+
+function classifyProviderFailure(error: unknown) {
+  const message = String(error);
+  const normalized = message.toLowerCase();
+  if (normalized.includes("timed out") || normalized.includes("timeout")) return "timeout";
+  if (
+    normalized.includes("module is not allowed")
+    || normalized.includes("is not defined")
+    || normalized.includes("is not a function")
+    || normalized.includes("failed to clone")
+  ) return "runtime";
+  if (/http\s+(?:429|5\d\d)\b/i.test(message)) return "external-transient";
+  if (/http\s+4\d\d\b/i.test(message)) return "external-http";
+  if (normalized.includes("network error") || normalized.includes("request failed")) return "external-network";
+  return "provider";
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>): Promise<R[]> {
@@ -563,6 +846,9 @@ export async function scrapeNuvioProviders(
   query: StreamQuery,
   title?: string,
   providerKeys?: string[],
+  onProviderStreams?: (streams: MediaStream[]) => void,
+  providerOrigins?: Record<string, ProviderStreamOrigin>,
+  onBatchStatus?: (status: ProviderBatchStatus) => void,
 ): Promise<MediaStream[]> {
   if (!isTauriRuntime()) return [];
   if (providerKeys && providerKeys.length === 0) return [];
@@ -576,33 +862,151 @@ export async function scrapeNuvioProviders(
     query.episode ?? "",
     title ?? "",
     providerKeys === undefined ? "all" : providerKeys.slice().sort().join(","),
+    JSON.stringify(providerOrigins ?? {}),
   ].join("|");
   const cached = resultCache.get(cacheKey);
-  if (cached && Date.now() - cached.updatedAt < RESULT_CACHE_TTL_MS) return cached.streams;
+  if (cached && cached.streams.length && Date.now() - cached.updatedAt < cached.ttlMs) {
+    if (DEBUG_PROVIDERS) console.info("[AETHERIO:PROVIDERS] batch cache hit", {
+      queryId: query.id,
+      tmdbId,
+      mediaType,
+      providerCount: providerKeys?.length,
+      streamCount: cached.streams.length,
+      ageMs: Date.now() - cached.updatedAt,
+      ttlMs: cached.ttlMs,
+    });
+    onProviderStreams?.(cached.streams);
+    onBatchStatus?.({
+      providerCount: providerKeys?.length ?? 0,
+      failedProviderCount: 0,
+      streamCount: cached.streams.length,
+      fromCache: true,
+    });
+    return cached.streams;
+  }
+  resultCache.delete(cacheKey);
 
   const selectedKeys = providerKeys ? new Set(providerKeys) : null;
-  const definitions = (await loadDefinitions()).filter(definition => {
-    if (selectedKeys && !selectedKeys.has(definition.key)) return false;
-    const supportedTypes = definition.scraper.supportedTypes ?? ["movie", "tv"];
-    return supportedTypes.includes(mediaType);
-  });
+  const definitions = (await loadDefinitions())
+    .filter(definition => {
+      if (selectedKeys && !selectedKeys.has(definition.key)) return false;
+      const supportedTypes = definition.scraper.supportedTypes ?? ["movie", "tv"];
+      return supportedTypes.includes(mediaType);
+    })
+    .sort((left, right) => providerRuntimePriority(right) - providerRuntimePriority(left));
   const args = [tmdbId, mediaType, query.season ?? null, query.episode ?? null, title ?? null, null];
+  const batchStartedAt = Date.now();
   const batches = await mapWithConcurrency(definitions, PROVIDER_CONCURRENCY, async definition => {
+    const origin = providerOrigins?.[definition.key];
+    const context = providerLogContext(definition, origin);
+    const executionKey = providerExecutionCacheKey(definition, query, tmdbId, mediaType, title, origin);
+    const cachedExecution = readProviderExecutionCache(executionKey);
+    if (cachedExecution) {
+      if (cachedExecution.streams.length) onProviderStreams?.(cachedExecution.streams);
+      if (DEBUG_PROVIDERS) console.info("[AETHERIO:PROVIDERS] provider cache hit", {
+        ...context,
+        status: cachedExecution.status,
+        acceptedCount: cachedExecution.streams.length,
+        ageMs: Date.now() - cachedExecution.updatedAt,
+        ttlMs: cachedExecution.ttlMs,
+      });
+      return {
+        streams: cachedExecution.streams,
+        failed: cachedExecution.status === "error",
+      };
+    }
+    const startedAt = Date.now();
     try {
-      return normalizeStreams(definition, await runProvider(definition, args));
+      const rawStreams = await runProvider(definition, args);
+      const durationMs = Date.now() - startedAt;
+      const streams = normalizeStreams(
+        definition,
+        rawStreams,
+        origin,
+      ).map(stream => ({
+        ...stream,
+        behaviorHints: {
+          ...stream.behaviorHints,
+          providerResolveMs: durationMs,
+        },
+      }));
+      const providerStatus: ProviderExecutionStatus = streams.length ? "success" : "empty";
+      const providerTtlMs = streams.length
+        ? providerResultCacheTtl(streams)
+        : EMPTY_PROVIDER_CACHE_TTL_MS;
+      providerExecutionCache.set(executionKey, {
+        streams,
+        status: providerStatus,
+        updatedAt: Date.now(),
+        ttlMs: providerTtlMs,
+      });
+      updateProviderRuntimeHealth(definition.key, true, durationMs);
+      if (streams.length) onProviderStreams?.(streams);
+      if (DEBUG_PROVIDERS) console.info("[AETHERIO:PROVIDERS] provider result", {
+        ...context,
+        status: streams.length ? "success" : rawStreams.length ? "rejected" : "empty",
+        rawCount: rawStreams.length,
+        acceptedCount: streams.length,
+        rejectedCount: Math.max(0, rawStreams.length - streams.length),
+        durationMs,
+        cacheTtlMs: providerTtlMs,
+      });
+      return { streams, failed: false };
     } catch (error) {
-      console.warn("[AETHERIO:PROVIDERS] provider failed", definition.key, String(error));
-      return [];
+      const durationMs = Date.now() - startedAt;
+      providerExecutionCache.set(executionKey, {
+        streams: [],
+        status: "error",
+        updatedAt: Date.now(),
+        ttlMs: FAILED_PROVIDER_COOLDOWN_MS,
+      });
+      updateProviderRuntimeHealth(definition.key, false, durationMs);
+      console.warn("[AETHERIO:PROVIDERS] provider result", {
+        ...context,
+        status: "error",
+        failureKind: classifyProviderFailure(error),
+        error: String(error),
+        rawCount: 0,
+        acceptedCount: 0,
+        rejectedCount: 0,
+        durationMs,
+        cooldownMs: FAILED_PROVIDER_COOLDOWN_MS,
+      });
+      return { streams: [] as MediaStream[], failed: true };
     }
   });
   const seen = new Set<string>();
-  const streams = batches.flat().filter(stream => {
+  const streams = batches.flatMap(batch => batch.streams).filter(stream => {
     const key = `${stream.url}|${JSON.stringify(stream.behaviorHints?.headers ?? {})}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  resultCache.set(cacheKey, { streams, updatedAt: Date.now() });
+  const failedProviderCount = batches.filter(batch => batch.failed).length;
+  const cacheable = streams.length > 0 && failedProviderCount === 0;
+  const ttlMs = providerResultCacheTtl(streams);
+  if (cacheable) {
+    resultCache.set(cacheKey, { streams, updatedAt: Date.now(), ttlMs });
+  } else {
+    resultCache.delete(cacheKey);
+  }
+  if (DEBUG_PROVIDERS) console.info("[AETHERIO:PROVIDERS] batch result", {
+    queryId: query.id,
+    tmdbId,
+    mediaType,
+    providerCount: definitions.length,
+    failedProviderCount,
+    streamCount: streams.length,
+    durationMs: Date.now() - batchStartedAt,
+    cached: cacheable,
+    cacheTtlMs: cacheable ? ttlMs : 0,
+  });
+  onBatchStatus?.({
+    providerCount: definitions.length,
+    failedProviderCount,
+    streamCount: streams.length,
+    fromCache: false,
+  });
   return streams;
 }
 

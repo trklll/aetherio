@@ -6,7 +6,9 @@ use tokio::sync::Semaphore;
 
 const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 16 * 1024 * 1024;
-const MAX_CONCURRENT_REQUESTS: usize = 16;
+const MAX_CONCURRENT_REQUESTS: usize = 20;
+const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct ProviderHttpState {
     client: reqwest::Client,
@@ -37,7 +39,8 @@ pub struct ProviderHttpResponse {
 impl Default for ProviderHttpState {
     fn default() -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
+            .timeout(PROVIDER_REQUEST_TIMEOUT)
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= 5 || !is_safe_url(attempt.url()) {

@@ -87,35 +87,41 @@ export function installGsapAnimations() {
     root.querySelectorAll<HTMLElement>(motionSelector).forEach(initializeElement);
   };
 
+  let _rafPending = false;
   const observer = new MutationObserver(records => {
-    for (const record of records) {
-      if (record.type === "attributes" && record.target instanceof HTMLElement) {
-        const ignored = ignoredClassMutations.get(record.target) ?? 0;
-        if (ignored > 0) {
-          ignoredClassMutations.set(record.target, ignored - 1);
+    if (_rafPending) return;
+    _rafPending = true;
+    requestAnimationFrame(() => {
+      _rafPending = false;
+      for (const record of records) {
+        if (record.type === "attributes" && record.target instanceof HTMLElement) {
+          const ignored = ignoredClassMutations.get(record.target) ?? 0;
+          if (ignored > 0) {
+            ignoredClassMutations.set(record.target, ignored - 1);
+            continue;
+          }
+          if (record.attributeName === "class" && record.target.classList.contains("aetherio-fullscreen-pop")) {
+            runFullscreenPop(record.target);
+          }
+          if (
+            record.attributeName === "class" &&
+            record.oldValue &&
+            record.target.classList.contains("gsap-transition")
+          ) {
+            animateClassChange(record.target, record.oldValue);
+          }
           continue;
         }
-        if (record.attributeName === "class" && record.target.classList.contains("aetherio-fullscreen-pop")) {
-          runFullscreenPop(record.target);
-        }
-        if (
-          record.attributeName === "class" &&
-          record.oldValue &&
-          record.target.classList.contains("gsap-transition")
-        ) {
-          animateClassChange(record.target, record.oldValue);
-        }
-        continue;
+        record.addedNodes.forEach(node => {
+          if (node instanceof HTMLElement) initializeTree(node);
+        });
+        record.removedNodes.forEach(node => {
+          if (!(node instanceof HTMLElement)) return;
+          gsap.killTweensOf(node);
+          gsap.killTweensOf(node.querySelectorAll("*"));
+        });
       }
-      record.addedNodes.forEach(node => {
-        if (node instanceof HTMLElement) initializeTree(node);
-      });
-      record.removedNodes.forEach(node => {
-        if (!(node instanceof HTMLElement)) return;
-        gsap.killTweensOf(node);
-        gsap.killTweensOf(node.querySelectorAll("*"));
-      });
-    }
+    });
   });
 
   initializeTree(document);

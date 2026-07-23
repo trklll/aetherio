@@ -140,13 +140,17 @@ export function readWatchedHistoryEntries(): ContinueWatchingEntry[] {
   }
 }
 
+let _cachedPlaybackEntries: ContinueWatchingEntry[] | null = null;
+
 export function readPlaybackStateEntries(): ContinueWatchingEntry[] {
+  if (_cachedPlaybackEntries) return _cachedPlaybackEntries;
   const byKey = new Map<string, ContinueWatchingEntry>();
   for (const entry of [...readWatchedHistoryEntries(), ...readContinueWatchingEntries()]) {
     const existing = byKey.get(entry.key);
     if (!existing || shouldReplaceEntry(existing, entry)) byKey.set(entry.key, entry);
   }
-  return Array.from(byKey.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+  _cachedPlaybackEntries = Array.from(byKey.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+  return _cachedPlaybackEntries;
 }
 
 export function getContinueWatchingRows() {
@@ -450,6 +454,7 @@ export function mergeContinueWatchingEntries(importedEntries: ContinueWatchingEn
 function writeEntries(entries: ContinueWatchingEntry[]) {
   try {
     localStorage.setItem(getStorageKey(), JSON.stringify(entries));
+    _cachedPlaybackEntries = null;
     window.dispatchEvent(new CustomEvent(CONTINUE_WATCHING_EVENT));
   } catch {
     // Ignore storage failures; playback must not depend on local persistence.
@@ -459,6 +464,7 @@ function writeEntries(entries: ContinueWatchingEntry[]) {
 function writeWatchedHistoryEntries(entries: ContinueWatchingEntry[]) {
   try {
     localStorage.setItem(getWatchedHistoryStorageKey(), JSON.stringify(entries));
+    _cachedPlaybackEntries = null;
     window.dispatchEvent(new CustomEvent(CONTINUE_WATCHING_EVENT));
   } catch {
     // Best-effort watched history cache only.

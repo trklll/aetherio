@@ -101,6 +101,7 @@ export function applyHomeCatalogPreferences(rows: CatalogRowData[], preferences:
   const hidden = new Set(preferences.hiddenCatalogKeys);
   return sortHomeCatalogRows(rows, preferences)
     .filter(row => !hidden.has(catalogPreferenceKey(row)))
+    .filter(row => matchesContentOrientation(row.type, preferences.contentOrientation))
     .sort((a, b) => (
       contentOrientationPriority(a.type, preferences.contentOrientation)
       - contentOrientationPriority(b.type, preferences.contentOrientation)

@@ -1,33 +1,37 @@
 import { tmdbFetch } from "../config/apiKeys";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform";
 import type { MediaItem, TrailerSource } from "../types/ui";
 
-interface CacheEntry {
+export interface YouTubeClipCandidate {
   videoId: string;
   source: TrailerSource;
   duration: number;
+}
+
+interface CacheEntry extends YouTubeClipCandidate {
   fetchedAt: number;
+  fallbacks: YouTubeClipCandidate[];
 }
 
-const CACHE_KEY = "aetherio-youtube-clips";
+interface YouTubeSearchResult {
+  videoId: string;
+  title: string;
+  duration?: number | null;
+  uploader?: string | null;
+  uploaderId?: string | null;
+}
+
+const CACHE_KEY = "aetherio-youtube-clips-v3";
 const CACHE_TTL = 1000 * 60 * 60 * 24;
-
-interface ChannelConfig {
-  query: string;
-  source: TrailerSource;
-  skipEnd: number;
-}
-
-const ANIME_CHANNELS: ChannelConfig[] = [
-  { query: "@netflixanime", source: "netflix", skipEnd: 12 },
-  { query: "@CrunchyrollenEspañol", source: "crunchyroll", skipEnd: 20 },
-  { query: "@HBOMaxLa", source: "hbo", skipEnd: 0 },
-  { query: "@disneyplusla", source: "disney", skipEnd: 15 },
+const OFFICIAL_CHANNELS = [
+  { handle: "@CrunchyrollenEspañol", source: "crunchyroll" as const },
+  { handle: "@netflixanime", source: "netflix" as const },
+  { handle: "@HBOMaxLa", source: "hbo" as const },
+  { handle: "@disneyplusla", source: "disney" as const },
 ];
-
-const INVidIOUS_INSTANCES = [
-  "https://inv.nadeko.net",
-  "https://yewtu.be",
-  "https://invidious.snopyta.org",
+const REJECTED_SCENE_WORDS = [
+  "trailer", "teaser", "review", "reaction", "amv", "opening", "ending",
+  "recap", "explained", "analysis", "top 10", "soundtrack", "ost",
 ];
 
 function getCache(): Record<string, CacheEntry> {
@@ -43,7 +47,9 @@ function setCache(id: string, entry: CacheEntry) {
     const cache = getCache();
     cache[id] = entry;
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-  } catch {}
+  } catch {
+    // Clip caching is an optimization; private storage modes may reject writes.
+  }
 }
 
 function getCached(id: string): CacheEntry | null {
@@ -52,78 +58,148 @@ function getCached(id: string): CacheEntry | null {
   if (!entry) return null;
   if (Date.now() - entry.fetchedAt > CACHE_TTL) {
     delete cache[id];
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    } catch {
+      // Ignore storage cleanup failures.
+    }
     return null;
   }
   return entry;
 }
 
-async function searchInvidious(query: string): Promise<string | null> {
-  for (const instance of INVidIOUS_INSTANCES) {
-    try {
-      const url = `${instance}/api/v1/search?type=video&q=${encodeURIComponent(query)}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0 && data[0].videoId) {
-        return data[0].videoId;
-      }
-    } catch {}
-  }
-  return null;
+function normalizeText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[™®©]/g, "")
+    .replace(/\([^)]*\)/g, " ")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-async function searchYouTubeHtml(query: string): Promise<string | null> {
+function meaningfulTitleTokens(name: string) {
+  const ignored = new Set(["a", "an", "and", "de", "del", "el", "la", "las", "los", "of", "the", "y"]);
+  return normalizeText(name)
+    .split(" ")
+    .filter(token => token.length > 1 && !ignored.has(token));
+}
+
+function sourceForCandidate(candidate: YouTubeSearchResult): TrailerSource {
+  const channel = normalizeText(`${candidate.uploader ?? ""} ${candidate.uploaderId ?? ""}`);
+  if (channel.includes("crunchyroll")) return "crunchyroll";
+  if (channel.includes("netflix")) return "netflix";
+  if (channel.includes("hbo max") || channel.includes("hbomax")) return "hbo";
+  if (channel.includes("disney plus") || channel.includes("disneyplus")) return "disney";
+  return "youtube";
+}
+
+function sceneScore(candidate: YouTubeSearchResult, mediaName: string) {
+  const title = normalizeText(candidate.title);
+  const tokens = meaningfulTitleTokens(mediaName);
+  const matchingTokens = tokens.filter(token => title.includes(token)).length;
+  const coverage = tokens.length ? matchingTokens / tokens.length : 0;
+  if (coverage < 0.5) return Number.NEGATIVE_INFINITY;
+  if (REJECTED_SCENE_WORDS.some(word => title.includes(word))) return Number.NEGATIVE_INFINITY;
+
+  const duration = candidate.duration ?? 0;
+  if (duration > 0 && (duration < 25 || duration > 12 * 60)) return Number.NEGATIVE_INFINITY;
+
+  let score = coverage * 100;
+  if (/\b(scene|clip|fight|moment|vs)\b/.test(title)) score += 18;
+  if (duration >= 45 && duration <= 4 * 60) score += 16;
+  if (sourceForCandidate(candidate) !== "youtube") score += 20;
+  return score;
+}
+
+async function runYouTubeSearch(query: string, channel?: string) {
   try {
-    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(8000),
-      headers: { "Accept-Language": "es-ES,es;q=0.9" },
+    return await invokeCommand<YouTubeSearchResult[]>("youtube_search", {
+      query,
+      limit: channel ? 8 : 10,
+      channel: channel ?? null,
     });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const match = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
+  } catch (error) {
+    console.warn(`[Aetherio:YouTube] Falló la búsqueda${channel ? ` en ${channel}` : " global"}:`, error);
+    return [];
   }
 }
 
-async function searchYouTube(query: string): Promise<string | null> {
-  const fromInvidious = await searchInvidious(query);
-  if (fromInvidious) return fromInvidious;
-  const fromHtml = await searchYouTubeHtml(query);
-  return fromHtml;
+function rankCandidates(candidates: YouTubeSearchResult[], name: string) {
+  const unique = new Map<string, YouTubeSearchResult>();
+  for (const candidate of candidates) unique.set(candidate.videoId, candidate);
+  return [...unique.values()]
+    .map(candidate => ({ candidate, score: sceneScore(candidate, name) }))
+    .filter(entry => Number.isFinite(entry.score))
+    .sort((left, right) => right.score - left.score)
+    .map(entry => entry.candidate);
 }
 
-async function searchTmdbVideos(tmdbType: "movie" | "tv", tmdbId: number): Promise<{ videoId: string; source: TrailerSource } | null> {
+async function searchAnimeScene(name: string): Promise<YouTubeClipCandidate[]> {
+  if (!isTauriRuntime()) return [];
+  const baseQuery = `${name} anime scene clip`;
+  const strictQuery = `${baseQuery} -trailer -teaser -review -reaction -amv -opening -ending -recap -explained -analysis -ost`;
+  const official: YouTubeClipCandidate[] = [];
+
+  // Search every preferred channel directly, first with exclusions and then
+  // without them. The channel page itself is the filter; uploader-name guesses
+  // are not used for this priority pass.
+  for (const preferred of OFFICIAL_CHANNELS) {
+    const [strict, relaxed] = await Promise.all([
+      runYouTubeSearch(strictQuery, preferred.handle),
+      runYouTubeSearch(baseQuery, preferred.handle),
+    ]);
+    for (const candidate of rankCandidates([...strict, ...relaxed], name)) {
+      if (official.some(entry => entry.videoId === candidate.videoId)) continue;
+      official.push({
+        videoId: candidate.videoId,
+        source: preferred.source,
+        duration: candidate.duration ?? 0,
+      });
+    }
+    if (official.length >= 8) break;
+  }
+
+  if (official.length >= 8) return official.slice(0, 8);
+
+  const [strictGlobal, relaxedGlobal] = await Promise.all([
+    runYouTubeSearch(strictQuery),
+    runYouTubeSearch(baseQuery),
+  ]);
+  const global = rankCandidates([...strictGlobal, ...relaxedGlobal], name)
+    .filter(candidate => !official.some(entry => entry.videoId === candidate.videoId))
+    .map(candidate => ({
+      videoId: candidate.videoId,
+      source: sourceForCandidate(candidate),
+      duration: candidate.duration ?? 0,
+    }));
+  return [...official, ...global].slice(0, 10);
+}
+
+async function searchTmdbVideos(
+  tmdbType: "movie" | "tv",
+  tmdbId: number,
+): Promise<Array<{ videoId: string; source: TrailerSource }>> {
   try {
     const data = await tmdbFetch<{ results: Array<{ key: string; site: string; type: string; official: boolean }> }>(
       `/${tmdbType}/${tmdbId}/videos`,
       { params: { language: "es-ES,en-US" } },
     );
-    if (!data?.results?.length) return null;
-    const clips = data.results.filter(v => v.site === "YouTube" && (v.type === "Clip" || v.type === "Scene"));
-    if (clips.length > 0) return { videoId: clips[0].key, source: "youtube" };
-    const trailers = data.results.filter(v => v.site === "YouTube" && v.type === "Trailer" && v.official);
-    if (trailers.length > 0) return { videoId: trailers[0].key, source: "tmdb" };
-    const anyVideo = data.results.find(v => v.site === "YouTube");
-    if (anyVideo) return { videoId: anyVideo.key, source: "tmdb" };
-    return null;
+    if (!data?.results?.length) return [];
+    const clips = data.results.filter(video => video.site === "YouTube" && (video.type === "Clip" || video.type === "Scene"));
+    const trailers = data.results.filter(video => video.site === "YouTube" && video.type === "Trailer" && video.official);
+    return [...clips, ...trailers]
+      .filter((video, index, all) => all.findIndex(entry => entry.key === video.key) === index)
+      .slice(0, 4)
+      .map(video => ({ videoId: video.key, source: "tmdb" as const }));
   } catch {
-    return null;
+    return [];
   }
 }
 
-function normalizeSearchName(name: string): string {
-  return name
-    .replace(/[™®©]/g, "")
-    .replace(/\([^)]*\)/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function getItemCacheKey(item: MediaItem): string {
+function getItemCacheKey(item: MediaItem) {
   return `clip:${item.type}:${item.id}`;
 }
 
@@ -136,67 +212,37 @@ export const TRAILER_SKIP_END: Record<TrailerSource, number> = {
   tmdb: 0,
 };
 
-export function getCachedClipInfo(item: MediaItem): { videoId: string; source: TrailerSource; duration: number } | null {
-  const cacheKey = getItemCacheKey(item);
-  return getCached(cacheKey);
+export function getCachedClipInfo(item: MediaItem) {
+  return getCached(getItemCacheKey(item));
 }
 
-export function getTrailerSkipEnd(source: TrailerSource): number {
+export function getTrailerSkipEnd(source: TrailerSource) {
   return TRAILER_SKIP_END[source] ?? 0;
 }
 
-export async function fetchYouTubeClip(item: MediaItem): Promise<{ videoId: string; source: TrailerSource; duration: number } | null> {
+export async function fetchYouTubeClip(item: MediaItem): Promise<CacheEntry | null> {
   const cacheKey = getItemCacheKey(item);
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
-  const name = normalizeSearchName(item.name);
-
+  const candidates: YouTubeClipCandidate[] = [];
   if (item.type === "anime") {
-    for (const channel of ANIME_CHANNELS) {
-      const query = `${channel.query} ${name} -trailer`;
-      const videoId = await searchYouTube(query);
-      if (videoId) {
-        const entry: CacheEntry = { videoId, source: channel.source, duration: 0, fetchedAt: Date.now() };
-        setCache(cacheKey, entry);
-        return entry;
+    candidates.push(...await searchAnimeScene(item.name));
+  }
+
+  const tmdbId = Number(String(item.id).replace("tmdb:", "").replace("anilist:", ""));
+  if (Number.isFinite(tmdbId) && tmdbId > 0) {
+    const results = await searchTmdbVideos(item.type === "movie" ? "movie" : "tv", tmdbId);
+    for (const result of results) {
+      if (!candidates.some(candidate => candidate.videoId === result.videoId)) {
+        candidates.push({ ...result, duration: 0 });
       }
     }
   }
 
-  if (item.type === "anime" || item.type === "movie" || item.type === "series") {
-    const query = `${name} scene clip -trailer -review -reaction -amv -top 10 -opening -ending -recap`;
-    const videoId = await searchYouTube(query);
-    if (videoId) {
-      const entry: CacheEntry = { videoId, source: "youtube", duration: 0, fetchedAt: Date.now() };
-      setCache(cacheKey, entry);
-      return entry;
-    }
-  }
-
-  const tmdbId = Number(item.id.replace("tmdb:", "").replace("anilist:", ""));
-  if (Number.isFinite(tmdbId) && tmdbId > 0) {
-    const tmdbType = item.type === "movie" ? "movie" : "tv";
-    const result = await searchTmdbVideos(tmdbType, tmdbId);
-    if (result) {
-      const entry: CacheEntry = { ...result, duration: 0, fetchedAt: Date.now() };
-      setCache(cacheKey, entry);
-      return entry;
-    }
-  }
-
-  return null;
-}
-
-export async function fetchYouTubeDuration(videoId: string): Promise<number> {
-  try {
-    const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return 0;
-    const data = await res.json();
-    if (typeof data.duration === "number") return data.duration;
-    return 0;
-  } catch {
-    return 0;
-  }
+  const [primary, ...fallbacks] = candidates;
+  if (!primary) return null;
+  const entry: CacheEntry = { ...primary, fallbacks, fetchedAt: Date.now() };
+  setCache(cacheKey, entry);
+  return entry;
 }

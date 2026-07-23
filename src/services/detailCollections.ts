@@ -52,11 +52,19 @@ function yearFrom(value: unknown) {
 }
 
 async function fetchTmdbArtwork(type: string, id: number) {
-  const endpoint = `/${tmdbType(type)}/${id}`;
-  const [detail, images] = await Promise.all([
+  const tmdbMediaType = type === "movie" ? "movie" : "tv";
+  let endpoint = `/${tmdbMediaType}/${id}`;
+  let [detail, images] = await Promise.all([
     tmdbFetch<any>(endpoint, { params: { language: "es-ES" } }),
     tmdbFetch<any>(`${endpoint}/images`, { params: { include_image_language: "es,en,null" } }),
   ]);
+  if (!detail && tmdbMediaType === "tv") {
+    endpoint = `/movie/${id}`;
+    [detail, images] = await Promise.all([
+      tmdbFetch<any>(endpoint, { params: { language: "es-ES" } }),
+      tmdbFetch<any>(`${endpoint}/images`, { params: { include_image_language: "es,en,null" } }),
+    ]);
+  }
   const logos = images?.logos ?? [];
   const logo = logos.find((item: any) => item.iso_639_1 === "es")
     ?? logos.find((item: any) => item.iso_639_1 === "en")

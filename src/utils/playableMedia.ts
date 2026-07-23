@@ -2,11 +2,43 @@ import type { MediaStream } from "../types/stream";
 
 const HTTP_URL_RE = /^https?:\/\//i;
 const DIRECT_PROTOCOL_RE = /^(?:rtmp|rtmps|rtsp|rtsps|srt):\/\//i;
-const P2P_TARGET_RE = /^(?:magnet:|stremio:)/i;
 const MEDIA_EXTENSION_RE = /\.(?:m3u8|mpd|mp4|m4v|mkv|webm|avi|mov|wmv|flv|ogv|ogg|mpg|mpeg|m2ts|mts|ts|vob)(?:$|[?#])/i;
+const HEX_BTIH_RE = /^[a-f0-9]{40}$/i;
+const BASE32_BTIH_RE = /^[a-z2-7]{32}$/i;
 
 function normalized(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/** Returns a canonical BitTorrent v1 info-hash, or undefined when invalid. */
+export function normalizeBtih(value: unknown): string | undefined {
+  const target = normalized(value);
+  if (!HEX_BTIH_RE.test(target) && !BASE32_BTIH_RE.test(target)) return undefined;
+  return target.toLowerCase();
+}
+
+/** Extracts and validates the btih topic from a magnet URI. */
+export function getMagnetBtih(value: unknown): string | undefined {
+  const target = normalized(value);
+  if (!/^magnet:\?/i.test(target)) return undefined;
+  const queryIndex = target.indexOf("?");
+  if (queryIndex < 0) return undefined;
+  try {
+    const params = new URLSearchParams(target.slice(queryIndex + 1));
+    for (const [key, topic] of params.entries()) {
+      if (key.toLowerCase() !== "xt") continue;
+      const match = topic.match(/^urn:btih:(.+)$/i);
+      const infoHash = normalizeBtih(match?.[1]);
+      if (infoHash) return infoHash;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+export function isValidMagnetUri(value: unknown): boolean {
+  return getMagnetBtih(value) !== undefined;
 }
 
 export function isLookupPageUrl(value: unknown): boolean {
@@ -43,7 +75,9 @@ function isDeclaredDirectUrl(stream: MediaStream): boolean {
 
   // Native scrapers do not have a provider contract: require a concrete media
   // extension so a search/detail page can never be mistaken for a stream.
-  if (stream.addonId === "scraper") return isDirectMediaUrl(target);
+  if (stream.addonId === "scraper") {
+    return hints?.scraperResolvedDirect === true || isDirectMediaUrl(target);
+  }
 
   // Stremio, Nuvio and Seanime expose `url` as their direct playback field.
   // Their external web page belongs in `externalUrl`, which is never accepted.
@@ -62,9 +96,9 @@ export function getDirectPlaybackUrl(stream: MediaStream | null | undefined): st
 
 export function hasP2pPlayback(stream: MediaStream | null | undefined): boolean {
   if (!stream) return false;
-  if (normalized(stream.infoHash)) return true;
+  if (normalizeBtih(stream.infoHash)) return true;
   return [stream.url, ...(stream.sources ?? [])]
-    .some(value => P2P_TARGET_RE.test(normalized(value)));
+    .some(isValidMagnetUri);
 }
 
 export function isPlayableMediaStream(stream: MediaStream | null | undefined): stream is MediaStream {

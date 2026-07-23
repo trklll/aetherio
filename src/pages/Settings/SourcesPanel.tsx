@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import clsx from "clsx";
-import { ExternalLink, RefreshCw, Settings2, X } from "lucide-react";
+import { ExternalLink, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
 import {
   getSourcePreferences,
   isProviderEnabled,
@@ -11,8 +11,10 @@ import {
   type SourcePreferences,
 } from "../../config/sourcePreferences";
 import {
+  addNuvioProviderRepository,
   getNuvioProviderRepositories,
   refreshNuvioProviderRepositories,
+  removeNuvioProviderRepository,
   type NuvioProviderRepositoryInfo,
 } from "../../services/nuvioProviderService";
 import { getScraperSites, type ScraperSiteInfo } from "../../services/scraperService";
@@ -24,6 +26,10 @@ import {
   type SeanimeExtensionManifest,
 } from "../../services/seanimeExtensionService";
 import { useAddonStore } from "../../store/addonStore";
+import {
+  getGlobalCloudstreamRepositories,
+  type GlobalCloudstreamRepositoryInfo,
+} from "../../services/cloudstreamRepositoryService";
 
 const CATEGORY_LABELS: Record<string, string> = {
   aggregator: "AGREGADORES",
@@ -47,6 +53,9 @@ export default function SourcesPanel() {
   const [configExtension, setConfigExtension] = useState<SeanimeExtensionManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [addingRepository, setAddingRepository] = useState(false);
+  const [cloudstreamRepositories, setCloudstreamRepositories] = useState<GlobalCloudstreamRepositoryInfo[]>([]);
 
   const loadInventory = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -60,6 +69,7 @@ export default function SourcesPanel() {
       setRepositories(nextRepositories);
       setSites(nextSites);
       setSeanime(nextSeanime);
+      setCloudstreamRepositories(await getGlobalCloudstreamRepositories(nextRepositories, refresh));
       if (nextSeanime.errors.length) setError(nextSeanime.errors.join("\n"));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -160,13 +170,39 @@ export default function SourcesPanel() {
     }
   }
 
+  async function addRepository(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!repositoryUrl.trim() || addingRepository) return;
+    setAddingRepository(true);
+    setError("");
+    try {
+      await addNuvioProviderRepository(repositoryUrl);
+      setRepositoryUrl("");
+      await loadInventory(true);
+    } catch (addError) {
+      setError(addError instanceof Error ? addError.message : String(addError));
+    } finally {
+      setAddingRepository(false);
+    }
+  }
+
+  async function removeRepository(url: string) {
+    setError("");
+    try {
+      const nextRepositories = await removeNuvioProviderRepository(url);
+      setRepositories(nextRepositories);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : String(removeError));
+    }
+  }
+
   return (
     <section>
       <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-black text-white">Fuentes</h2>
           <p className="mt-1 text-sm font-semibold text-white/45">
-            {activeAddonCount} add-ons Stremio · {activeRepositoryCount} repositorios · {activeSiteCount} sitios FMHY · {activeSeanimeCount} providers Seanime
+            {activeAddonCount} add-ons Stremio · {activeRepositoryCount} repositorios · {cloudstreamRepositories.length} repos CloudStream · {activeSiteCount} sitios · {activeSeanimeCount} providers Seanime
           </p>
           <p className="mt-1 text-xs font-semibold text-white/32">Fuentes integradas globales; AIOMetadata y AIOStreams pertenecen únicamente al perfil activo.</p>
         </div>
@@ -220,11 +256,32 @@ export default function SourcesPanel() {
         </SourceSection>
 
         <SourceSection
-          title="MANIFESTS"
+          title="REPOSITORIOS NUVIO JS"
           count={`${activeRepositoryCount}/${repositories.length}`}
           onEnableAll={() => setAllRepositories(true)}
           onDisableAll={() => setAllRepositories(false)}
         >
+          <form onSubmit={addRepository} className="flex gap-2 border-b border-white/[0.06] bg-black/10 p-3">
+            <input
+              type="url"
+              value={repositoryUrl}
+              onChange={event => setRepositoryUrl(event.target.value)}
+              placeholder="https://.../manifest.json"
+              className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none placeholder:text-white/25 focus:border-white/30"
+              aria-label="URL del repositorio Nuvio JS"
+              required
+            />
+            <button
+              type="submit"
+              disabled={addingRepository || !repositoryUrl.trim()}
+              className="flex h-10 items-center gap-2 rounded-lg bg-white px-4 text-sm font-black text-black gsap-transition hover:bg-white/90 disabled:cursor-wait disabled:opacity-45"
+            >
+              <Plus size={16} /> Añadir
+            </button>
+          </form>
+          <p className="border-b border-white/[0.05] px-5 py-3 text-xs font-semibold text-white/38">
+            Admite manifests JavaScript de Nuvio. Los repositorios CloudStream globales aparecen abajo y reutilizan automáticamente los providers que tienen un adaptador compatible.
+          </p>
           {repositories.map(repository => {
             const repositoryEnabled = isRepositoryEnabled(preferences, repository.key);
             const compatibleScrapers = repository.scrapers.filter(scraper => scraper.supportsExternalPlayer);
@@ -244,16 +301,29 @@ export default function SourcesPanel() {
                   checked={repositoryEnabled}
                   onChange={checked => setRepositoryEnabled(repository.key, checked)}
                   action={(
-                    <a
-                      href={repository.manifestUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
-                      aria-label={`Abrir manifest de ${repository.ownerName}`}
-                      title="Abrir manifest"
-                    >
-                      <ExternalLink size={15} />
-                    </a>
+                    <div className="flex items-center gap-1">
+                      <a
+                        href={repository.manifestUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
+                        aria-label={`Abrir manifest de ${repository.ownerName}`}
+                        title="Abrir manifest"
+                      >
+                        <ExternalLink size={15} />
+                      </a>
+                      {repository.custom ? (
+                        <button
+                          type="button"
+                          onClick={() => void removeRepository(repository.manifestUrl)}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
+                          aria-label={`Eliminar repositorio ${repository.ownerName}`}
+                          title="Eliminar repositorio"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      ) : null}
+                    </div>
                   )}
                 />
                 {repository.scrapers.length ? (
@@ -290,6 +360,32 @@ export default function SourcesPanel() {
             );
           })}
           {!loading && repositories.length === 0 ? <EmptyRow label="No se pudieron cargar los manifests." /> : null}
+        </SourceSection>
+
+        <SourceSection title="REPOSITORIOS CLOUDSTREAM GLOBALES" count={`${cloudstreamRepositories.length}`}>
+          {cloudstreamRepositories.map(repository => (
+            <SourceRow
+              key={repository.url}
+              title={repository.name}
+              description={repository.error
+                ? `No disponible · ${repository.error}`
+                : `${repository.spanishPluginCount}/${repository.pluginCount} extensiones en español · ${repository.compatibleProviderNames.length} adapters reproducibles: ${repository.compatibleProviderNames.join(", ") || "ninguno todavía"}`}
+              action={(
+                <a
+                  href={repository.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
+                  aria-label={`Abrir repositorio ${repository.name}`}
+                  title="Abrir repositorio"
+                >
+                  <ExternalLink size={15} />
+                </a>
+              )}
+              compact
+            />
+          ))}
+          {!loading && cloudstreamRepositories.length === 0 ? <EmptyRow label="Los repositorios CloudStream requieren la app de escritorio." /> : null}
         </SourceSection>
 
         <SourceSection
@@ -337,7 +433,7 @@ export default function SourcesPanel() {
         </SourceSection>
 
         <SourceSection
-          title="SITIOS FMHY"
+          title="SITIOS Y PROVEEDORES NATIVOS"
           count={`${activeSiteCount}/${sites.length}`}
           onEnableAll={() => setAllSites(true)}
           onDisableAll={() => setAllSites(false)}
@@ -359,7 +455,7 @@ export default function SourcesPanel() {
               ))}
             </div>
           ))}
-          {!loading && sites.length === 0 ? <EmptyRow label="Los sitios FMHY solo están disponibles en la app de escritorio." /> : null}
+          {!loading && sites.length === 0 ? <EmptyRow label="Los proveedores nativos solo están disponibles en la app de escritorio." /> : null}
         </SourceSection>
       </div>
       {configExtension ? (

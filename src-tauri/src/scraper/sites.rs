@@ -36,10 +36,21 @@ const DEFAULT_SCRAPER_SITE_IDS: &[&str] = &[
     "miruro",
     "kickassanime",
     "animetsu",
+    "okru",
 ];
 
 pub fn all_recommended_sites() -> Vec<ScraperSite> {
     vec![
+        ScraperSite {
+            id: "okru",
+            name: "OK.ru",
+            base_url: "https://ok.ru",
+            category: SiteCategory::DedicatedServer,
+            search_style: SearchStyle::QueryParam,
+            search_path: "/video/search?st.v.sq={query}",
+            types: &["movie"],
+            enabled_by_default: true,
+        },
         // ── Stream Aggregators ────────────────────────────────────────────
         ScraperSite {
             id: "cineby",

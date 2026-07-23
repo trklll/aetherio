@@ -1,24 +1,27 @@
+mod p2p;
 mod scraper;
 
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     os::raw::{c_char, c_int, c_void},
     path::{Path, PathBuf},
+    process::Command,
     ptr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use libloading::Library;
 #[cfg(not(target_os = "android"))]
 use librqbit::{
+    dht::PersistentDhtConfig,
     http_api::{HttpApi, HttpApiOptions},
     Api, Session, SessionOptions,
 };
@@ -480,11 +483,31 @@ unsafe impl Send for MpvVideoSurface {}
 unsafe impl Sync for MpvVideoSurface {}
 
 #[cfg(not(target_os = "android"))]
-#[derive(Default)]
 struct P2pState {
     server: Mutex<Option<P2pServer>>,
     resolve_lock: Mutex<()>,
     pending: Mutex<Option<P2pPlaybackInfo>>,
+    cache_entries: Arc<Mutex<HashMap<String, CachedP2pTorrent>>>,
+    cache_ops: Arc<Mutex<()>>,
+    cache_generation: Arc<AtomicU64>,
+    chunk_store: Mutex<Option<p2p::SharedChunkStore>>,
+    tracker: Mutex<Option<p2p::TrackerServer>>,
+}
+
+#[cfg(not(target_os = "android"))]
+impl Default for P2pState {
+    fn default() -> Self {
+        Self {
+            server: Mutex::new(None),
+            resolve_lock: Mutex::new(()),
+            pending: Mutex::new(None),
+            cache_entries: Arc::new(Mutex::new(HashMap::new())),
+            cache_ops: Arc::new(Mutex::new(())),
+            cache_generation: Arc::new(AtomicU64::new(0)),
+            chunk_store: Mutex::new(None),
+            tracker: Mutex::new(None),
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -499,9 +522,27 @@ struct P2pServer {
 }
 
 #[cfg(not(target_os = "android"))]
-const P2P_HTTP_ATTEMPT_TIMEOUT_MS: u64 = 35_000;
+const P2P_HTTP_ATTEMPT_TIMEOUT_MS: u64 = 20_000;
 #[cfg(not(target_os = "android"))]
 const P2P_HTTP_MAX_ATTEMPTS: usize = 2;
+// Primer tier: 1 pieza típica de torrent (~2 MiB) → reproducción instantánea
+#[cfg(not(target_os = "android"))]
+const P2P_PREFETCH_TARGET_BYTES: usize = 2 * 1024 * 1024;
+// Segundo tier: mínimo viable si el grace ha expirado (~1 MiB)
+#[cfg(not(target_os = "android"))]
+const P2P_PREFETCH_MIN_BYTES: usize = 1 * 1024 * 1024;
+// Tercer tier: si el rate es alto, esperamos más para evitar stutter (~8 MiB)
+#[cfg(not(target_os = "android"))]
+const P2P_PREFETCH_LARGE_BYTES: usize = 8 * 1024 * 1024;
+// Grace: tras 10s aceptamos el mínimo viable
+#[cfg(not(target_os = "android"))]
+const P2P_PREFETCH_GRACE_MS: u64 = 10_000;
+#[cfg(not(target_os = "android"))]
+const P2P_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+#[cfg(not(target_os = "android"))]
+const P2P_CACHE_MAX_ENTRIES: usize = 2;
+#[cfg(not(target_os = "android"))]
+const P2P_CACHE_MAX_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 
 impl MpvSession {
     fn stop(self) -> Option<P2pPlaybackInfo> {
@@ -702,6 +743,440 @@ fn find_mpv_runtime_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     }
 
     None
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YouTubeSearchResult {
+    video_id: String,
+    title: String,
+    duration: Option<f64>,
+    uploader: Option<String>,
+    uploader_id: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YouTubeStreamInfo {
+    video_id: String,
+    url: String,
+    audio_url: Option<String>,
+    title: String,
+    duration: Option<f64>,
+    width: Option<u64>,
+    height: Option<u64>,
+    format_id: Option<String>,
+    has_audio: bool,
+    mime_type: String,
+    audio_mime_type: Option<String>,
+}
+
+#[derive(Clone)]
+struct YouTubeRemoteTrack {
+    url: String,
+    mime_type: String,
+}
+
+struct CachedYouTubeStream {
+    value: YouTubeStreamInfo,
+    video: YouTubeRemoteTrack,
+    audio: Option<YouTubeRemoteTrack>,
+    resolved_at: Instant,
+}
+
+struct YouTubeState {
+    streams: Arc<Mutex<HashMap<String, CachedYouTubeStream>>>,
+    proxy_port: u16,
+}
+
+fn youtube_proxy_header(name: &[u8], value: &[u8]) -> Option<tiny_http::Header> {
+    tiny_http::Header::from_bytes(name, value).ok()
+}
+
+fn start_youtube_proxy(
+    streams: Arc<Mutex<HashMap<String, CachedYouTubeStream>>>,
+) -> Result<u16, String> {
+    let server = tiny_http::Server::http("127.0.0.1:0")
+        .map_err(|error| format!("No se pudo iniciar el proxy local de YouTube: {error}"))?;
+    let port = server
+        .server_addr()
+        .to_ip()
+        .map(|address| address.port())
+        .ok_or_else(|| String::from("El proxy local de YouTube no obtuvo un puerto TCP."))?;
+
+    thread::spawn(move || {
+        let client = match Client::builder()
+            .timeout(Duration::from_secs(25))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Aetherio/0.2")
+            .build()
+        {
+            Ok(client) => client,
+            Err(_) => return,
+        };
+
+        for request in server.incoming_requests() {
+            let path = request.url().split('?').next().unwrap_or("");
+            let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
+            let track =
+                if parts.len() == 3 && parts[0] == "youtube" && valid_youtube_video_id(parts[1]) {
+                    streams.lock().ok().and_then(|entries| {
+                        entries.get(parts[1]).and_then(|entry| match parts[2] {
+                            "video" => Some(entry.video.clone()),
+                            "audio" => entry.audio.clone(),
+                            _ => None,
+                        })
+                    })
+                } else {
+                    None
+                };
+
+            let Some(track) = track else {
+                let _ = request.respond(
+                    tiny_http::Response::from_string("stream not found")
+                        .with_status_code(tiny_http::StatusCode(404)),
+                );
+                continue;
+            };
+
+            let mut upstream_request = client.get(&track.url);
+            if let Some(range) = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Range"))
+            {
+                upstream_request = upstream_request.header("Range", range.value.as_str());
+            }
+
+            match upstream_request.send() {
+                Ok(upstream) => {
+                    let status = upstream.status().as_u16();
+                    let content_length = upstream
+                        .content_length()
+                        .and_then(|length| usize::try_from(length).ok());
+                    let mut headers = Vec::new();
+                    for name in ["content-range", "accept-ranges", "etag", "last-modified"] {
+                        if let Some(value) = upstream.headers().get(name) {
+                            if let Some(header) =
+                                youtube_proxy_header(name.as_bytes(), value.as_bytes())
+                            {
+                                headers.push(header);
+                            }
+                        }
+                    }
+                    if let Some(header) =
+                        youtube_proxy_header(b"Content-Type", track.mime_type.as_bytes())
+                    {
+                        headers.push(header);
+                    }
+                    if let Some(header) = youtube_proxy_header(b"Access-Control-Allow-Origin", b"*")
+                    {
+                        headers.push(header);
+                    }
+                    let response = tiny_http::Response::new(
+                        tiny_http::StatusCode(status),
+                        headers,
+                        upstream,
+                        content_length,
+                        None,
+                    );
+                    let _ = request.respond(response);
+                }
+                Err(error) => {
+                    let _ = request.respond(
+                        tiny_http::Response::from_string(format!("upstream failed: {error}"))
+                            .with_status_code(tiny_http::StatusCode(502)),
+                    );
+                }
+            }
+        }
+    });
+
+    Ok(port)
+}
+
+impl YouTubeState {
+    fn new() -> Result<Self, String> {
+        let streams = Arc::new(Mutex::new(HashMap::new()));
+        let proxy_port = start_youtube_proxy(Arc::clone(&streams))?;
+        Ok(Self {
+            streams,
+            proxy_port,
+        })
+    }
+}
+
+fn ytdlp_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let runtime_dir = find_mpv_runtime_dir(app).ok_or_else(|| {
+        String::from("No se encontro el runtime multimedia incluido con Aetherio.")
+    })?;
+    let candidates = [runtime_dir.join("yt-dlp.exe"), runtime_dir.join("yt-dlp")];
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| String::from("yt-dlp no esta incluido en el runtime multimedia."))
+}
+
+fn run_ytdlp(app: &tauri::AppHandle, args: &[String]) -> Result<String, String> {
+    let executable = ytdlp_path(app)?;
+    let mut command = Command::new(&executable);
+    command.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("No se pudo ejecutar yt-dlp: {}", error))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .last()
+            .unwrap_or("yt-dlp termino sin devolver resultados");
+        return Err(format!(
+            "yt-dlp fallo: {}",
+            detail.chars().take(360).collect::<String>()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|_| String::from("yt-dlp devolvio una respuesta que no es UTF-8."))
+}
+
+fn valid_youtube_video_id(value: &str) -> bool {
+    value.len() == 11
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+#[tauri::command]
+async fn youtube_search(
+    app: tauri::AppHandle,
+    query: String,
+    limit: Option<usize>,
+    channel: Option<String>,
+) -> Result<Vec<YouTubeSearchResult>, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() || query.len() > 180 || query.contains(['\r', '\n']) {
+        return Err(String::from("Consulta de YouTube invalida."));
+    }
+    let limit = limit.unwrap_or(8).clamp(1, 10);
+    let channel = channel.map(|value| value.trim().to_string());
+    let allowed_channels = [
+        "@CrunchyrollenEspañol",
+        "@netflixanime",
+        "@HBOMaxLa",
+        "@disneyplusla",
+    ];
+    if channel
+        .as_deref()
+        .is_some_and(|value| !allowed_channels.contains(&value))
+    {
+        return Err(String::from("Canal prioritario de YouTube invalido."));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = channel.map_or_else(
+            || format!("ytsearch{}:{}", limit, query),
+            |handle| {
+                format!(
+                    "https://www.youtube.com/{}/search?query={}",
+                    handle,
+                    urlencoding::encode(&query)
+                )
+            },
+        );
+        let args = vec![
+            String::from("--no-warnings"),
+            String::from("--no-playlist"),
+            String::from("--flat-playlist"),
+            String::from("--playlist-end"),
+            limit.to_string(),
+            String::from("--socket-timeout"),
+            String::from("8"),
+            String::from("--retries"),
+            String::from("1"),
+            String::from("--extractor-retries"),
+            String::from("1"),
+            String::from("--print"),
+            String::from("%(.{id,title,duration,uploader,uploader_id})j"),
+            target,
+        ];
+        let stdout = run_ytdlp(&app, &args)?;
+        let results = stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|value| {
+                let video_id = value.get("id")?.as_str()?.to_string();
+                if !valid_youtube_video_id(&video_id) {
+                    return None;
+                }
+                Some(YouTubeSearchResult {
+                    video_id,
+                    title: value.get("title")?.as_str()?.to_string(),
+                    duration: value.get("duration").and_then(|entry| entry.as_f64()),
+                    uploader: value
+                        .get("uploader")
+                        .and_then(|entry| entry.as_str())
+                        .map(str::to_string),
+                    uploader_id: value
+                        .get("uploader_id")
+                        .and_then(|entry| entry.as_str())
+                        .map(str::to_string),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(results)
+    })
+    .await
+    .map_err(|error| format!("Fallo la tarea de busqueda en YouTube: {}", error))?
+}
+
+#[tauri::command]
+async fn youtube_resolve_stream(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, YouTubeState>,
+    video_id: String,
+) -> Result<YouTubeStreamInfo, String> {
+    if !valid_youtube_video_id(&video_id) {
+        return Err(String::from("Identificador de video de YouTube invalido."));
+    }
+    if let Ok(streams) = state.streams.lock() {
+        if let Some(cached) = streams.get(&video_id) {
+            if cached.resolved_at.elapsed() < Duration::from_secs(15 * 60) {
+                return Ok(cached.value.clone());
+            }
+        }
+    }
+
+    let resolver_app = app.clone();
+    let resolver_id = video_id.clone();
+    let (mut stream, video, audio) = tauri::async_runtime::spawn_blocking(move || {
+        let args = vec![
+            String::from("--no-warnings"),
+            String::from("--no-playlist"),
+            String::from("--socket-timeout"),
+            String::from("8"),
+            String::from("--retries"),
+            String::from("1"),
+            String::from("--extractor-retries"),
+            String::from("1"),
+            String::from("-f"),
+            // The loopback proxy lets the WebView play YouTube's highest-quality
+            // adaptive video and audio tracks without contacting googlevideo.com.
+            String::from("bestvideo[protocol^=http]+bestaudio[protocol^=http]/best[protocol^=http][vcodec!=none][acodec!=none]"),
+            String::from("--print"),
+            String::from("%(.{id,title,duration,url,ext,width,height,format_id,vcodec,acodec,requested_formats})j"),
+            format!("https://www.youtube.com/watch?v={}", resolver_id),
+        ];
+        let stdout = run_ytdlp(&resolver_app, &args)?;
+        let value = stdout
+            .lines()
+            .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .ok_or_else(|| String::from("yt-dlp no devolvio un stream reproducible."))?;
+        let returned_id = value.get("id").and_then(|entry| entry.as_str()).unwrap_or("");
+        if returned_id != resolver_id {
+            return Err(String::from("yt-dlp resolvio un video diferente al solicitado."));
+        }
+        let requested_formats = value
+            .get("requested_formats")
+            .and_then(|entry| entry.as_array());
+        let video_format = requested_formats
+            .and_then(|formats| {
+                formats.iter().find(|format| {
+                    format.get("vcodec").and_then(|entry| entry.as_str()) != Some("none")
+                })
+            })
+            .unwrap_or(&value);
+        let audio_format = requested_formats.and_then(|formats| {
+            formats.iter().find(|format| {
+                format.get("vcodec").and_then(|entry| entry.as_str()) == Some("none")
+                    && format.get("acodec").and_then(|entry| entry.as_str()) != Some("none")
+            })
+        });
+        let track_from_value =
+            |format: &serde_json::Value, kind: &str| -> Result<YouTubeRemoteTrack, String> {
+                let url = format
+                    .get("url")
+                    .and_then(|entry| entry.as_str())
+                    .filter(|entry| entry.starts_with("https://") || entry.starts_with("http://"))
+                    .ok_or_else(|| format!("yt-dlp no devolvio la pista de {kind}."))?;
+                let extension = format
+                    .get("ext")
+                    .and_then(|entry| entry.as_str())
+                    .unwrap_or("mp4");
+                let media_kind = if kind == "audio" { "audio" } else { "video" };
+                Ok(YouTubeRemoteTrack {
+                    url: url.to_string(),
+                    mime_type: format!("{media_kind}/{extension}"),
+                })
+            };
+        let video = track_from_value(video_format, "video")?;
+        let audio = audio_format
+            .map(|format| track_from_value(format, "audio"))
+            .transpose()?;
+        let has_muxed_audio = video_format
+            .get("acodec")
+            .and_then(|entry| entry.as_str())
+            .is_some_and(|codec| codec != "none");
+        Ok((YouTubeStreamInfo {
+            video_id: resolver_id,
+            url: String::new(),
+            audio_url: None,
+            title: value
+                .get("title")
+                .and_then(|entry| entry.as_str())
+                .unwrap_or("")
+                .to_string(),
+            duration: value.get("duration").and_then(|entry| entry.as_f64()),
+            width: value.get("width").and_then(|entry| entry.as_u64()),
+            height: value.get("height").and_then(|entry| entry.as_u64()),
+            format_id: value
+                .get("format_id")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string),
+            has_audio: audio.is_some() || has_muxed_audio,
+            mime_type: video.mime_type.clone(),
+            audio_mime_type: audio.as_ref().map(|track| track.mime_type.clone()),
+        }, video, audio))
+    })
+    .await
+    .map_err(|error| format!("Fallo la tarea de resolucion de YouTube: {}", error))??;
+
+    stream.url = format!(
+        "http://127.0.0.1:{}/youtube/{}/video",
+        state.proxy_port, video_id
+    );
+    if audio.is_some() {
+        stream.audio_url = Some(format!(
+            "http://127.0.0.1:{}/youtube/{}/audio",
+            state.proxy_port, video_id
+        ));
+    }
+
+    if let Ok(mut streams) = state.streams.lock() {
+        streams.retain(|_, entry| entry.resolved_at.elapsed() < Duration::from_secs(15 * 60));
+        if streams.len() >= 32 {
+            if let Some(oldest) = streams
+                .iter()
+                .min_by_key(|(_, entry)| entry.resolved_at)
+                .map(|(key, _)| key.clone())
+            {
+                streams.remove(&oldest);
+            }
+        }
+        streams.insert(
+            video_id,
+            CachedYouTubeStream {
+                value: stream.clone(),
+                video,
+                audio,
+                resolved_at: Instant::now(),
+            },
+        );
+    }
+    Ok(stream)
 }
 
 #[cfg(target_os = "windows")]
@@ -1364,7 +1839,7 @@ fn spawn_mpv_event_forwarder(
 fn emit_mpv_startup_status(app: tauri::AppHandle, window_label: String) {
     thread::spawn(move || {
         for _ in 0..12 {
-            thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(250));
             emit_mpv_status(&app, &window_label, "startup");
         }
     });
@@ -1420,6 +1895,17 @@ fn looks_like_youtube_url(target: &str) -> bool {
         || value.contains("youtube.com/embed/")
 }
 
+fn looks_like_okru_url(target: &str) -> bool {
+    reqwest::Url::parse(target)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "ok.ru" || host.ends_with(".ok.ru"))
+}
+
+fn looks_like_ytdlp_url(target: &str) -> bool {
+    looks_like_youtube_url(target) || looks_like_okru_url(target)
+}
+
 struct ResolvedPlaybackTarget {
     target: String,
     audio_file: Option<String>,
@@ -1431,47 +1917,271 @@ struct P2pPlaybackInfo {
     server_url: String,
     torrent_id: String,
     file_idx: usize,
+    episode: Option<usize>,
+    details: serde_json::Value,
+    cache_key: String,
+    cache_entries: Arc<Mutex<HashMap<String, CachedP2pTorrent>>>,
+    cache_ops: Arc<Mutex<()>>,
+    cache_generation: Arc<AtomicU64>,
     cleanup_started: Arc<AtomicBool>,
+    cleanup_lock: Arc<Mutex<()>>,
+}
+
+#[cfg(not(target_os = "android"))]
+#[derive(Clone)]
+struct CachedP2pTorrent {
+    server_url: String,
+    torrent_id: String,
+    file_idx: usize,
+    episode: Option<usize>,
+    details: serde_json::Value,
+    generation: u64,
+    cached_at: Instant,
+    cached_bytes: u64,
+}
+
+#[cfg(not(target_os = "android"))]
+fn delete_cached_p2p_torrent(entry: &CachedP2pTorrent, reason: &str) {
+    let delete_url = format!("{}/torrents/{}/delete", entry.server_url, entry.torrent_id);
+    p2p_log(
+        "cache_delete_requested",
+        serde_json::json!({
+            "torrentId": entry.torrent_id,
+            "fileIdx": entry.file_idx,
+            "url": delete_url,
+            "reason": reason,
+        }),
+    );
+    let client = match Client::builder().timeout(Duration::from_secs(6)).build() {
+        Ok(client) => client,
+        Err(error) => {
+            p2p_log(
+                "cache_delete_error",
+                serde_json::json!({
+                    "torrentId": entry.torrent_id,
+                    "fileIdx": entry.file_idx,
+                    "error": error.to_string(),
+                    "reason": reason,
+                }),
+            );
+            return;
+        }
+    };
+    for attempt in 1..=2 {
+        match client.post(&delete_url).send() {
+            Ok(response) if response.status().is_success() => {
+                p2p_log(
+                    "cache_delete_finished",
+                    serde_json::json!({
+                        "torrentId": entry.torrent_id,
+                        "fileIdx": entry.file_idx,
+                        "status": response.status().as_u16(),
+                        "ok": true,
+                        "attempt": attempt,
+                        "reason": reason,
+                    }),
+                );
+                return;
+            }
+            Ok(response) => p2p_log(
+                "cache_delete_retry",
+                serde_json::json!({
+                    "torrentId": entry.torrent_id,
+                    "status": response.status().as_u16(),
+                    "attempt": attempt,
+                    "reason": reason,
+                }),
+            ),
+            Err(error) => p2p_log(
+                "cache_delete_retry",
+                serde_json::json!({
+                    "torrentId": entry.torrent_id,
+                    "error": error.to_string(),
+                    "attempt": attempt,
+                    "reason": reason,
+                }),
+            ),
+        }
+        if attempt == 1 {
+            thread::sleep(Duration::from_millis(150));
+        }
+    }
+    p2p_log(
+        "cache_delete_error",
+        serde_json::json!({
+            "torrentId": entry.torrent_id,
+            "fileIdx": entry.file_idx,
+            "error": "delete retries exhausted",
+            "reason": reason,
+        }),
+    );
 }
 
 #[cfg(not(target_os = "android"))]
 fn cleanup_p2p_torrent(info: P2pPlaybackInfo) {
+    let _cleanup = match info.cleanup_lock.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if info.cleanup_started.swap(true, Ordering::AcqRel) {
         return;
     }
+    let _cache_operation = match info.cache_ops.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
 
-    let delete_url = format!("{}/torrents/{}/delete", info.server_url, info.torrent_id);
+    let pause_url = format!("{}/torrents/{}/pause", info.server_url, info.torrent_id);
     p2p_log(
-        "cleanup_requested",
+        "cache_pause_requested",
         serde_json::json!({
             "torrentId": info.torrent_id,
             "fileIdx": info.file_idx,
-            "url": delete_url,
+            "url": pause_url,
         }),
     );
-    let result = Client::builder()
+    let pause_result = Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
-        .and_then(|client| client.post(&delete_url).send());
-    match result {
-        Ok(response) => p2p_log(
-            "cleanup_finished",
-            serde_json::json!({
-                "torrentId": info.torrent_id,
-                "fileIdx": info.file_idx,
-                "status": response.status().as_u16(),
-                "ok": response.status().is_success(),
-            }),
-        ),
-        Err(error) => p2p_log(
-            "cleanup_error",
-            serde_json::json!({
-                "torrentId": info.torrent_id,
-                "fileIdx": info.file_idx,
-                "error": error.to_string(),
-            }),
-        ),
+        .and_then(|client| client.post(&pause_url).send());
+    let paused = pause_result
+        .as_ref()
+        .map(|response| response.status().is_success())
+        .unwrap_or(false);
+    p2p_log(
+        "cache_pause_finished",
+        serde_json::json!({
+            "torrentId": info.torrent_id,
+            "fileIdx": info.file_idx,
+            "status": pause_result.as_ref().ok().map(|response| response.status().as_u16()),
+            "error": pause_result.as_ref().err().map(ToString::to_string),
+            "paused": paused,
+        }),
+    );
+
+    let generation = info.cache_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let stats_url = format!("{}/torrents/{}/stats/v1", info.server_url, info.torrent_id);
+    let cached_bytes = Client::builder()
+        .timeout(Duration::from_secs(6))
+        .build()
+        .and_then(|client| client.get(&stats_url).send())
+        .ok()
+        .and_then(|response| response.json::<serde_json::Value>().ok())
+        .and_then(|stats| stats.get("progress_bytes").and_then(|value| value.as_u64()))
+        .unwrap_or(0);
+    let entry = CachedP2pTorrent {
+        server_url: info.server_url.clone(),
+        torrent_id: info.torrent_id.clone(),
+        file_idx: info.file_idx,
+        episode: info.episode,
+        details: info.details.clone(),
+        generation,
+        cached_at: Instant::now(),
+        cached_bytes,
+    };
+    if !paused {
+        delete_cached_p2p_torrent(&entry, "pause_failed");
+        return;
     }
+
+    let mut evicted = Vec::new();
+    {
+        let mut entries = match info.cache_entries.lock() {
+            Ok(entries) => entries,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(replaced) = entries.insert(info.cache_key.clone(), entry.clone()) {
+            if replaced.torrent_id != entry.torrent_id || replaced.server_url != entry.server_url {
+                evicted.push(replaced);
+            }
+        }
+        while entries.len() > P2P_CACHE_MAX_ENTRIES
+            || entries
+                .values()
+                .map(|cached| cached.cached_bytes)
+                .sum::<u64>()
+                > P2P_CACHE_MAX_BYTES
+        {
+            let oldest_key = entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.cached_at)
+                .map(|(key, _)| key.clone());
+            let Some(oldest_key) = oldest_key else { break };
+            if let Some(oldest) = entries.remove(&oldest_key) {
+                evicted.push(oldest);
+            }
+        }
+    }
+    for cached in evicted {
+        delete_cached_p2p_torrent(&cached, "cache_capacity");
+    }
+    p2p_log(
+        "cache_retained",
+        serde_json::json!({
+            "cacheKey": info.cache_key,
+            "torrentId": entry.torrent_id,
+            "fileIdx": entry.file_idx,
+            "ttlSeconds": P2P_CACHE_TTL.as_secs(),
+            "cachedBytes": cached_bytes,
+            "cacheMaxBytes": P2P_CACHE_MAX_BYTES,
+            "generation": generation,
+        }),
+    );
+
+    let cache_key = info.cache_key;
+    let cache_entries = info.cache_entries;
+    let cache_ops = info.cache_ops.clone();
+    thread::spawn(move || {
+        thread::sleep(P2P_CACHE_TTL);
+        let _cache_operation = match cache_ops.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let expired = {
+            let mut entries = match cache_entries.lock() {
+                Ok(entries) => entries,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if entries
+                .get(&cache_key)
+                .map(|cached| cached.generation == generation)
+                .unwrap_or(false)
+            {
+                entries.remove(&cache_key)
+            } else {
+                None
+            }
+        };
+        if let Some(expired) = expired {
+            delete_cached_p2p_torrent(&expired, "cache_ttl");
+        }
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn discard_p2p_torrent(info: P2pPlaybackInfo, reason: &str) {
+    let _cleanup = match info.cleanup_lock.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if info.cleanup_started.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let _cache_operation = match info.cache_ops.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let entry = CachedP2pTorrent {
+        server_url: info.server_url,
+        torrent_id: info.torrent_id,
+        file_idx: info.file_idx,
+        episode: info.episode,
+        details: info.details,
+        generation: 0,
+        cached_at: Instant::now(),
+        cached_bytes: 0,
+    };
+    delete_cached_p2p_torrent(&entry, reason);
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1515,6 +2225,106 @@ fn clear_pending_p2p(state: &P2pState, info: &P2pPlaybackInfo) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
+fn resume_cached_p2p_torrent(
+    state: &P2pState,
+    client: &Client,
+    base_url: &str,
+    cache_key: &str,
+    requested_file_idx: Option<usize>,
+    episode: Option<usize>,
+) -> Result<Option<CachedP2pTorrent>, String> {
+    let _cache_operation = match state.cache_ops.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let cached = {
+        let mut entries = match state.cache_entries.lock() {
+            Ok(entries) => entries,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        entries.remove(cache_key)
+    };
+    let Some(mut cached) = cached else {
+        return Ok(None);
+    };
+    if cached.server_url != base_url || cached.cached_at.elapsed() >= P2P_CACHE_TTL {
+        delete_cached_p2p_torrent(&cached, "cache_resume_stale");
+        return Ok(None);
+    }
+    let file_idx = match choose_p2p_file(&cached.details, requested_file_idx, episode) {
+        Ok(file_idx) => file_idx,
+        Err(error) => {
+            delete_cached_p2p_torrent(&cached, "cache_resume_invalid_details");
+            p2p_log(
+                "cache_resume_skipped",
+                serde_json::json!({ "cacheKey": cache_key, "error": error }),
+            );
+            return Ok(None);
+        }
+    };
+    let torrent_id = cached.torrent_id.clone();
+
+    let update_url = format!("{}/torrents/{}/update_only_files", base_url, torrent_id);
+    let update_response = match client
+        .post(&update_url)
+        .json(&serde_json::json!({ "only_files": [file_idx] }))
+        .send()
+    {
+        Ok(response) => response,
+        Err(error) => {
+            delete_cached_p2p_torrent(&cached, "cache_resume_update_transport_failed");
+            return Err(format!(
+                "No se pudo actualizar el archivo P2P en cache: {}",
+                error
+            ));
+        }
+    };
+    if !update_response.status().is_success() {
+        let status = update_response.status();
+        delete_cached_p2p_torrent(&cached, "cache_resume_update_failed");
+        return Err(format!(
+            "El motor P2P no pudo reutilizar el torrent en cache: HTTP {}",
+            status
+        ));
+    }
+
+    let start_url = format!("{}/torrents/{}/start", base_url, torrent_id);
+    let start_response = match client.post(&start_url).send() {
+        Ok(response) => response,
+        Err(error) => {
+            delete_cached_p2p_torrent(&cached, "cache_resume_start_transport_failed");
+            return Err(format!(
+                "No se pudo reanudar el torrent P2P en cache: {}",
+                error
+            ));
+        }
+    };
+    if !start_response.status().is_success() {
+        let status = start_response.status();
+        delete_cached_p2p_torrent(&cached, "cache_resume_start_failed");
+        return Err(format!(
+            "El motor P2P no pudo reanudar el torrent en cache: HTTP {}",
+            status
+        ));
+    }
+    p2p_log(
+        "cache_resumed",
+        serde_json::json!({
+            "cacheKey": cache_key,
+            "torrentId": torrent_id,
+            "previousFileIdx": cached.file_idx,
+            "fileIdx": file_idx,
+            "cachedBytes": cached.cached_bytes,
+            "ageMs": cached.cached_at.elapsed().as_millis(),
+        }),
+    );
+    cached.file_idx = file_idx;
+    cached.episode = episode;
+    cached.cached_at = Instant::now();
+    Ok(Some(cached))
+}
+
 #[cfg(target_os = "android")]
 fn take_pending_p2p(_state: &P2pState) -> Option<P2pPlaybackInfo> {
     None
@@ -1549,7 +2359,7 @@ fn fallback_playback_target(target: &str) -> ResolvedPlaybackTarget {
 }
 
 fn resolve_ytdlp_playback_target(runtime_dir: &PathBuf, target: &str) -> ResolvedPlaybackTarget {
-    if !looks_like_youtube_url(target) {
+    if !looks_like_ytdlp_url(target) {
         return fallback_playback_target(target);
     }
 
@@ -1564,26 +2374,145 @@ fn resolve_ytdlp_playback_target(runtime_dir: &PathBuf, target: &str) -> Resolve
     fallback_playback_target(target)
 }
 
-#[cfg(not(target_os = "android"))]
 fn is_p2p_target(target: &str) -> bool {
-    let value = target.trim().to_ascii_lowercase();
-    value.starts_with("magnet:")
-        || value.starts_with("stremio:")
-        || (value.len() == 40 && value.chars().all(|c| c.is_ascii_hexdigit()))
+    let value = target.trim();
+    if value.to_ascii_lowercase().starts_with("magnet:") {
+        return magnet_cache_key(value).is_some();
+    }
+    canonical_btih(value).is_some()
 }
 
 #[cfg(not(target_os = "android"))]
 fn normalize_magnet_target(target: &str) -> Result<String, String> {
     let value = target.trim();
-    if value.to_ascii_lowercase().starts_with("magnet:") {
-        return Ok(value.to_string());
+    let magnet = if value.to_ascii_lowercase().starts_with("magnet:") {
+        value.to_string()
+    } else if let Some(btih) = canonical_btih(value) {
+        format!("magnet:?xt=urn:btih:{}", btih)
+    } else {
+        return Err(String::from(
+            "La fuente P2P no trae magnet ni infoHash reproducible.",
+        ));
+    };
+    Ok(append_supplementary_trackers(&magnet))
+}
+
+const P2P_SUPPLEMENTARY_TRACKERS: &[&str] = &[
+    "udp://tracker.altrosky.nl:6969/announce",
+    "https://tracker.altrosky.nl:443/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.opentrackr.org:1337/announce",
+    "https://tracker.opentrackr.org:443/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "https://opentracker.i2p.rocks:443/announce",
+];
+
+fn append_supplementary_trackers(magnet: &str) -> String {
+    let mut result = String::with_capacity(
+        magnet.len() + P2P_SUPPLEMENTARY_TRACKERS.len() * 80,
+    );
+    result.push_str(magnet);
+    for tracker in P2P_SUPPLEMENTARY_TRACKERS {
+        result.push_str("&tr=");
+        result.push_str(&urlencoding::encode(tracker));
     }
-    if value.len() == 40 && value.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Ok(format!("magnet:?xt=urn:btih:{}", value));
+    result
+}
+
+fn canonical_btih(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.len() == 40 && value.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Some(value.to_ascii_lowercase());
     }
-    Err(String::from(
-        "La fuente P2P no trae magnet ni infoHash reproducible.",
-    ))
+    if value.len() != 32 {
+        return None;
+    }
+
+    // A BitTorrent v1 base32 hash contains exactly 160 bits. Converting it to
+    // hexadecimal gives magnets in either representation the same cache key.
+    let mut bytes = Vec::with_capacity(20);
+    let mut accumulator = 0u32;
+    let mut bit_count = 0u8;
+    for character in value.bytes() {
+        let digit = match character.to_ascii_uppercase() {
+            b'A'..=b'Z' => character.to_ascii_uppercase() - b'A',
+            b'2'..=b'7' => character - b'2' + 26,
+            _ => return None,
+        };
+        accumulator = (accumulator << 5) | u32::from(digit);
+        bit_count += 5;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            bytes.push(((accumulator >> bit_count) & 0xff) as u8);
+        }
+    }
+    if bytes.len() != 20 || bit_count != 0 {
+        return None;
+    }
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn magnet_cache_key(magnet: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(magnet).ok()?;
+    parsed.query_pairs().find_map(|(key, value)| {
+        if !key.eq_ignore_ascii_case("xt") {
+            return None;
+        }
+        const PREFIX: &str = "urn:btih:";
+        if !value
+            .get(..PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+        {
+            return None;
+        }
+        canonical_btih(&value[PREFIX.len()..])
+    })
+}
+
+fn playback_target_log_summary(target: &str) -> String {
+    let trimmed = target.trim();
+    if trimmed.to_ascii_lowercase().starts_with("magnet:") {
+        let info_hash = magnet_cache_key(trimmed).unwrap_or_else(|| String::from("unknown"));
+        let tracker_count = reqwest::Url::parse(trimmed)
+            .ok()
+            .map(|url| {
+                url.query_pairs()
+                    .filter(|(key, _)| key.eq_ignore_ascii_case("tr"))
+                    .count()
+            })
+            .unwrap_or(0);
+        return format!(
+            "magnet:btih:{}...;trackers={}",
+            info_hash.chars().take(12).collect::<String>(),
+            tracker_count
+        );
+    }
+    if let Ok(url) = reqwest::Url::parse(trimmed) {
+        let host = url.host_str().unwrap_or("unknown");
+        let extension = Path::new(url.path())
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| value.len() <= 8)
+            .map(|value| format!(".{}", value))
+            .unwrap_or_default();
+        let mut query_keys = url
+            .query_pairs()
+            .map(|(key, _)| key.into_owned())
+            .collect::<Vec<_>>();
+        query_keys.sort();
+        query_keys.dedup();
+        let query = if query_keys.is_empty() {
+            String::new()
+        } else {
+            format!("?keys={}", query_keys.join(","))
+        };
+        return format!("{}://{}/<media{}>{}", url.scheme(), host, extension, query);
+    }
+    if trimmed.len() == 40 && trimmed.chars().all(|value| value.is_ascii_hexdigit()) {
+        return format!("btih:{}...", trimmed.chars().take(12).collect::<String>());
+    }
+    format!("<opaque-target len={}>", trimmed.len())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1635,6 +2564,34 @@ fn invalidate_p2p_server(state: &P2pState, expected_base_url: &str, reason: &str
     };
     if let Some(server) = server {
         stop_p2p_server(server, reason);
+    }
+    let _cache_operation = match state.cache_ops.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let stale_cache = {
+        let mut entries = match state.cache_entries.lock() {
+            Ok(entries) => entries,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let keys = entries
+            .iter()
+            .filter(|(_, cached)| cached.server_url == expected_base_url)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| entries.remove(&key))
+            .collect::<Vec<_>>()
+    };
+    if !stale_cache.is_empty() {
+        p2p_log(
+            "cache_invalidated",
+            serde_json::json!({
+                "serverUrl": expected_base_url,
+                "entries": stale_cache.len(),
+                "reason": reason,
+            }),
+        );
     }
 }
 
@@ -1691,6 +2648,7 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         .app_cache_dir()
         .map_err(|error| format!("No se pudo ubicar cache P2P: {}", error))?
         .join("p2p");
+    let dht_config_path = cache_root.with_file_name("p2p-dht.json");
     clear_stale_p2p_cache(&cache_root)?;
     fs::create_dir_all(&cache_root)
         .map_err(|error| format!("No se pudo crear cache P2P: {}", error))?;
@@ -1718,12 +2676,16 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         };
 
         runtime.block_on(async move {
-            // Persistent DHT reuses a fixed UDP port and breaks when a dev reload
-            // overlaps the previous process. Keep DHT enabled, but per session.
             let session = match Session::new_with_opts(
                 cache_root.clone(),
                 SessionOptions {
-                    disable_dht_persistence: true,
+                    dht_config: Some(PersistentDhtConfig {
+                        dump_interval: Some(Duration::from_secs(30)),
+                        config_filename: Some(dht_config_path.clone()),
+                    }),
+                    fastresume: true,
+                    enable_upnp_port_forwarding: true,
+                    defer_writes_up_to: Some(64),
                     ..Default::default()
                 },
             )
@@ -1732,32 +2694,76 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
                 Ok(session) => {
                     p2p_log(
                         "session_started",
-                        serde_json::json!({ "dhtMode": "memory" }),
+                        serde_json::json!({
+                            "dhtMode": "persistent",
+                            "dhtConfig": dht_config_path,
+                            "fastresume": true,
+                            "deferWritesMiB": 64,
+                        }),
                     );
                     session
                 }
-                Err(dht_error) => {
+                Err(persistent_dht_error) => {
                     p2p_log(
-                        "session_dht_fallback",
-                        serde_json::json!({ "error": dht_error.to_string() }),
+                        "session_persistent_dht_fallback",
+                        serde_json::json!({ "error": persistent_dht_error.to_string() }),
                     );
                     match Session::new_with_opts(
-                        cache_root,
+                        cache_root.clone(),
                         SessionOptions {
-                            disable_dht: true,
                             disable_dht_persistence: true,
+                            fastresume: true,
+                            enable_upnp_port_forwarding: true,
+                            defer_writes_up_to: Some(64),
                             ..Default::default()
                         },
                     )
                     .await
                     {
-                        Ok(session) => session,
-                        Err(error) => {
-                            let _ = tx.send(Err(format!(
-                                "No se pudo crear sesion P2P: {} (DHT: {})",
-                                error, dht_error
-                            )));
-                            return;
+                        Ok(session) => {
+                            p2p_log(
+                                "session_started",
+                                serde_json::json!({
+                                    "dhtMode": "memory",
+                                }),
+                            );
+                            session
+                        }
+                        Err(memory_dht_error) => {
+                            p2p_log(
+                                "session_memory_dht_fallback",
+                                serde_json::json!({ "error": memory_dht_error.to_string() }),
+                            );
+                            match Session::new_with_opts(
+                                cache_root,
+                                SessionOptions {
+                                    disable_dht: true,
+                                    disable_dht_persistence: true,
+                                    fastresume: true,
+                                    enable_upnp_port_forwarding: true,
+                                    defer_writes_up_to: Some(64),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            {
+                                Ok(session) => {
+                                    p2p_log(
+                                        "session_started",
+                                        serde_json::json!({
+                                            "dhtMode": "disabled",
+                                        }),
+                                    );
+                                    session
+                                }
+                                Err(error) => {
+                                    let _ = tx.send(Err(format!(
+                                        "No se pudo crear sesion P2P: {} (DHT persistente: {}; DHT temporal: {})",
+                                        error, persistent_dht_error, memory_dht_error
+                                    )));
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
@@ -1816,6 +2822,18 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         .server
         .lock()
         .map_err(|_| String::from("No se pudo guardar el motor P2P."))?;
+
+    if state.chunk_store.lock().map_err(|_| String::from("No se pudo acceder al base de chunks P2P."))?.is_none() {
+        let cache_root = app
+            .path()
+            .app_cache_dir()
+            .map_err(|error| format!("No se pudo ubicar cache P2P: {}", error))?
+            .join("p2p");
+        let (store, tracker, _handler) = p2p::spawn_p2p_layer(cache_root);
+        *state.chunk_store.lock().map_err(|_| String::from("No se pudo guardar el base de chunks P2P."))? = Some(store);
+        *state.tracker.lock().map_err(|_| String::from("No se pudo guardar el tracker P2P."))? = Some(tracker);
+    }
+
     *server = Some(P2pServer {
         base_url: base_url.clone(),
         shutdown,
@@ -1937,9 +2955,23 @@ fn choose_p2p_file(
     Ok(selected)
 }
 
+#[cfg(not(target_os = "android"))]
+fn p2p_file_length(details: &serde_json::Value, file_idx: usize) -> Option<u64> {
+    details
+        .get("files")
+        .and_then(|value| value.as_array())
+        .and_then(|files| files.get(file_idx))
+        .and_then(|file| file.get("length"))
+        .and_then(|value| value.as_u64())
+        .filter(|length| *length > 0)
+}
+
 #[cfg(all(test, not(target_os = "android")))]
 mod p2p_file_tests {
-    use super::{choose_p2p_file, p2p_episode_file_score};
+    use super::{
+        canonical_btih, choose_p2p_file, magnet_cache_key, p2p_episode_file_score,
+        playback_target_log_summary,
+    };
 
     #[test]
     fn episode_score_recognizes_common_anime_names() {
@@ -1963,6 +2995,40 @@ mod p2p_file_tests {
         });
         assert_eq!(choose_p2p_file(&details, None, Some(1)).unwrap(), 0);
         assert_eq!(choose_p2p_file(&details, None, Some(2)).unwrap(), 1);
+    }
+
+    #[test]
+    fn magnet_cache_key_is_strict_case_insensitive_and_canonical() {
+        let hex = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            magnet_cache_key(&format!("magnet:?XT=UrN:BtIh:{hex}&tr=https%3A%2F%2Ftracker.test")),
+            Some(hex.to_string())
+        );
+        assert_eq!(
+            canonical_btih("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            Some("0000000000000000000000000000000000000000".to_string())
+        );
+        assert_eq!(
+            magnet_cache_key("magnet:?xt=urn:btih:not-a-real-hash"),
+            None
+        );
+    }
+
+    #[test]
+    fn playback_logs_redact_magnet_trackers_and_signed_urls() {
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&tr=https%3A%2F%2Ftracker.test%2Fannounce%3Fpasskey%3Dsecret";
+        let magnet_summary = playback_target_log_summary(magnet);
+        assert!(magnet_summary.contains("trackers=1"));
+        assert!(!magnet_summary.contains("passkey"));
+        assert!(!magnet_summary.contains("secret"));
+
+        let direct = playback_target_log_summary(
+            "https://cdn.example/video.mp4?token=secret&expires=123",
+        );
+        assert!(direct.contains("cdn.example"));
+        assert!(direct.contains("token"));
+        assert!(!direct.contains("secret"));
+        assert!(!direct.contains("123"));
     }
 }
 
@@ -2083,6 +3149,89 @@ fn post_p2p_magnet_with_retry(
 }
 
 #[cfg(not(target_os = "android"))]
+fn finalize_p2p_playback_target(
+    state: &P2pState,
+    base_url: String,
+    torrent_id: String,
+    selected_file_idx: usize,
+    episode: Option<usize>,
+    details: serde_json::Value,
+    cache_key: String,
+    cache_resumed: bool,
+    reused_inspected_peers: usize,
+) -> Result<ResolvedPlaybackTarget, String> {
+    let stream_url = format!(
+        "{}/torrents/{}/stream/{}",
+        base_url, torrent_id, selected_file_idx
+    );
+    let info_hash = details
+        .get("info_hash")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let hash_stream_url = if info_hash.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{}/torrents/{}/stream/{}",
+            base_url, info_hash, selected_file_idx
+        ))
+    };
+    let expected_file_size = p2p_file_length(&details, selected_file_idx);
+    let p2p_info = P2pPlaybackInfo {
+        server_url: base_url.clone(),
+        torrent_id: torrent_id.clone(),
+        file_idx: selected_file_idx,
+        episode,
+        details,
+        cache_key,
+        cache_entries: state.cache_entries.clone(),
+        cache_ops: state.cache_ops.clone(),
+        cache_generation: state.cache_generation.clone(),
+        cleanup_started: Arc::new(AtomicBool::new(false)),
+        cleanup_lock: Arc::new(Mutex::new(())),
+    };
+    set_pending_p2p(state, p2p_info.clone());
+    let ready_stream_url = match wait_until_p2p_stream_ready(
+        &stream_url,
+        hash_stream_url.as_deref(),
+        &base_url,
+        &torrent_id,
+        selected_file_idx,
+        expected_file_size,
+        &p2p_info.cleanup_started,
+    ) {
+        Ok(url) => {
+            clear_pending_p2p(state, &p2p_info);
+            url
+        }
+        Err(error) => {
+            clear_pending_p2p(state, &p2p_info);
+            discard_p2p_torrent(p2p_info.clone(), "readiness_failed");
+            return Err(error);
+        }
+    };
+    p2p_log(
+        "resolve_ok",
+        serde_json::json!({
+            "torrentId": torrent_id,
+            "fileIdx": selected_file_idx,
+            "streamUrl": ready_stream_url,
+            "fallbackHashUrl": hash_stream_url,
+            "cacheResumed": cache_resumed,
+            "reusedInspectedPeers": reused_inspected_peers,
+            "expectedFileSize": expected_file_size,
+        }),
+    );
+
+    Ok(ResolvedPlaybackTarget {
+        target: ready_stream_url,
+        audio_file: None,
+        p2p: Some(p2p_info),
+    })
+}
+
+#[cfg(not(target_os = "android"))]
 fn resolve_p2p_playback_target(
     app: &tauri::AppHandle,
     state: &P2pState,
@@ -2100,12 +3249,13 @@ fn resolve_p2p_playback_target(
         .map_err(|_| String::from("No se pudo serializar la sesion P2P."))?;
 
     let magnet = normalize_magnet_target(target)?;
+    let requested_cache_key = magnet_cache_key(&magnet);
     let initial_base_url = ensure_p2p_server(app, state)?;
     p2p_log(
         "resolve_start",
         serde_json::json!({
-            "targetPrefix": target.chars().take(80).collect::<String>(),
-            "magnetPrefix": magnet.chars().take(160).collect::<String>(),
+            "target": playback_target_log_summary(target),
+            "magnet": playback_target_log_summary(&magnet),
             "requestedFileIdx": file_idx,
             "episode": episode,
             "baseUrl": initial_base_url,
@@ -2116,6 +3266,32 @@ fn resolve_p2p_playback_target(
         .build()
         .map_err(|error| format!("No se pudo crear cliente P2P: {}", error))?;
 
+    if let Some(cache_key) = requested_cache_key.as_deref() {
+        if let Some(cached) = resume_cached_p2p_torrent(
+            state,
+            &client,
+            &initial_base_url,
+            cache_key,
+            file_idx,
+            episode,
+        )? {
+            let selected_file_idx = cached.file_idx;
+            return finalize_p2p_playback_target(
+                state,
+                initial_base_url,
+                cached.torrent_id,
+                selected_file_idx,
+                episode,
+                cached.details,
+                cache_key.to_string(),
+                true,
+                0,
+            )
+            .map(Some);
+        }
+    }
+
+    let mut inspected_peers = Vec::new();
     let selected_file_idx = if let Some(index) = file_idx {
         index
     } else {
@@ -2135,12 +3311,28 @@ fn resolve_p2p_playback_target(
         let inspect_details = inspected
             .get("details")
             .ok_or_else(|| String::from("El motor P2P no devolvio archivos al inspeccionar."))?;
+        inspected_peers = inspected
+            .get("seen_peers")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .take(64)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         choose_p2p_file(inspect_details, None, episode)?
     };
-    let add_endpoint = format!(
+    let mut add_endpoint = format!(
         "/torrents?only_files={}&overwrite=true&timeout_ms={}",
         selected_file_idx, P2P_HTTP_ATTEMPT_TIMEOUT_MS
     );
+    if !inspected_peers.is_empty() {
+        add_endpoint.push_str("&initial_peers=");
+        add_endpoint.push_str(&urlencoding::encode(&inspected_peers.join(",")));
+    }
     let (base_url, json) = post_p2p_magnet_with_retry(
         app,
         state,
@@ -2170,64 +3362,30 @@ fn resolve_p2p_playback_target(
                 .map(ToOwned::to_owned)
         })
         .ok_or_else(|| String::from("El motor P2P no devolvio id del torrent."))?;
-    let stream_url = format!(
-        "{}/torrents/{}/stream/{}",
-        base_url, torrent_id, selected_file_idx
-    );
     let info_hash = details
         .get("info_hash")
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
-    let hash_stream_url = if info_hash.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "{}/torrents/{}/stream/{}",
-            base_url, info_hash, selected_file_idx
-        ))
-    };
-
-    let p2p_info = P2pPlaybackInfo {
-        server_url: base_url.clone(),
-        torrent_id: torrent_id.clone(),
-        file_idx: selected_file_idx,
-        cleanup_started: Arc::new(AtomicBool::new(false)),
-    };
-    set_pending_p2p(state, p2p_info.clone());
-    let ready_stream_url = match wait_until_p2p_stream_ready(
-        &stream_url,
-        hash_stream_url.as_deref(),
-        &base_url,
-        &torrent_id,
+    let cache_key = requested_cache_key.unwrap_or_else(|| {
+        if info_hash.is_empty() {
+            torrent_id.to_ascii_lowercase()
+        } else {
+            info_hash.to_ascii_lowercase()
+        }
+    });
+    finalize_p2p_playback_target(
+        state,
+        base_url,
+        torrent_id,
         selected_file_idx,
-        &p2p_info.cleanup_started,
-    ) {
-        Ok(url) => {
-            clear_pending_p2p(state, &p2p_info);
-            url
-        }
-        Err(error) => {
-            clear_pending_p2p(state, &p2p_info);
-            cleanup_p2p_torrent(p2p_info.clone());
-            return Err(error);
-        }
-    };
-    p2p_log(
-        "resolve_ok",
-        serde_json::json!({
-            "torrentId": torrent_id,
-            "fileIdx": selected_file_idx,
-            "streamUrl": ready_stream_url,
-            "fallbackHashUrl": hash_stream_url,
-        }),
-    );
-
-    Ok(Some(ResolvedPlaybackTarget {
-        target: ready_stream_url,
-        audio_file: None,
-        p2p: Some(p2p_info),
-    }))
+        episode,
+        details.clone(),
+        cache_key,
+        false,
+        inspected_peers.len(),
+    )
+    .map(Some)
 }
 
 #[cfg(target_os = "android")]
@@ -2248,102 +3406,319 @@ fn wait_until_p2p_stream_ready(
     base_url: &str,
     torrent_id: &str,
     file_idx: usize,
+    expected_file_size: Option<u64>,
     cancelled: &AtomicBool,
 ) -> Result<String, String> {
-    let client = Client::builder()
+    let status_client = Client::builder()
+        .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(6))
         .build()
         .map_err(|error| format!("No se pudo crear cliente de verificacion P2P: {}", error))?;
+    let prefetch_client = Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("No se pudo crear cliente de precarga P2P: {}", error))?;
 
     let mut attempts: u32 = 0;
     let mut last_status: Option<u16> = None;
     let mut last_error: Option<String> = None;
-    let start = std::time::Instant::now();
-    let max_wait = Duration::from_secs(75);
-    let urls = if let Some(hash_url) = hash_stream_url {
-        vec![id_stream_url.to_string(), hash_url.to_string()]
-    } else {
-        vec![id_stream_url.to_string()]
-    };
+    let mut last_state = String::new();
+    let mut best_prefetched = 0usize;
+    let mut progress_bytes_total = 0u64;
+    let mut initializing_start: Option<Instant> = None;
+    let start = Instant::now();
+    let max_wait = Duration::from_secs(60);
+    let stats_url = format!("{}/torrents/{}/stats/v1", base_url, torrent_id);
 
     while start.elapsed() < max_wait {
         if cancelled.load(Ordering::Acquire) {
             return Err(String::from("La preparacion del torrent fue cancelada."));
         }
         attempts += 1;
-        for url in &urls {
-            let response = client
-                .get(url)
-                .header(reqwest::header::RANGE, "bytes=0-1")
-                .send();
+        let stats = status_client.get(&stats_url).send();
+        let mut live = false;
+        match stats {
+            Ok(response) => {
+                last_status = Some(response.status().as_u16());
+                if response.status().is_success() {
+                    match response.json::<serde_json::Value>() {
+                        Ok(value) => {
+                            let state = value
+                                .get("state")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown");
+                            live = state == "live";
+                            let state_changed = state != last_state;
+                            if state_changed || attempts == 1 || attempts % 4 == 0 {
+                                p2p_log(
+                                    "torrent_readiness",
+                                    serde_json::json!({
+                                        "attempt": attempts,
+                                        "state": state,
+                                        "progressBytes": value.get("progress_bytes"),
+                                        "fileProgress": value.get("file_progress").and_then(|items| items.get(file_idx)),
+                                        "downloadSpeed": value.pointer("/live/download_speed"),
+                                        "peerStats": value.pointer("/live/snapshot/peer_stats"),
+                                        "elapsedMs": start.elapsed().as_millis(),
+                                        "bestPrefetchedBytes": best_prefetched,
+                                    }),
+                                );
+                            }
+                            last_state = state.to_string();
+                            progress_bytes_total = value
+                                .get("progress_bytes")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            if state == "initializing" {
+                                if initializing_start.is_none() {
+                                    initializing_start = Some(Instant::now());
+                                } else if initializing_start.unwrap().elapsed() > Duration::from_secs(30) && attempts % 8 == 0 {
+                                    p2p_log(
+                                        "torrent_initializing_slow",
+                                        serde_json::json!({
+                                            "attempt": attempts,
+                                            "elapsedMs": start.elapsed().as_millis(),
+                                            "progressBytes": progress_bytes_total,
+                                        }),
+                                    );
+                                }
+                            } else {
+                                initializing_start = None;
+                            }
+                            if state == "error" {
+                                let engine_error = value
+                                    .get("error")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("error desconocido");
+                                return Err(format!(
+                                    "El torrent entro en estado de error: {}",
+                                    engine_error
+                                ));
+                            }
+                        }
+                        Err(error) => {
+                            last_error = Some(format!("Estadisticas P2P invalidas: {}", error))
+                        }
+                    }
+                }
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
 
-            match response {
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    let ok = response.status().is_success()
-                        || status == 206
-                        || status == 416
-                        || status == 302
-                        || status == 307
-                        || status == 308;
+        if live && progress_bytes_total == 0 && attempts < 40 {
+            thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+
+        if live {
+            let mut urls = vec![id_stream_url];
+            if let Some(hash_url) = hash_stream_url {
+                urls.push(hash_url);
+            }
+            for (url_index, url) in urls.into_iter().enumerate() {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(String::from("La preparacion del torrent fue cancelada."));
+                }
+                let response = prefetch_client
+                    .get(url)
+                    // librqbit 8.1.1 accepts only the single-offset form bytes=<offset>-.
+                    .header(reqwest::header::RANGE, "bytes=0-")
+                    .send();
+                let mut response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_error = Some(error.to_string());
+                        p2p_log(
+                            "stream_prefetch_error",
+                            serde_json::json!({
+                                "attempt": attempts,
+                                "url": url,
+                                "error": error.to_string(),
+                            }),
+                        );
+                        continue;
+                    }
+                };
+                let status = response.status().as_u16();
+                last_status = Some(status);
+                if status == 416 {
                     p2p_log(
-                        "stream_probe",
+                        "stream_prefetch_partial",
                         serde_json::json!({
                             "attempt": attempts,
                             "url": url,
                             "status": status,
-                            "ok": ok,
+                            "bytes": 0,
+                            "expectedFileSize": expected_file_size,
+                            "reason": "range_unsatisfied",
                         }),
                     );
-                    if ok {
-                        return Ok(url.clone());
+                    continue;
+                }
+                if !(response.status().is_success() || status == 206) {
+                    if url_index == 0 && status != 404 {
+                        break;
                     }
-                    last_status = Some(status);
+                    continue;
                 }
-                Err(error) => {
-                    let message = error.to_string();
-                    last_error = Some(message.clone());
-                    p2p_log(
-                        "stream_probe_error",
-                        serde_json::json!({
-                            "attempt": attempts,
-                            "url": url,
-                            "error": message,
-                        }),
-                    );
-                }
-            }
-        }
 
-        if attempts == 6 || attempts == 12 || attempts == 18 {
-            let details_url = format!("{}/torrents/{}", base_url, torrent_id);
-            if let Ok(response) = client.get(&details_url).send() {
-                let status = response.status().as_u16();
-                let body = response.text().unwrap_or_default();
+                let response_length = response.content_length();
+                let expected_bytes = expected_file_size.or(response_length);
+                let mut prefetched = 0usize;
+                let mut buffer = [0u8; 64 * 1024];
+                let mut read_error = None;
+                while prefetched < P2P_PREFETCH_TARGET_BYTES {
+                    if cancelled.load(Ordering::Acquire) {
+                        return Err(String::from("La preparacion del torrent fue cancelada."));
+                    }
+                    let remaining = P2P_PREFETCH_TARGET_BYTES - prefetched;
+                    let read_len = remaining.min(buffer.len());
+                    match response.read(&mut buffer[..read_len]) {
+                        Ok(0) => break,
+                        Ok(read) => prefetched += read,
+                        Err(error) => {
+                            read_error = Some(error.to_string());
+                            break;
+                        }
+                    }
+                }
+                best_prefetched = best_prefetched.max(prefetched);
+                let complete_small_file = expected_bytes
+                    .filter(|size| *size > 0 && *size <= P2P_PREFETCH_TARGET_BYTES as u64)
+                    .is_some_and(|size| prefetched as u64 >= size);
+                let elapsed = start.elapsed();
+                let enough_for_start = prefetched >= P2P_PREFETCH_TARGET_BYTES
+                    || complete_small_file
+                    || prefetched >= P2P_PREFETCH_LARGE_BYTES
+                    || (prefetched >= P2P_PREFETCH_MIN_BYTES
+                        && elapsed >= Duration::from_millis(P2P_PREFETCH_GRACE_MS))
+                    || (status == 206 && attempts >= 10);
                 p2p_log(
-                    "torrent_details_probe",
+                    if enough_for_start {
+                        "stream_prefetch_ready"
+                    } else {
+                        "stream_prefetch_partial"
+                    },
                     serde_json::json!({
                         "attempt": attempts,
                         "status": status,
-                        "bodyPrefix": body.chars().take(3000).collect::<String>(),
+                        "url": url,
+                        "bytes": prefetched,
+                        "targetBytes": P2P_PREFETCH_TARGET_BYTES,
+                        "prefetchMinBytes": P2P_PREFETCH_MIN_BYTES,
+                        "prefetchLargeBytes": P2P_PREFETCH_LARGE_BYTES,
+                        "readError": read_error,
+                        "expectedFileSize": expected_bytes,
+                        "elapsedMs": start.elapsed().as_millis(),
                         "torrentId": torrent_id,
                         "fileIdx": file_idx,
                     }),
                 );
+                if enough_for_start {
+                    return Ok(url.to_string());
+                }
+                if url_index == 0 {
+                    break;
+                }
             }
         }
 
-        thread::sleep(Duration::from_millis(850));
+        thread::sleep(Duration::from_millis(250));
     }
 
     Err(format!(
-        "El stream P2P no quedo listo (torrent {}, fileIdx {}). status={:?}, error={:?}. Revisa {}",
+        "El stream P2P no reunio buffer suficiente (torrent {}, fileIdx {}, estado {}, precarga {} bytes). status={:?}, error={:?}. Revisa {}",
         torrent_id,
         file_idx,
+        last_state,
+        best_prefetched,
         last_status,
         last_error,
         p2p_log_path().display()
     ))
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod p2p_readiness_tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    fn read_http_request(stream: &mut TcpStream) -> Result<String, String> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|error| error.to_string())?;
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 2048];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream
+                .read(&mut buffer)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        String::from_utf8(request).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn readiness_uses_valid_range_and_prefetches_bytes() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = thread::spawn(move || -> Result<(), String> {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
+                let request = read_http_request(&mut stream)?;
+                if request.starts_with("GET /torrents/1/stats/v1 ") {
+                    let body = br#"{"state":"live","progress_bytes":2097152,"file_progress":[1.0],"error":null,"live":{"download_speed":{"mbps":20},"snapshot":{"peer_stats":{"live":3}}}}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .map_err(|error| error.to_string())?;
+                    stream.write_all(body).map_err(|error| error.to_string())?;
+                } else if request.starts_with("GET /torrents/1/stream/0 ") {
+                    if !request.to_ascii_lowercase().contains("range: bytes=0-\r\n") {
+                        return Err(format!("missing valid range header: {request}"));
+                    }
+                    let body = vec![7u8; P2P_PREFETCH_TARGET_BYTES];
+                    write!(
+                        stream,
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 0-{}/{}\r\nConnection: close\r\n\r\n",
+                        body.len(),
+                        body.len() - 1,
+                        body.len()
+                    )
+                    .map_err(|error| error.to_string())?;
+                    stream.write_all(&body).map_err(|error| error.to_string())?;
+                } else {
+                    return Err(format!("unexpected request: {request}"));
+                }
+            }
+            Ok(())
+        });
+
+        let base_url = format!("http://{}", address);
+        let stream_url = format!("{}/torrents/1/stream/0", base_url);
+        let cancelled = AtomicBool::new(false);
+        let ready = wait_until_p2p_stream_ready(
+            &stream_url,
+            None,
+            &base_url,
+            "1",
+            0,
+            Some(P2P_PREFETCH_TARGET_BYTES as u64),
+            &cancelled,
+        )
+        .expect("stream should become ready");
+        assert_eq!(ready, stream_url);
+        server
+            .join()
+            .expect("server thread")
+            .expect("test server result");
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2567,6 +3942,7 @@ async fn open_mpv(
     file_idx: Option<usize>,
     episode: Option<usize>,
     start_time: Option<f64>,
+    private_torrent: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if target.trim().is_empty() {
         return Err(String::from("La fuente no tiene URL reproducible."));
@@ -2576,10 +3952,15 @@ async fn open_mpv(
             "La URL de esta fuente es demasiado larga para abrirse de forma segura.",
         ));
     }
+    if private_torrent.unwrap_or(false) && is_p2p_target(&target) {
+        return Err(String::from(
+            "Los torrents privados estan bloqueados hasta poder aislarlos en una sesion sin DHT.",
+        ));
+    }
     mpv_bridge_log(
         "open_requested",
         serde_json::json!({
-            "targetPrefix": target.chars().take(240).collect::<String>(),
+            "target": playback_target_log_summary(&target),
             "hasSubtitle": subtitle.as_ref().map(|value| !value.trim().is_empty()).unwrap_or(false),
             "hasHeaders": headers.as_ref().map(|value| !value.is_empty()).unwrap_or(false),
             "fileIdx": file_idx,
@@ -2644,7 +4025,7 @@ async fn open_mpv(
     mpv_bridge_log(
         "target_resolved",
         serde_json::json!({
-            "resolvedPrefix": playback_target.target.chars().take(240).collect::<String>(),
+            "resolvedTarget": playback_target_log_summary(&playback_target.target),
             "audioFile": playback_target.audio_file.as_ref(),
             "isP2p": playback_target.p2p.is_some(),
             "runtimeDir": runtime_dir.display().to_string(),
@@ -2672,7 +4053,7 @@ async fn open_mpv(
     #[cfg(not(target_os = "windows"))]
     let _ = parent_hwnd;
 
-    let ytdl_enabled = looks_like_youtube_url(&target);
+    let ytdl_enabled = looks_like_ytdlp_url(&target);
 
     for (name, value) in [
         ("terminal", "no"),
@@ -2685,6 +4066,10 @@ async fn open_mpv(
         ("cache-pause", "yes"),
         ("cache-pause-initial", "no"),
         ("cache-pause-wait", "1"),
+        ("cache-secs", "30"),
+        ("demuxer-readahead-secs", "20"),
+        ("stream-buffer-size", "1MiB"),
+        ("network-timeout", "15"),
         ("hwdec", "auto-safe"),
         ("vo", "gpu-next"),
         ("gpu-api", "d3d11"),
@@ -2799,7 +4184,7 @@ async fn open_mpv(
     mpv_bridge_log(
         "loadfile_queued",
         serde_json::json!({
-            "resolvedPrefix": playback_target.target.chars().take(240).collect::<String>(),
+            "resolvedTarget": playback_target_log_summary(&playback_target.target),
             "startTime": normalized_start_time,
         }),
     );
@@ -3285,6 +4670,11 @@ fn trakt_api_get(
     }))
 }
 
+#[tauri::command]
+fn get_builtin_tmdb_key() -> String {
+    "d8fbcec110971e64699f338caf0e7192".to_string()
+}
+
 fn trakt_client_secret() -> Result<String, String> {
     if let Some(value) = option_env!("AETHERIO_TRAKT_CLIENT_SECRET")
         .map(str::trim)
@@ -3332,6 +4722,8 @@ fn trakt_oauth_error_message(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    let youtube_state = YouTubeState::new()
+        .unwrap_or_else(|error| panic!("No se pudo inicializar YouTube: {error}"));
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -3375,9 +4767,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(MpvState::default())
         .manage(P2pState::default())
+        .manage(youtube_state)
         .manage(scraper::provider_http::ProviderHttpState::default())
         .invoke_handler(tauri::generate_handler![
             playback_capabilities,
+            youtube_search,
+            youtube_resolve_stream,
             fetch_introdb_segments,
             fetch_mdblist_ratings,
             android_player_open,
@@ -3398,6 +4793,7 @@ pub fn run() {
             trakt_oauth_token,
             trakt_oauth_revoke,
             trakt_api_get,
+            get_builtin_tmdb_key,
             scraper::scrape_streams,
             scraper::get_scraper_sites,
             scraper::provider_http::provider_http_request

@@ -25,15 +25,25 @@ serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 libloading = "0.8"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "cookies", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "brotli", "cookies", "deflate", "gzip", "json", "rustls-tls", "zstd"] }
 scraper = "0.20"
 regex = "1"
 urlencoding = "2"
 base64 = "0.22"
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
 tauri-plugin-process = "2"
+tiny_http = "0.12"
+str0m = "0.21"
+tokio-tungstenite = "0.30"
+dashmap = "6"
+bytes = "1"
+parking_lot = "0.12"
+thiserror = "2"
+hex = "0.4"
+futures-util = "0.3"
+tokio-stream = "0.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 librqbit = { version = "8.1.1", default-features = false, features = ["http-api", "default-tls", "tracing-subscriber-utils"] }

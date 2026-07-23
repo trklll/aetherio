@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AudioLines, Captions, Check, ChevronDown, Film, Play, RefreshCw, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Film, RefreshCw, User, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist";
@@ -15,28 +15,25 @@ import { useOriginalLanguage } from "../../hooks/useOriginalLanguage";
 import { useSubtitles } from "../../hooks/useSubtitles";
 import { useStreams } from "../../hooks/useStreams";
 import { useScrapedStreams } from "../../hooks/useScrapedStreams";
+import { useYouTubePlayer } from "../../hooks/useYouTubePlayer";
 import { isPlayableMediaStream } from "../../utils/playableMedia";
-import { sortStreamsSpanishFirst } from "../../utils/streamLanguagePriority";
+import { streamSpanishPriority } from "../../utils/streamLanguagePriority";
+import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaStream, StreamQuery } from "../../types/stream";
 import type { SubtitleSource } from "../../types/subtitle";
 import PageContainer from "../../components/layout/PageContainer";
 import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow";
-import ContextMenu from "../../components/ui/ContextMenu";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
 import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork";
 import { pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork";
 import {
-  buildContinueWatchingKey,
   getExactResumeForQuery,
-  markEpisodeAsWatched,
-  readPlaybackStateEntries,
-  removeContinueWatchingEntry,
 } from "../../utils/continueWatching";
 import { readDetailMediaMeta, readDetailBackgroundOverride } from "../../utils/mediaMetadata";
 import { tweenTo } from "../../utils/motion";
 import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/streamFormatters";
-import { syncTraktMarkedUnwatched, syncTraktMarkedWatched, syncTraktRemovePlayback } from "../../trakt";
+import { getReportedSeeders } from "../../utils/torrentHealth";
 import {
   AUTO_NEXT_SOURCE_KEY,
   IMG,
@@ -45,9 +42,43 @@ import {
   SELECTED_PLAYBACK_OVERRIDES_KEY,
   SELECTED_STREAM_KEY,
   getDetailLogoKey,
+  getStreamKind,
   playbackOverrideQueryKey,
   resolveTmdbId,
 } from "../Player/utils";
+
+const sourceLogoUrls = import.meta.glob("../../assets/logosaddons/*.{png,jpg,jpeg}", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+const SOURCE_LOGO_MAP: Record<string, string> = {};
+for (const [path, url] of Object.entries(sourceLogoUrls)) {
+  const name = path.split("/").pop()?.toLowerCase() ?? "";
+  const urlStr = String(url);
+  const cleanKey = name
+    .replace(/-(logo|png)\.[a-z]+$/, "")
+    .replace(/-png$/, "")
+    .toLowerCase();
+  SOURCE_LOGO_MAP[cleanKey] = urlStr;
+
+  const noHyphenKey = cleanKey.replace(/-/g, "");
+  if (noHyphenKey !== cleanKey) {
+    SOURCE_LOGO_MAP[noHyphenKey] = urlStr;
+  }
+}
+
+function getSourceLogo(sourceName: string): string | null {
+  let key = sourceName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (SOURCE_LOGO_MAP[key]) return SOURCE_LOGO_MAP[key];
+  if (key === "nyaasi") {
+    if (SOURCE_LOGO_MAP["nyaa"]) return SOURCE_LOGO_MAP["nyaa"];
+  }
+  const fuzzy = sourceName.toLowerCase();
+  if (SOURCE_LOGO_MAP[fuzzy]) return SOURCE_LOGO_MAP[fuzzy];
+  return null;
+}
 
 interface EpisodePageMeta {
   name: string;
@@ -68,6 +99,7 @@ interface EpisodePageMeta {
   airDate?: string;
   mdbListRatings?: MdbListRatings;
   voteAverage?: number;
+  trailerVideoIds?: string[];
 }
 
 interface AutoNextSourceHint {
@@ -92,6 +124,8 @@ const CONTINUE_PLAY_PARAM = "continue";
 const FROM_PLAYER_PARAM = "fromPlayer";
 const AUTO_OPTION = "auto";
 const NO_SUBTITLES_OPTION = "none";
+const PLAYER_HANDOFF_DELAY_MS = 90;
+const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
 
 function numberValue(value: unknown) {
   const next = Number(value);
@@ -118,14 +152,21 @@ export default function EpisodiePage() {
   const [meta, setMeta] = useState<EpisodePageMeta | null>(null);
   const [metaReady, setMetaReady] = useState(false);
   const [selectedStreamId, setSelectedStreamId] = useState("");
-  const [audioChoice, setAudioChoice] = useState(AUTO_OPTION);
-  const [subtitleChoice, setSubtitleChoice] = useState(AUTO_OPTION);
-  const [openMenu, setOpenMenu] = useState<"audio" | "subtitle" | null>(null);
-  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
-  const [watchedVersion, setWatchedVersion] = useState(0);
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  const audioChoice = AUTO_OPTION;
+  const subtitleChoice = AUTO_OPTION;
   const [heroStillIndex, setHeroStillIndex] = useState(0);
   const [playerTransitioning, setPlayerTransitioning] = useState(false);
   const playerTransitionTimerRef = useRef<number | null>(null);
+  const playStreamRef = useRef<(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) => void>(() => {});
+  const allStreamsRef = useRef<MediaStream[]>([]);
+
+  const handleSelectStream = useCallback((streamId: string) => {
+    const stream = allStreamsRef.current.find(c => c.id === streamId);
+    if (!stream) return;
+    setSelectedStreamId(streamId);
+    playStreamRef.current(stream);
+  }, []);
 
   const query = useMemo<StreamQuery | null>(() => {
     const type = params.get("type");
@@ -142,15 +183,25 @@ export default function EpisodiePage() {
   }, [params]);
 
   const { streams, loading, error, reload, streamId } = useStreams(query);
-  const { streams: scrapedStreams, loading: scrapedLoading, error: scrapedError } = useScrapedStreams(query, meta?.name);
+  const {
+    streams: scrapedStreams,
+    loading: scrapedLoading,
+    error: scrapedError,
+    reload: reloadScrapedStreams,
+  } = useScrapedStreams(query, meta?.name);
   const allStreams = useMemo(
-    () => sortStreamsSpanishFirst([...streams, ...scrapedStreams].filter(isPlayableMediaStream)),
+    () => sortStreamsForPlayback([...streams, ...scrapedStreams].filter(isPlayableMediaStream)),
     [streams, scrapedStreams],
   );
   const selectedStream = useMemo(
     () => allStreams.find(stream => stream.id === selectedStreamId) ?? allStreams[0] ?? null,
     [selectedStreamId, allStreams],
   );
+
+  useEffect(() => {
+    setSelectedSource(null);
+  }, [query?.type, query?.id, query?.season, query?.episode]);
+
   const originalLanguage = useOriginalLanguage(query, selectedStream);
   const autoplayRequested = params.get(AUTO_PLAY_PARAM) === "1";
   const continueRequested = params.get(CONTINUE_PLAY_PARAM) === "1";
@@ -226,6 +277,12 @@ export default function EpisodiePage() {
             poster: pickArtwork(item.poster) ?? nextMeta.poster,
             logo: sanitizeLogoUrl(item.logo) ?? nextMeta.logo,
             alternateImages: uniqueArtwork([...(nextMeta.alternateImages ?? []), ...addonAlternateImages]),
+            trailerVideoIds: query.type === "movie"
+              ? uniqueStrings([
+                  ...(nextMeta.trailerVideoIds ?? []),
+                  ...collectTrailerVideoIds(item.trailers, item.trailerStreams, item.trailer),
+                ])
+              : undefined,
             description: item.description ?? item.overview ?? nextMeta.description,
             genres: normalizeList(item.genres ?? item.genre) ?? nextMeta.genres,
             director: normalizeCredit(item.director) ?? nextMeta.director,
@@ -248,7 +305,7 @@ export default function EpisodiePage() {
         const tmdbId = await resolveTmdbId(query.type, query.id);
         if (tmdbId) {
           const tmdbType = query.type === "movie" ? "movie" : "tv";
-          const [details, images, episode, episodeImages] = await Promise.all([
+          const [details, images, episode, episodeImages, tmdbVideos] = await Promise.all([
             tmdbFetch(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES", append_to_response: "external_ids" } }),
             tmdbFetch(`/${tmdbType}/${tmdbId}/images`, { params: { include_image_language: "es,en,null" } }),
             query.type !== "movie" && typeof query.season === "number" && query.episode
@@ -256,6 +313,9 @@ export default function EpisodiePage() {
               : Promise.resolve(null),
             query.type !== "movie" && typeof query.season === "number" && query.episode
               ? tmdbFetch(`/tv/${tmdbId}/season/${query.season}/episode/${query.episode}/images`)
+              : Promise.resolve(null),
+            query.type === "movie"
+              ? tmdbFetch(`/movie/${tmdbId}/videos`, { params: { language: "es-ES", include_video_language: "es,en,null" } })
               : Promise.resolve(null),
           ]);
           const logoPath = pickTmdbLogo(images?.logos);
@@ -276,6 +336,12 @@ export default function EpisodiePage() {
             poster: nextMeta.poster ?? (shouldUseTmdbArtwork && details?.poster_path ? `${IMG}/w780${details.poster_path}` : undefined),
             logo: nextMeta.logo ?? (shouldUseTmdbArtwork && logoPath ? `${IMG}/w500${logoPath}` : undefined),
             alternateImages: uniqueArtwork([...(nextMeta.alternateImages ?? []), ...tmdbBackdrops]),
+            trailerVideoIds: query.type === "movie"
+              ? uniqueStrings([
+                  ...(nextMeta.trailerVideoIds ?? []),
+                  ...mapTmdbTrailerVideoIds(tmdbVideos?.results),
+                ])
+              : undefined,
             description: nextMeta.description ?? details?.overview,
             genres: nextMeta.genres ?? normalizeList((details?.genres ?? []).map((genre: any) => genre?.name).filter(Boolean)),
             runtime: nextMeta.runtime ?? runtimeMinutes(details?.runtime),
@@ -289,7 +355,7 @@ export default function EpisodiePage() {
               ...nextMeta,
               episodeStill: pickRandomArtwork(nextMeta.alternateImages, [
                 nextMeta.background,
-                details?.backdrop_path ? `${IMG}/original${details.backdrop_path}` : undefined,
+                details?.backdrop_path ? `${IMG}/w780${details.backdrop_path}` : undefined,
               ]) ?? nextMeta.episodeStill,
             };
           }
@@ -299,7 +365,7 @@ export default function EpisodiePage() {
               ...nextMeta,
               episodeTitle: nextMeta.episodeTitle || episode.name,
               episodeOverview: episode.overview || nextMeta.episodeOverview,
-              episodeStill: episode.still_path ? `${IMG}/original${episode.still_path}` : nextMeta.episodeStill,
+              episodeStill: episode.still_path ? `${IMG}/w780${episode.still_path}` : nextMeta.episodeStill,
               episodeImages: uniqueArtwork([
                 ...(nextMeta.episodeImages ?? []),
                 ...mapTmdbEpisodeStills(episodeImages?.stills),
@@ -390,7 +456,7 @@ export default function EpisodiePage() {
 
   useEffect(() => {
     if (!query || returnedFromPlayer || loading || scrapedLoading || !metaReady || !allStreams.length) return;
-    const cached = getPreferredCachedStream(query, playbackPreferences);
+    const cached = getPreferredCachedStream(allStreams, query, playbackPreferences);
     const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
     const shouldAutoPlay = continueRequested
       ? playbackPreferences.reuseLastLink && Boolean(nextStream)
@@ -470,21 +536,6 @@ export default function EpisodiePage() {
     { value: NO_SUBTITLES_OPTION, label: "Sin subtitulos" },
     ...allSubtitles.map(subtitle => ({ value: `ext:${subtitle.url}`, label: subtitle.label })),
   ], [allSubtitles, autoSubtitleLabel]);
-  const preferredAudioAvailable = useMemo(() => {
-    if (!selectedStream) return false;
-    return streamSupportsPreferredAudio(selectedStream, playbackPreferences.firstAudioLanguage, originalLanguage);
-  }, [originalLanguage, playbackPreferences.firstAudioLanguage, selectedStream]);
-  const preferredSubtitleAvailable = useMemo(() => {
-    if (subtitleOptions.length <= 2) return false;
-    if (!playbackPreferences.preferredSubtitleLanguage) return true;
-    const preferred = normalizeLanguageToken(resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage));
-    return subtitleOptions.some(option => option.value.startsWith("ext:") && normalizeLanguageToken(option.label).includes(preferred));
-  }, [originalLanguage, playbackPreferences.preferredSubtitleLanguage, subtitleOptions]);
-  const watchedEntry = useMemo(() => {
-    if (!query) return null;
-    const key = buildContinueWatchingKey(query);
-    return readPlaybackStateEntries().find(entry => entry.key === key && entry.completed) ?? null;
-  }, [query, watchedVersion]);
   const heroStillKey = useMemo(() => {
     const backgroundKey = artworkKey(ensureOriginalTmdbImage(meta?.background));
     if (query?.type === "movie") {
@@ -514,18 +565,12 @@ export default function EpisodiePage() {
   }, [heroStillKey]);
 
   useEffect(() => {
-    if (heroStills.length <= 1) return;
+    if (query?.type === "movie" || heroStills.length <= 1) return;
     const timer = window.setInterval(() => {
       setHeroStillIndex(index => (index + 1) % heroStills.length);
     }, 6200);
     return () => window.clearInterval(timer);
-  }, [heroStills.length]);
-
-  useEffect(() => {
-    if (subtitleChoice === AUTO_OPTION || subtitleChoice === NO_SUBTITLES_OPTION) return;
-    if (subtitleOptions.some(option => option.value === subtitleChoice)) return;
-    setSubtitleChoice(AUTO_OPTION);
-  }, [subtitleChoice, subtitleOptions]);
+  }, [heroStills.length, query?.type]);
 
   if (!query) {
     return (
@@ -546,10 +591,11 @@ export default function EpisodiePage() {
     ?? ensureOriginalTmdbImage(meta?.poster)
     ?? ensureOriginalTmdbImage(meta?.background);
   const background = ensureOriginalTmdbImage(meta?.background) ?? meta?.poster;
-  const description = meta?.episodeOverview || meta?.description || "Selecciona la fuente, audio y subtitulos antes de reproducir.";
-  const sourceSummary = selectedStream ? formatSourceSummary(selectedStream) : (loading || scrapedLoading) ? "Buscando fuentes..." : "Sin fuente seleccionada";
   const showEpisodeHeading = query.type !== "movie";
   const detailPath = `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}?${detailReturnParams}`;
+
+  playStreamRef.current = playStream;
+  allStreamsRef.current = allStreams;
 
   function playStream(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) {
     if (!query) return;
@@ -573,6 +619,18 @@ export default function EpisodiePage() {
     saveLastLink(streamCacheKey(query.type, query.id, query.season, query.episode), stream);
     writePlaybackOverrides(query, playbackSelection);
     sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
+    if (getStreamKind(stream) === "https") {
+      const fallbacks = allStreams
+        .filter(candidate => (
+          candidate.id !== stream.id
+          && getStreamKind(candidate) === "https"
+          && candidate.behaviorHints?.scraperPlayback !== "iframe"
+        ))
+        .slice(0, 6);
+      sessionStorage.setItem(DIRECT_STREAM_FALLBACKS_KEY, JSON.stringify(fallbacks));
+    } else {
+      sessionStorage.removeItem(DIRECT_STREAM_FALLBACKS_KEY);
+    }
     sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
     sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
       name: mainTitle,
@@ -592,30 +650,7 @@ export default function EpisodiePage() {
     if (playerTransitionTimerRef.current !== null) window.clearTimeout(playerTransitionTimerRef.current);
     playerTransitionTimerRef.current = window.setTimeout(() => {
       navigate(to, { replace: options?.replace ?? false });
-    }, 620);
-  }
-
-  function markCurrentWatched() {
-    if (!query) return;
-    if (watchedEntry) {
-      const removed = removeContinueWatchingEntry(watchedEntry.key);
-      setWatchedVersion(version => version + 1);
-      void syncTraktMarkedUnwatched(removed ?? watchedEntry);
-      void syncTraktRemovePlayback(removed ?? watchedEntry);
-      return;
-    }
-    const marked = markEpisodeAsWatched({
-      query,
-      name: mainTitle,
-      episodeName: episodeTitle,
-      runtimeSeconds: (meta?.runtime ?? 0) * 60,
-      logo: sanitizeLogoUrl(meta?.logo),
-      background: ensureOriginalTmdbImage(meta?.background),
-      poster: meta?.poster,
-      episodeStill: ensureOriginalTmdbImage(meta?.episodeStill),
-    });
-    setWatchedVersion(version => version + 1);
-    void syncTraktMarkedWatched(marked);
+    }, PLAYER_HANDOFF_DELAY_MS);
   }
 
   return (
@@ -627,6 +662,7 @@ export default function EpisodiePage() {
             alt=""
             decoding="async"
             className="absolute inset-0 h-full w-full object-cover object-top opacity-50 grayscale"
+            style={{ aspectRatio: "16/9" }}
           />
         ) : null}
         <div className="absolute inset-0 bg-black/62" />
@@ -655,44 +691,49 @@ export default function EpisodiePage() {
         </div>
       ) : null}
 
-      <PageContainer fullBleed className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1680px] flex-col pb-9 pt-[88px]">
-        <section className="episode-page-layout grid min-h-[calc(100vh-160px)] grid-cols-1 items-end gap-10 lg:grid-cols-[minmax(380px,0.94fr)_minmax(460px,1.06fr)]">
-          <div className="episode-hero-main flex min-w-0 flex-col justify-end pb-1">
-            <div className="episode-media-card liquid-glass-dark relative mb-8 aspect-video w-full max-w-[560px] overflow-hidden rounded-2xl border-white/[0.08]">
-              {heroStills.length > 1 ? (
-                heroStills.map((still, index) => {
-                  const active = index === heroStillIndex % heroStills.length;
-                  return <EpisodeHeroStill key={still} src={still} alt={mainTitle} active={active} />;
-                })
-              ) : heroStill ? (
-                <img src={heroStill} alt={episodeTitle} decoding="async" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-white/42">
-                  <Film size={40} />
-                </div>
-              )}
+      <PageContainer fullBleed className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1920px] flex-col pb-9 pt-[88px]">
+        <section className="episode-page-layout grid min-h-[calc(100vh-160px)] grid-cols-1 items-center gap-12 lg:grid-cols-[0.82fr_1fr]">
+          <div className="episode-hero-main flex min-w-0 flex-col items-center justify-center pb-1">
+            <div className="episode-media-card liquid-glass-dark relative mx-auto mb-8 aspect-video w-full max-w-[800px] overflow-hidden rounded-2xl border-white/[0.08]">
+              <div className="absolute inset-[-2.5%] overflow-hidden">
+                {heroStills.length > 1 ? (
+                  heroStills.map((still, index) => {
+                    const active = index === heroStillIndex % heroStills.length;
+                    return <EpisodeHeroStill key={still} src={still} alt={mainTitle} active={active} />;
+                  })
+                ) : heroStill ? (
+                  <img src={heroStill} alt={episodeTitle} decoding="async" className="h-full w-full object-cover" style={{ aspectRatio: "16/9" }} />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-white/42">
+                    <Film size={40} />
+                  </div>
+                )}
+                {query.type === "movie" && meta.trailerVideoIds?.length ? (
+                  <MovieTrailerPreview videoIds={meta.trailerVideoIds} />
+                ) : null}
+              </div>
               <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/46 via-transparent to-white/[0.04]" />
             </div>
 
-            <div className="episode-hero-copy max-w-[760px] pl-1">
+            <div className="episode-hero-copy w-full max-w-[800px] text-center">
               {meta?.logo ? (
                 <button
                   type="button"
                   onClick={() => navigate(detailPath)}
-                  className="mb-5 rounded-md bg-transparent p-0 text-left gsap-transition hover:opacity-90"
+                  className="mx-auto mb-5 block max-w-full rounded-md bg-transparent p-0 text-center gsap-transition hover:opacity-90"
                   aria-label="Ir al detalle"
                   title="Ir al detalle"
                 >
-                  <img src={meta.logo} alt={mainTitle} decoding="async" className="max-h-[96px] max-w-[360px] object-contain drop-shadow-[0_10px_34px_rgba(0,0,0,0.72)]" />
+                  <img src={meta.logo} alt={mainTitle} decoding="async" className="mx-auto max-h-[216px] max-w-full object-contain drop-shadow-[0_10px_34px_rgba(0,0,0,0.72)]" style={{ aspectRatio: "auto", maxHeight: 216 }} />
                 </button>
               ) : (
-                <h1 className="mb-5 text-[clamp(2.75rem,5vw,5rem)] font-light uppercase leading-none tracking-normal text-white">
+                <h1 className="mb-5 text-center text-[clamp(2.75rem,5vw,5rem)] font-light uppercase leading-none tracking-normal text-white">
                   {mainTitle}
                 </h1>
               )}
 
               {showEpisodeHeading ? (
-                <h2 className="max-w-[760px] text-xl font-extrabold text-white/84">
+                <h2 className="max-w-[760px] text-center text-xl font-extrabold text-white/84">
                   {episodeTitle}
                 </h2>
               ) : null}
@@ -700,7 +741,7 @@ export default function EpisodiePage() {
                 <p className="mt-2 text-sm font-semibold text-white/48">{meta.episodeOriginalTitle}</p>
               ) : null}
 
-              <div className={`episode-metadata ${showEpisodeHeading ? "mt-4" : "mt-1"} flex flex-wrap items-center gap-4 text-sm font-bold text-white/70`}>
+              <div className={`episode-metadata ${showEpisodeHeading ? "mt-4" : "mt-1"} flex flex-wrap items-center justify-center gap-4 text-sm font-bold text-white/70`}>
                 {meta?.airDate ? <span>{formatDate(meta.airDate)}</span> : null}
                 {meta?.runtime ? <span>{formatRuntime(meta.runtime)}</span> : null}
                 {meta?.mdbListRatings ? (
@@ -709,109 +750,28 @@ export default function EpisodiePage() {
                 {meta?.runtime ? <span>Termina a {formatEndTime(meta.runtime)}</span> : null}
               </div>
 
-              <div className="episode-actions mt-6 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  disabled={!selectedStream || loading}
-                  onClick={() => selectedStream && playStream(selectedStream)}
-                  className="inline-flex h-12 min-w-[156px] items-center justify-center gap-3 rounded-full bg-white px-7 text-base font-extrabold text-black shadow-[0_14px_38px_rgba(0,0,0,0.38)] gsap-transition hover:bg-white/92 disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  <Play size={18} fill="black" />
-                  Reproducir
-                </button>
-                <IconGhostButton label={watchedEntry ? "Quitar visto" : "Marcar como visto"} active={Boolean(watchedEntry)} onClick={markCurrentWatched}>
-                  {watchedEntry ? <X size={21} /> : <Check size={21} />}
-                </IconGhostButton>
-                <IconGhostButton label="Recargar fuentes" onClick={reload}><RefreshCw size={20} /></IconGhostButton>
-              </div>
             </div>
           </div>
 
-          <div className="grid min-w-0 gap-5 self-end">
-            <div className="liquid-glass rounded-2xl p-5">
-              <div className="grid grid-cols-[30px_minmax(0,1fr)] items-center gap-4 py-1.5" data-menu-id="source">
-                <span className="flex items-center justify-center text-white/76" title="Fuente">
-                  <Film size={22} />
-                </span>
-                <button
-                  type="button"
-                  disabled={allStreams.length === 0}
-                  onClick={() => setSourcePickerOpen(true)}
-                  className="flex h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-white/[0.075] bg-white/[0.08] px-3 text-left text-sm font-semibold text-white/80 gsap-transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-45"
-                  aria-haspopup="dialog"
-                  aria-expanded={sourcePickerOpen}
-                >
-                  <span className="min-w-0 truncate">
-                    {selectedStream ? formatSourceOption(selectedStream) : loading ? "Buscando fuentes..." : "Sin fuentes disponibles"}
-                  </span>
-                </button>
-              </div>
-              <GlassSelector
-                id="audio"
-                icon={<AudioLines size={22} />}
-                label="Audio"
-                valueLabel={audioOptions.find(option => option.value === audioChoice)?.label ?? "Auto"}
-                open={openMenu === "audio"}
-                onToggle={() => setOpenMenu(current => current === "audio" ? null : "audio")}
-                onClose={() => setOpenMenu(null)}
-                items={audioOptions.map(option => ({
-                  label: option.label,
-                  selected: option.value === audioChoice,
-                  onSelect: () => setAudioChoice(option.value),
-                })).concat(
-                  preferredAudioAvailable || !playbackPreferences.firstAudioLanguage
-                    ? []
-                    : [{ label: "No hay fuente con audio preferido", selected: false, onSelect: () => undefined }],
-                )}
-              />
-              <GlassSelector
-                id="subtitle"
-                icon={<Captions size={22} />}
-                label="Subtitulos"
-                valueLabel={subtitleOptions.find(option => option.value === subtitleChoice)?.label ?? "Auto"}
-                open={openMenu === "subtitle"}
-                disabled={false}
-                onToggle={() => setOpenMenu(current => current === "subtitle" ? null : "subtitle")}
-                onClose={() => setOpenMenu(null)}
-                items={subtitleOptions.map(option => ({
-                  label: option.label,
-                  selected: option.value === subtitleChoice,
-                  onSelect: () => setSubtitleChoice(option.value),
-                })).concat(
-                  preferredSubtitleAvailable || !playbackPreferences.preferredSubtitleLanguage
-                    ? []
-                    : [{ label: "No hay subtitulos preferidos disponibles", selected: false, onSelect: () => undefined }],
-                )}
-              />
-              {error || scrapedError ? <p className="mt-3 rounded-xl border border-white/[0.08] bg-black/24 px-4 py-3 text-sm font-semibold text-white/58">{error ?? scrapedError}</p> : null}
-              <p className="mt-4 line-clamp-2 pl-[46px] text-sm font-semibold text-white/50">{sourceSummary}</p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.72fr)]">
-              <div className="liquid-glass rounded-2xl p-6">
-                <p className="text-base font-normal leading-relaxed text-white/66">{description}</p>
-              </div>
-              <div className="liquid-glass overflow-hidden rounded-2xl">
-                <InfoRow label="Géneros" value={meta?.genres?.join(", ") || "Animacion, Accion, Aventura"} />
-                <InfoRow label="Dirección" value={meta?.director || "-"} />
-                <InfoRow label="Guión" value={meta?.writer || "-"} />
-              </div>
-            </div>
+          <div className="w-full min-w-0 self-center">
+            <SourcePickerPanel
+              title="Seleccionar fuente"
+              loading={(loading || scrapedLoading) && allStreams.length === 0}
+              error={error ?? scrapedError}
+              streams={allStreams}
+              selectedStreamId={selectedStreamId}
+              selectedSource={selectedSource}
+              onSourceChange={setSelectedSource}
+              onReload={() => {
+                reload();
+                reloadScrapedStreams();
+              }}
+              query={query}
+              onSelect={handleSelectStream}
+            />
           </div>
         </section>
       </PageContainer>
-      <SourcePickerPopup
-        open={sourcePickerOpen}
-        title="Seleccionar fuente"
-        loading={(loading || scrapedLoading) && allStreams.length === 0}
-        streams={allStreams}
-        selectedStreamId={selectedStreamId}
-        onSelect={streamId => {
-          setSelectedStreamId(streamId);
-          setSourcePickerOpen(false);
-        }}
-        onClose={() => setSourcePickerOpen(false)}
-      />
     </div>
   );
 }
@@ -830,7 +790,58 @@ function EpisodeHeroStill({ src, alt, active }: { src: string; alt: string; acti
       alt={alt}
       decoding="async"
       className="absolute inset-0 h-full w-full object-cover"
-      style={{ opacity: 0, transform: "scale(1)" }}
+      style={{ aspectRatio: "16/9", opacity: 0, transform: "scale(1)" }}
+    />
+  );
+}
+
+function MovieTrailerPreview({ videoIds }: { videoIds: string[] }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoIdsKey = videoIds.join("|");
+  const [videoIndex, setVideoIndex] = useState(0);
+  const [exhausted, setExhausted] = useState(false);
+  const activeVideoId = exhausted ? null : (videoIds[videoIndex] ?? null);
+  const { stream, error } = useYouTubePlayer(activeVideoId);
+
+  useEffect(() => {
+    setVideoIndex(0);
+    setExhausted(false);
+  }, [videoIdsKey]);
+
+  useEffect(() => {
+    tweenTo(videoRef.current, { opacity: 0 }, 0);
+  }, [activeVideoId]);
+
+  const tryNextTrailer = () => {
+    tweenTo(videoRef.current, { opacity: 0 }, 0.2);
+    setVideoIndex(current => {
+      if (current + 1 < videoIds.length) return current + 1;
+      setExhausted(true);
+      return current;
+    });
+  };
+
+  useEffect(() => {
+    if (error) tryNextTrailer();
+  }, [error]);
+
+  if (!stream || exhausted) return null;
+
+  return (
+    <video
+      ref={videoRef}
+      key={activeVideoId}
+      src={stream.url}
+      autoPlay
+      muted
+      loop
+      playsInline
+      preload="auto"
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+      style={{ opacity: 0 }}
+      onPlaying={() => tweenTo(videoRef.current, { opacity: 1 }, 0.65)}
+      onError={tryNextTrailer}
     />
   );
 }
@@ -895,193 +906,287 @@ function resolvePlaybackSelections({
   };
 }
 
-function IconGhostButton({
-  children,
-  label,
-  onClick,
-  active = false,
+function isTorrentStream(stream: MediaStream) {
+  return Boolean(stream.infoHash) || (stream.sources ?? []).some(s => /^magnet:/i.test(s));
+}
+
+function torrentSeedersCount(stream: MediaStream) {
+  return getReportedSeeders(stream) ?? null;
+}
+
+function isPriorityStream(stream: MediaStream) {
+  const langScore = streamSpanishPriority(stream);
+  if (langScore < 2) return false;
+  if (stream.behaviorHints?.notWebReady === true) return false;
+  if (isTorrentStream(stream)) {
+    return (torrentSeedersCount(stream) ?? 0) >= 10;
+  }
+  return true;
+}
+
+const StreamItemButton = memo(function StreamItemButton({
+  stream,
+  selected,
+  onSelect,
 }: {
-  children: ReactNode;
-  label: string;
-  onClick?: () => void;
-  active?: boolean;
+  stream: MediaStream;
+  selected: boolean;
+  onSelect: (id: string) => void;
 }) {
+  const priority = isPriorityStream(stream);
+  const isTorrent = isTorrentStream(stream);
+  const seeders = torrentSeedersCount(stream);
+  const formatBadges = useMemo(() => getStreamFormatBadges(stream), [stream]);
+  const languageMetadata = useMemo(() => formatStreamLanguageMetadata(stream), [stream]);
+  const fileName = useMemo(() => extractSourceFileName(stream), [stream]);
+  const summary = useMemo(() => formatSourceSummary(stream), [stream]);
+  const metadata = useMemo(() => formatSourceCardMetadata(stream), [stream]);
+
   return (
     <button
       type="button"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      className={`flex h-11 w-11 items-center justify-center rounded-full border gsap-transition ${
-        active
-          ? "border-white/[0.14] bg-white/[0.16] text-white"
-          : "border-white/[0.07] bg-white/[0.06] text-white/82 hover:bg-white/10 hover:text-white"
+      onClick={() => onSelect(stream.id)}
+      className={`rounded-2xl border px-4 py-3 text-left ${
+        selected
+          ? "border-white/[0.24] bg-white/[0.22] text-white"
+          : "border-white/[0.1] bg-black/60 text-white/86 hover:bg-black/72"
       }`}
+      aria-pressed={selected}
     >
-      {children}
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="line-clamp-2 break-words text-[16px] font-bold leading-6 text-white [overflow-wrap:anywhere]">
+            {priority ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Zap size={15} className="shrink-0 text-amber-400" />
+                <span className="text-amber-400">Prioritaria</span>
+                <span aria-hidden="true">&middot;</span>
+              </span>
+            ) : null}
+            {fileName}
+          </p>
+          <p className="mt-1 text-[13px] font-semibold text-white/54">
+            {summary}
+          </p>
+          <p className="mt-2 break-words text-[13px] font-semibold leading-5 text-white/76 [overflow-wrap:anywhere]">
+            {metadata}
+          </p>
+          {isTorrent ? (
+            <p className="mt-1 inline-flex flex-wrap items-center gap-x-2 break-words text-[13px] font-semibold leading-5 text-white/76 [overflow-wrap:anywhere]">
+              <span className={`inline-flex items-center gap-1 ${
+                seeders === null
+                  ? "text-white/58"
+                  : seeders === 0
+                    ? "text-red-300"
+                    : seeders < 10
+                      ? "text-amber-300"
+                      : "text-emerald-300"
+              }`}>
+                <User size={13} className="shrink-0" />
+                {seeders === null
+                  ? "Seeders sin reportar"
+                  : `${seeders} ${seeders === 1 ? "seeder" : "seeders"}`}
+              </span>
+              <span>Torrent</span>
+            </p>
+          ) : null}
+          {languageMetadata ? (
+            <p className="mt-1 break-words text-[13px] font-semibold leading-5 text-white/76 [overflow-wrap:anywhere]">
+              {languageMetadata}
+            </p>
+          ) : null}
+          {formatBadges.length ? <StreamFormatBadges badges={formatBadges} /> : null}
+        </div>
+        {selected ? <Check size={16} className="mt-0.5 shrink-0 text-white" /> : null}
+      </div>
     </button>
   );
-}
+});
 
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid grid-cols-[116px_minmax(0,1fr)] border-b border-white/[0.08] px-4 py-3 last:border-b-0">
-      <span className="text-sm font-extrabold text-white/72">{label}</span>
-      <span className="min-w-0 text-right text-sm font-semibold text-white/54">{value}</span>
-    </div>
-  );
-}
-
-function GlassSelector({
-  id,
-  icon,
-  label,
-  valueLabel,
-  items,
-  open,
-  onToggle,
-  onClose,
-  disabled = false,
-}: {
-  id: string;
-  icon: ReactNode;
-  label: string;
-  valueLabel: string;
-  items: Array<{ label: string; selected: boolean; onSelect: () => void }>;
-  open: boolean;
-  onToggle: () => void;
-  onClose: () => void;
-  disabled?: boolean;
-}) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  return (
-    <div className="grid grid-cols-[30px_minmax(0,1fr)] items-center gap-4 py-1.5" data-menu-id={id}>
-      <span className="flex items-center justify-center text-white/76" title={label}>{icon}</span>
-      <button
-        ref={buttonRef}
-        type="button"
-        disabled={disabled}
-        onClick={onToggle}
-        className={`flex h-10 min-w-0 items-center justify-between gap-3 rounded-xl border px-3 text-left text-sm font-semibold gsap-transition ${
-          open
-            ? "border-white/[0.18] bg-white/[0.16] text-white"
-            : "border-white/[0.075] bg-white/[0.08] text-white/80 hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-45"
-        }`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        <span className="min-w-0 truncate">{valueLabel}</span>
-        <ChevronDown size={16} className="shrink-0 text-white/54" />
-      </button>
-      <ContextMenu
-        open={open && !disabled}
-        anchorRef={buttonRef}
-        onClose={onClose}
-        width={360}
-        maxHeight={320}
-        placement="below-start"
-        items={items.map(item => ({
-          label: item.label,
-          icon: item.selected ? <Check size={14} /> : undefined,
-          onSelect: item.onSelect,
-        }))}
-      />
-    </div>
-  );
-}
-
-function SourcePickerPopup({
-  open,
+function SourcePickerPanel({
   title,
   loading,
+  error,
   streams,
   selectedStreamId,
+  selectedSource,
+  onSourceChange,
   onSelect,
-  onClose,
+  onReload,
+  query,
 }: {
-  open: boolean;
   title: string;
   loading: boolean;
+  error?: string | null;
   streams: MediaStream[];
   selectedStreamId: string;
+  selectedSource: string | null;
+  onSourceChange: (source: string | null) => void;
   onSelect: (streamId: string) => void;
-  onClose: () => void;
+  onReload: () => void;
+  query?: StreamQuery | null;
 }) {
-  if (!open) return null;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  const isAnime = query?.type === "anime";
+
+  const uniqueSources = useMemo(() => {
+    const sourceMap = new Map<string, { count: number; hasSeanime: boolean }>();
+    for (const stream of streams) {
+      const sourceName = extractSourceName(stream);
+      if (!sourceName) continue;
+      const existing = sourceMap.get(sourceName) ?? { count: 0, hasSeanime: false };
+      existing.count++;
+      if (isAnime && isSeanimeSource(stream)) existing.hasSeanime = true;
+      sourceMap.set(sourceName, existing);
+    }
+    return Array.from(sourceMap.entries())
+      .map(([name, info]) => ({ name, count: info.count, hasSeanime: info.hasSeanime }))
+      .sort((a, b) => {
+        if (isAnime && a.hasSeanime !== b.hasSeanime) return a.hasSeanime ? -1 : 1;
+        return b.count - a.count;
+      });
+  }, [streams, isAnime]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateScrollButtons();
+    el.addEventListener("scroll", updateScrollButtons, { passive: true });
+    const observer = new ResizeObserver(updateScrollButtons);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", updateScrollButtons);
+      observer.disconnect();
+    };
+  }, [updateScrollButtons, uniqueSources]);
+
+  const filteredStreams = useMemo(() => {
+    if (!selectedSource) return streams;
+    return streams.filter(stream => extractSourceName(stream) === selectedSource);
+  }, [streams, selectedSource]);
+
   return (
-    <div
-      className="aetherio-popup-backdrop fixed inset-0 z-[90] flex items-center justify-center bg-black/88 px-4 backdrop-blur-xl"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
+    <section
+      className="liquid-glass w-full overflow-hidden rounded-3xl border border-white/[0.14]"
       aria-label={title}
     >
-      <div
-        className="aetherio-popup-card liquid-glass max-h-[80vh] w-full max-w-[980px] overflow-hidden rounded-3xl border border-white/[0.18] bg-[#040509ee]"
-        onClick={event => event.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
-          <p className="text-base font-bold text-white/90">{title}</p>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.06] text-white/78 gsap-transition hover:bg-white/[0.12] hover:text-white"
-            aria-label="Cerrar selector de fuentes"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="max-h-[calc(80vh-68px)] overflow-y-auto p-3">
-          {loading ? (
-            <p className="px-3 py-2 text-sm font-semibold text-white/62">Buscando fuentes...</p>
-          ) : streams.length === 0 ? (
-            <p className="px-3 py-2 text-sm font-semibold text-white/58">Sin fuentes disponibles.</p>
-          ) : (
-            <div className="grid gap-2">
-              {streams.map(stream => {
-                const selected = stream.id === selectedStreamId;
-                const formatBadges = getStreamFormatBadges(stream);
-                const languageMetadata = formatStreamLanguageMetadata(stream);
+      <div className="flex items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4">
+        <p className="text-base font-bold text-white/90">{title}</p>
+        <button
+          type="button"
+          onClick={onReload}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/[0.09] bg-white/[0.07] text-white/82 gsap-transition hover:bg-white/[0.13] hover:text-white"
+          title="Recargar fuentes"
+          aria-label="Recargar fuentes"
+        >
+          <RefreshCw size={17} />
+        </button>
+      </div>
+      <div className="relative border-b border-white/[0.06] px-4 py-3" style={{ minHeight: uniqueSources.length > 0 ? undefined : 52 }}>
+        {uniqueSources.length > 0 ? (
+          <>
+            {canScrollLeft ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = scrollRef.current;
+                  if (el) el.scrollBy({ left: -200, behavior: "smooth" });
+                }}
+                className="absolute left-0 top-0 z-10 flex h-full w-7 items-center justify-center rounded-l-3xl bg-gradient-to-r from-black/70 to-transparent text-white/60 gsap-transition hover:text-white"
+                aria-label="Desplazar izquierda"
+              >
+                <ChevronLeft size={14} />
+              </button>
+            ) : null}
+            <div ref={scrollRef} className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" style={{ scrollBehavior: "smooth" }}>
+              <button
+                type="button"
+                onClick={() => onSourceChange(null)}
+                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold gsap-transition ${
+                  selectedSource === null
+                    ? "border-white/25 bg-white/15 text-white"
+                    : "border-white/[0.08] bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80"
+                }`}
+              >
+                Todas
+                <span className="ml-0.5 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/50">
+                  {streams.length}
+                </span>
+              </button>
+              {uniqueSources.map(({ name, count }) => {
+                const logoUrl = getSourceLogo(name);
                 return (
                   <button
-                    key={stream.id}
+                    key={name}
                     type="button"
-                    onClick={() => onSelect(stream.id)}
-                    className={`rounded-2xl border px-4 py-3 text-left gsap-transition ${
-                      selected
-                        ? "border-white/[0.24] bg-white/[0.22] text-white"
-                        : "border-white/[0.1] bg-black/60 text-white/86 hover:bg-black/72"
+                    onClick={() => onSourceChange(name === selectedSource ? null : name)}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold gsap-transition ${
+                      selectedSource === name
+                        ? "border-white/25 bg-white/15 text-white"
+                        : "border-white/[0.08] bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80"
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="line-clamp-2 break-words text-[16px] font-bold leading-6 text-white [overflow-wrap:anywhere]">
-                          {extractSourceFileName(stream)}
-                        </p>
-                        <p className="mt-1 text-[13px] font-semibold text-white/54">
-                          {formatSourceSummary(stream)}
-                        </p>
-                        <p className="mt-2 break-words text-[13px] font-semibold leading-5 text-white/76 [overflow-wrap:anywhere]">
-                          {formatSourceCardMetadata(stream)}
-                        </p>
-                        {languageMetadata ? (
-                          <p className="mt-1 break-words text-[13px] font-semibold leading-5 text-white/76 [overflow-wrap:anywhere]">
-                            {languageMetadata}
-                          </p>
-                        ) : null}
-                        {formatBadges.length ? <StreamFormatBadges badges={formatBadges} /> : null}
-                      </div>
-                      {selected ? <Check size={16} className="mt-0.5 shrink-0 text-white" /> : null}
-                    </div>
+                    {logoUrl ? (
+                      <img src={logoUrl} alt="" className="h-4 w-4 shrink-0 rounded object-contain" />
+                    ) : null}
+                    {name}
+                    <span className="ml-0.5 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/50">
+                      {count}
+                    </span>
                   </button>
                 );
               })}
             </div>
-          )}
-        </div>
+            {canScrollRight ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = scrollRef.current;
+                  if (el) el.scrollBy({ left: 200, behavior: "smooth" });
+                }}
+                className="absolute right-0 top-0 z-10 flex h-full w-7 items-center justify-center rounded-r-3xl bg-gradient-to-l from-black/70 to-transparent text-white/60 gsap-transition hover:text-white"
+                aria-label="Desplazar derecha"
+              >
+                <ChevronRight size={14} />
+              </button>
+            ) : null}
+          </>
+        ) : null}
       </div>
-    </div>
+      <div className="max-h-[calc(100vh-210px)] overflow-y-auto p-3">
+        {error ? (
+          <p className="mb-2 rounded-xl border border-white/[0.08] bg-black/24 px-4 py-3 text-sm font-semibold text-white/58">{error}</p>
+        ) : null}
+        {loading ? (
+          <p className="px-3 py-2 text-sm font-semibold text-white/62">Buscando fuentes...</p>
+        ) : filteredStreams.length === 0 ? (
+          <p className="px-3 py-2 text-sm font-semibold text-white/58">
+            {selectedSource ? `Sin fuentes de ${selectedSource}.` : "Sin fuentes disponibles."}
+          </p>
+        ) : (
+          <div className="grid gap-2">
+            {filteredStreams.map(stream => (
+              <StreamItemButton
+                key={stream.id}
+                stream={stream}
+                selected={stream.id === selectedStreamId}
+                onSelect={onSelect}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1095,16 +1200,20 @@ function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
           aria-label={badge.label}
           className="flex h-7 min-w-[42px] max-w-[104px] items-center justify-center overflow-hidden rounded-lg border border-white/[0.09] bg-black/48 px-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
         >
-          <img
-            src={badge.imageUrl}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className={badge.overscan
-              ? "h-[74px] w-[108px] max-w-none shrink-0 object-contain"
-              : "max-h-[18px] max-w-[88px] object-contain"
-            }
-          />
+          {badge.imageUrl ? (
+            <img
+              src={badge.imageUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className={badge.overscan
+                ? "h-[74px] w-[108px] max-w-none shrink-0 object-contain"
+                : "max-h-[18px] max-w-[88px] object-contain"
+              }
+            />
+          ) : (
+            <span className="text-[10px] font-bold tracking-wider text-white/80">{badge.label}</span>
+          )}
         </span>
       ))}
     </div>
@@ -1139,9 +1248,9 @@ function pickDefaultStream(
     const resume = getExactResumeForQuery(query);
     const preferred = resume ? pickStreamByResume(streams, resume.streamId) : null;
     if (preferred) return preferred;
-    return getPreferredCachedStream(query, playbackPreferences);
+    return getPreferredCachedStream(streams, query, playbackPreferences);
   }
-  const cached = getPreferredCachedStream(query, playbackPreferences);
+  const cached = getPreferredCachedStream(streams, query, playbackPreferences);
   if (cached) return cached;
   return pickStreamByPreferences(
     streams,
@@ -1162,6 +1271,7 @@ function pickStreamByPreferences(
   const scored = streams
     .map(stream => {
       let score = 0;
+      if (getStreamKind(stream) === "p2p" && getReportedSeeders(stream) === 0) score -= 1_000;
       if (streamSupportsPreferredAudio(stream, preferredAudio, originalLanguage)) score += 6;
       if (!preferredSubtitleNorm) score += 2;
       else if ((stream.subtitles ?? []).some(item => normalizeLanguageToken(item.lang ?? item.language).includes(preferredSubtitleNorm))) score += 2;
@@ -1171,12 +1281,27 @@ function pickStreamByPreferences(
   return scored[0]?.stream ?? null;
 }
 
-function getPreferredCachedStream(query: StreamQuery, playbackPreferences: ReturnType<typeof usePlaybackPreferences>) {
+function getPreferredCachedStream(
+  streams: MediaStream[],
+  query: StreamQuery,
+  playbackPreferences: ReturnType<typeof usePlaybackPreferences>,
+) {
   if (!playbackPreferences.reuseLastLink) return null;
-  return getCachedLastLink(
+  const cached = getCachedLastLink(
     streamCacheKey(query.type, query.id, query.season, query.episode),
     playbackPreferences.lastLinkCacheHours,
   );
+  if (!cached) return null;
+  return streams.find(stream => {
+    if (cached.infoHash && stream.infoHash) {
+      const cachedFileIdx = typeof cached.fileIdx === "number" ? cached.fileIdx : undefined;
+      const streamFileIdx = typeof stream.fileIdx === "number" ? stream.fileIdx : undefined;
+      return cached.infoHash.toLowerCase() === stream.infoHash.toLowerCase()
+        && cachedFileIdx === streamFileIdx;
+    }
+    if (cached.url && stream.url) return cached.url === stream.url;
+    return cached.id === stream.id;
+  }) ?? null;
 }
 
 function readAutoNextSourceHint(): AutoNextSourceHint | null {
@@ -1331,18 +1456,6 @@ function extractLanguageMentionsFromText(value: string) {
   return hits.map(({ code, label }) => ({ code, label }));
 }
 
-function formatSourceOption(stream: MediaStream) {
-  const fileName = extractSourceFileName(stream);
-  const mbps = extractSourceMbps(stream);
-  const size = extractSourceSize(stream);
-  const sourceName = stream.addonId.startsWith("nuvio-provider:")
-    ? [stream.addonName, stream.name].filter((value, index, values) => value && values.indexOf(value) === index).join(" · ")
-    : stream.addonId === "scraper"
-      ? [stream.addonName, fileName].filter((value, index, values) => value && values.indexOf(value) === index).join(" · ")
-      : fileName;
-  return [sourceName, mbps, size].filter(Boolean).join(" - ");
-}
-
 function formatSourceSummary(stream: MediaStream) {
   const provider = stream.addonId.startsWith("nuvio-provider:") && stream.name !== stream.addonName
     ? ` · ${stream.name}`
@@ -1357,7 +1470,9 @@ function formatSourceCardMetadata(stream: MediaStream) {
   const folderSize = firstPositiveNumber(stream.folderSize, hints.folderSize, detected.folderSize);
   const indexer = firstNonEmptyText(stream.indexer, hints.indexer, detected.indexer);
   const duration = firstPositiveNumber(stream.duration, hints.duration, detected.duration);
-  const sections = [`Size: ${size ? formatBytes10(size) : "—"}${folderSize ? ` / ${formatBytes10(folderSize)}` : ""}`];
+  const sections: string[] = [];
+  if (size) sections.push(`Size: ${formatBytes10(size)}${folderSize ? ` / ${formatBytes10(folderSize)}` : ""}`);
+  else if (folderSize) sections.push(`Size: ${formatBytes10(folderSize)}`);
   if (indexer) sections.push(`Source: ${indexer}`);
   if (duration) sections.push(`Duration: ${formatDuration(duration)}`);
   return sections.join(" | ");
@@ -1388,30 +1503,45 @@ function extractSourceFileName(stream: MediaStream) {
   return fromTitle || stream.name;
 }
 
-function extractSourceMbps(stream: MediaStream) {
-  const source = [stream.name, stream.title, stream.description, stream.behaviorHints?.filename]
-    .filter(Boolean)
-    .join(" ");
-  const match = source.match(/(\d+(?:[.,]\d+)?)\s*mbps/i);
-  if (!match) return "";
-  const value = Number(match[1].replace(",", "."));
-  if (!Number.isFinite(value) || value <= 0) return "";
-  return `${value.toFixed(value < 10 ? 1 : 0)} Mbps`;
+function extractSourceName(stream: MediaStream): string | null {
+  const addonId = stream.addonId?.trim() ?? "";
+  const isTorrentio = addonId === "torrentio" || addonId === "com.stremio.torrentio";
+  const isSeanime = addonId.startsWith("seanime:");
+
+  if (isTorrentio) {
+    const indexer = stream.indexer?.trim();
+    if (indexer) return indexer;
+    const detected = extractRenderedStreamMetadata(stream);
+    if (detected.indexer) return detected.indexer;
+    return "Torrentio";
+  }
+
+  if (isSeanime) {
+    const addonName = stream.addonName?.trim();
+    if (addonName && addonName !== "Unknown") return addonName;
+  }
+
+  const name = stream.name?.trim() ?? "";
+  const title = stream.title?.trim() ?? "";
+  const text = title || name;
+
+  const sourcePatterns = [
+    /\b(Lacloud|VOE|VidHide|Streamtape|DoodStream|StreamTape|Upstream|MixDrop|Gounlimited|Fembed|Vivo|Megadesch|Netu|YourUpload|Vidlox|Stremeo|Cloudstream|Storm|Torrentio|\bOk\.ru|The[-_. ]?Pirate[-_. ]?Bay|NyaaSi|Nyaa|AnimeTosho|AnimeUnity|AnimeSaturn|Anime[-_. ]?World|CineCalidad|Cineby|\bSeadex|Embed(?:69)?|GojoWtf|AnimeKai)\b/i,
+  ];
+
+  for (const pattern of sourcePatterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+
+  const addonName = stream.addonName?.trim();
+  if (addonName && addonName !== "Unknown") return addonName;
+
+  return null;
 }
 
-function extractSourceSize(stream: MediaStream) {
-  const bytes = Number(stream.size ?? stream.behaviorHints?.videoSize ?? 0);
-  if (Number.isFinite(bytes) && bytes > 0) {
-    return formatBytes10(bytes);
-  }
-  const source = [stream.name, stream.title, stream.description, stream.behaviorHints?.filename]
-    .filter(Boolean)
-    .join(" ");
-  const match = source.match(/(\d+(?:[.,]\d+)?)\s*(gb|mb)\b/i);
-  if (!match) return "";
-  const value = Number(match[1].replace(",", "."));
-  if (!Number.isFinite(value) || value <= 0) return "";
-  return `${value.toFixed(value < 10 ? 2 : 1)} ${match[2].toUpperCase()}`;
+function isSeanimeSource(stream: MediaStream): boolean {
+  return stream.addonId?.startsWith("seanime:") ?? false;
 }
 
 function extractRenderedStreamMetadata(stream: MediaStream) {
@@ -1543,7 +1673,7 @@ function streamSupportsPreferredAudio(stream: MediaStream, preferredAudio: strin
 
 function ensureOriginalTmdbImage(url?: string) {
   if (!url) return undefined;
-  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `${IMG}/original/`);
+  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `${IMG}/w1280/`);
 }
 
 function normalizeArtworkCandidate(value?: string | null) {
@@ -1589,6 +1719,60 @@ function uniqueArtwork(values: Array<string | undefined | null>) {
     list.push(normalized);
   }
   return list;
+}
+
+function uniqueStrings(values: Array<string | undefined | null>) {
+  return [...new Set(values.map(value => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function extractYouTubeVideoId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  const urlMatch = normalized.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/|youtube:)([a-zA-Z0-9_-]{6,})/i);
+  if (urlMatch?.[1]) return urlMatch[1];
+  return /^[a-zA-Z0-9_-]{6,15}$/.test(normalized) ? normalized : undefined;
+}
+
+function collectTrailerVideoIds(...values: unknown[]) {
+  const ids: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value) return;
+    if (typeof value === "string") {
+      const id = extractYouTubeVideoId(value);
+      if (id) ids.push(id);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      for (const key of ["youtubeId", "ytId", "key", "source", "url", "externalUrl"]) {
+        const id = extractYouTubeVideoId(record[key]);
+        if (id) {
+          ids.push(id);
+          break;
+        }
+      }
+    }
+  };
+  values.forEach(visit);
+  return uniqueStrings(ids);
+}
+
+function mapTmdbTrailerVideoIds(videos: unknown) {
+  if (!Array.isArray(videos)) return [];
+  return uniqueStrings(
+    videos
+      .filter(video => video?.site === "YouTube" && ["Trailer", "Teaser"].includes(video?.type))
+      .sort((left, right) => {
+        const score = (video: any) => (video?.official ? 4 : 0) + (video?.type === "Trailer" ? 2 : 0);
+        return score(right) - score(left);
+      })
+      .map(video => extractYouTubeVideoId(video?.key)),
+  ).slice(0, 8);
 }
 
 function pickRandomArtwork(values: Array<string | undefined | null> | undefined, excluded: Array<string | undefined | null>) {

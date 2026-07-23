@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod cineby;
 pub mod generic;
 pub mod http;
+pub mod okru;
 pub mod provider_http;
 pub mod sites;
 
@@ -73,6 +74,27 @@ fn site_info_from_site(site: &ScraperSite) -> ScraperSiteInfo {
     }
 }
 
+fn scraped_stream_from_okru(resolved: okru::OkruResolvedStream) -> ScrapedStream {
+    let id = format!("okru|{}", resolved.stream.url);
+    ScrapedStream {
+        id,
+        url: resolved.stream.url,
+        name: "OK.ru".to_string(),
+        title: Some(resolved.title),
+        quality: resolved.stream.quality,
+        languages: resolved
+            .stream
+            .language
+            .filter(|language| !language.trim().is_empty())
+            .map(|language| vec![language]),
+        site_id: "okru".to_string(),
+        site_name: "OK.ru".to_string(),
+        embed_url: Some(resolved.embed_url),
+        headers: resolved.stream.headers,
+        subtitles: None,
+    }
+}
+
 async fn scrape_single_site(
     client: &reqwest::Client,
     site: &ScraperSite,
@@ -84,6 +106,16 @@ async fn scrape_single_site(
 ) -> Vec<ScrapedStream> {
     let entry_target = build_entry_target(site, query, media_type, external_id, season, episode);
     let search_url = entry_target.url;
+
+    if site.id == "okru" {
+        return match okru::search_and_resolve(client, query).await {
+            Ok(resolved) => resolved.into_iter().map(scraped_stream_from_okru).collect(),
+            Err(error) => {
+                eprintln!("[scraper:okru] search/resolution failed: {error}");
+                Vec::new()
+            }
+        };
+    }
 
     if site.id == "cineby" {
         match cineby::resolve(
@@ -177,7 +209,7 @@ async fn scrape_single_site(
                 site_id: site.id.to_string(),
                 site_name: site.name.to_string(),
                 embed_url: Some(detail_path.clone()),
-                headers: None,
+                headers: candidate.headers,
                 subtitles: None,
             });
         }
@@ -505,5 +537,42 @@ mod tests {
             assert!(!site.name.is_empty());
             assert!(site.base_url.starts_with("https://"));
         }
+    }
+
+    #[test]
+    fn okru_mapping_preserves_metadata_without_inventing_language() {
+        let stream = scraped_stream_from_okru(okru::OkruResolvedStream {
+            title: "Los siete samuráis (1954)".to_string(),
+            embed_url: "https://ok.ru/videoembed/3697464052307".to_string(),
+            stream: generic::StreamCandidate {
+                url: "https://vd.okcdn.ru/video.mp4".to_string(),
+                quality: Some("1080p".to_string()),
+                language: None,
+                source: "okru".to_string(),
+                headers: None,
+            },
+        });
+
+        assert_eq!(stream.title.as_deref(), Some("Los siete samuráis (1954)"));
+        assert_eq!(stream.quality.as_deref(), Some("1080p"));
+        assert_eq!(stream.languages, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the live OK.ru provider"]
+    async fn scrape_streams_returns_okru_for_seven_samurai() {
+        let streams = scrape_streams(
+            "Los siete samuráis".to_string(),
+            "movie".to_string(),
+            Some("tmdb:346".to_string()),
+            None,
+            None,
+            Some(vec!["okru".to_string()]),
+        )
+        .await
+        .unwrap();
+        assert!(!streams.is_empty());
+        assert!(streams.iter().all(|stream| stream.site_id == "okru"));
+        assert!(streams.iter().all(|stream| stream.headers.is_some()));
     }
 }

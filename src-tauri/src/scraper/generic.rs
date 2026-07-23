@@ -2,7 +2,7 @@ use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamCandidate {
@@ -10,6 +10,7 @@ pub struct StreamCandidate {
     pub quality: Option<String>,
     pub language: Option<String>,
     pub source: String,
+    pub headers: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -125,6 +126,7 @@ pub fn extract_stream_urls(html: &str) -> Vec<StreamCandidate> {
                     quality,
                     language: None,
                     source: "m3u8".to_string(),
+                    headers: None,
                 });
             }
         }
@@ -142,6 +144,7 @@ pub fn extract_stream_urls(html: &str) -> Vec<StreamCandidate> {
                     quality,
                     language: None,
                     source: "mp4".to_string(),
+                    headers: None,
                 });
             }
         }
@@ -158,6 +161,7 @@ pub fn extract_stream_urls(html: &str) -> Vec<StreamCandidate> {
                     quality: None,
                     language: None,
                     source: "dash".to_string(),
+                    headers: None,
                 });
             }
         }
@@ -182,6 +186,7 @@ pub fn extract_stream_urls(html: &str) -> Vec<StreamCandidate> {
                     quality,
                     language: None,
                     source: source.to_string(),
+                    headers: None,
                 });
             }
         }
@@ -199,6 +204,7 @@ pub fn extract_stream_urls(html: &str) -> Vec<StreamCandidate> {
                     quality,
                     language: None,
                     source: "source".to_string(),
+                    headers: None,
                 });
             }
         }
@@ -237,6 +243,10 @@ pub async fn follow_embed_chain(
             break;
         }
         visited.insert(current_url.clone());
+
+        if super::okru::is_okru_url(&current_url) {
+            return super::okru::resolve(client, &current_url).await;
+        }
 
         let html = match fetch_page(client, &current_url).await {
             Ok(html) => html,

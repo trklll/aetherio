@@ -1,7 +1,7 @@
 {
   "name": "aetherio",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.99",
   "type": "module",
   "scripts": {
     "predev": "npm run providers:build",
@@ -43,6 +43,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.5.0",
+    "canvas": "^3.2.3",
     "esbuild": "^0.28.1",
     "knip": "^6.14.2",
     "postcss": "^8.5.13",

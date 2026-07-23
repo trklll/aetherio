@@ -27,7 +27,18 @@ const HORIZONTAL_GAP = 22;
 const RANKED_GAP = 10;
 const ROW_SHADOW_GUTTER = 32;
 
+const RANKED_CATALOG_IDS = new Set([
+  "tmdb.trending_movie",
+  "tmdb.trending_series",
+  "mal.top_anime",
+  "jikan.top_movies",
+  "jikan.top_favorites",
+  "jikan.most_popular",
+  "mal.last_year_best",
+]);
+
 function isTrendingRow(row: Pick<CatalogRowData, "catalogId" | "name">) {
+  if (RANKED_CATALOG_IDS.has(row.catalogId)) return true;
   const name = row.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -75,20 +86,22 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [watchedVersion, setWatchedVersion] = useState(0);
   const title = useMemo(() => homeRailTitle(row.name, row.type), [row.name, row.type]);
   const ranked = useMemo(() => isTrendingRow(row), [row]);
+  const maxCards = ranked ? 10 : 7;
+  const rowItems = useMemo(() => row.items.slice(0, maxCards), [row.items, maxCards]);
   const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
   const virtualWindow = useHorizontalVirtualWindow({
-    itemCount: row.items.length,
+    itemCount: rowItems.length,
     itemWidth: cardSize.width,
     gap: ranked ? RANKED_GAP : HORIZONTAL_GAP,
     overscan: 4,
   });
   const visibleStart = ranked ? 0 : virtualWindow.start;
-  const visibleEnd = ranked ? row.items.length : virtualWindow.end;
+  const visibleEnd = ranked ? rowItems.length : virtualWindow.end;
   const beforeWidth = ranked ? 0 : virtualWindow.beforeWidth;
   const afterWidth = ranked ? 0 : virtualWindow.afterWidth;
   const visibleItems = useMemo(
-    () => row.items.slice(visibleStart, visibleEnd),
-    [row.items, visibleEnd, visibleStart],
+    () => rowItems.slice(visibleStart, visibleEnd),
+    [rowItems, visibleEnd, visibleStart],
   );
   const watchedMediaKeys = useMemo(() => new Set(
     readPlaybackStateEntries()
@@ -151,7 +164,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
         measureTimerRef.current = null;
       }
     };
-  }, [row.items.length, updateArrows]);
+  }, [rowItems.length, updateArrows]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -190,7 +203,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   }, [hovered, showLeft, showRight]);
 
   return (
-    <section style={{ paddingLeft: 0, paddingRight: 0 }}>
+    <section style={{ paddingLeft: 0, paddingRight: 0, contentVisibility: "auto" }}>
       {!hideHeader ? (
         <button
           onClick={openCatalog}
@@ -268,7 +281,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 style={{
                   flex: "0 0 auto",
                   paddingLeft: idx === 0 ? 10 : 0,
-                  marginRight: idx === row.items.length - 1 ? 0 : ranked ? RANKED_GAP : HORIZONTAL_GAP,
+                  marginRight: idx === rowItems.length - 1 ? 0 : ranked ? RANKED_GAP : HORIZONTAL_GAP,
                 }}
               >
                 <CinematicCard
@@ -567,6 +580,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               src={image}
               alt={item.name}
               decoding="async"
+              loading="lazy"
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }}
             />
           ) : null}
@@ -621,23 +635,19 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         </div>
       ) : null}
       {airingSchedule ? <AiringScheduleBadge label={airingSchedule.label} watched={watched} compact={posterLayout === "vertical"} /> : null}
-      {image && <img src={image} alt={item.name} decoding="async"
+      {image && <img src={image} alt={item.name} decoding="async" loading="lazy"
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} />}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "45%", background: "linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px" }}>
         {logo ? (
           <img src={logo} alt={item.name}
             decoding="async"
+            loading="lazy"
             style={{ maxHeight: 48, maxWidth: 206, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
         ) : (
           <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
             {item.name}
           </span>
-        )}
-        {item.year && (
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", marginTop: 2 }}>
-            {item.year}
-          </div>
         )}
       </div> : null}
       {artworkControls}

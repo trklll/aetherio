@@ -54,9 +54,9 @@ export async function extractDominantColors(
 
     if (brightness(r, g, b) < MIN_BRIGHTNESS) continue
 
-    r = Math.round(r / QUANTIZE_STEP) * QUANTIZE_STEP
-    g = Math.round(g / QUANTIZE_STEP) * QUANTIZE_STEP
-    b = Math.round(b / QUANTIZE_STEP) * QUANTIZE_STEP
+    r = Math.min(255, Math.round(r / QUANTIZE_STEP) * QUANTIZE_STEP)
+    g = Math.min(255, Math.round(g / QUANTIZE_STEP) * QUANTIZE_STEP)
+    b = Math.min(255, Math.round(b / QUANTIZE_STEP) * QUANTIZE_STEP)
 
     const key = (r << 16) | (g << 8) | b
     const existing = buckets.get(key)

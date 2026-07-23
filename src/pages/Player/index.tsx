@@ -24,6 +24,7 @@ import {
   type ContinueWatchingEntry,
 } from "../../utils/continueWatching";
 import { sanitizeLogoUrl } from "../../utils/artwork";
+import { isPlayableMediaStream } from "../../utils/playableMedia";
 import { readDetailMediaMeta, resolveDetailBackground } from "../../utils/mediaMetadata";
 import { sendTraktScrobble, syncTraktProgressEntry } from "../../trakt";
 import {
@@ -62,9 +63,12 @@ import {
 const DEBUG_AUTOPLAY = false;
 const DEBUG_AUTO_LANG = true;
 const DEBUG_RESUME = true;
-const STARTUP_GATE_HARD_TIMEOUT_MS = 3500;
-const LOAD_FAILURE_TIMEOUT_MS = 18000;
+const DIRECT_STARTUP_GATE_TIMEOUT_MS = 900;
+const P2P_STARTUP_GATE_TIMEOUT_MS = 3500;
+const LOAD_FAILURE_TIMEOUT_MS = 12_000;
 const P2P_LOAD_FAILURE_TIMEOUT_MS = 180000;
+const DIRECT_FIRST_FRAME_TIMEOUT_MS = 8_000;
+const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 interface MpvAutocropResult {
@@ -166,9 +170,14 @@ export default function PlayerPage() {
   const traktStartedKeyRef = useRef("");
   const traktStoppedKeyRef = useRef("");
   const nextEpisodePromptKeyRef = useRef("");
+  const directFallbacksRef = useRef<MediaStream[]>([]);
+  const attemptedDirectTargetsRef = useRef(new Set<string>());
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const isP2pStream = getStreamKind(stream) === "p2p";
+  const startupGateTimeoutMs = isP2pStream
+    ? P2P_STARTUP_GATE_TIMEOUT_MS
+    : DIRECT_STARTUP_GATE_TIMEOUT_MS;
   const [selectedMediaName, setSelectedMediaName] = useState("");
   const [selectedMediaBackground, setSelectedMediaBackground] = useState("");
   const [selectedMediaLogo, setSelectedMediaLogo] = useState("");
@@ -387,12 +396,53 @@ export default function PlayerPage() {
           setSelectedResumeTime(0);
         }
       }
+      try {
+        const rawFallbacks = sessionStorage.getItem(DIRECT_STREAM_FALLBACKS_KEY);
+        const parsedFallbacks = rawFallbacks ? JSON.parse(rawFallbacks) as unknown : [];
+        directFallbacksRef.current = Array.isArray(parsedFallbacks)
+          ? parsedFallbacks
+              .filter((candidate): candidate is MediaStream => (
+                Boolean(candidate)
+                && typeof candidate === "object"
+                && isPlayableMediaStream(candidate as MediaStream)
+                && getStreamKind(candidate as MediaStream) === "https"
+              ))
+              .slice(0, 6)
+          : [];
+      } catch {
+        directFallbacksRef.current = [];
+      }
+      const selectedTarget = getPlaybackTarget(parsed);
+      if (selectedTarget) attemptedDirectTargetsRef.current.add(selectedTarget);
       setStream(parsed);
       sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
     } catch {
       setStream(null);
     }
   }, []);
+
+  useEffect(() => {
+    if (isP2pStream || !mpvStatus?.startsWith("MPV no pudo cargar esta fuente") || leavingPlayerRef.current) return;
+    const next = directFallbacksRef.current.find(candidate => {
+      const target = getPlaybackTarget(candidate);
+      return target && !attemptedDirectTargetsRef.current.has(target);
+    });
+    if (!next) return;
+    const failed = stream;
+    const nextTarget = getPlaybackTarget(next);
+    attemptedDirectTargetsRef.current.add(nextTarget);
+    sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(next));
+    console.warn("[AETHERIO:DIRECT] automatic fallback", {
+      failedProvider: failed?.addonName ?? failed?.name,
+      nextProvider: next.addonName ?? next.name,
+      attempted: attemptedDirectTargetsRef.current.size,
+      remaining: directFallbacksRef.current.filter(candidate => (
+        !attemptedDirectTargetsRef.current.has(getPlaybackTarget(candidate))
+      )).length,
+    });
+    setMpvStatus(`La fuente ${failed?.name ?? "seleccionada"} no respondio. Probando ${next.name ?? next.addonName ?? "otra fuente"}...`);
+    setStream(next);
+  }, [isP2pStream, mpvStatus, stream]);
 
   useEffect(() => {
     getPlaybackCapabilities()
@@ -621,13 +671,13 @@ export default function PlayerPage() {
   useEffect(() => {
     if (!stream || !mpvReadyForCommands || !startupGateActiveRef.current || manualPaused) return;
     const elapsed = Date.now() - startupGateStartedAtRef.current;
-    const delay = Math.max(250, STARTUP_GATE_HARD_TIMEOUT_MS - elapsed);
+    const delay = Math.max(100, startupGateTimeoutMs - elapsed);
     const timer = window.setTimeout(() => {
       if (!startupGateActiveRef.current || manualPausedRef.current) return;
       releaseStartupGate("startup gate hard timeout");
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [manualPaused, mpvReadyForCommands, stream]);
+  }, [manualPaused, mpvReadyForCommands, startupGateTimeoutMs, stream]);
 
   useEffect(() => {
     if (
@@ -651,6 +701,15 @@ export default function PlayerPage() {
     }, isP2pStream ? P2P_LOAD_FAILURE_TIMEOUT_MS : LOAD_FAILURE_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [isP2pStream, mpvFileLoaded, mpvReadyForCommands, mpvStatus, playbackStarted, stream]);
+
+  useEffect(() => {
+    if (!stream || isP2pStream || !mpvFileLoaded || playbackStarted || manualPaused) return;
+    const timer = window.setTimeout(() => {
+      if (currentTimeRef.current > 0.05 || manualPausedRef.current || playbackStarted) return;
+      setMpvStatus("MPV no pudo cargar esta fuente. El archivo abrio, pero no entrego cuadros reproducibles.");
+    }, DIRECT_FIRST_FRAME_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [isP2pStream, manualPaused, mpvFileLoaded, playbackStarted, stream]);
 
   useEffect(() => {
     if (!playbackStarted || startupKickCountRef.current === 0) return;
@@ -1086,7 +1145,8 @@ export default function PlayerPage() {
     resumeSeekSettledRef.current = resumeSeekTargetRef.current < 12;
     resumeSeekStartedAtRef.current = 0;
     resumeLog("session init", {
-      launchKey,
+      streamId: stream.id,
+      source: stream.addonName ?? stream.name,
       resumeTargetFromStorage: resumeSeekTargetRef.current,
       resumeWillSeek: !resumeSeekSettledRef.current,
     });
@@ -1135,7 +1195,12 @@ export default function PlayerPage() {
       : isP2pStream
         ? "Preparando stream P2P..."
         : "Abriendo MPV...");
-    debugLog("native playback open called", { target: launchKey, androidPlayback });
+    debugLog("native playback open called", {
+      streamId: stream.id,
+      source: stream.addonName ?? stream.name,
+      kind: getStreamKind(stream),
+      androidPlayback,
+    });
 
     const resumeStartTime = resumeSeekTargetRef.current;
     void openExternal(stream, undefined, resumeStartTime, query?.episode).then(({ error }) => {
@@ -1526,9 +1591,7 @@ export default function PlayerPage() {
         : selectedMpvAudioRef.current === preferredAudio.value || autoAudioAttemptsRef.current >= 8;
 
     const preferredSubtitleValue = preferredSubtitle?.value ?? "";
-    const subtitleSettled = !subtitlesReady
-      ? false
-      : !preferredSubtitleValue
+    const subtitleSettled = !preferredSubtitleValue
         ? true
         : preferredSubtitleValue.startsWith("ext:")
           ? selectedMpvSubtitleRef.current === preferredSubtitleValue ||
@@ -1570,14 +1633,12 @@ export default function PlayerPage() {
       }
     }
 
-    const hardTimedOut = Date.now() - startupGateStartedAtRef.current > STARTUP_GATE_HARD_TIMEOUT_MS;
+    const hardTimedOut = Date.now() - startupGateStartedAtRef.current > startupGateTimeoutMs;
     const mustHoldForFileLoad = !mpvFileLoaded && !hardTimedOut;
     const mustHoldForAudio = audioTargetExists && !audioSettled;
     const mustHoldForSubtitle = subtitleTargetExists && !subtitleSettled;
-    const mustHoldForAudioDiscovery = mpvFileLoaded && audioOptions.length === 0 && !hardTimedOut;
-    const mustHoldForSubtitleDiscovery = !subtitlesReady && !hardTimedOut;
     const timedOut = hardTimedOut && !mustHoldForAudio && !mustHoldForSubtitle;
-    if (mustHoldForFileLoad || mustHoldForAudioDiscovery || mustHoldForSubtitleDiscovery || mustHoldForAudio || mustHoldForSubtitle) return;
+    if (mustHoldForFileLoad || mustHoldForAudio || mustHoldForSubtitle) return;
 
     startupGateActiveRef.current = false;
     startupGatePausedRef.current = false;
@@ -1587,8 +1648,8 @@ export default function PlayerPage() {
       audioTargetExists,
       subtitleTargetExists,
       fileLoadPending: mustHoldForFileLoad,
-      audioDiscoveryPending: mustHoldForAudioDiscovery,
-      subtitleDiscoveryPending: mustHoldForSubtitleDiscovery,
+      audioDiscoveryPending: false,
+      subtitleDiscoveryPending: false,
       timedOut,
       selectedAudio: selectedMpvAudioRef.current,
       selectedSubtitle: selectedMpvSubtitleRef.current,
@@ -1629,6 +1690,7 @@ export default function PlayerPage() {
     selectedMpvSubtitle,
     subtitleOptions,
     subtitlesReady,
+    startupGateTimeoutMs,
   ]);
 
   useEffect(() => {
@@ -1639,7 +1701,7 @@ export default function PlayerPage() {
     if (!stalledPlayback || currentTimeRef.current >= 1.5) return;
 
     mpvRecoveryKeyRef.current = launchKey;
-    debugLog("mpv stalled recovery", { launchKey });
+    debugLog("mpv stalled recovery", { streamId: stream.id, source: stream.addonName ?? stream.name });
     if (manualPausedRef.current) return;
     void sendMpvCommand(["set_property", "pause", false]);
     void sendMpvCommand(["set_property", "speed", 1.0]);
@@ -2164,7 +2226,7 @@ if (!stream) {
         </div>
       ) : null}
 
-      <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} />
+      <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} message={mpvStatus} hideMessage={playbackStarted} p2p={isP2pStream} />
 
       {!androidPlayback && playbackPreferences.skipSegmentsEnabled && activeSkipSegment && mpvReadyForCommands && playbackStarted ? (
         <button

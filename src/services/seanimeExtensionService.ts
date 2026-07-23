@@ -2,6 +2,8 @@ import { tmdbFetch } from "../config/apiKeys";
 import { invokeCommand, isTauriRuntime } from "../runtime/platform";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream";
 import { getScopedStorageKey } from "../utils/localProfiles";
+import { getMagnetBtih, isValidMagnetUri, normalizeBtih } from "../utils/playableMedia";
+import { normalizeSeederCount } from "../utils/torrentHealth";
 
 export type SeanimeExtensionType = "anime-torrent-provider" | "onlinestream-provider";
 
@@ -11,6 +13,7 @@ interface ProviderHttpRequest {
   headers?: Record<string, string>;
   body?: string;
   bodyBase64?: boolean;
+  sessionKey?: string;
 }
 
 interface ProviderHttpResponse {
@@ -145,7 +148,7 @@ const WORKER_RUNTIME = String.raw`
 "use strict";
 globalThis.window = globalThis;
 globalThis.global = globalThis;
-importScripts(__DEPENDENCY_URL__);
+importScripts(__DEPENDENCY_URL__, __TYPESCRIPT_DEPENDENCY_URL__);
 const __deps = globalThis.__NUVIO_PROVIDER_DEPS__ || {};
 let __httpSequence = 0;
 const __httpPending = new Map();
@@ -686,7 +689,11 @@ async function loadPayload(manifest: SeanimeExtensionManifest) {
 async function runExtension<T>(manifest: SeanimeExtensionManifest, args: Record<string, unknown>): Promise<T> {
   const source = await loadPayload(manifest);
   const dependencyUrl = new URL("nuvio-provider-deps.js", window.location.href).toString();
-  const blob = new Blob([WORKER_RUNTIME.replace("__DEPENDENCY_URL__", JSON.stringify(dependencyUrl))], { type: "text/javascript" });
+  const typescriptDependencyUrl = new URL("seanime-typescript-deps.js", window.location.href).toString();
+  const runtime = WORKER_RUNTIME
+    .replace("__DEPENDENCY_URL__", JSON.stringify(dependencyUrl))
+    .replace("__TYPESCRIPT_DEPENDENCY_URL__", JSON.stringify(typescriptDependencyUrl));
+  const blob = new Blob([runtime], { type: "text/javascript" });
   const workerUrl = URL.createObjectURL(blob);
   const worker = new Worker(workerUrl, { name: `seanime-${manifest.id}` });
   URL.revokeObjectURL(workerUrl);
@@ -708,7 +715,7 @@ async function runExtension<T>(manifest: SeanimeExtensionManifest, args: Record<
     worker.onmessage = event => {
       const message = event.data as WorkerMessage;
       if (message.type === "http-request") {
-        void providerHttp(message.request)
+        void providerHttp({ ...message.request, sessionKey: `seanime:${manifest.id}` })
           .then(response => worker.postMessage({ type: "http-response", id: message.id, response }))
           .catch(error => worker.postMessage({ type: "http-response", id: message.id, error: String(error) }));
         return;
@@ -905,6 +912,7 @@ function normalizeOnlineVariant(manifest: SeanimeExtensionManifest, variant: Onl
         seanimeProviderType: manifest.type,
         seanimeManifest: manifest.manifestURI,
         seanimeProvider: manifest.id,
+        providerHttpSessionKey: `seanime:${manifest.id}`,
         seanimeServer: server.server,
         seanimeSubOrDub: variant.searchResult?.subOrDub ?? (variant.requestedDub ? "dub" : "sub"),
         seanimeEpisode: variant.episode?.number,
@@ -923,20 +931,21 @@ function normalizeOnline(manifest: SeanimeExtensionManifest, result: OnlineWorke
 }
 
 function infoHashFromMagnet(magnet?: string) {
-  if (!magnet) return undefined;
-  const match = magnet.match(/(?:\?|&)xt=urn:btih:([a-z0-9]+)/i);
-  return match?.[1];
+  return getMagnetBtih(magnet);
 }
 
 function normalizeTorrents(manifest: SeanimeExtensionManifest, result: TorrentWorkerResult): MediaStream[] {
   return (result.torrents ?? []).flatMap((torrent, index) => {
-    const magnet = typeof torrent.magnetLink === "string" && /^magnet:/i.test(torrent.magnetLink) ? torrent.magnetLink : undefined;
-    const infoHash = torrent.infoHash?.trim() || infoHashFromMagnet(magnet);
+    const magnet = typeof torrent.magnetLink === "string" && isValidMagnetUri(torrent.magnetLink)
+      ? torrent.magnetLink.trim()
+      : undefined;
+    const infoHash = normalizeBtih(torrent.infoHash) ?? infoHashFromMagnet(magnet);
+    const seeders = normalizeSeederCount(torrent.seeders);
     if (!magnet && !infoHash) return [];
     const details = [
       torrent.resolution,
       torrent.formattedSize,
-      Number.isFinite(torrent.seeders) ? `${torrent.seeders} seeders` : undefined,
+      seeders !== undefined ? `${seeders} seeders` : undefined,
       torrent.releaseGroup,
     ].filter(Boolean).join(" - ");
     return [{
@@ -948,11 +957,12 @@ function normalizeTorrents(manifest: SeanimeExtensionManifest, result: TorrentWo
       description: details,
       size: typeof torrent.size === "number" && Number.isFinite(torrent.size) && torrent.size > 0 ? torrent.size : undefined,
       infoHash,
+      seeders,
       sources: magnet ? [magnet] : undefined,
       behaviorHints: {
         filename: torrent.name,
         videoSize: torrent.size,
-        seeders: torrent.seeders,
+        seeders,
         leechers: torrent.leechers,
         releaseGroup: torrent.releaseGroup,
         seanimeProviderType: manifest.type,
@@ -1001,22 +1011,38 @@ export async function scrapeSeanimeExtensions(
   const batches = await mapWithConcurrency(manifests, 3, async manifest => {
     try {
       if (manifest.type === "onlinestream-provider") {
-        return normalizeOnline(manifest, await runExtension<OnlineWorkerResult>(manifest, args));
+        return {
+          streams: normalizeOnline(manifest, await runExtension<OnlineWorkerResult>(manifest, args)),
+          succeeded: true,
+        };
       }
-      return normalizeTorrents(manifest, await runExtension<TorrentWorkerResult>(manifest, args));
+      return {
+        streams: normalizeTorrents(manifest, await runExtension<TorrentWorkerResult>(manifest, args)),
+        succeeded: true,
+      };
     } catch (error) {
       console.warn("[AETHERIO:SEANIME] provider failed", manifest.id, String(error));
-      return [];
+      return { streams: [] as MediaStream[], succeeded: false };
     }
   });
   const seen = new Set<string>();
-  const streams = batches.flat().filter(stream => {
+  const streams = batches.flatMap(batch => batch.streams).filter(stream => {
     const key = stream.url ?? stream.infoHash ?? stream.sources?.[0] ?? stream.id;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  resultCache.set(cacheKey, { streams, updatedAt: Date.now() });
+  const requestedExtensionCount = extensionIds ? new Set(extensionIds).size : manifests.length;
+  const inventoryComplete = inventory.errors.length === 0 && manifests.length === requestedExtensionCount;
+  const allProvidersSucceeded = inventoryComplete
+    && batches.length === manifests.length
+    && batches.every(batch => batch.succeeded);
+  if (streams.length > 0 && allProvidersSucceeded) {
+    resultCache.set(cacheKey, { streams, updatedAt: Date.now() });
+  } else {
+    // Un resultado vacio o parcial debe poder reintentarse inmediatamente.
+    resultCache.delete(cacheKey);
+  }
   return streams;
 }
 

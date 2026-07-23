@@ -12,6 +12,85 @@ export const TMDB = "https://api.themoviedb.org/3";
 export const IMG = "https://image.tmdb.org/t/p";
 export const DETAIL_LOGO_KEY = "aetherio-detail-logo";
 
+const PUBLIC_TORRENT_FALLBACK_TRACKERS = [
+  "udp://tracker.opentrackr.org:1337/announce",
+  "udp://open.stealth.si:80/announce",
+  "udp://tracker.torrent.eu.org:451/announce",
+  "udp://exodus.desync.com:6969/announce",
+] as const;
+
+const BTIH_RE = /^(?:[a-f0-9]{40}|[a-z2-7]{32})$/i;
+const MAX_TRACKER_URL_LENGTH = 2_048;
+const TRACKER_PROTOCOLS = new Set(["http:", "https:", "udp:"]);
+
+function hasPrivateTorrentHint(stream: MediaStream) {
+  const value = stream.behaviorHints?.private;
+  if (value === true || value === 1) return true;
+  return typeof value === "string" && /^(?:1|true|yes)$/i.test(value.trim());
+}
+
+function normalizeTrackerUrl(value: string) {
+  const candidate = value.trim();
+  if (
+    !candidate
+    || candidate.length > MAX_TRACKER_URL_LENGTH
+    || /[\u0000-\u001f\u007f]/.test(candidate)
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(candidate);
+    if (
+      !TRACKER_PROTOCOLS.has(parsed.protocol.toLowerCase())
+      || !parsed.hostname
+      || parsed.username
+      || parsed.password
+    ) {
+      return null;
+    }
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function stringStreamSources(stream: MediaStream) {
+  return Array.isArray(stream.sources)
+    ? stream.sources.filter((source): source is string => typeof source === "string")
+    : [];
+}
+
+function explicitTrackerSources(stream: MediaStream) {
+  const trackers = new Set<string>();
+  for (const source of stringStreamSources(stream)) {
+    const match = /^tracker:(.+)$/i.exec(source.trim());
+    if (!match) continue;
+    const tracker = normalizeTrackerUrl(match[1]);
+    if (tracker) trackers.add(tracker);
+  }
+  return [...trackers];
+}
+
+function validDirectMagnet(stream: MediaStream) {
+  for (const value of [stream.url, ...stringStreamSources(stream)]) {
+    if (typeof value !== "string" || !/^magnet:/i.test(value.trim())) continue;
+    const raw = value.trim();
+    try {
+      const parsed = new URL(raw);
+      const hasValidInfoHash = parsed.protocol.toLowerCase() === "magnet:"
+        && parsed.searchParams.getAll("xt").some(xt => {
+          const match = /^urn:btih:(.+)$/i.exec(xt.trim());
+          return Boolean(match && BTIH_RE.test(match[1]));
+        });
+      if (hasValidInfoHash) return { raw, parsed };
+    } catch {
+      // Ignore malformed magnets and continue with another candidate or infoHash.
+    }
+  }
+  return null;
+}
+
 export function getDetailLogoKey(type?: string | null, id?: string | null) {
   return type && id ? `${DETAIL_LOGO_KEY}:${type}:${id}` : DETAIL_LOGO_KEY;
 }
@@ -43,18 +122,34 @@ export function getPlaybackTarget(stream: MediaStream | null | undefined) {
 }
 
 function buildMagnetTarget(stream: MediaStream) {
-  const directMagnet = [stream.url, ...(stream.sources ?? [])]
-    .find(value => typeof value === "string" && /^(?:magnet:|stremio:)/i.test(value));
-  if (directMagnet) return directMagnet;
-  if (!stream.infoHash) return "";
+  const isPrivate = hasPrivateTorrentHint(stream);
+  const suppliedTrackers = isPrivate ? [] : explicitTrackerSources(stream);
+  const directMagnet = validDirectMagnet(stream);
+  if (directMagnet) {
+    // A private magnet is already authoritative: never merge or append tracker sources.
+    if (isPrivate) return directMagnet.raw;
+    const trackers = new Set(
+      directMagnet.parsed.searchParams
+        .getAll("tr")
+        .map(normalizeTrackerUrl)
+        .filter((tracker): tracker is string => Boolean(tracker)),
+    );
+    for (const tracker of suppliedTrackers) trackers.add(tracker);
+    directMagnet.parsed.searchParams.delete("tr");
+    for (const tracker of trackers) directMagnet.parsed.searchParams.append("tr", tracker);
+    return directMagnet.parsed.toString();
+  }
+  const infoHash = typeof stream.infoHash === "string" ? stream.infoHash.trim() : "";
+  if (!BTIH_RE.test(infoHash)) return "";
 
   const magnet = new URLSearchParams();
-  magnet.set("xt", `urn:btih:${stream.infoHash}`);
-  for (const source of stream.sources ?? []) {
-    const tracker = source.replace(/^tracker:/i, "").trim();
-    if (/^https?:\/\//i.test(tracker) || /^udp:\/\//i.test(tracker)) {
-      magnet.append("tr", tracker);
-    }
+  magnet.set("xt", `urn:btih:${infoHash}`);
+  for (const tracker of new Set(suppliedTrackers)) magnet.append("tr", tracker);
+  // Torrentio publishes public swarms but omits trackers from its stream payload.
+  // Keep arbitrary addons and private hashes isolated from public fallbacks.
+  const trustedPublicSwarm = stream.addonId === "com.stremio.torrentio.addon";
+  if (!isPrivate && suppliedTrackers.length === 0 && trustedPublicSwarm) {
+    for (const tracker of PUBLIC_TORRENT_FALLBACK_TRACKERS) magnet.append("tr", tracker);
   }
   if (stream.title || stream.behaviorHints?.filename) {
     magnet.set("dn", String(stream.behaviorHints?.filename ?? stream.title));
@@ -99,6 +194,9 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
   const normalizedStartTime = Number.isFinite(startTime) ? Math.max(0, startTime) : 0;
   try {
     const headers = extractHttpHeaders(stream);
+    const providerSessionKey = typeof stream.behaviorHints?.providerHttpSessionKey === "string"
+      ? stream.behaviorHints.providerHttpSessionKey.trim()
+      : "";
     const requestedBackend = isAndroidRuntime() ? "android-media3" : "mpv";
     console.info("[AETHERIO:PLAYER:OPEN_NATIVE] request", {
       backend: requestedBackend,
@@ -109,7 +207,8 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       startTime: normalizedStartTime,
       hasSubtitle: Boolean(subtitle?.trim()),
       hasHeaders: Object.keys(headers).length > 0,
-      targetPrefix: target.slice(0, 240),
+      targetKind: getStreamKind(stream),
+      targetHost: /^https?:/i.test(target) ? new URL(target).hostname : undefined,
     });
     const result = await openNativePlayback({
       target,
@@ -118,12 +217,16 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       fileIdx: stream.fileIdx,
       episode,
       startTime: normalizedStartTime > 0 ? normalizedStartTime : undefined,
+      privateTorrent: getStreamKind(stream) === "p2p" && hasPrivateTorrentHint(stream),
+      providerSessionKey: providerSessionKey || undefined,
     });
     console.info("[AETHERIO:PLAYER:OPEN_NATIVE] response", {
       requestedBackend,
       streamId: stream.id,
       backend: result?.backend,
-      resolvedTarget: result?.resolvedTarget,
+      resolvedHost: typeof result?.resolvedTarget === "string" && /^https?:/i.test(result.resolvedTarget)
+        ? new URL(result.resolvedTarget).hostname
+        : undefined,
       logPath: result?.logPath,
       bridgeLogPath: result?.bridgeLogPath,
       p2pLogPath: result?.p2pLogPath,
@@ -134,7 +237,7 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       backend: isAndroidRuntime() ? "android-media3" : "mpv",
       streamId: stream.id,
       error: String(error),
-      targetPrefix: target.slice(0, 240),
+      targetKind: getStreamKind(stream),
     });
     return { result: null, error: String(error) };
   }

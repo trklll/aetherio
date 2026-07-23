@@ -494,6 +494,158 @@
       "enabled": true,
       "sourceUrl": "https://raw.githubusercontent.com/jorgitoxp/Regexes/refs/heads/main/mousa.m%20icons/Web1.png",
       "status": "downloaded"
+    },
+    {
+      "pattern": "(?i)\\b(x\\.?264|h\\.?264|avc(?:1)?|mpeg[-_. ]?4[ ._-]*avc)\\b",
+      "name": "H.264",
+      "file": "./codec-h264.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\b(x\\.?265|h\\.?265|hevc|mpeg[-_. ]?4[ ._-]*(?:hvc|h265))\\b(?!.*\\b(dv|dolby[ ._-]?vision)\\b)",
+      "name": "H.265",
+      "file": "./codec-h265.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bhevc\\b",
+      "name": "HEVC",
+      "file": "./codec-hevc.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bav1\\b(?!.*\\b(h\\.?264|h\\.?265|hevc|x\\.?264|x\\.?265|avc)\\b)",
+      "name": "AV1",
+      "file": "./codec-av1.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\baac\\b(?!.*\\b(flac|dts|ac-?3|e-?ac-?3|truehd|atmos)\\b)",
+      "name": "AAC",
+      "file": "./codec-aac.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bflac\\b(?!.*\\b(aac|dts|ac-?3|e-?ac-?3|truehd|atmos)\\b)",
+      "name": "FLAC",
+      "file": "./codec-flac.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bvp[ ._-]?9\\b",
+      "name": "VP9",
+      "file": "./codec-vp9.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bmpeg[-_. ]?4[ ._-]*(?:part[ ._-]*)?2\\b|\\bmp4v\\b|\\bm4v\\b",
+      "name": "MPEG-4",
+      "file": "./video-mpeg4.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\b(bd|hd|m)?480[pi]?\\b|\\b640\\s?x\\s?\\d{3,4}\\b|\\b854\\s?x\\s?\\d{3,4}\\b",
+      "name": "480p",
+      "file": "./resolution-480p.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\b576[pi]?\\b|\\b720\\s?x\\s?\\d{3,4}\\b",
+      "name": "576p",
+      "file": "./resolution-576p.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\b(bd|hd|m)?360[pi]?\\b|\\b640\\s?x\\s?\\d{3}\\b",
+      "name": "360p",
+      "file": "./resolution-360p.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bfhd\\b|\\bfull[ ._-]?hd\\b",
+      "name": "FHD",
+      "file": "./fhd.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\buhd\\b|\\bultra[ ._-]?hd\\b",
+      "name": "UHD",
+      "file": "./uhd.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bopus\\b(?!.*\\b(aac|flac|dts|ac-?3|e-?ac-?3|truehd|atmos)\\b)",
+      "name": "Opus",
+      "file": "./codec-opus.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bvorbis\\b(?!.*\\b(aac|flac|dts|ac-?3|e-?ac-?3|truehd|atmos|opus)\\b)",
+      "name": "Vorbis",
+      "file": "./codec-vorbis.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bmp3\\b(?!.*\\b(aac|flac|dts|ac-?3|e-?ac-?3|truehd|atmos|opus|vorbis)\\b)",
+      "name": "MP3",
+      "file": "./codec-mp3.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\b2[ .]?0\\b(?!.*\\b(5[ .]?1|6[ .]?1|7[ .]?1|7[ .]?2|mono)\\b)",
+      "name": "2.0 CH",
+      "file": "./audio-2.0.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bmono\\b(?!.*\\b(2[ .]?0|5[ .]?1|6[ .]?1|7[ .]?1|7[ .]?2|stereo)\\b)",
+      "name": "Mono",
+      "file": "./audio-mono.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
+    },
+    {
+      "pattern": "(?i)\\bstereo\\b(?!.*\\b(5[ .]?1|6[ .]?1|7[ .]?1|7[ .]?2|mono)\\b)",
+      "name": "Stereo",
+      "file": "./audio-2.0.png",
+      "enabled": true,
+      "sourceUrl": null,
+      "status": "generated"
     }
   ]
 }

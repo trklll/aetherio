@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { getTmdbApiKey, tmdbFetch } from "../config/apiKeys";
 import { getMdbListSettings } from "../config/mdblist";
 import {
@@ -8,28 +8,57 @@ import {
   fetchAnilistTopAnime,
   fetchAnilistTopAiring,
   fetchAnilistActionAnime,
+  fetchAnilistAdventureAnime,
+  fetchAnilistComedyAnime,
+  fetchAnilistDramaAnime,
+  fetchAnilistRomanceAnime,
+  fetchAnilistFantasyAnime,
+  fetchAnilistSciFiAnime,
+  fetchAnilistLastYearBestAnime,
   resolveAnilistToTmdb,
 } from "../services/anilist";
+import {
+  fetchJikanUpcoming,
+  fetchJikanTopMovies,
+  fetchJikanTopOva,
+  fetchJikanTopOna,
+  fetchJikanTopSpecials,
+  fetchJikanRecommendations,
+  fetchJikanTopAiring,
+  fetchJikanTopUpcoming,
+  fetchJikanTopFavorites,
+  fetchJikanMostPopular,
+  fetchJikanAction,
+  fetchJikanAdventure,
+  fetchJikanRomance,
+  fetchJikanComedy,
+  fetchJikanFantasy,
+  fetchJikanSciFi,
+  fetchJikanSliceOfLife,
+  fetchJikanPsychological,
+  resolveMalToTmdb,
+  runJikanSerial,
+} from "../services/jikan";
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService";
 import { fetchYouTubeClip } from "../services/youtubeClips";
 import type { InstalledAddon } from "../store/addonStore";
 import { isFreshHomeCache, useCacheStore } from "../store/cacheStore";
 import type { CatalogRowData, MediaItem } from "../types/ui";
-import { matchesContentOrientation, type ContentOrientation } from "../config/homePreferences";
+import { type ContentOrientation } from "../config/homePreferences";
 import { sanitizeLogoUrl } from "../utils/artwork";
 import { resolveDetailBackground } from "../utils/mediaMetadata";
 import { readHomeCardArtwork } from "../utils/homeCardArtwork";
-import { ensureOriginalTmdbImage, pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork";
+import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork";
 
 const HERO_GROUP_FETCH_LIMIT = 7;
 const HERO_TOTAL_LIMIT = 15;
-const HOME_ROWS_STALE_TIME = Infinity;
-const HOME_HERO_STALE_TIME = Infinity;
+const HOME_ROWS_STALE_TIME = 0;
+const HOME_HERO_STALE_TIME = 0;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
 const HOME_ROWS_DATA_VERSION = "native-home-rails-v13";
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
-const HOME_RAIL_ITEM_LIMIT = 18;
+const HOME_RAIL_ITEM_LIMIT = 10;
 
 interface HomeCatalogRequest {
   catalog: any;
@@ -54,13 +83,20 @@ function upgradeTmdbImage(url: string | undefined, size: "w1280" | "w780" | "w50
   return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `https://image.tmdb.org/t/p/${size}/`);
 }
 
+function stripSeasonPattern(name: string): string | null {
+  const cleaned = name.trim();
+  const match = cleaned.match(/^(.*?)\s+(?:(?:Season|Part|Cour|Saga)\s+\d+|S\d{1,2}|\d+(?:st|nd|rd|th)\s+Season)\s*$/i);
+  if (match && match[1].trim().length > 0) return match[1].trim();
+  return null;
+}
+
 function normalizeMediaItem(item: MediaItem): MediaItem {
   const detailBackground = resolveDetailBackground(item.type, item.id, item.background);
   return {
     ...item,
-    poster: upgradeTmdbImage(readHomeCardArtwork("poster", item.type, item.id, item.poster), "w500"),
-    background: ensureOriginalTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground)),
-    logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w500")),
+    poster: upgradeTmdbImage(readHomeCardArtwork("poster", item.type, item.id, item.poster), "w342"),
+    background: upgradeTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground), "w500"),
+    logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w342")),
   };
 }
 
@@ -92,12 +128,13 @@ function hashValue(value: string) {
   return String(hash);
 }
 
-function enabledAddonSignature(addons: InstalledAddon[]) {
+function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const catalogAddons = addons.filter(addon => (
     addon.enabled && Array.isArray(addon.manifest?.catalogs) && addon.manifest.catalogs.length > 0
   ));
+  const orientationTag = `|orient:${contentOrientation}`;
   if (!catalogAddons.length) {
-    return `${HOME_ROWS_DATA_VERSION}|aetherio-starter|${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}`;
+    return `${HOME_ROWS_DATA_VERSION}|aetherio-starter|${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}${orientationTag}`;
   }
 
   return `${HOME_ROWS_DATA_VERSION}|${catalogAddons
@@ -113,7 +150,7 @@ function enabledAddonSignature(addons: InstalledAddon[]) {
         .join(",");
       return `${addon.id}|${addon.url}|${addon.version}|${catalogs}`;
     })
-    .join("||")}`;
+    .join("||")}${orientationTag}`;
 }
 
 function homeRailTitle(title: string | undefined, type: string) {
@@ -230,14 +267,18 @@ export const homeCatalogKeys = {
 
 async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPath?: string | null) {
   try {
-    const data = await tmdbFetch(`/${type}/${id}/images`, { params: { include_image_language: "es,en,null" } });
+    const data = await tmdbFetch<any>(`/${type}/${id}`, {
+      params: { append_to_response: "images", include_image_language: "es,en,null", language: "es-ES" },
+    });
     if (!data) return {};
-    const logo = data.logos?.find((item: any) => item.iso_639_1 === "es")
-      ?? data.logos?.find((item: any) => item.iso_639_1 === "en")
-      ?? data.logos?.[0];
+    const images = data.images;
+    const logo = images?.logos?.find((item: any) => item.iso_639_1 === "es")
+      ?? images?.logos?.find((item: any) => item.iso_639_1 === "en")
+      ?? images?.logos?.[0];
     return {
       logo: tmdbImageUrl(logo?.file_path, "w500"),
-      background: pickPreferredTmdbBackdrop(data.backdrops, fallbackBackdropPath),
+      background: pickPreferredTmdbBackdrop(images?.backdrops, fallbackBackdropPath),
+      description: data.overview ?? undefined,
     };
   } catch {
     return {};
@@ -260,8 +301,15 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
       }
       const tmdbType = item.type === "movie" ? "movie" : "tv";
       try {
-        const artwork = await tmdbArtwork(tmdbType, tmdbId);
-        results[i] = { ...item, logo: artwork.logo ?? item.logo };
+        let artwork = await tmdbArtwork(tmdbType, tmdbId);
+        if (!artwork.description && tmdbType === "tv") {
+          artwork = await tmdbArtwork("movie", tmdbId);
+        }
+        results[i] = {
+          ...item,
+          logo: artwork.logo ?? item.logo,
+          description: artwork.description ?? item.description,
+        };
       } catch {
         results[i] = item;
       }
@@ -284,6 +332,7 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
   let runtime: string | undefined;
   let genres: string[] | undefined;
   let certification: string | undefined;
+  let isAnime = false;
 
   if (detail) {
     const images = detail.images;
@@ -307,6 +356,12 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
       genres = genreList.map((g: any) => g.name);
     }
 
+    const hasAnimationGenre = Array.isArray(genreList) && genreList.some((g: any) => g.id === 16);
+    const isJapanese = detail.original_language === "ja";
+    if (hasAnimationGenre && isJapanese) {
+      isAnime = true;
+    }
+
     if (type === "movie") {
       const us = detail.release_dates?.results?.find((r: any) => r.iso_3166_1 === "US");
       certification = us?.release_dates?.[0]?.certification || undefined;
@@ -318,12 +373,12 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
 
   return {
     id: `tmdb:${item.id}`,
-    type,
+    type: isAnime ? "anime" : type,
     name: item.title ?? item.name ?? "Sin titulo",
     poster: tmdbImageUrl(item.poster_path, "w500"),
     background: background ?? tmdbImageUrl(item.backdrop_path, "original"),
     logo: sanitizeLogoUrl(logo),
-    description: item.overview,
+    description: detail?.overview ?? item.overview,
     rating: typeof item.vote_average === "number" && item.vote_average > 0 ? item.vote_average.toFixed(1) : undefined,
     year: yearFrom(item.release_date ?? item.first_air_date),
     genres,
@@ -362,18 +417,16 @@ function interleaveGroups(groups: MediaItem[][]) {
   return mixed;
 }
 
-function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = [], contentOrientation?: ContentOrientation) {
+function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []) {
   const merged: MediaItem[] = [];
   const seen = new Set<string>();
-  let animeCount = 0;
 
   const add = (item: MediaItem, group?: string) => {
     const key = `${item.type}:${item.id}`;
     if (seen.has(key)) return;
-    const background = ensureOriginalTmdbImage(resolveDetailBackground(item.type, item.id, item.background));
+    const background = upgradeTmdbImage(resolveDetailBackground(item.type, item.id, item.background), "w1280");
     if (!background || isAetherioDefaultArtwork(background)) return;
     seen.add(key);
-    if (item.type === "anime") animeCount++;
     merged.push({
       ...item,
       background,
@@ -382,34 +435,18 @@ function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []
     });
   };
 
-  if (contentOrientation === "anime") {
-    for (const row of rows) {
-      if (!matchesContentOrientation(row.type, "anime")) continue;
+  const sourceRows = rows.slice(0, 6);
+  for (const row of sourceRows) {
+    if (merged.length >= HERO_TOTAL_LIMIT) break;
+    for (const item of row.items.slice(0, 8)) {
       if (merged.length >= HERO_TOTAL_LIMIT) break;
-      for (const item of row.items) {
-        if (merged.length >= HERO_TOTAL_LIMIT) break;
-        add(item, row.name);
-      }
+      add(item, row.name);
     }
-  } else {
-    const isWestern = (t: string) => matchesContentOrientation(t, "movies-series");
+  }
 
-    const sourceRows = rows.slice(0, 4);
-    for (const row of sourceRows) {
-      if (contentOrientation === "movies-series" && !isWestern(row.type)) continue;
-      if (contentOrientation === "both" && row.type === "anime" && animeCount >= 5) continue;
-      for (const item of row.items.slice(0, 8)) {
-        if (contentOrientation === "both" && item.type === "anime" && animeCount >= 5) break;
-        if (merged.length >= HERO_TOTAL_LIMIT) break;
-        add(item, row.name);
-      }
-    }
-
-    for (const item of tmdbItems) {
-      if (merged.length >= HERO_TOTAL_LIMIT) break;
-      if (contentOrientation === "movies-series" && !isWestern(item.type)) continue;
-      add(item, item.heroGroup);
-    }
+  for (const item of tmdbItems) {
+    if (merged.length >= HERO_TOTAL_LIMIT) break;
+    add(item, item.heroGroup);
   }
 
   return merged
@@ -421,7 +458,7 @@ function heroRandomValue(item: MediaItem) {
   return Number(hashValue(`${todayKey()}|${item.type}|${item.id}|${item.heroGroup ?? ""}`));
 }
 
-export async function fetchHomeRows(addons: InstalledAddon[]) {
+export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const enabledAddons = addons.filter(addon => addon.enabled);
   const rowTasks = enabledAddons.flatMap(addon =>
     (addon.manifest?.catalogs ?? [])
@@ -463,42 +500,110 @@ export async function fetchHomeRows(addons: InstalledAddon[]) {
   const addonRows = rows.filter((row): row is CatalogRowData => row !== null);
   const baseRows = addonRows.length ? addonRows : await fetchTmdbStarterRows();
 
-  const animeRows = await fetchAnimeRows();
-  if (!animeRows.length) return baseRows;
+  if (contentOrientation === "both") {
+    const animeRows = await fetchAnimeRows();
+    if (!animeRows.length) return baseRows;
 
-  const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
-  const filteredAnimeRows = animeRows.map(row => ({
-    ...row,
-    items: row.items.filter(item => !baseItemIds.has(`${item.type}:${item.id}`)),
-  })).filter(row => row.items.length > 0);
-
-  if (!filteredAnimeRows.length) return baseRows;
-
-  const resolvedAnimeRows = await Promise.all(
-    filteredAnimeRows.map(async row => ({
+    const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
+    const filteredAnimeRows = animeRows.map(row => ({
       ...row,
-      items: await resolveAnilistToTmdb(row.items),
-    })),
+      items: row.items.filter(item => !baseItemIds.has(`${item.type}:${item.id}`)),
+    })).filter(row => row.items.length > 0);
+
+    if (!filteredAnimeRows.length) return baseRows;
+
+    const malResolvedRows = await Promise.all(
+      filteredAnimeRows.map(async row => ({
+        ...row,
+        items: await resolveMalToTmdb(row.items),
+      })),
+    );
+    const resolvedAnimeRows = await Promise.all(
+      malResolvedRows.map(async row => ({
+        ...row,
+        items: await resolveAnilistToTmdb(row.items),
+      })),
+    );
+
+    const dedupedAnimeRows = resolvedAnimeRows.map(row => {
+      const seen = new Set<string>();
+      return {
+        ...row,
+        items: row.items.filter(item => {
+          const base = stripSeasonPattern(item.name);
+          const key = (base ?? item.name).toLowerCase().trim();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }),
+      };
+    });
+
+    const validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
+
+    const balanced = buildBothModeRows(baseRows, validAnimeRows);
+    const allEnriched = await enrichAllItemsWithLogos(balanced.flatMap(row => row.items));
+    let offset = 0;
+    return balanced.map(row => {
+      const items = allEnriched.slice(offset, offset + row.items.length);
+      offset += row.items.length;
+      return { ...row, items };
+    });
+  }
+
+  const animeRows = await fetchAnimeRows();
+  const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
+  const filteredAnimeRows = (animeRows.length
+    ? animeRows.map(row => ({
+      ...row,
+      items: row.items.filter(item => !baseItemIds.has(`${item.type}:${item.id}`)),
+    })).filter(row => row.items.length > 0)
+    : []
   );
 
-  const allEnriched = await enrichAllItemsWithLogos([
-    ...baseRows.flatMap(r => r.items),
-    ...resolvedAnimeRows.flatMap(r => r.items),
-  ]);
+  let validAnimeRows: CatalogRowData[] = [];
+  if (filteredAnimeRows.length) {
+    const malResolvedRows = await Promise.all(
+      filteredAnimeRows.map(async row => ({
+        ...row,
+        items: await resolveMalToTmdb(row.items),
+      })),
+    );
+    const resolvedAnimeRows = await Promise.all(
+      malResolvedRows.map(async row => ({
+        ...row,
+        items: await resolveAnilistToTmdb(row.items),
+      })),
+    );
 
+    const dedupedAnimeRows = resolvedAnimeRows.map(row => {
+      const seen = new Set<string>();
+      return {
+        ...row,
+        items: row.items.filter(item => {
+          const base = stripSeasonPattern(item.name);
+          const key = (base ?? item.name).toLowerCase().trim();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }),
+      };
+    });
+
+    validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
+  }
+
+  const shuffledAnime = [...validAnimeRows].sort(() => Math.random() - 0.5);
+  const shuffledBase = [...baseRows].sort(() => Math.random() - 0.5).slice(0, 5);
+  const combined = shuffledAnime.length ? [...shuffledAnime, ...shuffledBase] : baseRows;
+
+  const allEnriched = await enrichAllItemsWithLogos(combined.flatMap(row => row.items));
   let offset = 0;
-  const enrichedBase = baseRows.map(row => {
+  return combined.map(row => {
     const items = allEnriched.slice(offset, offset + row.items.length);
     offset += row.items.length;
     return { ...row, items };
   });
-  const enrichedAnime = resolvedAnimeRows.map(row => {
-    const items = allEnriched.slice(offset, offset + row.items.length);
-    offset += row.items.length;
-    return { ...row, items };
-  });
-
-  return [...enrichedBase, ...enrichedAnime];
 }
 
 async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
@@ -550,73 +655,215 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
 async function fetchAnimeRows(): Promise<CatalogRowData[]> {
   const animeBase = { with_genres: "16", with_original_language: "ja" };
 
-  const animeRowsData = await Promise.all([
-    {
-      id: "mal.airing_anime",
-      title: "Emitiéndose",
-      fetch: fetchAnilistAiringAnime,
-      tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) },
-    },
-    {
-      id: "mal.top_anime",
-      title: "Lo mejor del Anime",
-      fetch: fetchAnilistTopAnime,
-      tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" },
-    },
-    {
-      id: "mal.most_favorites_anime",
-      title: "Las favoritas - Anime",
-      fetch: fetchAnilistMostFavorites,
-      tmdb: { sort_by: "vote_count.desc" },
-    },
-    {
-      id: "mal.top_airing_anime",
-      title: "Top Series - Anime",
-      fetch: fetchAnilistTopAiring,
-      tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) },
-    },
-    {
-      id: "mal.action_anime",
-      title: "Anime de acción",
-      fetch: fetchAnilistActionAnime,
-      tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10759" },
-    },
-  ].map(async (entry): Promise<CatalogRowData | null> => {
-    let items: MediaItem[] = [];
-    let source = "MAL";
+  interface AnimeEntry {
+    id: string;
+    title: string;
+    fetch: () => Promise<MediaItem[]>;
+    tmdb?: Record<string, string | undefined>;
+    kind: "current" | "top" | "genre" | "other";
+    order: number;
+  }
 
-    try {
-      items = await entry.fetch();
-    } catch {}
+  // Order defines dedupe precedence: lower wins.
+  const anilistEntries: AnimeEntry[] = [
+    { id: "mal.airing_anime", title: "Sonando fuerte esta temporada", fetch: fetchAnilistAiringAnime, kind: "current", tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) }, order: 1 },
+    { id: "mal.top_anime", title: "Los reyes del anime", fetch: fetchAnilistTopAnime, kind: "top", tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" }, order: 4 },
+    { id: "mal.most_favorites_anime", title: "Favoritos de la comunidad", fetch: fetchAnilistMostFavorites, kind: "top", tmdb: { sort_by: "vote_count.desc" }, order: 6 },
+    { id: "mal.top_airing_anime", title: "Mejor puntuados ahora", fetch: fetchAnilistTopAiring, kind: "current", tmdb: { sort_by: "vote_average.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "10" }, order: 2 },
+    { id: "mal.action_anime", title: "Puro Acción", fetch: fetchAnilistActionAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10759" }, order: 30 },
+    { id: "mal.adventure", title: "Aventuras del otro mundo", fetch: fetchAnilistAdventureAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_count.desc", with_genres: "16,10759", "vote_count.gte": "30" }, order: 31 },
+    { id: "mal.comedy", title: "Tears y risas", fetch: fetchAnilistComedyAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,35" }, order: 32 },
+    { id: "mal.drama", title: "Para llorar a mares", fetch: fetchAnilistDramaAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_average.desc", with_genres: "16,18" }, order: 33 },
+    { id: "mal.romance", title: "Amor en el aire", fetch: fetchAnilistRomanceAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10749" }, order: 34 },
+    { id: "mal.fantasy", title: "Magia sin límites", fetch: fetchAnilistFantasyAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_count.desc", with_genres: "16,10765" }, order: 35 },
+    { id: "mal.scifi", title: "Locuras del futuro", fetch: fetchAnilistSciFiAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_average.desc", with_genres: "16,10765", "vote_count.gte": "20" }, order: 36 },
+    { id: "mal.last_year_best", title: "Lo mejor de ayer", fetch: fetchAnilistLastYearBestAnime, kind: "other", tmdb: { ...animeBase, sort_by: "vote_average.desc", "vote_count.gte": "200", "air_date.gte": isoDate(-365), "air_date.lte": isoDate(0) }, order: 28 },
+  ];
 
-    if (!items.length) {
-      source = "TMDB";
-      try {
-        const tmdbParams: Record<string, string> = { language: "es-ES", page: "1", ...animeBase };
-        for (const [k, v] of Object.entries(entry.tmdb)) {
-          if (v != null) tmdbParams[k] = String(v);
+  const jikanEntries: AnimeEntry[] = [
+    { id: "jikan.top_airing", title: "Las que están arrasando", fetch: fetchJikanTopAiring, kind: "current", order: 3, tmdb: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5" } },
+    { id: "jikan.upcoming", title: "Lo que viene", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
+    { id: "jikan.top_movies", title: "Joyas cinematográficas", fetch: fetchJikanTopMovies, kind: "other", order: 8, tmdb: { sort_by: "popularity.desc", with_genres: "16,12" } },
+    { id: "jikan.top_ova", title: "OVA legendarios", fetch: fetchJikanTopOva, kind: "other", order: 9, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "100" } },
+    { id: "jikan.top_ona", title: "ONA imperdibles", fetch: fetchJikanTopOna, kind: "other", order: 10, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "50" } },
+    { id: "jikan.top_specials", title: "Especiales que enamoran", fetch: fetchJikanTopSpecials, kind: "other", order: 11, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "10" } },
+    { id: "jikan.recommendations", title: "La comunidad lo recomienda", fetch: fetchJikanRecommendations, kind: "other", order: 12, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" } },
+    { id: "jikan.top_upcoming", title: "Próximos estrenos", fetch: fetchJikanTopUpcoming, kind: "other", order: 13, tmdb: { sort_by: "vote_average.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(365) } },
+    { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 7, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "150" } },
+    { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "top", order: 14, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
+    { id: "jikan.action", title: "Adrenalina pura", fetch: fetchJikanAction, kind: "genre", order: 40, tmdb: { page: "2", sort_by: "popularity.desc", with_genres: "16,10759" } },
+    { id: "jikan.adventure", title: "Aventuras épicas", fetch: fetchJikanAdventure, kind: "genre", order: 41, tmdb: { sort_by: "vote_average.desc", with_genres: "16,10759", "vote_count.gte": "50" } },
+    { id: "jikan.romance", title: "Corazones rotos felices", fetch: fetchJikanRomance, kind: "genre", order: 42, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,10749", "vote_count.gte": "20" } },
+    { id: "jikan.comedy", title: "Carcajadas garantizadas", fetch: fetchJikanComedy, kind: "genre", order: 43, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,35", "vote_count.gte": "20" } },
+    { id: "jikan.fantasy", title: "Mundos mágicos", fetch: fetchJikanFantasy, kind: "genre", order: 44, tmdb: { sort_by: "vote_average.desc", with_genres: "16,10765", "vote_count.gte": "50" } },
+    { id: "jikan.scifi", title: "Futuro y espacio", fetch: fetchJikanSciFi, kind: "genre", order: 45, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,10765", "vote_count.gte": "30" } },
+    { id: "jikan.slice_of_life", title: "Días tranquilos", fetch: fetchJikanSliceOfLife, kind: "genre", order: 46, tmdb: { page: "3", sort_by: "vote_average.desc", with_genres: "16", "vote_count.gte": "100" } },
+    { id: "jikan.psychological", title: "Mente enigma", fetch: fetchJikanPsychological, kind: "genre", order: 47, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,9648", "vote_count.gte": "50" } },
+  ];
+
+  // Fetch AniList entries in parallel, Jikan entries serially (rate-limit).
+  const anilistRaw = await Promise.all(
+    anilistEntries.map(async (entry): Promise<{ entry: AnimeEntry; items: MediaItem[] }> => {
+      let items: MediaItem[] = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+        try { items = await entry.fetch(); } catch {}
+        if (items.length) break;
+      }
+      if (!items.length && entry.tmdb) {
+        try {
+          const tmdbParams: Record<string, string> = { language: "es-ES", page: "1", ...animeBase };
+          for (const [k, v] of Object.entries(entry.tmdb)) {
+            if (v != null) tmdbParams[k] = String(v);
+          }
+          const results = await tmdbFetch<any>("/discover/tv", { params: tmdbParams });
+          items = (Array.isArray(results?.results) ? results.results : [])
+            .map((item: any) => normalizeTmdbCatalogItem(item, "anime", entry.title))
+            .filter((item: MediaItem | null): item is MediaItem => item != null);
+        } catch {}
+      }
+      const unique = items.filter((item, index, list) => list.findIndex(i => i.id === item.id) === index);
+      return { entry, items: unique.slice(0, HOME_RAIL_ITEM_LIMIT) };
+    }),
+  );
+
+  const sortedJikan = [...jikanEntries].sort((a, b) => a.order - b.order);
+  const jikanRaw = await runJikanSerial(
+    sortedJikan.map((entry) => ({
+      fn: async (): Promise<{ entry: AnimeEntry; items: MediaItem[] }> => {
+        let items: MediaItem[] = [];
+        try { items = await entry.fetch(); } catch {}
+        if (!items.length && entry.tmdb) {
+          try {
+            const tmdbParams: Record<string, string> = { language: "es-ES", page: "1", ...animeBase };
+            for (const [k, v] of Object.entries(entry.tmdb)) {
+              if (v != null) tmdbParams[k] = String(v);
+            }
+            const results = await tmdbFetch<any>("/discover/tv", { params: tmdbParams });
+            items = (Array.isArray(results?.results) ? results.results : [])
+              .map((item: any) => normalizeTmdbCatalogItem(item, "anime", entry.title))
+              .filter((item: MediaItem | null): item is MediaItem => item != null);
+          } catch {}
         }
-        const results = await tmdbFetch<any>("/discover/tv", { params: tmdbParams });
-        items = (Array.isArray(results?.results) ? results.results : [])
-          .map((item: any) => normalizeTmdbCatalogItem(item, "anime", entry.title))
-          .filter((item: MediaItem | null): item is MediaItem => item != null);
-      } catch {}
-    }
+        const unique = items.filter((item, index, list) => list.findIndex(i => i.id === item.id) === index);
+        return { entry, items: unique.slice(0, HOME_RAIL_ITEM_LIMIT) };
+      },
+    })),
+  );
+  const jikanResults = await Promise.all(jikanRaw);
 
-    const unique = items.filter((item, index, list) => list.findIndex(i => i.id === item.id) === index);
-    if (!unique.length) return null;
-    return {
+  const allResults = [...anilistRaw, ...jikanResults].sort((a, b) => a.entry.order - b.entry.order);
+
+  // Central dedupe by mal_id; later rows lose items already seen.
+  const seenMalIds = new Set<number>();
+  const seenKeys = new Set<string>();
+  const rows: CatalogRowData[] = [];
+  for (const { entry, items } of allResults) {
+    const deduped: MediaItem[] = [];
+    for (const item of items) {
+      const malId = (item as MediaItem & { _malId?: number })._malId;
+      const itemKey = `${item.type}:${item.id}`;
+      if (seenKeys.has(itemKey)) continue;
+      if (malId && seenMalIds.has(malId)) continue;
+      seenKeys.add(itemKey);
+      if (malId) seenMalIds.add(malId);
+      deduped.push(item);
+    }
+    if (!deduped.length) continue;
+    rows.push({
       addonId: "aetherio-starter",
       addonName: "Aetherio",
       catalogId: entry.id,
       type: "anime",
       name: entry.title,
-      subtitle: `Actualizado con ${source}`,
-      items: unique.slice(0, HOME_RAIL_ITEM_LIMIT),
-    } satisfies CatalogRowData;
-  }));
+      subtitle: "Actualizado con TMDB",
+      items: deduped,
+    } satisfies CatalogRowData);
+  }
+  return rows;
+}
 
-  return animeRowsData.filter((row): row is CatalogRowData => row !== null);
+function buildBothModeRows(baseRows: CatalogRowData[], animeRows: CatalogRowData[]): CatalogRowData[] {
+  const seed = todayKey();
+  const rng = (max: number, salt: string) => Math.abs(Number(hashValue(`${seed}|${salt}`))) % max;
+
+  const airingAnime = animeRows.filter(r => r.catalogId === "mal.airing_anime" || r.catalogId === "jikan.top_airing" || r.catalogId === "jikan.upcoming");
+  const topAnime = animeRows.filter(r => r.catalogId === "mal.top_anime" || r.catalogId === "mal.most_favorites_anime" || r.catalogId === "jikan.top_favorites" || r.catalogId === "jikan.most_popular");
+  const otherAnime = animeRows.filter(r => !airingAnime.includes(r) && !topAnime.includes(r));
+
+  const trendingBase = baseRows.filter(r => r.catalogId === "tmdb.trending_movie" || r.catalogId === "tmdb.trending_series");
+  const topBase = baseRows.filter(r => r.catalogId === "tmdb.top_movie" || r.catalogId === "tmdb.top_series");
+  const otherBase = baseRows.filter(r => !trendingBase.includes(r) && !topBase.includes(r));
+
+  const selectedAnime: CatalogRowData[] = [];
+  const selectedBase: CatalogRowData[] = [];
+
+  if (airingAnime.length) selectedAnime.push(airingAnime[rng(airingAnime.length, "anime-airing")]);
+  if (topAnime.length) selectedAnime.push(topAnime[rng(topAnime.length, "anime-top")]);
+
+  if (trendingBase.length) selectedBase.push(trendingBase[rng(trendingBase.length, "base-trending")]);
+  if (topBase.length) selectedBase.push(topBase[rng(topBase.length, "base-top")]);
+
+  const fillAnimePool = [...otherAnime];
+  while (selectedAnime.length < 10 && fillAnimePool.length) {
+    const idx = rng(fillAnimePool.length, `anime-fill-${selectedAnime.length}`);
+    selectedAnime.push(fillAnimePool[idx]);
+    fillAnimePool.splice(idx, 1);
+  }
+
+  const fillBasePool = [...otherBase];
+  while (selectedBase.length < 10 && fillBasePool.length) {
+    const idx = rng(fillBasePool.length, `base-fill-${selectedBase.length}`);
+    selectedBase.push(fillBasePool[idx]);
+    fillBasePool.splice(idx, 1);
+  }
+
+  return buildInterleavedWithTopSlotRules(selectedAnime, selectedBase);
+}
+
+function buildInterleavedWithTopSlotRules(animeRows: CatalogRowData[], baseRows: CatalogRowData[]): CatalogRowData[] {
+  const topAnimeIds = new Set(["mal.top_anime", "mal.most_favorites_anime", "jikan.top_favorites", "jikan.most_popular"]);
+  const topBaseIds = new Set(["tmdb.top_movie", "tmdb.top_series"]);
+
+  const result: CatalogRowData[] = [];
+  let iA = 0;
+  let iB = 0;
+  let lastWasTop = false;
+
+  function pickFrom(source: CatalogRowData[], idxRef: { i: number }): CatalogRowData | null {
+    while (idxRef.i < source.length) {
+      const row = source[idxRef.i];
+      idxRef.i++;
+      const isTop = (source === animeRows ? topAnimeIds : topBaseIds).has(row.catalogId);
+      if (isTop && lastWasTop) continue;
+      return row;
+    }
+    return null;
+  }
+
+  while (result.length < 20 && (iA < animeRows.length || iB < baseRows.length)) {
+    const turn = result.length % 2 === 0 ? "anime" : "base";
+    const idxRef = turn === "anime" ? { i: iA } : { i: iB };
+    const source = turn === "anime" ? animeRows : baseRows;
+    const row = pickFrom(source, idxRef);
+    if (turn === "anime") iA = idxRef.i;
+    else iB = idxRef.i;
+    if (!row) {
+      // Try the other side to fill the slot.
+      const altIdxRef = turn === "anime" ? { i: iB } : { i: iA };
+      const altSource = turn === "anime" ? baseRows : animeRows;
+      const altRow = pickFrom(altSource, altIdxRef);
+      if (turn === "anime") iB = altIdxRef.i;
+      else iA = altIdxRef.i;
+      if (!altRow) break;
+      result.push(altRow);
+      lastWasTop = (altSource === animeRows ? topAnimeIds : topBaseIds).has(altRow.catalogId);
+      continue;
+    }
+    result.push(row);
+    lastWasTop = (source === animeRows ? topAnimeIds : topBaseIds).has(row.catalogId);
+  }
+  return result.slice(0, 20);
 }
 
 async function fetchStarterTmdbResults(request: TmdbHomeRailRequest) {
@@ -701,14 +948,14 @@ function companyParams(companyIds: string[]) {
 
 export async function fetchHomeHero() {
   try {
-    const [movies, series] = await Promise.all([
-      tmdbFetch("/movie/popular", { params: { language: "es-ES", page: "1", region: "US" } }),
-      tmdbFetch("/tv/popular", { params: { language: "es-ES", page: "1" } }),
+    const [airingSeries, nowPlaying] = await Promise.all([
+      tmdbFetch("/tv/on_the_air", { params: { language: "es-ES", page: "1" } }),
+      tmdbFetch("/movie/now_playing", { params: { language: "es-ES", page: "1", region: "US" } }),
     ]);
 
     const rawHeroItems = [
-      ...((movies as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "movie" as const, group: "Popular Movies" })),
-      ...((series as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "series" as const, group: "Popular Series" })),
+      ...((nowPlaying as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "movie" as const, group: "En emisión - Películas" })),
+      ...((airingSeries as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "series" as const, group: "En emisión - Series" })),
     ];
 
     const HERO_BATCH = 4;
@@ -723,8 +970,8 @@ export async function fetchHomeHero() {
       }
     }
 
-    const movieItems = heroItems.filter(item => item.heroGroup === "Popular Movies");
-    const seriesItems = heroItems.filter(item => item.heroGroup === "Popular Series");
+    const movieItems = heroItems.filter(item => item.heroGroup === "En emisión - Películas");
+    const seriesItems = heroItems.filter(item => item.heroGroup === "En emisión - Series");
 
     return enrichHeroRatings(interleaveGroups([movieItems, seriesItems]));
   } catch {
@@ -761,12 +1008,12 @@ function cachedHero(signature: string) {
   if (!home || home.heroSignature !== signature || !isFreshHomeCache(home.heroUpdatedAt)) return undefined;
   return home.heroItems.map(item => ({
     ...item,
-    background: ensureOriginalTmdbImage(item.background),
+    background: upgradeTmdbImage(item.background, "w1280"),
   }));
 }
 
-export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddon[]) {
-  const rowsSignature = enabledAddonSignature(addons);
+export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
+  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
   const currentHeroSignature = heroSignature();
   const home = useCacheStore.getState().home;
   const rows = cachedRows(rowsSignature);
@@ -781,7 +1028,7 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
 
   void queryClient.prefetchQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
-    queryFn: () => fetchHomeRows(addons),
+    queryFn: () => fetchHomeRows(addons, contentOrientation),
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
   });
@@ -795,19 +1042,30 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
 
 export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const queryClient = useQueryClient();
-  const rowsSignature = enabledAddonSignature(addons);
+  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
   const currentHeroSignature = heroSignature();
+  const prevSignatureRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    const prev = prevSignatureRef.current;
+    if (prev !== undefined && prev !== rowsSignature) {
+      queryClient.removeQueries({ queryKey: ["home"] });
+      useCacheStore.getState().clearHome();
+    }
+    prevSignatureRef.current = rowsSignature;
+  }, [queryClient, rowsSignature]);
+
   const initialRows = cachedRows(rowsSignature);
   const initialHero = cachedHero(currentHeroSignature);
 
   const rowsQuery = useQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
-    queryFn: () => fetchHomeRows(addons),
+    queryFn: () => fetchHomeRows(addons, contentOrientation),
     initialData: initialRows,
     initialDataUpdatedAt: initialRows ? useCacheStore.getState().home?.rowsUpdatedAt : undefined,
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
-    refetchOnMount: !initialRows,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
@@ -818,7 +1076,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
     initialDataUpdatedAt: initialHero ? useCacheStore.getState().home?.heroUpdatedAt : undefined,
     staleTime: HOME_HERO_STALE_TIME,
     gcTime: HOME_GC_TIME,
-    refetchOnMount: !initialHero,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
@@ -835,11 +1093,11 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   }, [heroQuery.data, currentHeroSignature]);
 
   useEffect(() => {
-    prefetchHomeData(queryClient, addons);
-  }, [addons, queryClient]);
+    prefetchHomeData(queryClient, addons, contentOrientation);
+  }, [addons, queryClient, contentOrientation]);
 
   const rows = rowsQuery.data ?? [];
-  const heroItems = useMemo(() => mergeHeroItems(heroQuery.data ?? [], rows, contentOrientation), [heroQuery.data, rows, contentOrientation]);
+  const heroItems = useMemo(() => mergeHeroItems(heroQuery.data ?? [], rows), [heroQuery.data, rows]);
   const usingStarterRows = rows.length > 0 && rows.every(row => row.addonId === "aetherio-starter");
 
   useEffect(() => {

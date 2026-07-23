@@ -17,6 +17,7 @@ export interface MediaStream {
   externalUrl?: string;
   ytId?: string;
   infoHash?: string;
+  seeders?: number;
   fileIdx?: number;
   size?: number;
   folderSize?: number;

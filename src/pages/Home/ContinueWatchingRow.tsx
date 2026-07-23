@@ -330,8 +330,13 @@ function ScrollArrow({ visible, side, onClick }: { visible: boolean; side: "left
 }
 
 async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
-  const tmdbType = entry.type === "movie" ? "movie" : "tv";
-  const tmdbId = await resolveTmdbId(entry, tmdbType);
+  const initialType = entry.type === "movie" ? "movie" : "tv";
+  let tmdbId = await resolveTmdbId(entry, initialType);
+  let tmdbType = initialType;
+  if (!tmdbId && initialType === "tv") {
+    tmdbId = await resolveTmdbId(entry, "movie");
+    tmdbType = "movie";
+  }
   if (!tmdbId) {
     console.info("[AETHERIO:CONTINUE:ARTWORK] no TMDB match", {
       key: entry.key,
@@ -343,10 +348,17 @@ async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
     return null;
   }
 
-  const [details, images] = await Promise.all([
+  let [details, images] = await Promise.all([
     tmdbFetch<{ title?: string; name?: string; backdrop_path?: string; poster_path?: string }>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES" } }),
     entry.logo ? Promise.resolve(null) : tmdbFetch<{ logos?: unknown }>(`/${tmdbType}/${tmdbId}/images`, { params: { include_image_language: "es,en,null" } }),
   ]);
+  if (!details && tmdbType === "tv") {
+    tmdbType = "movie";
+    [details, images] = await Promise.all([
+      tmdbFetch<{ title?: string; name?: string; backdrop_path?: string; poster_path?: string }>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES" } }),
+      entry.logo ? Promise.resolve(null) : tmdbFetch<{ logos?: unknown }>(`/${tmdbType}/${tmdbId}/images`, { params: { include_image_language: "es,en,null" } }),
+    ]);
+  }
   const logoPath = entry.logo ? undefined : pickTmdbLogoPath(images?.logos);
   const episodeDetails = entry.type !== "movie" && entry.season && entry.episode
     ? await fetchTmdbEpisodeDetails(tmdbId, entry.season, entry.episode)

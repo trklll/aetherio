@@ -11,10 +11,12 @@ function blendWithBase(hex: string, factor: number): string {
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
-  const br = 31, bg = 31, bb = 31
-  const rr = Math.round(r * factor + br * (1 - factor))
-  const gg = Math.round(g * factor + bg * (1 - factor))
-  const bb2 = Math.round(b * factor + bb * (1 - factor))
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000
+  const base = brightness > 160 ? [60, 60, 60] : [31, 31, 31]
+  const f = brightness > 160 ? Math.max(factor, 0.4) : factor
+  const rr = Math.round(r * f + base[0] * (1 - f))
+  const gg = Math.round(g * f + base[1] * (1 - f))
+  const bb2 = Math.round(b * f + base[2] * (1 - f))
   return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb2.toString(16).padStart(2, "0")}`
 }
 
