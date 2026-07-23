@@ -1,9 +1,9 @@
-import { tmdbFetch } from "../config/apiKeys";
-import { invokeCommand, isTauriRuntime } from "../runtime/platform";
-import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream";
-import { getScopedStorageKey } from "../utils/localProfiles";
-import { getMagnetBtih, isValidMagnetUri, normalizeBtih } from "../utils/playableMedia";
-import { normalizeSeederCount } from "../utils/torrentHealth";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
+import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
+import { getMagnetBtih, isValidMagnetUri, normalizeBtih } from "../utils/playableMedia.ts";
+import { normalizeSeederCount } from "../utils/torrentHealth.ts";
 
 export type SeanimeExtensionType = "anime-torrent-provider" | "onlinestream-provider";
 

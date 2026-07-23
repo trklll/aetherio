@@ -1,20 +1,20 @@
 ﻿import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play, Volume2, VolumeX } from "lucide-react";
-import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist";
-import type { MediaItem } from "../../types/ui";
-import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
-import { sanitizeLogoUrl } from "../../utils/artwork";
-import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { tmdbImage } from "../../utils/tmdbArtwork";
-import { gsap, tweenTo } from "../../utils/motion";
+import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
+import type { MediaItem } from "../../types/ui.ts";
+import { fetchMdbListRatingsForMedia } from "../../services/MDBListService.ts";
+import { sanitizeLogoUrl } from "../../utils/artwork.ts";
+import { writeDetailMediaMeta } from "../../utils/mediaMetadata.ts";
+import { tmdbImage } from "../../utils/tmdbArtwork.ts";
+import { gsap, tweenTo } from "../../utils/motion.ts";
 import {
   fetchYouTubeClip,
   getCachedClipInfo,
   getTrailerSkipEnd,
   type YouTubeClipCandidate,
-} from "../../services/youtubeClips";
-import { useYouTubePlayer } from "../../hooks/useYouTubePlayer";
+} from "../../services/youtubeClips.ts";
+import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
 
 interface Props {
   item: MediaItem;

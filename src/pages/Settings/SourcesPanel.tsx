@@ -9,27 +9,27 @@ import {
   isScraperSiteEnabled,
   saveSourcePreferences,
   type SourcePreferences,
-} from "../../config/sourcePreferences";
+} from "../../config/sourcePreferences.ts";
 import {
   addNuvioProviderRepository,
   getNuvioProviderRepositories,
   refreshNuvioProviderRepositories,
   removeNuvioProviderRepository,
   type NuvioProviderRepositoryInfo,
-} from "../../services/nuvioProviderService";
-import { getScraperSites, type ScraperSiteInfo } from "../../services/scraperService";
+} from "../../services/nuvioProviderService.ts";
+import { getScraperSites, type ScraperSiteInfo } from "../../services/scraperService.ts";
 import {
   getSeanimeExtensionInventory,
   getSeanimeExtensionUserConfig,
   saveSeanimeExtensionUserConfig,
   type SeanimeExtensionInventory,
   type SeanimeExtensionManifest,
-} from "../../services/seanimeExtensionService";
-import { useAddonStore } from "../../store/addonStore";
+} from "../../services/seanimeExtensionService.ts";
+import { useAddonStore } from "../../store/addonStore.ts";
 import {
   getGlobalCloudstreamRepositories,
   type GlobalCloudstreamRepositoryInfo,
-} from "../../services/cloudstreamRepositoryService";
+} from "../../services/cloudstreamRepositoryService.ts";
 
 const CATEGORY_LABELS: Record<string, string> = {
   aggregator: "AGREGADORES",

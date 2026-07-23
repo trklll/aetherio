@@ -1,19 +1,19 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { useAddonStore } from "../store/addonStore";
-import { tmdbFetch } from "../config/apiKeys";
-import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream";
+import { useAddonStore } from "../store/addonStore.ts";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
 import {
   getMagnetBtih,
   isPlayableMediaStream,
   isValidMagnetUri,
   normalizeBtih,
-} from "../utils/playableMedia";
-import { sortStreamsForPlayback } from "../utils/streamPlaybackRanking";
+} from "../utils/playableMedia.ts";
+import { sortStreamsForPlayback } from "../utils/streamPlaybackRanking.ts";
 import {
   extractByteSizeFromText,
   extractReportedSeedersFromText,
   normalizeSeederCount,
-} from "../utils/torrentHealth";
+} from "../utils/torrentHealth.ts";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;

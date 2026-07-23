@@ -1,39 +1,39 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, ChevronLeft, ChevronRight, Film, RefreshCw, User, Zap } from "lucide-react";
-import { tmdbFetch } from "../../config/apiKeys";
-import { useHomePreferences } from "../../config/homePreferences";
-import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist";
+import { tmdbFetch } from "../../config/apiKeys.ts";
+import { useHomePreferences } from "../../config/homePreferences.ts";
+import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
 import {
   getCachedLastLink,
   LANGUAGE_OPTIONS,
   saveLastLink,
   streamCacheKey,
   usePlaybackPreferences,
-} from "../../config/playbackPreferences";
-import { useOriginalLanguage } from "../../hooks/useOriginalLanguage";
-import { useSubtitles } from "../../hooks/useSubtitles";
-import { useStreams } from "../../hooks/useStreams";
-import { useScrapedStreams } from "../../hooks/useScrapedStreams";
-import { useYouTubePlayer } from "../../hooks/useYouTubePlayer";
-import { isPlayableMediaStream } from "../../utils/playableMedia";
-import { streamSpanishPriority } from "../../utils/streamLanguagePriority";
-import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking";
-import { useAddonStore } from "../../store/addonStore";
-import type { MediaStream, StreamQuery } from "../../types/stream";
-import type { SubtitleSource } from "../../types/subtitle";
-import PageContainer from "../../components/layout/PageContainer";
-import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow";
-import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
-import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork";
-import { pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork";
+} from "../../config/playbackPreferences.ts";
+import { useOriginalLanguage } from "../../hooks/useOriginalLanguage.ts";
+import { useSubtitles } from "../../hooks/useSubtitles.ts";
+import { useStreams } from "../../hooks/useStreams.ts";
+import { useScrapedStreams } from "../../hooks/useScrapedStreams.ts";
+import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
+import { isPlayableMediaStream } from "../../utils/playableMedia.ts";
+import { streamSpanishPriority } from "../../utils/streamLanguagePriority.ts";
+import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking.ts";
+import { useAddonStore } from "../../store/addonStore.ts";
+import type { MediaStream, StreamQuery } from "../../types/stream.ts";
+import type { SubtitleSource } from "../../types/subtitle.ts";
+import PageContainer from "../../components/layout/PageContainer.tsx";
+import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow.tsx";
+import { fetchMdbListRatingsForMedia } from "../../services/MDBListService.ts";
+import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork.ts";
+import { pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork.ts";
 import {
   getExactResumeForQuery,
-} from "../../utils/continueWatching";
-import { readDetailMediaMeta, readDetailBackgroundOverride } from "../../utils/mediaMetadata";
-import { tweenTo } from "../../utils/motion";
-import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/streamFormatters";
-import { getReportedSeeders } from "../../utils/torrentHealth";
+} from "../../utils/continueWatching.ts";
+import { readDetailMediaMeta, readDetailBackgroundOverride } from "../../utils/mediaMetadata.ts";
+import { tweenTo } from "../../utils/motion.ts";
+import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/streamFormatters.ts";
+import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import {
   AUTO_NEXT_SOURCE_KEY,
   IMG,
@@ -45,7 +45,7 @@ import {
   getStreamKind,
   playbackOverrideQueryKey,
   resolveTmdbId,
-} from "../Player/utils";
+} from "../Player/utils.ts";
 
 const sourceLogoUrls = import.meta.glob("../../assets/logosaddons/*.{png,jpg,jpeg}", {
   eager: true,
@@ -194,7 +194,7 @@ export default function EpisodiePage() {
     [streams, scrapedStreams],
   );
   const selectedStream = useMemo(
-    () => allStreams.find(stream => stream.id === selectedStreamId) ?? allStreams[0] ?? null,
+    () => allStreams.find((stream: MediaStream) => stream.id === selectedStreamId) ?? allStreams[0] ?? null,
     [selectedStreamId, allStreams],
   );
 
@@ -440,7 +440,7 @@ export default function EpisodiePage() {
       return;
     }
     setSelectedStreamId(current => {
-      if (current && allStreams.some(stream => stream.id === current)) return current;
+      if (current && allStreams.some((stream: MediaStream) => stream.id === current)) return current;
       return pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage)?.id ?? allStreams[0].id;
     });
   }, [
@@ -621,7 +621,7 @@ export default function EpisodiePage() {
     sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
     if (getStreamKind(stream) === "https") {
       const fallbacks = allStreams
-        .filter(candidate => (
+        .filter((candidate: MediaStream) => (
           candidate.id !== stream.id
           && getStreamKind(candidate) === "https"
           && candidate.behaviorHints?.scraperPlayback !== "iframe"

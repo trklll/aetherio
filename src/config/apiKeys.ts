@@ -1,4 +1,4 @@
-import { getScopedStorageKey } from "../utils/localProfiles";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 import { invoke } from "@tauri-apps/api/core";
 
 let _builtinTmdbKey = "";
@@ -154,7 +154,6 @@ export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { pa
   const key = await getTmdbApiKeyAsync();
   if (!key) return null;
 
-  const now = Date.now();
   const url = new URL(path.startsWith("http") ? path : `${TMDB_BASE}${path}`);
   url.searchParams.set("api_key", key);
 

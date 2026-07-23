@@ -5,26 +5,27 @@ import {
   isScraperSiteEnabled,
   sourcePreferencesSignature,
   useSourcePreferences,
-} from "../config/sourcePreferences";
-import { isTauriRuntime } from "../runtime/platform";
+} from "../config/sourcePreferences.ts";
+import { isTauriRuntime } from "../runtime/platform.ts";
 import {
   getGlobalCloudstreamRepositories,
   selectCloudstreamAdapters,
   type CloudstreamCompatibleAdapter,
-} from "../services/cloudstreamRepositoryService";
+  type GlobalCloudstreamRepositoryInfo,
+} from "../services/cloudstreamRepositoryService.ts";
 import {
   clearNuvioProviderResultCache,
   getNuvioProviderRepositories,
   scrapeNuvioProviders,
-} from "../services/nuvioProviderService";
-import { getScraperSites, scrapeStreams, type ScrapedStream } from "../services/scraperService";
+} from "../services/nuvioProviderService.ts";
+import { getScraperSites, scrapeStreams, type ScrapedStream } from "../services/scraperService.ts";
 import {
   clearSeanimeCaches,
   getSeanimeExtensionInventory,
   scrapeSeanimeExtensions,
-} from "../services/seanimeExtensionService";
-import type { MediaStream, StreamQuery } from "../types/stream";
-import { isPlayableMediaStream } from "../utils/playableMedia";
+} from "../services/seanimeExtensionService.ts";
+import type { MediaStream, StreamQuery } from "../types/stream.ts";
+import { isPlayableMediaStream } from "../utils/playableMedia.ts";
 
 const SCRAPED_CACHE_TTL_MS = 5 * 60 * 1000;
 const OKRU_SIGNED_CACHE_TTL_MS = 30 * 1000;
@@ -349,7 +350,7 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
           else publish();
         };
         const cloudstreamInventoryPromise = getGlobalCloudstreamRepositories(repositories, refreshIndex > 0)
-          .then(cloudstreamRepositories => {
+          .then((cloudstreamRepositories: GlobalCloudstreamRepositoryInfo[]) => {
             cloudstreamAdapters = selectCloudstreamAdapters(
               cloudstreamRepositories,
               new Set(selectedProviders),
@@ -357,7 +358,7 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
             if (DEBUG_SCRAPERS) console.info("[AETHERIO:CLOUDSTREAM] spanish adapters request", JSON.stringify({
               queryId: query.id,
               title: searchName,
-              repositories: cloudstreamRepositories.map(repository => ({
+              repositories: cloudstreamRepositories.map((repository: GlobalCloudstreamRepositoryInfo) => ({
                 name: repository.name,
                 activeExtensions: repository.pluginCount,
                 spanishExtensions: repository.spanishPluginCount,
