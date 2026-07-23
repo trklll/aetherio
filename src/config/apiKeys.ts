@@ -1,4 +1,5 @@
 import { getScopedStorageKey } from "../utils/localProfiles";
+import { invoke } from "@tauri-apps/api/core";
 
 let _builtinTmdbKey = "";
 let _tmdbKeyPromise: Promise<string> | null = null;
@@ -7,7 +8,6 @@ export function initBuiltinTmdbKey(): Promise<string> {
   if (_tmdbKeyPromise) return _tmdbKeyPromise;
   _tmdbKeyPromise = (async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       _builtinTmdbKey = await invoke<string>("get_builtin_tmdb_key");
     } catch {
       _builtinTmdbKey = "";

@@ -1105,8 +1105,10 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   }, [heroQuery.data, currentHeroSignature]);
 
   useEffect(() => {
-    prefetchHomeData(queryClient, addons, contentOrientation);
-  }, [addons, queryClient, contentOrientation]);
+    if (tmdbReady) {
+      prefetchHomeData(queryClient, addons, contentOrientation);
+    }
+  }, [addons, queryClient, contentOrientation, tmdbReady]);
 
   const rows = rowsQuery.data ?? [];
   const heroItems = useMemo(() => mergeHeroItems(heroQuery.data ?? [], rows), [heroQuery.data, rows]);
