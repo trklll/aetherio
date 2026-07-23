@@ -38,7 +38,7 @@
       }
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwQzU3RjhFNEQ3OTlFREIKUldUYm5ubE5qbi9Gb0lGZFdZcnMrMW5Tc1ZxM3ZFY1Q5UGJuTm8rNUVXREowRlZZQ2RYUGhuSmwK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzQzkxOTM4QjkwODk2MwpSV1JqaVpDTGs1RThBUmpCNVpWTG9OL3V1TjJwUlVWZG8vWnBEZzVZZEVHUTVnNlc5amNLRWVjSQo=",
       "endpoints": [
         "https://github.com/trklll/aetherio/releases/latest/download/latest.json"
       ],
