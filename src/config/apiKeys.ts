@@ -1,15 +1,26 @@
 import { getScopedStorageKey } from "../utils/localProfiles";
 
-let _builtinTmdbKey: string | undefined;
+let _builtinTmdbKey = "";
+let _tmdbKeyPromise: Promise<string> | null = null;
 
-export async function initBuiltinTmdbKey(): Promise<void> {
-  if (_builtinTmdbKey !== undefined) return;
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    _builtinTmdbKey = await invoke<string>("get_builtin_tmdb_key");
-  } catch {
-    _builtinTmdbKey = "";
-  }
+export function initBuiltinTmdbKey(): Promise<string> {
+  if (_tmdbKeyPromise) return _tmdbKeyPromise;
+  _tmdbKeyPromise = (async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      _builtinTmdbKey = await invoke<string>("get_builtin_tmdb_key");
+    } catch {
+      _builtinTmdbKey = "";
+    }
+    return _builtinTmdbKey;
+  })();
+  return _tmdbKeyPromise;
+}
+
+export async function getTmdbApiKeyAsync(): Promise<string> {
+  if (_builtinTmdbKey) return _builtinTmdbKey;
+  if (_tmdbKeyPromise) return _tmdbKeyPromise;
+  return initBuiltinTmdbKey();
 }
 
 interface CacheEntry {
@@ -140,11 +151,12 @@ export function getTmdbApiKey() {
 const TMDB_BASE = "https://api.themoviedb.org/3";
 
 export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { params?: Record<string, string> }): Promise<T | null> {
-  const key = getTmdbApiKey();
+  const key = await getTmdbApiKeyAsync();
   if (!key) return null;
 
   const now = Date.now();
   const url = new URL(path.startsWith("http") ? path : `${TMDB_BASE}${path}`);
+  url.searchParams.set("api_key", key);
 
   if (init?.params) {
     for (const [k, v] of Object.entries(init.params)) {

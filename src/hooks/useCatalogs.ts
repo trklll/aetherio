@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
-import { getTmdbApiKey, tmdbFetch } from "../config/apiKeys";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys";
 import { getMdbListSettings } from "../config/mdblist";
 import {
   fetchAnilistAiringAnime,
@@ -1042,6 +1042,16 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
 
 export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const queryClient = useQueryClient();
+  const [tmdbReady, setTmdbReady] = useState(() => Boolean(getTmdbApiKey()));
+
+  useEffect(() => {
+    if (!tmdbReady) {
+      let cancelled = false;
+      getTmdbApiKeyAsync().then(() => { if (!cancelled) setTmdbReady(true); });
+      return () => { cancelled = true; };
+    }
+  }, [tmdbReady]);
+
   const rowsSignature = enabledAddonSignature(addons, contentOrientation);
   const currentHeroSignature = heroSignature();
   const prevSignatureRef = useRef<string | undefined>(undefined);
@@ -1061,6 +1071,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   const rowsQuery = useQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
     queryFn: () => fetchHomeRows(addons, contentOrientation),
+    enabled: tmdbReady,
     initialData: initialRows,
     initialDataUpdatedAt: initialRows ? useCacheStore.getState().home?.rowsUpdatedAt : undefined,
     staleTime: HOME_ROWS_STALE_TIME,
@@ -1072,6 +1083,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   const heroQuery = useQuery({
     queryKey: homeCatalogKeys.hero(currentHeroSignature),
     queryFn: fetchHomeHero,
+    enabled: tmdbReady,
     initialData: initialHero,
     initialDataUpdatedAt: initialHero ? useCacheStore.getState().home?.heroUpdatedAt : undefined,
     staleTime: HOME_HERO_STALE_TIME,
