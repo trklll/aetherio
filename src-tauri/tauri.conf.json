@@ -1,6 +1,6 @@
 {
   "productName": "aetherio",
-  "version": "0.2.1",
+  "version": "0.2.99",
   "identifier": "com.aetherio",
   "build": {
     "beforeDevCommand": "npm run dev",
