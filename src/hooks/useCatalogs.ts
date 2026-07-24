@@ -275,10 +275,11 @@ async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPat
     const logo = images?.logos?.find((item: any) => item.iso_639_1 === "es")
       ?? images?.logos?.find((item: any) => item.iso_639_1 === "en")
       ?? images?.logos?.[0];
+    const hasDescription = Boolean(data.overview?.trim());
     return {
       logo: tmdbImageUrl(logo?.file_path, "w500"),
       background: pickPreferredTmdbBackdrop(images?.backdrops, fallbackBackdropPath),
-      description: data.overview ?? undefined,
+      description: hasDescription ? data.overview : undefined,
     };
   } catch {
     return {};
@@ -296,6 +297,10 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
       const item = items[i];
       const tmdbId = Number(item.id.replace("tmdb:", ""));
       if (!Number.isFinite(tmdbId)) {
+        results[i] = item;
+        continue;
+      }
+      if (item.logo && item.description) {
         results[i] = item;
         continue;
       }
