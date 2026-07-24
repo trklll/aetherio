@@ -1,5 +1,5 @@
 import { sanitizeLogoUrl } from "./artwork";
-import type { MdbListRatings } from "../config/mdblist";
+import type { MdbListRatings } from "../config/mdblist.ts";
 import { getScopedStorageKey } from "./localProfiles";
 
 const DETAIL_MEDIA_META_KEY = "aetherio-detail-media-meta-v1";

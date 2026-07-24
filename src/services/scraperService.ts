@@ -1,4 +1,4 @@
-import { invokeCommand, isTauriRuntime } from "../runtime/platform";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
 
 export interface ScrapedStream {
   id: string;

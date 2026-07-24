@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Lock, Check } from "lucide-react";
-import ProfileAvatar from "../components/profile/ProfileAvatar";
+import ProfileAvatar from "../components/profile/ProfileAvatar.tsx";
 import {
   getLocalProfiles,
   getActiveProfileId,
@@ -9,7 +9,7 @@ import {
   verifyPin,
   getProfileInitial,
   type LocalProfile,
-} from "../utils/localProfiles";
+} from "../utils/localProfiles.ts";
 import "./ProfileSelection.css";
 
 const PASTEL_COLORS = [

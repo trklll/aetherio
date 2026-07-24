@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { tmdbFetch } from "../config/apiKeys";
-import { matchesPreferredLanguage, resolvePreferredLanguage, usePlaybackPreferences } from "../config/playbackPreferences";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { matchesPreferredLanguage, resolvePreferredLanguage, usePlaybackPreferences } from "../config/playbackPreferences.ts";
 import { useOriginalLanguage } from "./useOriginalLanguage";
-import { useAddonStore, type InstalledAddon } from "../store/addonStore";
-import type { MediaStream, StreamQuery } from "../types/stream";
-import type { SubtitleSource } from "../types/subtitle";
+import { useAddonStore, type InstalledAddon } from "../store/addonStore.ts";
+import type { MediaStream, StreamQuery } from "../types/stream.ts";
+import type { SubtitleSource } from "../types/subtitle.ts";
 
 const OPEN_SUBTITLES_PRO_URL = "https://opensubtitlesv3-pro.dexter21767.com/eyJsYW5ncyI6WyJzcGFuaXNoIiwic3BhbmlzaC1sYSJdLCJzb3VyY2UiOiJhbGwiLCJhaVRyYW5zbGF0ZWQiOnRydWUsImF1dG9BZGp1c3RtZW50Ijp0cnVlfQ==/manifest.json";
 const OPEN_SUBTITLES_PRO_ADDON: InstalledAddon = {

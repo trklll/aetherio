@@ -1,4 +1,4 @@
-import type { MediaStream, PlaybackEngine, StreamQuery } from "../types/stream";
+import type { MediaStream, PlaybackEngine, StreamQuery } from "../types/stream.ts";
 
 export type EngineDecision = {
   engine: PlaybackEngine;

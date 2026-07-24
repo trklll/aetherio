@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { tmdbFetch } from "../config/apiKeys";
+import { tmdbFetch } from "../config/apiKeys.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SPANISH_WEEKDAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"] as const;

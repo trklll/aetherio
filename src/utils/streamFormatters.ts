@@ -1,5 +1,5 @@
 import formatterManifest from "../assets/stream-tags/manifest.json";
-import type { MediaStream } from "../types/stream";
+import type { MediaStream } from "../types/stream.ts";
 
 export type StreamFormatCategory = "source" | "video" | "audio" | "channels";
 

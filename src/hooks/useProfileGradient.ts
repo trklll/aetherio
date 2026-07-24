@@ -2,8 +2,8 @@ import { useEffect, useState, useRef } from "react"
 import {
   getActiveProfile,
   LOCAL_PROFILES_CHANGED_EVENT,
-} from "../utils/localProfiles"
-import { extractDominantColors } from "../utils/colorExtractor"
+} from "../utils/localProfiles.ts"
+import { extractDominantColors } from "../utils/colorExtractor.ts"
 
 const FALLBACK_GRADIENT = ""
 

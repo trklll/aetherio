@@ -1,5 +1,5 @@
-import { tmdbFetch } from "../config/apiKeys";
-import { invokeCommand, openExternalUrl } from "../runtime/platform";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { invokeCommand, openExternalUrl } from "../runtime/platform.ts";
 import {
   buildContinueWatchingKey,
   buildMediaKey,
@@ -7,8 +7,8 @@ import {
   progressPercent,
   readPlaybackStateEntries,
   type ContinueWatchingEntry,
-} from "../utils/continueWatching";
-import { getScopedStorageKey } from "../utils/localProfiles";
+} from "../utils/continueWatching.ts";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 const BASE_URL = "https://api.trakt.tv";
 const AUTHORIZE_URL = "https://trakt.tv/oauth/authorize";

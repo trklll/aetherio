@@ -1,5 +1,5 @@
-import type { MediaItem } from "../types/ui";
-import { tmdbFetch } from "../config/apiKeys";
+import type { MediaItem } from "../types/ui.ts";
+import { tmdbFetch } from "../config/apiKeys.ts";
 
 const JIKAN_URL = "https://api.jikan.moe/v4";
 const JIKAN_RATE_GAP_MS = 150;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { CatalogRowData } from "../types/ui";
-import { getScopedStorageKey } from "../utils/localProfiles";
+import type { CatalogRowData } from "../types/ui.ts";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 export type HomePosterLayout = "horizontal" | "vertical";
 export type ContentOrientation = "movies-series" | "anime" | "both";

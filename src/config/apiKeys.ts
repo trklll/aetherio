@@ -1,6 +1,8 @@
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
 import { invoke } from "@tauri-apps/api/core";
 
+const APP_TMDB_API_KEY = (import.meta.env.VITE_TMDB_API_KEY as string | undefined)?.trim() ?? "";
+
 let _builtinTmdbKey = "";
 let _tmdbKeyPromise: Promise<string> | null = null;
 
@@ -18,71 +20,31 @@ export function initBuiltinTmdbKey(): Promise<string> {
 }
 
 export async function getTmdbApiKeyAsync(): Promise<string> {
+  const userKey = getApiKeys().tmdbApiKey;
+  if (userKey) return userKey;
   if (_builtinTmdbKey) return _builtinTmdbKey;
   if (_tmdbKeyPromise) return _tmdbKeyPromise;
   return initBuiltinTmdbKey();
 }
 
+export function isTmdbReady() {
+  return Boolean(getApiKeys().tmdbApiKey || _builtinTmdbKey || APP_TMDB_API_KEY);
+}
+
 interface CacheEntry {
   data: any;
-  timestamp: number;
   expiresAt: number;
 }
 
-class SimpleRateLimiter {
-  private requests: Map<string, number[]> = new Map();
-  private cache: Map<string, CacheEntry> = new Map();
+const responseCache = new Map<string, CacheEntry>();
 
-  private cleanExpiredCache() {
-    const now = Date.now();
-    for (const [key, entry] of this.cache.entries()) {
-      if (now > entry.expiresAt) {
-        this.cache.delete(key);
-      }
+function cleanExpiredCache() {
+  const now = Date.now();
+  for (const [key, entry] of responseCache.entries()) {
+    if (now > entry.expiresAt) {
+      responseCache.delete(key);
     }
   }
-
-  async checkLimit(identifier: string, limit: number, windowMs: number): Promise<boolean> {
-    if (limit <= 0) return true;
-
-    const now = Date.now();
-    const windowStart = now - windowMs;
-
-    let requests = this.requests.get(identifier) || [];
-    requests = requests.filter(time => time > windowStart);
-
-    if (requests.length >= limit) {
-      return false;
-    }
-
-    requests.push(now);
-    this.requests.set(identifier, requests);
-
-    return true;
-  }
-
-  async getFromCache(key: string): Promise<any> {
-    this.cleanExpiredCache();
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-
-    if (Date.now() > entry.expiresAt) {
-      this.cache.delete(key);
-      return null;
-    }
-
-    return entry.data;
-  }
-
-  async setCache(key: string, data: any, ttlSeconds: number): Promise<void> {
-    const ttlMs = ttlSeconds * 1000;
-    const expiresAt = Date.now() + ttlMs;
-    this.cache.set(key, { data, timestamp: Date.now(), expiresAt });
-  }
-}
-
-export function isTmdbReady() {
-  return Boolean(_builtinTmdbKey);
 }
 
 export interface ApiKeys {
@@ -99,8 +61,6 @@ export const EMPTY_API_KEYS: ApiKeys = {
   introDbApiKey: "",
   animeSkipClientId: "",
 };
-
-const rateLimiter = new SimpleRateLimiter();
 
 export function getApiKeys(): ApiKeys {
   try {
@@ -119,9 +79,9 @@ export function getApiKeys(): ApiKeys {
 
 export function saveApiKeys(keys: ApiKeys) {
   const normalized: ApiKeys = {
+    tmdbApiKey: keys.tmdbApiKey.trim(),
     introDbApiKey: keys.introDbApiKey.trim(),
     animeSkipClientId: keys.animeSkipClientId.trim(),
-    tmdbApiKey: "",
   };
   localStorage.setItem(getApiKeysStorageKey(), JSON.stringify(normalized));
   window.dispatchEvent(new CustomEvent(API_KEYS_CHANGED_EVENT, { detail: normalized }));
@@ -144,19 +104,29 @@ export function getApiKeysForProfile(profileId: string): ApiKeys {
 }
 
 export function getTmdbApiKey() {
-  if (_builtinTmdbKey) return _builtinTmdbKey;
-  return "";
+  return getApiKeys().tmdbApiKey || _builtinTmdbKey || APP_TMDB_API_KEY;
 }
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 
+export async function validateTmdbApiKey(apiKey: string) {
+  const normalized = apiKey.trim();
+  if (!normalized) return false;
+  try {
+    const url = new URL(`${TMDB_BASE}/configuration`);
+    url.searchParams.set("api_key", normalized);
+    const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { params?: Record<string, string> }): Promise<T | null> {
   const key = await getTmdbApiKeyAsync();
   if (!key) return null;
-
   const url = new URL(path.startsWith("http") ? path : `${TMDB_BASE}${path}`);
   url.searchParams.set("api_key", key);
-
   if (init?.params) {
     for (const [k, v] of Object.entries(init.params)) {
       url.searchParams.set(k, v);
@@ -164,51 +134,26 @@ export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { pa
   }
 
   const cacheKey = `${path}?${url.search}`;
-
-  const cacheEntry = await rateLimiter.getFromCache(cacheKey);
-  if (cacheEntry) {
-    return cacheEntry as T;
+  cleanExpiredCache();
+  const cached = responseCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.data as T;
   }
 
-  const ip = "default";
-  const rateLimitCheck = await rateLimiter.checkLimit(`tmdb_${ip}`, 60, 60000);
-  if (!rateLimitCheck) {
-    console.warn("TMDB rate limit exceeded");
-    return null;
-  }
-
+  const { params: _params, ...fetchInit } = init ?? {};
   const response = await fetch(url.toString(), {
-    ...init,
+    ...fetchInit,
     headers: {
       "Accept": "application/json",
-      ...init?.headers,
+      ...fetchInit.headers,
     },
   });
-
-  if (response.status === 429) {
-    console.warn("TMDB rate limit exceeded (HTTP 429)");
-    await rateLimiter.setCache(cacheKey, null, 300);
-    return null;
-  }
-
-  if (response.status === 401) {
-    console.error("TMDB API key invalid");
-    return null;
-  }
-
-  if (!response.ok) {
-    console.error(`TMDB API error: ${response.status}`);
-    return null;
-  }
-
+  if (!response.ok) return null;
   try {
     const data = await response.json() as T;
-
-    await rateLimiter.setCache(cacheKey, data, 300);
-
+    responseCache.set(cacheKey, { data, expiresAt: Date.now() + 300_000 });
     return data;
-  } catch (error) {
-    console.error("TMDB response parsing error:", error);
+  } catch {
     return null;
   }
 }
@@ -216,4 +161,3 @@ export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { pa
 function getApiKeysStorageKey() {
   return getScopedStorageKey(API_KEYS_STORAGE_KEY);
 }
-

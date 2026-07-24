@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invokeCommand, isTauriRuntime } from "../runtime/platform";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
 
 export interface YouTubeStreamInfo {
   videoId: string;

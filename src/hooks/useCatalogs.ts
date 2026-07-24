@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys";
-import { getMdbListSettings } from "../config/mdblist";
+import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys.ts";
+import { getMdbListSettings } from "../config/mdblist.ts";
 import {
   fetchAnilistAiringAnime,
   fetchAnilistMostFavorites,
@@ -16,7 +16,7 @@ import {
   fetchAnilistSciFiAnime,
   fetchAnilistLastYearBestAnime,
   resolveAnilistToTmdb,
-} from "../services/anilist";
+} from "../services/anilist.ts";
 import {
   fetchJikanUpcoming,
   fetchJikanTopMovies,
@@ -38,17 +38,17 @@ import {
   fetchJikanPsychological,
   resolveMalToTmdb,
   runJikanSerial,
-} from "../services/jikan";
-import { fetchMdbListRatingsForMedia } from "../services/MDBListService";
-import { fetchYouTubeClip } from "../services/youtubeClips";
-import type { InstalledAddon } from "../store/addonStore";
-import { isFreshHomeCache, useCacheStore } from "../store/cacheStore";
-import type { CatalogRowData, MediaItem } from "../types/ui";
-import { type ContentOrientation } from "../config/homePreferences";
-import { sanitizeLogoUrl } from "../utils/artwork";
-import { resolveDetailBackground } from "../utils/mediaMetadata";
-import { readHomeCardArtwork } from "../utils/homeCardArtwork";
-import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork";
+} from "../services/jikan.ts";
+import { fetchMdbListRatingsForMedia } from "../services/MDBListService.ts";
+import { fetchYouTubeClip } from "../services/youtubeClips.ts";
+import type { InstalledAddon } from "../store/addonStore.ts";
+import { isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
+import type { CatalogRowData, MediaItem } from "../types/ui.ts";
+import { type ContentOrientation } from "../config/homePreferences.ts";
+import { sanitizeLogoUrl } from "../utils/artwork.ts";
+import { resolveDetailBackground } from "../utils/mediaMetadata.ts";
+import { readHomeCardArtwork } from "../utils/homeCardArtwork.ts";
+import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
 
 const HERO_GROUP_FETCH_LIMIT = 7;
 const HERO_TOTAL_LIMIT = 15;

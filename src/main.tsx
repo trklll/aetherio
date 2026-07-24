@@ -3,11 +3,11 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
-import UpdatePopup from "./components/updater/UpdatePopup";
+import UpdatePopup from "./components/updater/UpdatePopup.tsx";
 import { queryClient } from "./queryClient";
-import { installAndroidTvRemoteNavigation, installRuntimeDocumentClasses } from "./runtime/platform";
-import { installGsapAnimations } from "./utils/motion";
-import { initBuiltinTmdbKey } from "./config/apiKeys";
+import { installAndroidTvRemoteNavigation, installRuntimeDocumentClasses } from "./runtime/platform.ts";
+import { installGsapAnimations } from "./utils/motion.ts";
+import { initBuiltinTmdbKey } from "./config/apiKeys.ts";
 import "./index.css";
 
 installRuntimeDocumentClasses();

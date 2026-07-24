@@ -3,7 +3,7 @@ import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/eve
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { MpvLaunchResult, MpvStatusSnapshot } from "../pages/Player/types";
+import type { MpvLaunchResult, MpvStatusSnapshot } from "../pages/Player/types.ts";
 
 export type RuntimeKind = "desktop" | "android-tv" | "android" | "web";
 

@@ -1,4 +1,4 @@
-import type { MediaStream, StreamQuery } from "../types/stream";
+import type { MediaStream, StreamQuery } from "../types/stream.ts";
 import { sanitizeLogoUrl } from "./artwork";
 import { getScopedStorageKey } from "./localProfiles";
 

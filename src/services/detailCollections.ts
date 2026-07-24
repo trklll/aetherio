@@ -1,4 +1,4 @@
-import { tmdbFetch } from "../config/apiKeys";
+import { tmdbFetch } from "../config/apiKeys.ts";
 
 const IMG = "https://image.tmdb.org/t/p";
 const JIKAN = "https://api.jikan.moe/v4";

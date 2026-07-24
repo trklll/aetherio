@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { MediaStream } from "../types/stream";
-import { getScopedStorageKey } from "../utils/localProfiles";
+import type { MediaStream } from "../types/stream.ts";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 export type SourceSelectionMode = "manual" | "first";
 export type AddonSubtitleLoadMode = "preferred" | "all";

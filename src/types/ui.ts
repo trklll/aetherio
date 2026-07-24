@@ -1,4 +1,4 @@
-import type { MdbListRatings } from "../config/mdblist";
+import type { MdbListRatings } from "../config/mdblist.ts";
 
 export type TrailerSource = "netflix" | "crunchyroll" | "hbo" | "disney" | "youtube" | "tmdb";
 

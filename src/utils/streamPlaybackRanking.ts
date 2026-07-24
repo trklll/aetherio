@@ -1,4 +1,4 @@
-import type { MediaStream } from "../types/stream";
+import type { MediaStream } from "../types/stream.ts";
 import { getDirectPlaybackUrl, hasP2pPlayback, isPlayableMediaStream } from "./playableMedia";
 import { streamSpanishPriority } from "./streamLanguagePriority";
 import { getReportedSeeders, torrentHealthScore } from "./torrentHealth";

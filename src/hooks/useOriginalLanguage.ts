@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { tmdbFetch } from "../config/apiKeys";
-import { useAddonStore, type InstalledAddon } from "../store/addonStore";
-import type { MediaStream, StreamQuery } from "../types/stream";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { useAddonStore, type InstalledAddon } from "../store/addonStore.ts";
+import type { MediaStream, StreamQuery } from "../types/stream.ts";
 
 export function useOriginalLanguage(query: StreamQuery | null, stream?: MediaStream | null) {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);

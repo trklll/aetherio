@@ -1,4 +1,4 @@
-import type { MediaStream, StreamSubtitle } from "../types/stream";
+import type { MediaStream, StreamSubtitle } from "../types/stream.ts";
 
 const SPANISH_WORDS = /(?:^|[^a-z0-9])(es(?:-es|-mx|-419)?|spa|spanish|espanol|castellano|latino|latam)(?:[^a-z0-9]|$)/i;
 const SPANISH_AUDIO = /(?:audio|dub(?:bed)?|doblaje|idioma)[\s:._-]*(?:es(?:-es|-mx|-419)?|spa|spanish|espanol|castellano|latino|latam)|(?:latino|castellano)[\s:._-]*(?:audio|dub(?:bed)?|doblaje)/i;

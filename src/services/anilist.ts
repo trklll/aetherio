@@ -1,5 +1,5 @@
-import type { MediaItem } from "../types/ui";
-import { tmdbFetch } from "../config/apiKeys";
+import type { MediaItem } from "../types/ui.ts";
+import { tmdbFetch } from "../config/apiKeys.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
 

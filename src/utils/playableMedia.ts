@@ -1,4 +1,4 @@
-import type { MediaStream } from "../types/stream";
+import type { MediaStream } from "../types/stream.ts";
 
 const HTTP_URL_RE = /^https?:\/\//i;
 const DIRECT_PROTOCOL_RE = /^(?:rtmp|rtmps|rtsp|rtsps|srt):\/\//i;

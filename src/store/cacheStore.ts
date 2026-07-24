@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import type { CatalogRowData, MediaItem } from "../types/ui";
-import { getScopedStorageKey } from "../utils/localProfiles";
+import type { CatalogRowData, MediaItem } from "../types/ui.ts";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 interface HomeCacheSnapshot {
   rows: CatalogRowData[];

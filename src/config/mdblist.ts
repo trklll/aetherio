@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getScopedStorageKey } from "../utils/localProfiles";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 export type MdbListProvider =
   | "trakt"

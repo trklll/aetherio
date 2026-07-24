@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getActiveProfileId } from "../utils/localProfiles";
+import { getActiveProfileId } from "../utils/localProfiles.ts";
 
 export interface SourcePreferences {
   repositoryOverrides: Record<string, boolean>;

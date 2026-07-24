@@ -1,4 +1,4 @@
-import { getScopedStorageKey } from "../utils/localProfiles";
+import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 const QUICK_START_STORAGE_KEY = "aetherio-quick-start-v1";
 const QUICK_START_VERSION = 1;

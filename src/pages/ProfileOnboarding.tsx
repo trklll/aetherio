@@ -1,13 +1,13 @@
 import { type ChangeEvent, type FormEvent, useState } from "react";
 import { Lock, UserRound } from "lucide-react";
-import ProfileAvatar from "../components/profile/ProfileAvatar";
+import ProfileAvatar from "../components/profile/ProfileAvatar.tsx";
 import aetherioLogo from "../assets/aetheriologo.png";
 import {
   createLocalProfile,
   getLocalProfiles,
   readImageFileAsDataUrl,
   type LocalProfile,
-} from "../utils/localProfiles";
+} from "../utils/localProfiles.ts";
 
 export default function ProfileOnboarding() {
   const [name, setName] = useState("");

@@ -1,1 +1,1 @@
-export { toggleWindowFullscreen } from "../runtime/platform";
+export { toggleWindowFullscreen } from "../runtime/platform.ts";

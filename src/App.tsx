@@ -1,14 +1,14 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAddonStore } from "./store/addonStore";
-import AppShell from "./components/layout/AppShell";
-import { getActiveProfile, getLocalProfiles, hasActiveLocalProfile } from "./utils/localProfiles";
-import { prefetchHomeData } from "./hooks/useCatalogs";
-import { useFullscreen } from "./hooks/useFullscreen";
+import { useAddonStore } from "./store/addonStore.ts";
+import AppShell from "./components/layout/AppShell.tsx";
+import { getActiveProfile, getLocalProfiles, hasActiveLocalProfile } from "./utils/localProfiles.ts";
+import { prefetchHomeData } from "./hooks/useCatalogs.ts";
+import { useFullscreen } from "./hooks/useFullscreen.ts";
 import { completeTraktAuthorization, TRAKT_AUTH_CHANGED_EVENT, type TraktAuthEventDetail } from "./trakt";
-import { getCurrentDeepLinks, listenOpenUrls } from "./runtime/platform";
-import { hasCompletedQuickStart } from "./config/quickStart";
+import { getCurrentDeepLinks, listenOpenUrls } from "./runtime/platform.ts";
+import { hasCompletedQuickStart } from "./config/quickStart.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();

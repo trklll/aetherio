@@ -19,31 +19,31 @@ import {
   UserRound,
 } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
-import ProfileAvatar from "../components/profile/ProfileAvatar";
-import { EMPTY_API_KEYS, getApiKeys, getApiKeysForProfile, saveApiKeys, type ApiKeys } from "../config/apiKeys";
+import ProfileAvatar from "../components/profile/ProfileAvatar.tsx";
+import { EMPTY_API_KEYS, getApiKeys, getApiKeysForProfile, saveApiKeys, type ApiKeys } from "../config/apiKeys.ts";
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
   getPlaybackPreferences,
   LANGUAGE_OPTIONS,
   savePlaybackPreferences,
   type PlaybackPreferences,
-} from "../config/playbackPreferences";
-import { completeQuickStart } from "../config/quickStart";
+} from "../config/playbackPreferences.ts";
+import { completeQuickStart } from "../config/quickStart.ts";
 import {
   DEFAULT_HOME_PREFERENCES,
   getHomePreferences,
   saveHomePreferences,
   type ContentOrientation,
   type HomePreferences,
-} from "../config/homePreferences";
-import { openExternalUrl } from "../runtime/platform";
+} from "../config/homePreferences.ts";
+import { openExternalUrl } from "../runtime/platform.ts";
 import {
   createLocalProfile,
   getLocalProfiles,
   readImageFileAsDataUrl,
   verifyPin,
   type LocalProfile,
-} from "../utils/localProfiles";
+} from "../utils/localProfiles.ts";
 import mugiwaraSeekLogo from "../assets/mugiwara-seeklogo.png";
 
 type QuickStartStep = "profile" | "welcome" | "content" | "playback" | "apis" | "addons";

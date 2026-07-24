@@ -1,4 +1,4 @@
-import type { MediaStream } from "../types/stream";
+import type { MediaStream } from "../types/stream.ts";
 
 type StreamTextSource = Pick<MediaStream, "name" | "title" | "description" | "behaviorHints">;
 

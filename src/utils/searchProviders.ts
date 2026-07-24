@@ -1,5 +1,5 @@
-import { tmdbFetch } from "../config/apiKeys";
-import type { InstalledAddon } from "../store/addonStore";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import type { InstalledAddon } from "../store/addonStore.ts";
 import { normalizeAddonMediaMeta, type MediaMetadataSeed } from "./mediaMetadata";
 
 const IMG = "https://image.tmdb.org/t/p";

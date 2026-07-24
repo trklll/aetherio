@@ -1,11 +1,11 @@
-import { tmdbFetch } from "../config/apiKeys";
-import { invokeCommand } from "../runtime/platform";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { invokeCommand } from "../runtime/platform.ts";
 import {
   getEnabledMdbListProviders,
   type MdbListProvider,
   type MdbListRatings,
   type MdbListSettings,
-} from "../config/mdblist";
+} from "../config/mdblist.ts";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 

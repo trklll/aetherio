@@ -1,6 +1,6 @@
-import { tmdbFetch } from "../config/apiKeys";
-import { invokeCommand, isTauriRuntime } from "../runtime/platform";
-import type { MediaItem, TrailerSource } from "../types/ui";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
+import type { MediaItem, TrailerSource } from "../types/ui.ts";
 
 export interface YouTubeClipCandidate {
   videoId: string;

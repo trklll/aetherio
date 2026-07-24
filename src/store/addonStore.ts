@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { getActiveProfileId } from "../utils/localProfiles";
+import { getActiveProfileId } from "../utils/localProfiles.ts";
 
 export type AddonScope = "global" | "profile";
 

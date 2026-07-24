@@ -1,6 +1,6 @@
-import { tmdbFetch } from "../config/apiKeys";
-import { invokeCommand, isTauriRuntime } from "../runtime/platform";
-import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream";
+import { tmdbFetch } from "../config/apiKeys.ts";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
+import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
 
 interface ProviderManifestSource {
   key: string;
