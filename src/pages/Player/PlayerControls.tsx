@@ -178,7 +178,7 @@ export default function PlayerControls({
               <input
                 type="range"
                 min={0}
-                max={1}
+                max={2}
                 step={0.01}
                 value={volume}
                 onChange={event => onVolumeChange(Number(event.target.value))}

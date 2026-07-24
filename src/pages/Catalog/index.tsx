@@ -51,16 +51,87 @@ function catalogEndpoint(base: string, type: string, catalogId: string, extraPar
   return `${base}/catalog/${encodeURIComponent(type)}/${encodeURIComponent(catalogId)}${extras ? `/${extras}` : ""}.json`;
 }
 
-function tmdbCatalogParams(catalogId: string): { path: string; type: "movie" | "series"; params: Record<string, string> } | null {
+function isoDate(daysFromNow: number) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
+const STREAMING_PROVIDERS: Record<string, { providerIds: string[]; networkIds: string[]; companyIds: string[] }> = {
+  netflix: { providerIds: ["8"], networkIds: ["213"], companyIds: ["213"] },
+  hbo_max: { providerIds: ["1899", "384"], networkIds: ["49", "3186"], companyIds: ["174", "3268"] },
+  disney: { providerIds: ["337"], networkIds: ["2739"], companyIds: ["2", "6125"] },
+  prime_video: { providerIds: ["9"], networkIds: ["1024"], companyIds: ["1024"] },
+  apple_tv: { providerIds: ["350"], networkIds: ["2552"], companyIds: ["2552"] },
+};
+
+function providerDiscoverParams(providerId: string, kind: "movie" | "series") {
+  const provider = STREAMING_PROVIDERS[providerId];
+  if (!provider) return null;
+  const providerIds = provider.providerIds.join("|");
+  const networkIds = provider.networkIds.join("|");
+  const companyIds = provider.companyIds.join("|");
+  return {
+    primary: {
+      sort_by: "popularity.desc",
+      with_watch_monetization_types: "flatrate",
+      with_watch_providers: providerIds,
+      region: "PE",
+      watch_region: "PE",
+    } as Record<string, string>,
+    fallbacks: [
+      {
+        sort_by: "popularity.desc",
+        with_watch_monetization_types: "flatrate",
+        with_watch_providers: providerIds,
+        region: "US",
+        watch_region: "US",
+      } as Record<string, string>,
+      (kind === "series"
+        ? { sort_by: "popularity.desc", with_networks: networkIds }
+        : { sort_by: "popularity.desc", with_companies: companyIds }) as Record<string, string>,
+    ],
+  };
+}
+
+function tmdbCatalogParams(catalogId: string): { path: string; type: "movie" | "series"; params: Record<string, string>; fallbacks?: Array<{ path?: string; params: Record<string, string> }> } | null {
+  if (catalogId === "tmdb.top_series") return { path: "/tv/popular", type: "series", params: {} };
+  if (catalogId === "tmdb.trending_movie") return { path: "/trending/movie/day", type: "movie", params: {} };
+  if (catalogId === "tmdb.top_movie") return { path: "/movie/popular", type: "movie", params: {} };
+  if (catalogId === "tmdb.trending_series") return { path: "/trending/tv/day", type: "series", params: {} };
+
+  const streamingMatch = catalogId.match(/^tmdb\.discover\.(movie|series)\.streaming_(.+)$/);
+  if (streamingMatch) {
+    const kind = streamingMatch[1] as "movie" | "series";
+    const providerId = streamingMatch[2];
+    const discover = providerDiscoverParams(providerId, kind);
+    if (!discover) return null;
+    const path = kind === "movie" ? "/discover/movie" : "/discover/tv";
+    return { path, type: kind, params: discover.primary, fallbacks: discover.fallbacks.map(f => ({ path, params: f })) };
+  }
+
+  const animeBase = { with_genres: "16", with_original_language: "ja" };
   switch (catalogId) {
-    case "tmdb:series:trending":
-      return { path: "/trending/tv/day", type: "series" as const, params: {} };
-    case "tmdb:movie:trending":
-      return { path: "/trending/movie/day", type: "movie" as const, params: {} };
-    case "tmdb:series:anime":
-      return { path: "/discover/tv", type: "series" as const, params: { sort_by: "popularity.desc", with_genres: "16", with_original_language: "ja" } };
-    case "tmdb:movie:anime":
-      return { path: "/discover/movie", type: "movie" as const, params: { sort_by: "popularity.desc", with_genres: "16", with_original_language: "ja" } };
+    case "mal.airing_anime":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), ...animeBase } };
+    case "mal.top_anime":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_average.desc", "vote_count.gte": "200", ...animeBase } };
+    case "mal.most_favorites_anime":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_count.desc", ...animeBase } };
+    case "mal.top_airing_anime":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_average.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "10", ...animeBase } };
+    case "jikan.top_airing":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5", ...animeBase } };
+    case "jikan.upcoming":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180), ...animeBase } };
+    case "jikan.top_movies":
+      return { path: "/discover/movie", type: "movie", params: { sort_by: "popularity.desc", with_genres: "16,12" } };
+    case "jikan.recommendations":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_average.desc", "vote_count.gte": "200", ...animeBase } };
+    case "jikan.top_favorites":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_average.desc", "vote_count.gte": "150", ...animeBase } };
+    case "jikan.most_popular":
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_count.desc", "vote_count.gte": "100", ...animeBase } };
     default:
       return null;
   }
@@ -107,7 +178,7 @@ export default function CatalogPage() {
       setError("");
       setItems([]);
 
-      if ((!addon && addonId !== "tmdb") || !type || !catalogId) {
+      if ((!addon && addonId !== "tmdb" && addonId !== "aetherio-starter") || !type || !catalogId) {
         setError("No se encontró el catálogo.");
         setLoading(false);
         return;
@@ -117,28 +188,37 @@ export default function CatalogPage() {
         const seen = new Set<string>();
         const collected: MediaItem[] = [];
 
-        if (addonId === "tmdb") {
+        if (addonId === "tmdb" || addonId === "aetherio-starter") {
           const tmdbCatalog = tmdbCatalogParams(catalogId);
           if (!tmdbCatalog) {
             setError("No se encontró el catálogo.");
             setLoading(false);
             return;
           }
+          const variants = [
+            { path: tmdbCatalog.path, params: tmdbCatalog.params },
+            ...(tmdbCatalog.fallbacks ?? []).map(fb => ({ path: fb.path ?? tmdbCatalog.path, params: fb.params })),
+          ];
           for (let page = 1; collected.length < MAX_ITEMS; page += 1) {
-            const data = await tmdbFetch<any>(tmdbCatalog.path, {
-              params: { language: "es-ES", page: String(page), ...tmdbCatalog.params },
-            });
-            const results = Array.isArray(data?.results) ? data.results : [];
             let added = 0;
-            for (const result of results) {
-              const item = normalizeTmdbCatalogItem(result, tmdbCatalog.type);
-              if (!item || seen.has(item.id)) continue;
-              seen.add(item.id);
-              collected.push(item);
-              added += 1;
+            let lastResults: any[] = [];
+            for (const variant of variants) {
+              const data = await tmdbFetch<any>(variant.path, {
+                params: { language: "es-ES", page: String(page), region: "PE", ...variant.params },
+              });
+              const results = Array.isArray(data?.results) ? data.results : [];
+              lastResults = results;
+              for (const result of results) {
+                const item = normalizeTmdbCatalogItem(result, tmdbCatalog.type);
+                if (!item || seen.has(item.id)) continue;
+                seen.add(item.id);
+                collected.push(item);
+                added += 1;
+              }
+              if (results.length) break;
             }
             if (!cancelled) setItems([...collected]);
-            if (results.length < PAGE_LIMIT || added === 0) break;
+            if (lastResults.length < PAGE_LIMIT || added === 0) break;
           }
         } else if (addon) {
           const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
@@ -216,7 +296,7 @@ export default function CatalogPage() {
             <CatalogGridCard
               key={`${item.id}-${index}`}
               item={item}
-              type={type}
+              type={item.type || type}
               width={cardSize.width}
               height={cardSize.height}
               posterLayout={preferences.posterLayout}

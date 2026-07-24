@@ -71,9 +71,15 @@ export function installRuntimeDocumentClasses() {
   apply();
   window.addEventListener("resize", apply);
   window.addEventListener("orientationchange", apply);
+
+  const onContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
+  };
+  document.addEventListener("contextmenu", onContextMenu, { capture: true });
   return () => {
     window.removeEventListener("resize", apply);
     window.removeEventListener("orientationchange", apply);
+    document.removeEventListener("contextmenu", onContextMenu, { capture: true } as AddEventListenerOptions);
   };
 }
 

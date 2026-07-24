@@ -3,8 +3,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import BackButton from "./BackButton";
 import FloatingActionButton from "./FloatingActionButton";
 import TopNav from "./TopNav";
-import { Maximize } from "lucide-react";
-import { toggleWindowFullscreen } from "../../utils/windowControls";
+import { Maximize, Minus, X } from "lucide-react";
+import { toggleWindowFullscreen, minimizeWindow, closeWindow } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { tweenTo } from "../../utils/motion";
 
@@ -221,7 +221,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         <div
           ref={actionChromeRef}
-          className="absolute"
+          className="absolute flex items-center gap-2"
           style={{
             right: "var(--app-safe-x)",
             top: "var(--app-safe-top)",
@@ -230,12 +230,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
           }}
         >
           {!androidRuntime && (!isPlayer || showBack) && (
-            <FloatingActionButton
-              onClick={toggleWindowFullscreen}
-              title="Pantalla completa"
-              icon={<Maximize size={18} />}
-              animateOnClick
-            />
+            <>
+              <FloatingActionButton
+                onClick={() => void minimizeWindow()}
+                title="Minimizar"
+                icon={<Minus size={18} />}
+              />
+              <FloatingActionButton
+                onClick={toggleWindowFullscreen}
+                title="Pantalla completa"
+                icon={<Maximize size={18} />}
+                animateOnClick
+              />
+              <FloatingActionButton
+                onClick={() => void closeWindow()}
+                title="Cerrar"
+                icon={<X size={18} />}
+              />
+            </>
           )}
         </div>
       </div>

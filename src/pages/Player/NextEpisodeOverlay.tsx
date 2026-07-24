@@ -919,7 +919,7 @@ export default function PlayerPage() {
   }
 
   function applyVolume(nextVolume: number) {
-    const clamped = Math.min(1, Math.max(0, nextVolume));
+    const clamped = Math.min(2, Math.max(0, nextVolume));
     setVolume(clamped);
     void sendMpvCommand(["set_property", "volume", Math.round(clamped * 100)]);
   }

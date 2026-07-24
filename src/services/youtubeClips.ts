@@ -314,12 +314,15 @@ export async function fetchYouTubeClip(item: MediaItem): Promise<CacheEntry | nu
     candidates.push(...await searchSeriesMovieScene(item.name));
   }
 
-  const tmdbId = Number(String(item.id).replace("tmdb:", "").replace("anilist:", ""));
-  if (Number.isFinite(tmdbId) && tmdbId > 0) {
-    const results = await searchTmdbVideos(item.type === "movie" ? "movie" : "tv", tmdbId);
-    for (const result of results) {
-      if (!candidates.some(candidate => candidate.videoId === result.videoId)) {
-        candidates.push({ ...result, duration: 0 });
+  const idNumericMatch = /^(?:tmdb|anilist):(\d+)/.exec(String(item.id));
+  if (idNumericMatch) {
+    const tmdbId = Number(idNumericMatch[1]);
+    if (Number.isFinite(tmdbId) && tmdbId > 0) {
+      const results = await searchTmdbVideos(item.type === "movie" ? "movie" : "tv", tmdbId);
+      for (const result of results) {
+        if (!candidates.some(candidate => candidate.videoId === result.videoId)) {
+          candidates.push({ ...result, duration: 0 });
+        }
       }
     }
   }
