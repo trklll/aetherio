@@ -1095,7 +1095,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   }, [heroItems, heroQuery.data, heroQuery.isLoading, rows, usingStarterRows]);
 
   useEffect(() => {
-    for (const item of heroItems) {
+    for (const item of heroItems.slice(0, 3)) {
       setTimeout(() => void fetchYouTubeClip(item), 0);
     }
   }, [heroItems]);

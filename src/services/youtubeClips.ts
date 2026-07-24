@@ -23,6 +23,20 @@ interface YouTubeSearchResult {
 
 const CACHE_KEY = "aetherio-youtube-clips-v3";
 const CACHE_TTL = 1000 * 60 * 60 * 24;
+const YTDLP_CONCURRENCY = 2;
+let activeYtdlpCount = 0;
+
+async function withYtdlpSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (activeYtdlpCount >= YTDLP_CONCURRENCY) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  activeYtdlpCount++;
+  try {
+    return await fn();
+  } finally {
+    activeYtdlpCount--;
+  }
+}
 const OFFICIAL_CHANNELS = [
   { handle: "@CrunchyrollenEspañol", source: "crunchyroll" as const },
   { handle: "@netflixanime", source: "netflix" as const },
@@ -115,16 +129,18 @@ function sceneScore(candidate: YouTubeSearchResult, mediaName: string) {
 }
 
 async function runYouTubeSearch(query: string, channel?: string) {
-  try {
-    return await invokeCommand<YouTubeSearchResult[]>("youtube_search", {
-      query,
-      limit: channel ? 8 : 10,
-      channel: channel ?? null,
-    });
-  } catch (error) {
-    console.warn(`[Aetherio:YouTube] Falló la búsqueda${channel ? ` en ${channel}` : " global"}:`, error);
-    return [];
-  }
+  return withYtdlpSlot(async () => {
+    try {
+      return await invokeCommand<YouTubeSearchResult[]>("youtube_search", {
+        query,
+        limit: channel ? 8 : 10,
+        channel: channel ?? null,
+      });
+    } catch (error) {
+      console.warn(`[Aetherio:YouTube] Falló la búsqueda${channel ? ` en ${channel}` : " global"}:`, error);
+      return [];
+    }
+  });
 }
 
 function rankCandidates(candidates: YouTubeSearchResult[], name: string) {
@@ -143,15 +159,9 @@ async function searchAnimeScene(name: string): Promise<YouTubeClipCandidate[]> {
   const strictQuery = `${baseQuery} -trailer -teaser -review -reaction -amv -opening -ending -recap -explained -analysis -ost`;
   const official: YouTubeClipCandidate[] = [];
 
-  // Search every preferred channel directly, first with exclusions and then
-  // without them. The channel page itself is the filter; uploader-name guesses
-  // are not used for this priority pass.
   for (const preferred of OFFICIAL_CHANNELS) {
-    const [strict, relaxed] = await Promise.all([
-      runYouTubeSearch(strictQuery, preferred.handle),
-      runYouTubeSearch(baseQuery, preferred.handle),
-    ]);
-    for (const candidate of rankCandidates([...strict, ...relaxed], name)) {
+    const strict = await runYouTubeSearch(strictQuery, preferred.handle);
+    for (const candidate of rankCandidates(strict, name)) {
       if (official.some(entry => entry.videoId === candidate.videoId)) continue;
       official.push({
         videoId: candidate.videoId,
@@ -159,16 +169,24 @@ async function searchAnimeScene(name: string): Promise<YouTubeClipCandidate[]> {
         duration: candidate.duration ?? 0,
       });
     }
-    if (official.length >= 8) break;
+    if (official.length >= 5) break;
+
+    const relaxed = await runYouTubeSearch(baseQuery, preferred.handle);
+    for (const candidate of rankCandidates(relaxed, name)) {
+      if (official.some(entry => entry.videoId === candidate.videoId)) continue;
+      official.push({
+        videoId: candidate.videoId,
+        source: preferred.source,
+        duration: candidate.duration ?? 0,
+      });
+    }
+    if (official.length >= 5) break;
   }
 
-  if (official.length >= 8) return official.slice(0, 8);
+  if (official.length >= 5) return official.slice(0, 8);
 
-  const [strictGlobal, relaxedGlobal] = await Promise.all([
-    runYouTubeSearch(strictQuery),
-    runYouTubeSearch(baseQuery),
-  ]);
-  const global = rankCandidates([...strictGlobal, ...relaxedGlobal], name)
+  const strictGlobal = await runYouTubeSearch(strictQuery);
+  const global = rankCandidates(strictGlobal, name)
     .filter(candidate => !official.some(entry => entry.videoId === candidate.videoId))
     .map(candidate => ({
       videoId: candidate.videoId,
