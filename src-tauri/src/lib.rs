@@ -980,9 +980,15 @@ async fn youtube_search(
         let target = channel.map_or_else(
             || format!("ytsearch{}:{}", limit, query),
             |handle| {
+                // Encode non-ASCII characters in the channel handle (e.g. ñ -> %C3%B1)
+                // while keeping ASCII characters like @ intact.
+                let encoded_handle: String = handle
+                    .chars()
+                    .map(|c| if c.is_ascii() { c.to_string() } else { urlencoding::encode(&c.to_string()).into_owned() })
+                    .collect();
                 format!(
                     "https://www.youtube.com/{}/search?query={}",
-                    handle,
+                    encoded_handle,
                     urlencoding::encode(&query)
                 )
             },

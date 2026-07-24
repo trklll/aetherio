@@ -221,7 +221,7 @@ function initializeElement(element: Element) {
     gsap.fromTo(element, { opacity: 0, x: 34 }, { opacity: 1, x: 0, duration: 0.42, ease: appleEase });
   }
   if (element.classList.contains("aetherio-page-curtain")) {
-    gsap.fromTo(element, { opacity: 0.66, xPercent: 0 }, { opacity: 0, xPercent: -22, duration: motionTimings.page, ease: appleEase });
+    gsap.fromTo(element, { opacity: 0.4, xPercent: 0 }, { opacity: 0, xPercent: -22, duration: 0.38, ease: appleEase });
   }
   if (element.classList.contains("aetherio-player-handoff")) runPlayerHandoff(element);
   if (element.classList.contains("person-page")) {

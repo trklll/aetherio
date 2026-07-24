@@ -122,7 +122,7 @@ export default function App() {
 
   return (
     <AppShell>
-      <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" />
+      <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
       <div key={location.key} className="min-h-full aetherio-page-enter">
         <Suspense fallback={<RouteFallback />}>
           <Routes location={location}>
