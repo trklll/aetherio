@@ -154,6 +154,7 @@ const motionSelector = [
   ".aetherio-player-handoff",
   ".person-page",
   ".gsap-transition",
+  ".aetherio-detail-fade",
   ".detail-episode-card",
   ".detail-episode-card__image",
   ".detail-episode-card__media",
@@ -222,6 +223,14 @@ function initializeElement(element: Element) {
   }
   if (element.classList.contains("aetherio-page-curtain")) {
     gsap.fromTo(element, { opacity: 0.4, xPercent: 0 }, { opacity: 0, xPercent: -22, duration: 0.38, ease: appleEase });
+  }
+  if (element.classList.contains("aetherio-detail-fade")) {
+    const children = element.children;
+    if (children.length) {
+      gsap.fromTo(children, { opacity: 0 }, { opacity: 1, duration: 0.46, ease: appleEase, stagger: 0.08 });
+    } else {
+      gsap.fromTo(element, { opacity: 0 }, { opacity: 1, duration: 0.46, ease: appleEase });
+    }
   }
   if (element.classList.contains("aetherio-player-handoff")) runPlayerHandoff(element);
   if (element.classList.contains("person-page")) {

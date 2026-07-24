@@ -1,6 +1,6 @@
 [package]
 name = "aetherio"
-version = "0.2.99"
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"

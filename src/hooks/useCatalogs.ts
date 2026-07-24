@@ -541,6 +541,16 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     });
   }
 
+  if (contentOrientation === "movies-series") {
+    const allEnriched = await enrichAllItemsWithLogos(baseRows.flatMap(row => row.items));
+    let offset = 0;
+    return baseRows.map(row => {
+      const items = allEnriched.slice(offset, offset + row.items.length);
+      offset += row.items.length;
+      return { ...row, items };
+    });
+  }
+
   const animeRows = await fetchAnimeRows();
   const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
   const filteredAnimeRows = (animeRows.length

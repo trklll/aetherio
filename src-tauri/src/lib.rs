@@ -969,6 +969,13 @@ async fn youtube_search(
         "@netflixanime",
         "@HBOMaxLa",
         "@disneyplusla",
+        "@NetflixLATAM",
+        "@DisneyPlusLA",
+        "@PrimeVideoLATAM",
+        "@MubiLatinoamerica",
+        "@AppleTV",
+        "@HuluLatinoamerica",
+        "@ParamountPlusLA",
     ];
     if channel
         .as_deref()

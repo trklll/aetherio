@@ -43,6 +43,17 @@ const OFFICIAL_CHANNELS = [
   { handle: "@HBOMaxLa", source: "hbo" as const },
   { handle: "@disneyplusla", source: "disney" as const },
 ];
+
+const SERIES_MOVIE_OFFICIAL_CHANNELS = [
+  { handle: "@NetflixLATAM", source: "netflix" as const },
+  { handle: "@HBOMaxLa", source: "hbo" as const },
+  { handle: "@DisneyPlusLA", source: "disney" as const },
+  { handle: "@PrimeVideoLATAM", source: "prime" as const },
+  { handle: "@MubiLatinoamerica", source: "mubi" as const },
+  { handle: "@AppleTV", source: "apple" as const },
+  { handle: "@HuluLatinoamerica", source: "hulu" as const },
+  { handle: "@ParamountPlusLA", source: "paramount" as const },
+];
 const REJECTED_SCENE_WORDS = [
   "trailer", "teaser", "review", "reaction", "amv", "opening", "ending",
   "recap", "explained", "analysis", "top 10", "soundtrack", "ost",
@@ -107,6 +118,11 @@ function sourceForCandidate(candidate: YouTubeSearchResult): TrailerSource {
   if (channel.includes("netflix")) return "netflix";
   if (channel.includes("hbo max") || channel.includes("hbomax")) return "hbo";
   if (channel.includes("disney plus") || channel.includes("disneyplus")) return "disney";
+  if (channel.includes("prime video") || channel.includes("primevideo")) return "prime";
+  if (channel.includes("apple tv")) return "apple";
+  if (channel.includes("hulu")) return "hulu";
+  if (channel.includes("paramount")) return "paramount";
+  if (channel.includes("mubi")) return "mubi";
   return "youtube";
 }
 
@@ -115,14 +131,14 @@ function sceneScore(candidate: YouTubeSearchResult, mediaName: string) {
   const tokens = meaningfulTitleTokens(mediaName);
   const matchingTokens = tokens.filter(token => title.includes(token)).length;
   const coverage = tokens.length ? matchingTokens / tokens.length : 0;
-  if (coverage < 0.5) return Number.NEGATIVE_INFINITY;
+  if (coverage < 1) return Number.NEGATIVE_INFINITY;
   if (REJECTED_SCENE_WORDS.some(word => title.includes(word))) return Number.NEGATIVE_INFINITY;
 
   const duration = candidate.duration ?? 0;
   if (duration > 0 && (duration < 25 || duration > 12 * 60)) return Number.NEGATIVE_INFINITY;
 
   let score = coverage * 100;
-  if (/\b(scene|clip|fight|moment|vs)\b/.test(title)) score += 18;
+  if (/\b(scene|clip|fight|moment|vs|escena)\b/.test(title)) score += 18;
   if (duration >= 45 && duration <= 4 * 60) score += 16;
   if (sourceForCandidate(candidate) !== "youtube") score += 20;
   return score;
@@ -196,6 +212,49 @@ async function searchAnimeScene(name: string): Promise<YouTubeClipCandidate[]> {
   return [...official, ...global].slice(0, 10);
 }
 
+async function searchSeriesMovieScene(name: string): Promise<YouTubeClipCandidate[]> {
+  if (!isTauriRuntime()) return [];
+  const baseQuery = `${name} scene clip`;
+  const strictQuery = `${baseQuery} -trailer -teaser -review -reaction -recap -explained -analysis -ost`;
+  const official: YouTubeClipCandidate[] = [];
+
+  for (const preferred of SERIES_MOVIE_OFFICIAL_CHANNELS) {
+    const strict = await runYouTubeSearch(strictQuery, preferred.handle);
+    for (const candidate of rankCandidates(strict, name)) {
+      if (official.some(entry => entry.videoId === candidate.videoId)) continue;
+      official.push({
+        videoId: candidate.videoId,
+        source: preferred.source,
+        duration: candidate.duration ?? 0,
+      });
+    }
+    if (official.length >= 5) break;
+
+    const relaxed = await runYouTubeSearch(baseQuery, preferred.handle);
+    for (const candidate of rankCandidates(relaxed, name)) {
+      if (official.some(entry => entry.videoId === candidate.videoId)) continue;
+      official.push({
+        videoId: candidate.videoId,
+        source: preferred.source,
+        duration: candidate.duration ?? 0,
+      });
+    }
+    if (official.length >= 5) break;
+  }
+
+  if (official.length >= 5) return official.slice(0, 8);
+
+  const strictGlobal = await runYouTubeSearch(strictQuery);
+  const global = rankCandidates(strictGlobal, name)
+    .filter(candidate => !official.some(entry => entry.videoId === candidate.videoId))
+    .map(candidate => ({
+      videoId: candidate.videoId,
+      source: sourceForCandidate(candidate),
+      duration: candidate.duration ?? 0,
+    }));
+  return [...official, ...global].slice(0, 10);
+}
+
 async function searchTmdbVideos(
   tmdbType: "movie" | "tv",
   tmdbId: number,
@@ -226,6 +285,11 @@ export const TRAILER_SKIP_END: Record<TrailerSource, number> = {
   crunchyroll: 20,
   disney: 15,
   hbo: 0,
+  prime: 0,
+  apple: 0,
+  hulu: 0,
+  paramount: 0,
+  mubi: 0,
   youtube: 0,
   tmdb: 0,
 };
@@ -246,6 +310,8 @@ export async function fetchYouTubeClip(item: MediaItem): Promise<CacheEntry | nu
   const candidates: YouTubeClipCandidate[] = [];
   if (item.type === "anime") {
     candidates.push(...await searchAnimeScene(item.name));
+  } else if (item.type === "movie" || item.type === "series" || item.type === "tv") {
+    candidates.push(...await searchSeriesMovieScene(item.name));
   }
 
   const tmdbId = Number(String(item.id).replace("tmdb:", "").replace("anilist:", ""));

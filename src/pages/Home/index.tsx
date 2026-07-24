@@ -107,7 +107,7 @@ function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; 
 
   return (
     <div className="flex flex-col gap-1 md:flex-row">
-      <div className="flex-1">
+      <div className="flex-1" style={{ overflow: "hidden", position: "relative" }}>
         {animeItem && (
           <HeroSection
             key="anime-hero"
@@ -122,7 +122,7 @@ function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; 
           />
         )}
       </div>
-      <div className="flex-1">
+      <div className="flex-1" style={{ overflow: "hidden", position: "relative" }}>
         {smItem && (
           <HeroSection
             key="series-movie-hero"

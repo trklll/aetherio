@@ -1,7 +1,7 @@
 {
   "name": "aetherio",
   "private": true,
-  "version": "0.2.99",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "predev": "npm run providers:build",

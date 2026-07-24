@@ -1600,7 +1600,7 @@ export default function DetailPage() {
   }
 
   return (
-    <div className="detail-page-scale" style={{ minHeight:"100vh", background:"#1f1f1f" }}>
+    <div className="detail-page-scale aetherio-detail-fade" key={`detail-fade-${data.id}`} style={{ minHeight:"100vh", background:"#1f1f1f" }}>
       {/* HERO full-bleed */}
       <div className="detail-page-hero" ref={heroRef} style={{ position:"relative", width:"100vw", left:"50%", marginLeft:"-50vw", height:"calc(92vh + var(--app-shell-nav-height) - 150px)", minHeight:450, marginTop:"calc(-1 * var(--app-shell-nav-height))", overflow:"hidden" }}>
         {(data.backdrop??data.poster)&&(

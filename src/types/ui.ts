@@ -1,6 +1,6 @@
 import type { MdbListRatings } from "../config/mdblist.ts";
 
-export type TrailerSource = "netflix" | "crunchyroll" | "hbo" | "disney" | "youtube" | "tmdb";
+export type TrailerSource = "netflix" | "crunchyroll" | "hbo" | "disney" | "prime" | "apple" | "hulu" | "paramount" | "mubi" | "youtube" | "tmdb";
 
 export interface MediaItem {
   id: string;
