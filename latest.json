@@ -1,10 +1,10 @@
 ﻿{
   "version": "0.3.0",
   "notes": "v0.3.0: escenas para series/peliculas, anime title match, fade-in, hero split fix, rows orientation fix",
-  "pub_date": "2026-07-24T07:25:46Z",
+  "pub_date": "2026-07-24T07:33:46Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSamlaQ0xrNUU4QVV3STZBNThNa1I3MmZLRGVsc1pEclIxVVh4emphZ2FCL0ZMWTRyM2pIeExHMnFwTEJkdWR6L0FJQzJGNE5HOHhBYi91d2RGNEJEc1ViUDgwVG5wL0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODc2ODgyCWZpbGU6YWV0aGVyaW9fMC4zLjBfeDY0LXNldHVwLmV4ZQpxY2hPdWJnQWRuV0RmcGEzdG1mdSs3ZmZjYlNjT1VueXdBSkxkTExRcm96cmFYYVc3Y0dUVVB1ZzQ1T1dGSm4wbVcxYXYvc3F0bnlBWDFNYys3SnRCdz09Cg==",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSamlaQ0xrNUU4QWN3dEIzQi9Qc3J1ZkIwdlpYSW1MZGhJeHVDcjZXZm1RanA3bkVFeElGd3BnYnUwRGEwNmx5V1RieUplenBOcS9CeGw1MC95SGNEYXh4dk5IMUh0a2cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODc4Mzk0CWZpbGU6YWV0aGVyaW9fMC4zLjBfeDY0LXNldHVwLmV4ZQp2M3ZadzJ4cEg4Y1AvUzJMODgwbnRwR0lFV0R3NElsZFhyYzZnN0lvanAvRWdodCt5eHVkTzlVMTdJMVVRSXZFRnBJUTBOVHhYbnZiTXdUZVdnaEZEQT09Cg==",
       "url": "https://github.com/trklll/aetherio/releases/download/v0.3.0/aetherio_0.3.0_x64-setup.exe"
     }
   }
