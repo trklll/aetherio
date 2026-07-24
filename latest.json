@@ -1,11 +1,11 @@
 ﻿{
-  "version": "0.3.0",
-  "notes": "v0.3.0: escenas para series/peliculas, anime title match, fade-in, hero split fix, rows orientation fix, topnav collapse on scroll",
-  "pub_date": "2026-07-24T08:18:18Z",
+  "version": "0.3.1",
+  "notes": "v0.3.1: topnav collapse, version dinamica, error de actualizacion arreglado",
+  "pub_date": "2026-07-24T08:30:29Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSamlaQ0xrNUU4QVl0bktacXlib1NmdnBNVnJuY05aTWIyNGd6SFg1V0FlK01sQ09yZi91UHhUaEpydFpxRWYvYVpLQm1NaU4xR1JsKzZDMVZEZGxvdVVwdjdYcE5JT2dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODgxMDgxCWZpbGU6YWV0aGVyaW9fMC4zLjBfeDY0LXNldHVwLmV4ZQp0NmNTT01lZExOZUxSRG90NTBLR1ZjSXgram13ZFlNM3pCcE1hRDZhMGhuLzdIV1FwdDRDWXdHcVoxYzVodHFGMUFscmVxUEtRTHhXSnpaV3BQL2pDQT09Cg==",
-      "url": "https://github.com/trklll/aetherio/releases/download/v0.3.0/aetherio_0.3.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSamlaQ0xrNUU4QWR6ZVpuTXV3VnVxRjF3eGJpd1l1dVRUUTB4RS90cXdGOFJiZ2tZZ3Z3NDdxeXJnN2hXV1FkS0xGekdSQUtta0xwYlV0NFBaU21Jb1FGK0tZenh0T1E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODgxNzg3CWZpbGU6YWV0aGVyaW9fMC4zLjFfeDY0LXNldHVwLmV4ZQpRalplaG9zMERTVkd6VDNnK0E2eHBid1l2K0hnaHBqUkxNMG5CcE9QdU5OYXlSN0Z4ZWxuUWN2YVFTRjBLd2VBTEw4TzdJREd3QW9oS3hjVFFSS2ZEZz09Cg==",
+      "url": "https://github.com/trklll/aetherio/releases/download/v0.3.1/aetherio_0.3.1_x64-setup.exe"
     }
   }
 }

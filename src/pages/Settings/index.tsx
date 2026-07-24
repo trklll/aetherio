@@ -1318,7 +1318,8 @@ function AboutPanel() {
         setUpdateMessage("Ya tienes la última versión.");
       }
     } catch (err) {
-      setUpdateMessage("No se pudo verificar actualizaciones.");
+      const msg = err instanceof Error ? err.message : (typeof err === "string" ? err : JSON.stringify(err));
+      setUpdateMessage(`No se pudo verificar actualizaciones: ${msg}`);
     } finally {
       setCheckingUpdate(false);
     }
@@ -1328,9 +1329,9 @@ function AboutPanel() {
     <PanelScaffold title="Acerca de">
       <PillBlock>
         <div className="flex items-center gap-5 p-6">
-          <img src={aetherioLogo} alt="Aetherio" className="h-20 w-20 rounded-3xl object-contain" />
+          <img src={aetherioLogo} alt="Logo de la aplicación Aetherio" className="h-20 w-20 rounded-3xl object-contain" />
           <div>
-            <h2 className="text-2xl font-black text-white">Aetherio</h2>
+            <p className="text-xl font-black text-white">Aetherio</p>
             <p className="mt-1 text-sm text-white/52">Version {appVersion}</p>
             <p className="mt-3 max-w-xl text-sm leading-6 text-white/60">Reproductor de escritorio con perfiles locales, complementos y reproducción integrada en la app.</p>
           </div>
