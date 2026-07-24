@@ -5,7 +5,7 @@ import FloatingActionButton from "./FloatingActionButton";
 import TopNav from "./TopNav";
 import { Maximize } from "lucide-react";
 import { toggleWindowFullscreen } from "../../utils/windowControls";
-import { isAndroidRuntime, isWindowFullscreen, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
+import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { tweenTo } from "../../utils/motion";
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -73,16 +73,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
       const isEscape = event.key === "Escape" || event.key === "Esc" || event.code === "Escape";
       if (!isEscape) return;
 
-      void (async () => {
-        try {
-          if (await isWindowFullscreen()) {
-            event.preventDefault();
-            await toggleWindowFullscreen();
-          }
-        } catch {
-          // Keyboard fullscreen controls are best-effort outside Tauri runtime.
-        }
-      })();
+      // Don't intercept Escape on input/textarea/search contexts.
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      goBack();
     };
 
     window.addEventListener("keydown", onKeyDown, true);

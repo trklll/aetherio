@@ -22,6 +22,7 @@ interface Props {
   activeIndex: number;
   onSelect: (i: number) => void;
   onVideoEnd?: () => void;
+  inline?: boolean;
 }
 
 const START_TIME = 60;
@@ -88,7 +89,7 @@ function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () =>
   );
 }
 
-export default function HeroSection({ item, items, activeIndex, onSelect, onVideoEnd }: Props) {
+export default function HeroSection({ item, items, activeIndex, onSelect, onVideoEnd, inline = false }: Props) {
   const navigate = useNavigate();
   const mdbListSettings = useMdbListSettings();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -261,7 +262,15 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
   };
 
   return (
-    <div style={{ position: "relative", flexShrink: 0, paddingBottom: 24, width: "100vw", marginLeft: "-50vw", left: "50%", overflow: "visible" }}>
+    <div style={{
+      position: "relative",
+      flexShrink: 0,
+      paddingBottom: 24,
+      width: inline ? "100%" : "100vw",
+      marginLeft: inline ? 0 : "-50vw",
+      left: inline ? 0 : "50%",
+      overflow: "visible",
+    }}>
       <div style={{ position: "relative", display: "flex", justifyContent: "center", alignItems: "center", height: "clamp(340px, 42vw, 680px)", width: "100%", overflow: "visible" }}>
         {hasNeighbors && prevIndex >= 0 && (
           <NeighborCard item={items[prevIndex]} onClick={() => onSelect(prevIndex)} side="left" />

@@ -119,6 +119,7 @@ function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; 
               if (animeItems.length < 2) return;
               setAnimeIndex(i => (i + 1) % animeItems.length);
             }}
+            inline
           />
         )}
       </div>
@@ -134,6 +135,7 @@ function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; 
               if (seriesMovieItems.length < 2) return;
               setSmIndex(i => (i + 1) % seriesMovieItems.length);
             }}
+            inline
           />
         )}
       </div>
