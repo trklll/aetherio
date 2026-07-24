@@ -20,6 +20,7 @@ import {
   Trash2,
   Unlink,
   UserRound,
+  Search,
 } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import ProfileAvatar from "../../components/profile/ProfileAvatar";
@@ -1291,6 +1292,38 @@ function PlaybackPanel({
 }
 
 function AboutPanel() {
+  const [appVersion, setAppVersion] = useState("0.3.0");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const v = await getVersion();
+        if (v) setAppVersion(v);
+      } catch {}
+    })();
+  }, []);
+
+  async function handleCheckUpdate() {
+    setCheckingUpdate(true);
+    setUpdateMessage(null);
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check({ timeout: 15_000 });
+      if (update) {
+        setUpdateMessage(`Nueva versión disponible: v${update.version}`);
+      } else {
+        setUpdateMessage("Ya tienes la última versión.");
+      }
+    } catch (err) {
+      setUpdateMessage("No se pudo verificar actualizaciones.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
   return (
     <PanelScaffold title="Acerca de">
       <PillBlock>
@@ -1298,9 +1331,26 @@ function AboutPanel() {
           <img src={aetherioLogo} alt="Aetherio" className="h-20 w-20 rounded-3xl object-contain" />
           <div>
             <h2 className="text-2xl font-black text-white">Aetherio</h2>
-            <p className="mt-1 text-sm text-white/52">Version 0.1.0</p>
+            <p className="mt-1 text-sm text-white/52">Version {appVersion}</p>
             <p className="mt-3 max-w-xl text-sm leading-6 text-white/60">Reproductor de escritorio con perfiles locales, complementos y reproducción integrada en la app.</p>
           </div>
+        </div>
+      </PillBlock>
+
+      <PillBlock title="Actualizaciones">
+        <div className="p-6 space-y-3">
+          <button
+            type="button"
+            onClick={() => void handleCheckUpdate()}
+            disabled={checkingUpdate}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/8 px-5 py-2.5 text-sm font-semibold text-white/80 transition-colors hover:bg-white/14 hover:text-white disabled:opacity-50"
+          >
+            <Search size={15} className={checkingUpdate ? "animate-spin" : ""} />
+            {checkingUpdate ? "Buscando…" : "Buscar actualizaciones"}
+          </button>
+          {updateMessage ? (
+            <p className="text-sm text-white/60">{updateMessage}</p>
+          ) : null}
         </div>
       </PillBlock>
     </PanelScaffold>
