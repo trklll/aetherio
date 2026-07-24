@@ -6,7 +6,8 @@ import TopNav from "./TopNav";
 import { Maximize, Minus, X } from "lucide-react";
 import { toggleWindowFullscreen, minimizeWindow, closeWindow } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
-import { tweenTo } from "../../utils/motion";
+import { getHomeScroll } from "../../store/homeScrollStore";
+import { gsap, tweenTo } from "../../utils/motion";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -22,15 +23,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const mouseBackAtRef = useRef(0);
   const [playerChromeVisible, setPlayerChromeVisible] = useState(true);
   const [playerTransparent, setPlayerTransparent] = useState(false);
+  const [windowControlsZone, setWindowControlsZone] = useState(false);
   const showBack = isEpisodePage || isPlayer || isDetailPage || isPersonPage;
-  const chromeVisible = isPlayer ? playerChromeVisible : true;
+  const chromeVisible = isPlayer ? (playerChromeVisible || windowControlsZone) : true;
   const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
-    tweenTo([backChromeRef.current, actionChromeRef.current], { opacity: chromeVisible ? 1 : 0 }, 0.3);
+    const els = [backChromeRef.current, actionChromeRef.current].filter(Boolean);
+    gsap.set(els, { opacity: chromeVisible ? 1 : 0 });
+    tweenTo(els, { opacity: chromeVisible ? 1 : 0 }, 0.3);
   }, [chromeVisible]);
 
   useEffect(() => {
+    if (!isPlayer) return;
+    function onMouseMove(event: MouseEvent) {
+      const x = event.clientX;
+      const y = event.clientY;
+      const w = window.innerWidth;
+      const inCorner = x > w - 180 && y < 80;
+      setWindowControlsZone(prev => prev !== inCorner ? inCorner : prev);
+    }
+    function onMouseLeave() {
+      setWindowControlsZone(false);
+    }
+    window.addEventListener("mousemove", onMouseMove, { passive: true });
+    document.addEventListener("mouseout", onMouseLeave);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove, { passive: true } as AddEventListenerOptions);
+      document.removeEventListener("mouseout", onMouseLeave);
+    };
+  }, [isPlayer]);
+
+  useEffect(() => {
+    if (loc.pathname === "/home" && getHomeScroll()) return;
     scrollRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
   }, [loc.pathname, loc.search]);
 
@@ -202,7 +227,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
             style={{
               left: "var(--app-safe-x)",
               top: "var(--app-safe-top)",
-              opacity: 1,
               pointerEvents: chromeVisible ? "auto" : "none",
             }}
           >
@@ -225,7 +249,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
           style={{
             right: "var(--app-safe-x)",
             top: "var(--app-safe-top)",
-            opacity: 1,
             pointerEvents: chromeVisible ? "auto" : "none",
           }}
         >

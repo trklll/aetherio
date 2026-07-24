@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   applyHomeCatalogPreferences,
@@ -7,6 +7,7 @@ import {
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
+import { getHomeScroll, saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import CatalogRow from "./CatalogRow";
 import ContinueWatchingRow from "./ContinueWatchingRow";
@@ -24,6 +25,7 @@ export default function HomePage() {
   const homePreferences = useHomePreferences();
   const { rows, heroItems, loading } = useHomeCatalogs(addons, homePreferences.contentOrientation);
   const { gradient } = useProfileGradient();
+  const restoredVerticalRef = useRef(false);
 
   useEffect(() => {
     if (gradient) {
@@ -33,6 +35,18 @@ export default function HomePage() {
       document.documentElement.style.removeProperty("--aetherio-page-bg")
     }
   }, [gradient])
+
+  useLayoutEffect(() => {
+    if (loading || restoredVerticalRef.current) return;
+    const saved = getHomeScroll();
+    if (saved && saved.vertical > 0) {
+      const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+      if (shell) {
+        shell.scrollTo({ top: saved.vertical, behavior: "instant" as ScrollBehavior });
+        restoredVerticalRef.current = true;
+      }
+    }
+  }, [loading]);
 
   const typeFilter = new URLSearchParams(location.search).get("type");
   const visibleRows = useMemo(
@@ -76,7 +90,9 @@ export default function HomePage() {
               );
             }
             if (streamingProviderGroups.some(group => group.hiddenIndex === i)) return null;
-            return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} />;
+            const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
+            const saved = getHomeScroll();
+            return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} />;
           })
         ) : (
           <Empty typeFilter={typeFilter} />
@@ -89,14 +105,44 @@ export default function HomePage() {
 function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; seriesMovieItems: MediaItem[] }) {
   const [animeIndex, setAnimeIndex] = useState(0);
   const [smIndex, setSmIndex] = useState(0);
+  const animeIndexRef = useRef(0);
+  const smIndexRef = useRef(0);
+  useEffect(() => { animeIndexRef.current = animeIndex; }, [animeIndex]);
+  useEffect(() => { smIndexRef.current = smIndex; }, [smIndex]);
 
   useEffect(() => {
-    if (animeItems.length) setAnimeIndex(Math.floor(Math.random() * animeItems.length));
+    const saved = getHomeScroll();
+    if (saved?.hero && saved.hero.kind === "split") {
+      if (saved.hero.anime >= 0 && saved.hero.anime < animeItems.length) setAnimeIndex(saved.hero.anime);
+      if (saved.hero.sm >= 0 && saved.hero.sm < seriesMovieItems.length) setSmIndex(saved.hero.sm);
+    } else if (animeItems.length) {
+      setAnimeIndex(Math.floor(Math.random() * animeItems.length));
+    }
   }, [animeItems]);
 
   useEffect(() => {
-    if (seriesMovieItems.length) setSmIndex(Math.floor(Math.random() * seriesMovieItems.length));
+    const saved = getHomeScroll();
+    if (saved?.hero && saved.hero.kind === "split") {
+      // already set above
+    } else if (seriesMovieItems.length) {
+      setSmIndex(Math.floor(Math.random() * seriesMovieItems.length));
+    }
   }, [seriesMovieItems]);
+
+  const handleAnimeOpenDetail = useCallback((idx: number) => {
+    const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    saveHomeScroll({
+      vertical: shell?.scrollTop ?? 0,
+      hero: { kind: "split", anime: idx, sm: smIndexRef.current },
+    });
+  }, []);
+  const handleSmOpenDetail = useCallback((idx: number) => {
+    const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    saveHomeScroll({
+      vertical: shell?.scrollTop ?? 0,
+      hero: { kind: "split", anime: animeIndexRef.current, sm: idx },
+    });
+  }, []);
 
   const animeItem = animeItems[animeIndex % Math.max(1, animeItems.length)];
   const smItem = seriesMovieItems[smIndex % Math.max(1, seriesMovieItems.length)];
@@ -115,6 +161,7 @@ function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; 
             items={animeItems}
             activeIndex={animeIndex}
             onSelect={setAnimeIndex}
+            onOpenDetail={handleAnimeOpenDetail}
             onVideoEnd={() => {
               if (animeItems.length < 2) return;
               setAnimeIndex(i => (i + 1) % animeItems.length);
@@ -131,6 +178,7 @@ function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; 
             items={seriesMovieItems}
             activeIndex={smIndex}
             onSelect={setSmIndex}
+            onOpenDetail={handleSmOpenDetail}
             onVideoEnd={() => {
               if (seriesMovieItems.length < 2) return;
               setSmIndex(i => (i + 1) % seriesMovieItems.length);
@@ -190,7 +238,12 @@ function HomeHero({ items }: { items: MediaItem[] }) {
       setHeroIndex(0);
       return;
     }
-    setHeroIndex(Math.floor(Math.random() * items.length));
+    const saved = getHomeScroll();
+    if (saved?.hero && saved.hero.kind === "single" && saved.hero.index >= 0 && saved.hero.index < items.length) {
+      setHeroIndex(saved.hero.index);
+    } else {
+      setHeroIndex(Math.floor(Math.random() * items.length));
+    }
   }, [items]);
 
   const handleVideoEnd = () => {
@@ -198,10 +251,18 @@ function HomeHero({ items }: { items: MediaItem[] }) {
     setHeroIndex(index => (index + 1) % items.length);
   };
 
+  const handleOpenDetail = useCallback((idx: number) => {
+    const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    saveHomeScroll({
+      vertical: shell?.scrollTop ?? 0,
+      hero: { kind: "single", index: idx },
+    });
+  }, []);
+
   const hero = items[heroIndex % Math.max(1, items.length)];
   if (!hero) return null;
 
-  return <HeroSection item={hero} items={items} activeIndex={heroIndex} onSelect={setHeroIndex} onVideoEnd={handleVideoEnd} />;
+  return <HeroSection item={hero} items={items} activeIndex={heroIndex} onSelect={setHeroIndex} onOpenDetail={handleOpenDetail} onVideoEnd={handleVideoEnd} />;
 }
 
 function Skeleton() {

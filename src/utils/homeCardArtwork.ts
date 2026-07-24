@@ -1,4 +1,4 @@
-import { getScopedStorageKey } from "./localProfiles";
+import { getScopedStorageKey, LOCAL_PROFILES_CHANGED_EVENT } from "./localProfiles";
 
 export type HomeCardArtworkMode = "background" | "poster" | "logo";
 
@@ -12,12 +12,28 @@ function artworkKey(mode: HomeCardArtworkMode, type: string, id: string) {
 
 function readArtworkMap() {
   if (typeof window === "undefined" || typeof window.localStorage === "undefined") return {};
+  if (artworkMapCache !== null) return artworkMapCache;
   try {
     const raw = window.localStorage.getItem(getScopedStorageKey(HOME_CARD_ARTWORK_KEY));
-    return raw ? JSON.parse(raw) as Record<string, string> : {};
+    artworkMapCache = raw ? JSON.parse(raw) as Record<string, string> : {};
   } catch {
-    return {};
+    artworkMapCache = {};
   }
+  return artworkMapCache;
+}
+
+let artworkMapCache: Record<string, string> | null = null;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === getScopedStorageKey(HOME_CARD_ARTWORK_KEY)) artworkMapCache = null;
+  });
+  window.addEventListener(HOME_CARD_ARTWORK_CHANGED_EVENT, () => {
+    artworkMapCache = null;
+  });
+  window.addEventListener(LOCAL_PROFILES_CHANGED_EVENT, () => {
+    artworkMapCache = null;
+  });
 }
 
 export function readHomeCardArtwork(
@@ -41,6 +57,7 @@ export function writeHomeCardArtwork(
     const map = readArtworkMap();
     map[artworkKey(mode, type, id)] = url;
     window.localStorage.setItem(storageKey, JSON.stringify(map));
+    artworkMapCache = map;
     window.dispatchEvent(new CustomEvent(HOME_CARD_ARTWORK_CHANGED_EVENT, {
       detail: { mode, type, id, url },
     }));

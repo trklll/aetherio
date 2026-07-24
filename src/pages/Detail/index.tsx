@@ -40,7 +40,7 @@ import {
   type TraktCommentReview,
 } from "../../trakt";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
-import { scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
+import { gsap, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
 const IMG      = "https://image.tmdb.org/t/p";
 const DEBUG_LOGO = false;
 const DETAIL_LOGO_KEY = "aetherio-detail-logo";
@@ -1948,15 +1948,17 @@ export default function DetailPage() {
                   style={{ flexShrink:0,width:180,height:271,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
                   onMouseEnter={e=>{
                     const card = e.currentTarget as HTMLDivElement;
-                    tweenTo(card, { boxShadow: "0 18px 44px rgba(0,0,0,0.32)" }, 0.25);
+                    tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
+                    gsap.set(card, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
                     const image = card.querySelector("img") as HTMLImageElement | null;
-                    if (image) tweenTo(image, { scale: 1.05 }, 0.25);
+                    if (image) tweenTo(image, { scale: 1.04 }, 0.32);
                   }}
                   onMouseLeave={e=>{
                     const card = e.currentTarget as HTMLDivElement;
-                    tweenTo(card, { boxShadow: "0 0 0 rgba(0,0,0,0)" }, 0.25);
+                    tweenTo(card, { y: 0, scale: 1, zIndex: 1 }, 0.32);
+                    gsap.set(card, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
                     const image = card.querySelector("img") as HTMLImageElement | null;
-                    if (image) tweenTo(image, { scale: 1 }, 0.25);
+                    if (image) tweenTo(image, { scale: 1 }, 0.32);
                   }}
                 >
                   {completedMediaKeys.has(`${r.media_type}:tmdb:${r.id}`) ? (
@@ -2036,10 +2038,14 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
             onClick={() => navigate(`/entity/${kind}/${encodeURIComponent(String(item.id))}`)}
             style={{ height:60,minWidth:116,maxWidth:188,borderRadius:14,border:"1px solid rgba(255,255,255,0.82)",background:"linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))",display:"flex",alignItems:"center",justifyContent:"center",padding:"10px 15px",overflow:"hidden",cursor:"pointer",boxShadow:"0 10px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.92)" }}
             onMouseEnter={event => {
-              tweenTo(event.currentTarget, { y: -2, background: "linear-gradient(180deg, rgba(255,255,255,1), rgba(244,246,250,0.94))" });
+              const el = event.currentTarget;
+              tweenTo(el, { y: -2 }, 0.22);
+              gsap.set(el, { background: "linear-gradient(180deg, rgba(255,255,255,1), rgba(244,246,250,0.94))" });
             }}
             onMouseLeave={event => {
-              tweenTo(event.currentTarget, { y: 0, background: "linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))" });
+              const el = event.currentTarget;
+              tweenTo(el, { y: 0 }, 0.22);
+              gsap.set(el, { background: "linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))" });
             }}
           >
             {item.logo ? (
@@ -2266,8 +2272,18 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
       type="button"
       onClick={onPress}
       aria-label={item.title}
-      onMouseEnter={event=>tweenTo(event.currentTarget,{scale:1.06},0.24)}
-      onMouseLeave={event=>tweenTo(event.currentTarget,{scale:1},0.24)}
+      onMouseEnter={event=>{
+        tweenTo(event.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
+        gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+        const image = (event.currentTarget as HTMLButtonElement).querySelector("img");
+        if (image) tweenTo(image, { scale: 1.04 }, 0.32);
+      }}
+      onMouseLeave={event=>{
+        tweenTo(event.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
+        gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+        const image = (event.currentTarget as HTMLButtonElement).querySelector("img");
+        if (image) tweenTo(image, { scale: 1 }, 0.32);
+      }}
       style={{
         position:"relative",
         flexShrink:0,
@@ -2475,6 +2491,20 @@ function EpCard({
         }
       }}
       style={{ opacity:locked ? 0.58 : 1, cursor:locked ? "not-allowed" : "pointer" }}
+      onMouseEnter={(e)=>{
+        const card = e.currentTarget as HTMLDivElement;
+        tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
+        gsap.set(card,{boxShadow:"0 18px 40px rgba(0,0,0,0.42)"});
+        const img=card.querySelector("img.detail-episode-card__image") as HTMLImageElement | null;
+        if(img) tweenTo(img,{scale:1.04},0.28);
+      }}
+      onMouseLeave={(e)=>{
+        const card = e.currentTarget as HTMLDivElement;
+        tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
+        gsap.set(card,{boxShadow:"none"});
+        const img=card.querySelector("img.detail-episode-card__image") as HTMLImageElement | null;
+        if(img) tweenTo(img,{scale:1},0.28);
+      }}
     >
       <div className="detail-episode-card__media">
         {(ep.still ?? fallbackImage) ? (
@@ -2579,15 +2609,17 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
       onClick={playTrailer}
       style={{ flexShrink:0,width:302,height:196,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",padding:0,textAlign:"left" }}
       onMouseEnter={e=>{
-        tweenTo(e.currentTarget, { boxShadow:"0 5px 18px rgba(0,0,0,0.5)", borderColor:"rgba(225,230,238,0.16)" }, 0.25);
-        const img=(e.currentTarget as HTMLButtonElement).querySelector("img");
-        if(img) tweenTo(img, { scale:1.03 }, 0.25);
-      }}
-      onMouseLeave={e=>{
-        tweenTo(e.currentTarget, { boxShadow:"0 0 0 rgba(0,0,0,0)", borderColor:"rgba(225,230,238,0.1)" }, 0.25);
-        const img=(e.currentTarget as HTMLButtonElement).querySelector("img");
-        if(img) tweenTo(img, { scale:1 }, 0.25);
-      }}
+         tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
+         gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+         const img=(e.currentTarget as HTMLButtonElement).querySelector("img");
+         if(img) tweenTo(img, { scale: 1.04 }, 0.32);
+       }}
+       onMouseLeave={e=>{
+         tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+         gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+         const img=(e.currentTarget as HTMLButtonElement).querySelector("img");
+         if(img) tweenTo(img, { scale: 1 }, 0.32);
+       }}
     >
       {thumbSrc ? (
         <img src={thumbSrc} alt={trailer.name}
@@ -2615,7 +2647,10 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
     .join("");
   const character = member.character?.split("(")[0]?.trim();
   const setFocusedScale = (element:HTMLButtonElement,focused:boolean) => {
-    tweenTo(element,{scale:focused?1.04:1},0.18);
+    tweenTo(element, { scale: focused ? 1.05 : 1, y: focused ? -4 : 0, zIndex: focused ? 5 : 1 }, 0.32);
+    gsap.set(element, { boxShadow: focused ? "0 20px 42px rgba(0,0,0,0.48)" : "0 12px 28px rgba(0,0,0,0.28)" });
+    const img = element.querySelector("img");
+    if (img) tweenTo(img, { scale: focused ? 1.05 : 1 }, 0.32);
   };
   return (
     <button
@@ -2654,7 +2689,7 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
           style={{ width:154,height:154,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#2c2c2e" }}
         />
       ):(
-        <div style={{ width:154,height:154,borderRadius:"50%",background:"linear-gradient(180deg, rgba(154,154,154,0.96), rgba(112,112,112,0.96))",boxShadow:"0 10px 22px rgba(0,0,0,0.28)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:42,color:"rgba(255,255,255,0.94)",fontWeight:800,flexShrink:0 }}>
+        <div style={{ width:154,height:154,borderRadius:"50%",background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:42,color:"#000",fontWeight:900,flexShrink:0 }}>
           {initials}
         </div>
       )}

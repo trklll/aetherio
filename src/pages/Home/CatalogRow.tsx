@@ -15,7 +15,8 @@ import {
   type HomeCardArtworkMode,
 } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
+import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
+import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
@@ -69,9 +70,10 @@ interface CatalogRowProps {
   hideHeader?: boolean;
   embedded?: boolean;
   onScrollOriginChange?: (atOrigin: boolean) => void;
+  restoreScrollLeft?: number;
 }
 
-function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange }: CatalogRowProps) {
+function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft }: CatalogRowProps) {
   const navigate = useNavigate();
   const rafRef = useRef<number | null>(null);
   const measureTimerRef = useRef<number | null>(null);
@@ -165,6 +167,21 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
       }
     };
   }, [rowItems.length, updateArrows]);
+
+  useEffect(() => {
+    if (restoreScrollLeft == null || !rowItems.length) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const apply = () => {
+      if (el.scrollWidth >= restoreScrollLeft) {
+        el.scrollTo({ left: restoreScrollLeft, behavior: "instant" as ScrollBehavior });
+        updateArrows();
+      }
+    };
+    apply();
+    const id = window.setTimeout(apply, 50);
+    return () => window.clearTimeout(id);
+  }, [restoreScrollLeft, rowItems.length, updateArrows]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -278,6 +295,13 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             return (
               <div
                 key={`${item.id}-${row.catalogId}-${idx}`}
+                onClickCapture={() => {
+                  const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+                  saveHomeScroll({
+                    vertical: shell?.scrollTop ?? 0,
+                    rows: { [makeRowKey(row.addonId, row.catalogId, row.type)]: scrollRef.current?.scrollLeft ?? 0 },
+                  });
+                }}
                 style={{
                   flex: "0 0 auto",
                   paddingLeft: idx === 0 ? 10 : 0,
@@ -493,24 +517,20 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         onClick={openDetail}
         onContextMenu={openArtworkMenu}
         aria-label={`${rank}. ${item.name}`}
-        style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, cursor: "pointer" }}
+        style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, cursor: "pointer", willChange: "transform" }}
         onMouseEnter={e => {
           tweenTo(e.currentTarget, { y: -4, zIndex: 5 });
           const poster = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-ranked-poster]");
           const artwork = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-card-artwork]");
-          const number = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-rank-number]");
-          tweenTo(poster, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
+          gsap.set(poster, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
           tweenTo(artwork, { scale: 1.04 });
-          tweenTo(number, { x: -3 });
         }}
         onMouseLeave={e => {
           tweenTo(e.currentTarget, { y: 0, zIndex: 1 });
           const poster = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-ranked-poster]");
           const artwork = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-card-artwork]");
-          const number = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-rank-number]");
-          tweenTo(poster, { boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)" });
+          gsap.set(poster, { boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)" });
           tweenTo(artwork, { scale: 1 });
-          tweenTo(number, { x: 0 });
         }}
       >
         <div
@@ -566,8 +586,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                backdropFilter: "blur(10px)",
-                WebkitBackdropFilter: "blur(10px)",
               }}
             >
               <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
@@ -603,12 +621,14 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       ref={cardRef}
       onClick={openDetail}
       onContextMenu={openArtworkMenu}
-      style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, borderRadius: 10, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", boxShadow: "0 12px 28px rgba(0,0,0,0.28)" }}
+      style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, borderRadius: 10, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", boxShadow: "0 12px 28px rgba(0,0,0,0.28)", willChange: "transform" }}
       onMouseEnter={e => {
-        tweenTo(e.currentTarget, { scale: 1.05, zIndex: 5, boxShadow: "0 20px 42px rgba(0,0,0,0.48)" }, 0.32);
+        tweenTo(e.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
+        gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
       }}
       onMouseLeave={e => {
-        tweenTo(e.currentTarget, { scale: 1, zIndex: 1, boxShadow: "0 12px 28px rgba(0,0,0,0.28)" }, 0.32);
+        tweenTo(e.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
+        gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
       }}
     >
       {watched ? (
@@ -627,16 +647,11 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            backdropFilter: "blur(10px)",
-            WebkitBackdropFilter: "blur(10px)",
           }}
         >
           <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
         </div>
       ) : null}
-      {airingSchedule ? <AiringScheduleBadge label={airingSchedule.label} watched={watched} compact={posterLayout === "vertical"} /> : null}
-      {image && <img src={image} alt={item.name} decoding="async" loading="lazy"
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} />}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "45%", background: "linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px" }}>
         {logo ? (

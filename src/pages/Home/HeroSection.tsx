@@ -6,6 +6,7 @@ import type { MediaItem } from "../../types/ui.ts";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService.ts";
 import { sanitizeLogoUrl } from "../../utils/artwork.ts";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata.ts";
+import { saveHomeScroll } from "../../store/homeScrollStore.ts";
 import { tmdbImage } from "../../utils/tmdbArtwork.ts";
 import { gsap, tweenTo } from "../../utils/motion.ts";
 import {
@@ -23,6 +24,7 @@ interface Props {
   onSelect: (i: number) => void;
   onVideoEnd?: () => void;
   inline?: boolean;
+  onOpenDetail?: (activeIndex: number) => void;
 }
 
 const START_TIME = 60;
@@ -89,7 +91,7 @@ function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () =>
   );
 }
 
-export default function HeroSection({ item, items, activeIndex, onSelect, onVideoEnd, inline = false }: Props) {
+export default function HeroSection({ item, items, activeIndex, onSelect, onVideoEnd, inline = false, onOpenDetail }: Props) {
   const navigate = useNavigate();
   const mdbListSettings = useMdbListSettings();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -208,6 +210,15 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
   }, [activeIndex, item]);
 
   const openDetail = () => {
+    if (onOpenDetail) {
+      onOpenDetail(activeIndex);
+    } else {
+      const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+      saveHomeScroll({
+        vertical: shell?.scrollTop ?? 0,
+        hero: { kind: "single", index: activeIndex },
+      });
+    }
     writeDetailMediaMeta({
       id: displayItem.id,
       type: displayItem.type,

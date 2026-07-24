@@ -22,7 +22,7 @@ import {
   writeHomeCardArtwork,
 } from "../../utils/homeCardArtwork";
 import { readDetailMediaMeta, writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
+import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 import { syncTraktMarkedWatched, syncTraktRemovePlayback } from "../../trakt";
 import type { MediaItem } from "../../types/ui";
 import CardArtworkPicker from "./CardArtworkPicker";
@@ -651,12 +651,22 @@ const ContinueCard = memo(function ContinueCard({
         textAlign: "left",
       }}
       onMouseEnter={event => {
-        tweenTo(event.currentTarget, removing ? { scale: 0.96 } : { y: -3, zIndex: 5, boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+        if (removing) {
+          tweenTo(event.currentTarget, { scale: 0.96 });
+        } else {
+          tweenTo(event.currentTarget, { y: -3, zIndex: 5 });
+          gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+        }
         const img = event.currentTarget.querySelector("img");
         if (img) tweenTo(img, { scale: 1.04 });
       }}
       onMouseLeave={event => {
-        tweenTo(event.currentTarget, removing ? { scale: 0.96, y: 0 } : { scale: 1, y: 0, zIndex: 1, boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+        if (removing) {
+          tweenTo(event.currentTarget, { scale: 0.96, y: 0 });
+        } else {
+          tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 });
+          gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+        }
         const img = event.currentTarget.querySelector("img");
         if (img) tweenTo(img, { scale: 1 });
       }}
