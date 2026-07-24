@@ -28,6 +28,23 @@ export default function TopNav() {
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const [hovering, setHovering] = useState(false);
+  const collapsed = scrolled && !hovering && !searching;
+
+  useEffect(() => {
+    function onScroll() {
+      const shell = document.querySelector("[data-aetherio-scroll-shell]");
+      const el = (shell as HTMLElement) ?? document.scrollingElement ?? document.documentElement;
+      const y = el.scrollTop;
+      setScrolled(y > 180);
+    }
+    const shell = document.querySelector("[data-aetherio-scroll-shell]");
+    const target = (shell as HTMLElement) ?? window;
+    target.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => target.removeEventListener("scroll", onScroll);
+  }, [location.pathname]);
 
   const isActive = (to: string) => {
     const [path, qs] = to.split("?");
@@ -105,17 +122,28 @@ export default function TopNav() {
   }, []);
 
   return (
-    <div className="relative z-50 flex items-center justify-center" data-tauri-drag-region>
+    <div
+      className="relative z-50 flex items-center justify-center"
+      data-tauri-drag-region
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+    >
       <div
-        className="relative liquid-glass-pill px-2 py-1.5 flex items-center min-w-0"
-        style={{ boxShadow: "0 3px 14px rgba(0,0,0,0.38)" }}
+        className={clsx(
+          "relative liquid-glass-pill flex items-center min-w-0 gsap-transition",
+          collapsed ? "p-1" : "px-2 py-1.5"
+        )}
+        style={{ boxShadow: "0 3px 14px rgba(0,0,0,0.38)", transition: "padding 0.28s ease, width 0.28s ease" }}
       >
         <button
           onClick={() => {
             closeSearch();
             navigate("/settings?tab=account");
           }}
-          className="w-8 h-8 rounded-full bg-white flex items-center justify-center shrink-0 mr-2 hover:scale-105 gsap-transition"
+          className={clsx(
+            "rounded-full bg-white flex items-center justify-center shrink-0 hover:scale-105 gsap-transition",
+            collapsed ? "w-9 h-9" : "w-8 h-8 mr-2"
+          )}
           title="Perfil"
         >
           {profile?.avatarDataUrl ? (
@@ -125,7 +153,7 @@ export default function TopNav() {
           )}
         </button>
 
-        {!searching && (
+        {!searching && !collapsed && (
           <div className="flex items-center gap-0.5 aetherio-nav-pop">
             {NAV_ITEMS.map(({ label, to }) => (
               <button
@@ -144,7 +172,7 @@ export default function TopNav() {
           </div>
         )}
 
-        {searching && (
+        {searching && !collapsed && (
           <div className="flex items-center aetherio-nav-pop" style={{ width: 320 }}>
             <Search size={15} className="text-atv-secondary shrink-0 ml-1 mr-2" />
             <input
@@ -158,27 +186,29 @@ export default function TopNav() {
           </div>
         )}
 
-        <div className="w-px h-4 bg-white/10 mx-2 shrink-0" />
+        {!collapsed && <div className="w-px h-4 bg-white/10 mx-2 shrink-0" />}
 
-        <div className="flex items-center gap-1 shrink-0">
-          {!searching ? (
-            <button
-              onClick={openSearch}
-              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition"
-              title="Buscar"
-            >
-              <Search size={15} />
-            </button>
-          ) : (
-            <button
-              onClick={closeSearch}
-              className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition"
-              title="Cerrar busqueda"
-            >
-              <X size={15} />
-            </button>
-          )}
-        </div>
+        {!collapsed && (
+          <div className="flex items-center gap-1 shrink-0">
+            {!searching ? (
+              <button
+                onClick={openSearch}
+                className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition"
+                title="Buscar"
+              >
+                <Search size={15} />
+              </button>
+            ) : (
+              <button
+                onClick={closeSearch}
+                className="p-2 rounded-full text-atv-secondary hover:text-white hover:bg-atv-hover gsap-transition"
+                title="Cerrar busqueda"
+              >
+                <X size={15} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {searching && showSugg && suggestions.length > 0 && (
