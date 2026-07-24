@@ -3,39 +3,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys.ts";
 import { getMdbListSettings } from "../config/mdblist.ts";
 import {
-  fetchAnilistAiringAnime,
-  fetchAnilistMostFavorites,
   fetchAnilistTopAnime,
+  fetchAnilistAiringAnime,
   fetchAnilistTopAiring,
-  fetchAnilistActionAnime,
-  fetchAnilistAdventureAnime,
-  fetchAnilistComedyAnime,
-  fetchAnilistDramaAnime,
-  fetchAnilistRomanceAnime,
-  fetchAnilistFantasyAnime,
-  fetchAnilistSciFiAnime,
-  fetchAnilistLastYearBestAnime,
+  fetchAnilistMostFavorites,
   resolveAnilistToTmdb,
 } from "../services/anilist.ts";
 import {
+  fetchJikanTopAiring,
   fetchJikanUpcoming,
   fetchJikanTopMovies,
-  fetchJikanTopOva,
-  fetchJikanTopOna,
-  fetchJikanTopSpecials,
-  fetchJikanRecommendations,
-  fetchJikanTopAiring,
-  fetchJikanTopUpcoming,
   fetchJikanTopFavorites,
   fetchJikanMostPopular,
-  fetchJikanAction,
-  fetchJikanAdventure,
-  fetchJikanRomance,
-  fetchJikanComedy,
-  fetchJikanFantasy,
-  fetchJikanSciFi,
-  fetchJikanSliceOfLife,
-  fetchJikanPsychological,
+  fetchJikanRecommendations,
   resolveMalToTmdb,
   runJikanSerial,
 } from "../services/jikan.ts";
@@ -287,14 +267,16 @@ async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPat
 }
 
 async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]> {
-  const CONCURRENCY = 6;
-  const results: MediaItem[] = new Array(items.length);
+  const CONCURRENCY = 4;
+  const MAX_ITEMS = 60;
+  const capped = items.length > MAX_ITEMS ? items.slice(0, MAX_ITEMS) : items;
+  const results: MediaItem[] = new Array(capped.length);
   let nextIndex = 0;
 
   async function worker() {
-    while (nextIndex < items.length) {
+    while (nextIndex < capped.length) {
       const i = nextIndex++;
-      const item = items[i];
+      const item = capped[i];
       const tmdbId = Number(item.id.replace("tmdb:", ""));
       if (!Number.isFinite(tmdbId)) {
         results[i] = item;
@@ -321,7 +303,10 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, capped.length) }, worker));
+  if (capped.length < items.length) {
+    return [...results, ...items.slice(capped.length)];
+  }
   return results;
 }
 
@@ -675,35 +660,15 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
     { id: "mal.top_anime", title: "Los reyes del anime", fetch: fetchAnilistTopAnime, kind: "top", tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" }, order: 4 },
     { id: "mal.most_favorites_anime", title: "Favoritos de la comunidad", fetch: fetchAnilistMostFavorites, kind: "top", tmdb: { sort_by: "vote_count.desc" }, order: 6 },
     { id: "mal.top_airing_anime", title: "Mejor puntuados ahora", fetch: fetchAnilistTopAiring, kind: "current", tmdb: { sort_by: "vote_average.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "10" }, order: 2 },
-    { id: "mal.action_anime", title: "Puro Acción", fetch: fetchAnilistActionAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10759" }, order: 30 },
-    { id: "mal.adventure", title: "Aventuras del otro mundo", fetch: fetchAnilistAdventureAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_count.desc", with_genres: "16,10759", "vote_count.gte": "30" }, order: 31 },
-    { id: "mal.comedy", title: "Tears y risas", fetch: fetchAnilistComedyAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,35" }, order: 32 },
-    { id: "mal.drama", title: "Para llorar a mares", fetch: fetchAnilistDramaAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_average.desc", with_genres: "16,18" }, order: 33 },
-    { id: "mal.romance", title: "Amor en el aire", fetch: fetchAnilistRomanceAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "popularity.desc", with_genres: "16,10749" }, order: 34 },
-    { id: "mal.fantasy", title: "Magia sin límites", fetch: fetchAnilistFantasyAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_count.desc", with_genres: "16,10765" }, order: 35 },
-    { id: "mal.scifi", title: "Locuras del futuro", fetch: fetchAnilistSciFiAnime, kind: "genre", tmdb: { ...animeBase, sort_by: "vote_average.desc", with_genres: "16,10765", "vote_count.gte": "20" }, order: 36 },
-    { id: "mal.last_year_best", title: "Lo mejor de ayer", fetch: fetchAnilistLastYearBestAnime, kind: "other", tmdb: { ...animeBase, sort_by: "vote_average.desc", "vote_count.gte": "200", "air_date.gte": isoDate(-365), "air_date.lte": isoDate(0) }, order: 28 },
   ];
 
   const jikanEntries: AnimeEntry[] = [
     { id: "jikan.top_airing", title: "Las que están arrasando", fetch: fetchJikanTopAiring, kind: "current", order: 3, tmdb: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5" } },
     { id: "jikan.upcoming", title: "Lo que viene", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
     { id: "jikan.top_movies", title: "Joyas cinematográficas", fetch: fetchJikanTopMovies, kind: "other", order: 8, tmdb: { sort_by: "popularity.desc", with_genres: "16,12" } },
-    { id: "jikan.top_ova", title: "OVA legendarios", fetch: fetchJikanTopOva, kind: "other", order: 9, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "100" } },
-    { id: "jikan.top_ona", title: "ONA imperdibles", fetch: fetchJikanTopOna, kind: "other", order: 10, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "50" } },
-    { id: "jikan.top_specials", title: "Especiales que enamoran", fetch: fetchJikanTopSpecials, kind: "other", order: 11, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "10" } },
     { id: "jikan.recommendations", title: "La comunidad lo recomienda", fetch: fetchJikanRecommendations, kind: "other", order: 12, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" } },
-    { id: "jikan.top_upcoming", title: "Próximos estrenos", fetch: fetchJikanTopUpcoming, kind: "other", order: 13, tmdb: { sort_by: "vote_average.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(365) } },
     { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 7, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "150" } },
     { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "top", order: 14, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
-    { id: "jikan.action", title: "Adrenalina pura", fetch: fetchJikanAction, kind: "genre", order: 40, tmdb: { page: "2", sort_by: "popularity.desc", with_genres: "16,10759" } },
-    { id: "jikan.adventure", title: "Aventuras épicas", fetch: fetchJikanAdventure, kind: "genre", order: 41, tmdb: { sort_by: "vote_average.desc", with_genres: "16,10759", "vote_count.gte": "50" } },
-    { id: "jikan.romance", title: "Corazones rotos felices", fetch: fetchJikanRomance, kind: "genre", order: 42, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,10749", "vote_count.gte": "20" } },
-    { id: "jikan.comedy", title: "Carcajadas garantizadas", fetch: fetchJikanComedy, kind: "genre", order: 43, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,35", "vote_count.gte": "20" } },
-    { id: "jikan.fantasy", title: "Mundos mágicos", fetch: fetchJikanFantasy, kind: "genre", order: 44, tmdb: { sort_by: "vote_average.desc", with_genres: "16,10765", "vote_count.gte": "50" } },
-    { id: "jikan.scifi", title: "Futuro y espacio", fetch: fetchJikanSciFi, kind: "genre", order: 45, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,10765", "vote_count.gte": "30" } },
-    { id: "jikan.slice_of_life", title: "Días tranquilos", fetch: fetchJikanSliceOfLife, kind: "genre", order: 46, tmdb: { page: "3", sort_by: "vote_average.desc", with_genres: "16", "vote_count.gte": "100" } },
-    { id: "jikan.psychological", title: "Mente enigma", fetch: fetchJikanPsychological, kind: "genre", order: 47, tmdb: { page: "2", sort_by: "vote_average.desc", with_genres: "16,9648", "vote_count.gte": "50" } },
   ];
 
   // Fetch AniList entries in parallel, Jikan entries serially (rate-limit).

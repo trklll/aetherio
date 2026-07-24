@@ -8,7 +8,7 @@ const JIKAN_MAX_RETRIES_504 = 0;
 const JIKAN_RETRY_BASE_MS = 500;
 const JIKAN_TIMEOUT_MS = 3000;
 const JIKAN_HEALTH_FAILURES_THRESHOLD = 2;
-const TMDB_FIND_CONCURRENCY = 3;
+const TMDB_FIND_CONCURRENCY = 2;
 
 let jikanHealthFailures = 0;
 let jikanDisabled = false;
@@ -332,7 +332,7 @@ function stripSeasonPattern(name: string): string | null {
 export async function resolveMalToTmdb(items: MediaItem[]): Promise<MediaItem[]> {
   const malItems = items.filter(
     (item): item is EnrichedItem => item.id.startsWith("mal:") && "_malId" in item,
-  );
+  ).slice(0, 40);
   if (!malItems.length) return items;
 
   const resolved = new Map<number, TmdbResolve>();
