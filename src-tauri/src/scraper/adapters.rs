@@ -53,6 +53,7 @@ pub fn build_entry_target(
         "miruro" => query_target(site, "/search?query={query}", query),
         "kickassanime" => query_target(site, "/search?query={query}", query),
         "animetsu" => query_target(site, "/search?query={query}", query),
+        "animeav1" => query_target(site, "/catalogo?search={query}", query),
         _ => query_target(site, site.search_path, query),
     }
 }

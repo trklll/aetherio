@@ -39,6 +39,36 @@ const CATEGORY_LABELS: Record<string, string> = {
   free_with_ads: "GRATUITAS CON ANUNCIOS",
 };
 
+const sourceLogoUrls = import.meta.glob("../../assets/logosaddons/*.{png,jpg,jpeg}", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+const SOURCE_LOGO_MAP: Record<string, string> = {};
+for (const [path, url] of Object.entries(sourceLogoUrls)) {
+  const name = path.split("/").pop()?.toLowerCase() ?? "";
+  const urlStr = String(url);
+  const cleanKey = name
+    .replace(/-(logo|png)\.[a-z]+$/, "")
+    .replace(/-png$/, "")
+    .toLowerCase();
+  SOURCE_LOGO_MAP[cleanKey] = urlStr;
+  const noHyphenKey = cleanKey.replace(/-/g, "");
+  if (noHyphenKey !== cleanKey) {
+    SOURCE_LOGO_MAP[noHyphenKey] = urlStr;
+  }
+}
+
+function getSourceLogo(sourceName: string): string | null {
+  let key = sourceName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (SOURCE_LOGO_MAP[key]) return SOURCE_LOGO_MAP[key];
+  if (key === "nyaasi") {
+    if (SOURCE_LOGO_MAP["nyaa"]) return SOURCE_LOGO_MAP["nyaa"];
+  }
+  return SOURCE_LOGO_MAP[sourceName.toLowerCase()] ?? null;
+}
+
 export default function SourcesPanel() {
   const addons = useAddonStore(state => state.addons);
   const enableAddon = useAddonStore(state => state.enableAddon);
@@ -450,6 +480,7 @@ export default function SourcesPanel() {
                   description={`${site.types.map(type => type === "series" ? "Series" : type === "movie" ? "Peliculas" : "Anime").join(" · ")} · ${site.baseUrl}`}
                   checked={isScraperSiteEnabled(preferences, site.id, site.enabledByDefault)}
                   onChange={checked => setSiteEnabled(site.id, checked)}
+                  logo={getSourceLogo(site.name) ?? undefined}
                   compact
                 />
               ))}
@@ -511,6 +542,7 @@ function SourceRow({
   compact = false,
   action,
   onChange,
+  logo,
 }: {
   title: string;
   description?: string;
@@ -519,6 +551,7 @@ function SourceRow({
   compact?: boolean;
   action?: ReactNode;
   onChange?: (checked: boolean) => void;
+  logo?: string;
 }) {
   return (
     <div className={clsx(
@@ -526,9 +559,12 @@ function SourceRow({
       compact ? "py-3" : "py-4",
       disabled && "opacity-45",
     )}>
-      <div className="min-w-0">
-        <p className="truncate text-sm font-black text-white">{title}</p>
-        {description ? <p className="mt-1 truncate text-xs font-semibold text-white/42">{description}</p> : null}
+      <div className="flex min-w-0 items-center gap-3">
+        {logo ? <img src={logo} alt="" className="h-6 w-6 shrink-0 rounded-sm object-contain" /> : null}
+        <div className="min-w-0">
+          <p className="truncate text-sm font-black text-white">{title}</p>
+          {description ? <p className="mt-1 truncate text-xs font-semibold text-white/42">{description}</p> : null}
+        </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
         {action}
