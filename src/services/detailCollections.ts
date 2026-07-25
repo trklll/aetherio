@@ -190,14 +190,19 @@ async function fetchJikanAnime(malId: string) {
 }
 
 async function searchJikanAnime(title: string) {
-  const payload = await fetchJson(`${JIKAN}/anime?q=${encodeURIComponent(title)}&limit=5`);
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
-  const normalized = title.trim().toLowerCase();
-  const exact = rows.find((item: any) => [item.title_english, item.title]
-    .some(value => String(value ?? "").trim().toLowerCase() === normalized));
-  const partial = rows.find((item: any) => [item.title_english, item.title]
-    .some(value => String(value ?? "").toLowerCase().includes(normalized)));
-  return String((exact ?? partial ?? rows[0])?.mal_id ?? "") || null;
+  const body = JSON.stringify({
+    query: `query($search: String){ Media(search: $search, type: ANIME){ idMal title{ english romaji } } }`,
+    variables: { search: title },
+  });
+  const payload = await fetchJson("https://graphql.anilist.co", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body,
+  });
+  const media = payload?.data?.Media;
+  if (!media) return null;
+  const malId = Number(media.idMal);
+  return Number.isFinite(malId) && malId > 0 ? String(malId) : null;
 }
 
 async function resolveMalToTmdb(malId: string, preferredType: "movie" | "series") {

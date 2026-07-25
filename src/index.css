@@ -4,6 +4,15 @@
 @tailwind components;
 @tailwind utilities;
 
+::view-transition-group(*){
+  animation-duration:var(--vt-duration,0.52s);
+  animation-timing-function:cubic-bezier(0.22,1,0.36,1);
+}
+
+@media (prefers-reduced-motion: reduce){
+  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation-duration:0s!important}
+}
+
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 
 html,body,#root{
@@ -79,6 +88,17 @@ html.aetherio-android-tv .scroll-row{
   -webkit-backdrop-filter:blur(12px) saturate(150%);
   border:1px solid rgba(225,230,238,0.09);
   box-shadow:0 2px 12px rgba(0,0,0,0.32),inset 0 1px 0 rgba(255,255,255,0.045);
+}
+.liquid-glass-arrow{
+  position:relative;
+  background:rgba(0,0,0,0.32);
+  backdrop-filter:blur(16px) saturate(160%);
+  -webkit-backdrop-filter:blur(16px) saturate(160%);
+  border:1px solid rgba(225,230,238,0.10);
+  box-shadow:0 2px 12px rgba(0,0,0,0.32),inset 0 1px 0 rgba(255,255,255,0.06);
+  will-change:backdrop-filter,opacity;
+  -webkit-transform:translateZ(0);
+  transform:translateZ(0);
 }
 .liquid-glass-dark{
   background:rgba(0,0,0,0.65);

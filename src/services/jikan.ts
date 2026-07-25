@@ -170,6 +170,48 @@ export async function fetchJikanTopOna(): Promise<MediaItem[]> {
   return dedupeByMalId((result?.data ?? []).map(jikanToItem));
 }
 
+interface JikanCharacterImage {
+  jpg?: { image_url?: string; large_image_url?: string };
+  webp?: { image_url?: string; large_image_url?: string };
+}
+
+interface JikanCharacterEntry {
+  character: { mal_id: number; name: string; images?: JikanCharacterImage };
+  role?: string;
+  voice_actors?: { person: { name: string }; language?: string }[];
+}
+
+interface JikanCharacterResponse {
+  data: JikanCharacterEntry[];
+}
+
+export interface JikanCharacter {
+  malId: number;
+  name: string;
+  image?: string;
+  role?: string;
+  voiceActor?: string;
+}
+
+export async function fetchJikanAnimeCharacters(malId: number): Promise<JikanCharacter[]> {
+  const result = await jikanFetch<JikanCharacterResponse>(`/anime/${malId}/characters`);
+  if (!result?.data) return [];
+  return result.data
+    .filter((entry) => entry.character?.name)
+    .map((entry) => {
+      const img = entry.character.images;
+      const image = img?.webp?.large_image_url || img?.webp?.image_url || img?.jpg?.large_image_url || img?.jpg?.image_url;
+      const jaVa = entry.voice_actors?.find((va) => va.language === "Japanese");
+      return {
+        malId: entry.character.mal_id,
+        name: entry.character.name,
+        image,
+        role: entry.role,
+        voiceActor: jaVa?.person?.name,
+      };
+    });
+}
+
 export async function fetchJikanTopSpecials(): Promise<MediaItem[]> {
   const result = await jikanFetch<JikanListResponse<JikanAnime>>("/top/anime", { type: "special", filter: "bypopularity", limit: LIMIT });
   return dedupeByMalId((result?.data ?? []).map(jikanToItem));

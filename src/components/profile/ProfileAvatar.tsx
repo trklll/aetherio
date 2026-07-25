@@ -21,13 +21,25 @@ export default function ProfileAvatar({ profile, className }: { profile?: LocalP
     };
   }, [profile]);
 
-  return (
-    <span className={className ?? "relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-white text-black"}>
-      {currentProfile?.avatarDataUrl ? (
+  if (currentProfile?.avatarDataUrl) {
+    return (
+      <span className={className ?? "relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-full"}>
         <img src={currentProfile.avatarDataUrl} alt="" className="h-full w-full object-cover" />
-      ) : (
-        <span className="text-black font-black text-sm">{getProfileInitial(currentProfile)}</span>
-      )}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={className ?? "relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-full"}
+      style={{
+        background: "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
+        boxShadow: "0 8px 16px rgba(0,0,0,0.4)",
+        color: "rgba(255,255,255,0.94)",
+        fontFamily: "Inter, system-ui, sans-serif",
+      }}
+    >
+      <span className="font-black text-sm" style={{ color: "inherit", fontFamily: "inherit" }}>{getProfileInitial(currentProfile)}</span>
     </span>
   );
 }

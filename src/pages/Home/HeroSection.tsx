@@ -9,6 +9,7 @@ import { writeDetailMediaMeta } from "../../utils/mediaMetadata.ts";
 import { saveHomeScroll } from "../../store/homeScrollStore.ts";
 import { tmdbImage } from "../../utils/tmdbArtwork.ts";
 import { gsap, tweenTo } from "../../utils/motion.ts";
+import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition.ts";
 import {
   fetchYouTubeClip,
   getCachedClipInfo,
@@ -230,6 +231,8 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
       year: displayItem.year,
       mdbListRatings: mdbListRatings ?? displayItem.mdbListRatings,
     });
+    setSharedElementName(displayItem.type, displayItem.id);
+    captureCardRect(cardRef.current);
     navigate(`/detail/${encodeURIComponent(displayItem.type)}/${encodeURIComponent(displayItem.id)}`);
   };
 

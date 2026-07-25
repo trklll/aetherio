@@ -148,11 +148,14 @@ export default function TopNav() {
             closeSearch();
             navigate("/settings?tab=account");
           }}
-          className="rounded-full bg-white flex items-center justify-center shrink-0 hover:scale-105 gsap-transition"
+          className="rounded-full flex items-center justify-center shrink-0 hover:scale-105 gsap-transition"
           style={{
             width: collapsed ? 36 : 32,
             height: collapsed ? 36 : 32,
             marginRight: collapsed ? 0 : 8,
+            background: profile?.avatarDataUrl ? undefined : "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
+            boxShadow: profile?.avatarDataUrl ? undefined : "0 8px 16px rgba(0,0,0,0.4)",
+            fontFamily: "Inter, system-ui, sans-serif",
             transition: "width 0.32s cubic-bezier(0.32, 0.72, 0, 1), height 0.32s cubic-bezier(0.32, 0.72, 0, 1), margin 0.32s cubic-bezier(0.32, 0.72, 0, 1)",
           }}
           title="Perfil"
@@ -160,7 +163,7 @@ export default function TopNav() {
           {profile?.avatarDataUrl ? (
             <img src={profile.avatarDataUrl} alt="" className="h-full w-full rounded-full object-cover" />
           ) : (
-            <span className="text-black font-black text-sm">{getProfileInitial(profile)}</span>
+            <span className="font-black text-sm" style={{ color: "rgba(255,255,255,0.94)", fontFamily: "Inter, system-ui, sans-serif" }}>{getProfileInitial(profile)}</span>
           )}
         </button>
 

@@ -7,6 +7,10 @@ import { scrollByGsap } from "../../utils/motion";
 
 const IMG = "https://image.tmdb.org/t/p";
 
+function initials(value: string) {
+  return value.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]?.toUpperCase()).join("");
+}
+
 type CreditType = "movie" | "series";
 
 interface PersonCredit {
@@ -135,13 +139,27 @@ export default function PersonPage() {
 
         <section className="person-overview">
           <div className="person-gallery-column">
-            <HorizontalRail className="person-gallery" label="Retratos" resetKey={person.id}>
-              {(person.images.length ? person.images : [person.profileUrl]).filter(Boolean).map((image, index) => (
-                <div className="person-portrait" tabIndex={0} key={`${image}-${index}`}>
-                  <img src={image} alt={person.name} decoding="async" />
-                </div>
-              ))}
-            </HorizontalRail>
+            {(person.images.length ? person.images : [person.profileUrl]).filter(Boolean).length > 0 ? (
+              <HorizontalRail className="person-gallery" label="Retratos" resetKey={person.id}>
+                {(person.images.length ? person.images : [person.profileUrl]).filter(Boolean).map((image, index) => (
+                  <div className="person-portrait" tabIndex={0} key={`${image}-${index}`}>
+                    <img src={image} alt={person.name} decoding="async" />
+                  </div>
+                ))}
+              </HorizontalRail>
+            ) : (
+              <div style={{
+                width:174,height:246,borderRadius:16,overflow:"hidden",
+                background:"linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
+                boxShadow:"0 8px 16px rgba(0,0,0,0.4)",
+                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+                fontFamily:"Inter, system-ui, sans-serif"
+              }}>
+                <span style={{fontSize:58,color:"rgba(255,255,255,0.94)",fontWeight:900,letterSpacing:1,fontFamily:"inherit"}}>
+                  {initials(person.name)}
+                </span>
+              </div>
+            )}
             {person.biography ? (
               <button className="person-biography-preview" type="button" onClick={() => setBiographyOpen(true)}>
                 <span>{person.biography}</span>

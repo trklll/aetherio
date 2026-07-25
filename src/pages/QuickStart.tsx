@@ -357,7 +357,7 @@ function ProfileStep({
 
       <div className="grid gap-5 rounded-[30px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl md:p-8">
         <div className="flex items-center gap-4">
-          <ProfileAvatar profile={previewProfile} className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white text-xl font-black text-black" />
+          <ProfileAvatar profile={previewProfile} className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl text-xl font-black" />
           <div>
             <p className="text-lg font-black">{name.trim() || "Tu nuevo perfil"}</p>
             <p className="text-xs font-semibold text-white/42">Guardado localmente en este equipo</p>
@@ -614,7 +614,7 @@ function ApiStep({
                   disabled={sharing !== null}
                   className="gsap-transition flex items-center gap-2.5 rounded-full border border-white/12 px-3.5 py-2 text-xs font-bold text-white/68 hover:bg-white/10 hover:text-white disabled:opacity-40"
                 >
-                  <ProfileAvatar profile={p} className="h-7 w-7 shrink-0 overflow-hidden rounded-full bg-white/20 text-[10px] font-black text-black" />
+                  <ProfileAvatar profile={p} className="h-7 w-7 shrink-0 overflow-hidden rounded-full bg-white/20 text-[10px] font-black" />
                   {p.name}
                   {p.pin ? <Lock size={12} className="text-white/34" /> : null}
                 </button>
@@ -626,7 +626,7 @@ function ApiStep({
         {sharing ? (
           <div className="rounded-[24px] border border-white/12 bg-white/[0.08] p-5">
             <div className="flex items-center gap-3 mb-3">
-              <ProfileAvatar profile={sharing.profile} className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white/20 text-sm font-black text-black" />
+              <ProfileAvatar profile={sharing.profile} className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white/20 text-sm font-black" />
               <div>
                 <p className="text-sm font-black text-white">{sharing.profile.name}</p>
                 <p className="text-xs font-medium text-white/46">Introduce el PIN para compartir sus claves</p>

@@ -24,8 +24,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [playerChromeVisible, setPlayerChromeVisible] = useState(true);
   const [playerTransparent, setPlayerTransparent] = useState(false);
   const [windowControlsZone, setWindowControlsZone] = useState(false);
+  const hideTimerRef = useRef<number | null>(null);
   const showBack = isEpisodePage || isPlayer || isDetailPage || isPersonPage;
-  const chromeVisible = isPlayer ? (playerChromeVisible || windowControlsZone) : true;
+  const chromeVisible = isPlayer ? (playerChromeVisible || windowControlsZone) : showBack ? windowControlsZone : true;
   const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
@@ -35,24 +36,49 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [chromeVisible]);
 
   useEffect(() => {
-    if (!isPlayer) return;
+    function clearHideTimer() {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    }
+    function scheduleHide() {
+      clearHideTimer();
+      hideTimerRef.current = window.setTimeout(() => {
+        setWindowControlsZone(false);
+      }, 1800);
+    }
     function onMouseMove(event: MouseEvent) {
       const x = event.clientX;
       const y = event.clientY;
       const w = window.innerWidth;
-      const inCorner = x > w - 180 && y < 80;
-      setWindowControlsZone(prev => prev !== inCorner ? inCorner : prev);
+      const inCorner = x > w - 220 && y < 90;
+      if (inCorner) {
+        clearHideTimer();
+        setWindowControlsZone(prev => prev !== true ? true : prev);
+      } else {
+        setWindowControlsZone(prev => {
+          if (prev) scheduleHide();
+          return prev;
+        });
+      }
     }
     function onMouseLeave() {
       setWindowControlsZone(false);
     }
     window.addEventListener("mousemove", onMouseMove, { passive: true });
     document.addEventListener("mouseout", onMouseLeave);
+
+    if (isPlayer) {
+      setWindowControlsZone(true);
+    }
+
     return () => {
+      clearHideTimer();
       window.removeEventListener("mousemove", onMouseMove, { passive: true } as AddEventListenerOptions);
       document.removeEventListener("mouseout", onMouseLeave);
     };
-  }, [isPlayer]);
+  }, [isPlayer, showBack]);
 
   useEffect(() => {
     if (loc.pathname === "/home" && getHomeScroll()) return;

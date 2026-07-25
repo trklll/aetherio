@@ -438,6 +438,45 @@ export function progressPercent(entry: ContinueWatchingEntry) {
   return Math.min(100, Math.max(0, (entry.currentTime / entry.duration) * 100));
 }
 
+export function markMediaAsWatched(input: {
+  type: string;
+  id: string;
+  name: string;
+  logo?: string;
+  background?: string;
+  poster?: string;
+}) {
+  const mediaKey = buildMediaKey(input.type, input.id);
+  const key = `${mediaKey}:0:0`;
+  const entries = readContinueWatchingEntries();
+  const existing = entries.find(entry => entry.key === key);
+
+  const entry: ContinueWatchingEntry = {
+    key,
+    mediaKey,
+    type: input.type,
+    id: input.id,
+    name: input.name || existing?.name || input.id,
+    logo: sanitizeLogoUrl(input.logo) ?? existing?.logo,
+    background: input.background ?? existing?.background,
+    poster: input.poster ?? existing?.poster,
+    episodeStill: existing?.episodeStill,
+    season: 0,
+    episode: 0,
+    episodeName: undefined,
+    currentTime: 1,
+    duration: 1,
+    updatedAt: Date.now(),
+    completed: true,
+    entryKind: "resume",
+    source: "local",
+  };
+
+  writeEntries(entries.filter(item => item.key !== key).slice(0, MAX_ENTRIES));
+  writeWatchedHistoryEntries(mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES));
+  return entry;
+}
+
 export function mergeContinueWatchingEntries(importedEntries: ContinueWatchingEntry[]) {
   if (!importedEntries.length) return;
   const watchedEntries = importedEntries.filter(entry => entry.completed);

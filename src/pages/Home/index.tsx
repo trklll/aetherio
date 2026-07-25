@@ -9,6 +9,7 @@ import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import { getHomeScroll, saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
+import { tmdbFetch } from "../../config/apiKeys";
 import CatalogRow from "./CatalogRow";
 import ContinueWatchingRow from "./ContinueWatchingRow";
 import HeroSection from "./HeroSection";
@@ -63,15 +64,64 @@ export default function HomePage() {
     [filteredRows],
   );
 
-  const animeHeroItems = useMemo(() => heroItems.filter(i => i.type === "anime"), [heroItems]);
-  const seriesMovieHeroItems = useMemo(() => heroItems.filter(i => i.type !== "anime"), [heroItems]);
+  useEffect(() => {
+    if (!filteredRows.length) return;
+    const streamingItems: MediaItem[] = [];
+    for (const group of buildStreamingProviderGroups(filteredRows)) {
+      for (const item of group.seriesRow.items) {
+        if (!item.logo) streamingItems.push(item);
+      }
+      for (const item of group.moviesRow.items) {
+        if (!item.logo) streamingItems.push(item);
+      }
+    }
+    if (!streamingItems.length) return;
+    let cancelled = false;
+    async function enrich() {
+      for (const item of streamingItems) {
+        if (cancelled || item.logo) continue;
+        try {
+          const idPart = item.id.split(":")[0];
+          let tmdbId: number | null = null;
+          let tmdbType: "movie" | "tv" | null = null;
+          if (item.type === "movie" || item.type === "series" || item.type === "tv") {
+            tmdbType = item.type === "series" ? "tv" : item.type as "movie" | "tv";
+          }
+          if (idPart.startsWith("tmdb:")) {
+            tmdbId = parseInt(idPart.slice(5), 10);
+          } else if (idPart.startsWith("tt")) {
+            const fd = await tmdbFetch<{ movie_results?: { id: number }[]; tv_results?: { id: number }[] }>(
+              `/find/${encodeURIComponent(idPart)}`,
+              { params: { external_source: "imdb_id", language: "es-ES" } },
+            );
+            if (fd?.movie_results?.length) { tmdbId = fd.movie_results[0].id; tmdbType = "movie"; }
+            else if (fd?.tv_results?.length) { tmdbId = fd.tv_results[0].id; tmdbType = "tv"; }
+          }
+          if (!tmdbId || !tmdbType) continue;
+          const images = await tmdbFetch<{ logos?: { iso_639_1?: string; file_path?: string }[] }>(
+            `/${tmdbType}/${tmdbId}/images`,
+            { params: { include_image_language: "es,en,null" } },
+          );
+          const logo = images?.logos?.find((l: any) => l?.iso_639_1 === "es" && typeof l?.file_path === "string")
+            ?? images?.logos?.find((l: any) => l?.iso_639_1 === "en" && typeof l?.file_path === "string")
+            ?? images?.logos?.find((l: any) => l?.iso_639_1 === null && typeof l?.file_path === "string")
+            ?? images?.logos?.find((l: any) => typeof l?.file_path === "string");
+          if (logo?.file_path) {
+            item.logo = `https://image.tmdb.org/t/p/w342${logo.file_path}`;
+          }
+        } catch {}
+      }
+    }
+    void enrich();
+    return () => { cancelled = true; };
+  }, [filteredRows]);
 
   if (loading) return <Skeleton />;
 
   return (
     <div className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
       {!typeFilter && (
-        <SplitHero animeItems={animeHeroItems} seriesMovieItems={seriesMovieHeroItems} />
+        <HomeHero items={heroItems} />
       )}
       <div className="relative flex min-h-full flex-col">
         {!typeFilter && <ContinueWatchingRow />}
@@ -96,95 +146,6 @@ export default function HomePage() {
           })
         ) : (
           <Empty typeFilter={typeFilter} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SplitHero({ animeItems, seriesMovieItems }: { animeItems: MediaItem[]; seriesMovieItems: MediaItem[] }) {
-  const [animeIndex, setAnimeIndex] = useState(0);
-  const [smIndex, setSmIndex] = useState(0);
-  const animeIndexRef = useRef(0);
-  const smIndexRef = useRef(0);
-  useEffect(() => { animeIndexRef.current = animeIndex; }, [animeIndex]);
-  useEffect(() => { smIndexRef.current = smIndex; }, [smIndex]);
-
-  useEffect(() => {
-    const saved = getHomeScroll();
-    if (saved?.hero && saved.hero.kind === "split") {
-      if (saved.hero.anime >= 0 && saved.hero.anime < animeItems.length) setAnimeIndex(saved.hero.anime);
-      if (saved.hero.sm >= 0 && saved.hero.sm < seriesMovieItems.length) setSmIndex(saved.hero.sm);
-    } else if (animeItems.length) {
-      setAnimeIndex(Math.floor(Math.random() * animeItems.length));
-    }
-  }, [animeItems]);
-
-  useEffect(() => {
-    const saved = getHomeScroll();
-    if (saved?.hero && saved.hero.kind === "split") {
-      // already set above
-    } else if (seriesMovieItems.length) {
-      setSmIndex(Math.floor(Math.random() * seriesMovieItems.length));
-    }
-  }, [seriesMovieItems]);
-
-  const handleAnimeOpenDetail = useCallback((idx: number) => {
-    const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
-    saveHomeScroll({
-      vertical: shell?.scrollTop ?? 0,
-      hero: { kind: "split", anime: idx, sm: smIndexRef.current },
-    });
-  }, []);
-  const handleSmOpenDetail = useCallback((idx: number) => {
-    const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
-    saveHomeScroll({
-      vertical: shell?.scrollTop ?? 0,
-      hero: { kind: "split", anime: animeIndexRef.current, sm: idx },
-    });
-  }, []);
-
-  const animeItem = animeItems[animeIndex % Math.max(1, animeItems.length)];
-  const smItem = seriesMovieItems[smIndex % Math.max(1, seriesMovieItems.length)];
-
-  if (!animeItems.length && !seriesMovieItems.length) return <HomeHero items={[]} />;
-  if (!animeItems.length) return <HomeHero items={seriesMovieItems} />;
-  if (!seriesMovieItems.length) return <HomeHero items={animeItems} />;
-
-  return (
-    <div className="flex flex-col gap-1 md:flex-row">
-      <div className="flex-1" style={{ overflow: "hidden", position: "relative" }}>
-        {animeItem && (
-          <HeroSection
-            key="anime-hero"
-            item={animeItem}
-            items={animeItems}
-            activeIndex={animeIndex}
-            onSelect={setAnimeIndex}
-            onOpenDetail={handleAnimeOpenDetail}
-            onVideoEnd={() => {
-              if (animeItems.length < 2) return;
-              setAnimeIndex(i => (i + 1) % animeItems.length);
-            }}
-            inline
-          />
-        )}
-      </div>
-      <div className="flex-1" style={{ overflow: "hidden", position: "relative" }}>
-        {smItem && (
-          <HeroSection
-            key="series-movie-hero"
-            item={smItem}
-            items={seriesMovieItems}
-            activeIndex={smIndex}
-            onSelect={setSmIndex}
-            onOpenDetail={handleSmOpenDetail}
-            onVideoEnd={() => {
-              if (seriesMovieItems.length < 2) return;
-              setSmIndex(i => (i + 1) % seriesMovieItems.length);
-            }}
-            inline
-          />
         )}
       </div>
     </div>

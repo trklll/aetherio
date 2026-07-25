@@ -829,7 +829,7 @@ function ManageProfiles({
         {activePreview ? (
           <div className="grid gap-5 p-5 md:grid-cols-[auto,1fr]">
             <div className="flex flex-col items-center gap-3">
-              <ProfileAvatar profile={activePreview} className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-white text-black" />
+              <ProfileAvatar profile={activePreview} className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full" />
               <label className="flex cursor-pointer items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 py-2 text-xs font-bold text-white/72 gsap-transition hover:bg-white/14 hover:text-white">
                 <ImagePlus size={14} />
                 Cambiar foto
@@ -854,7 +854,7 @@ function ManageProfiles({
           const isActive = profile.id === activeProfile?.id;
           const isOnlyProfile = profiles.length <= 1;
           return (
-            <PillRow key={profile.id} title={profile.name} description={profile.pin ? "PIN activo" : "Sin PIN"} leading={<ProfileAvatar profile={profile} className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-white text-black" />}>
+            <PillRow key={profile.id} title={profile.name} description={profile.pin ? "PIN activo" : "Sin PIN"} leading={<ProfileAvatar profile={profile} className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full" />}>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -984,7 +984,7 @@ function CreateProfile({
       <PillBlock>
         <div className="grid gap-5 p-5 md:grid-cols-[auto,1fr]">
           <div className="flex flex-col items-center gap-3">
-            <ProfileAvatar profile={newPreview} className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-white text-black" />
+            <ProfileAvatar profile={newPreview} className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full" />
             <label className="flex cursor-pointer items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 py-2 text-xs font-bold text-white/72 gsap-transition hover:bg-white/14 hover:text-white">
               <ImagePlus size={14} />
               Foto

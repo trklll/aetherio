@@ -8,6 +8,7 @@ import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { pickPreferredTmdbBackdrop } from "../../utils/tmdbArtwork";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import type { MediaStream } from "../../types/stream";
+import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
 
 const IMG = "https://image.tmdb.org/t/p";
 
@@ -52,11 +53,13 @@ export default function DetailSectionPage() {
   const [related, setRelated] = useState<RelatedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [isAnimeDetected, setIsAnimeDetected] = useState(type === "anime");
+  const isAnimeFromUrl = type === "anime";
   const title = sectionKind === "trailers"
-    ? "Tráilers"
+    ? "TrÃ¡ilers"
     : sectionKind === "cast"
-      ? "Reparto"
-      : "Más como esto";
+      ? (isAnimeDetected ? "Personajes" : "Reparto")
+      : "MÃ¡s como esto";
 
   useEffect(() => {
     let cancelled = false;
@@ -68,14 +71,14 @@ export default function DetailSectionPage() {
         let tmdbType = type === "movie" ? "movie" : "tv";
         const tmdbId = await resolveTmdbId(type, id, params.get("title"));
         if (!tmdbId) {
-          setError("No se encontró este título en TMDB.");
+          setError("No se encontrï¿½ este tï¿½tulo en TMDB.");
           return;
         }
 
         const append = sectionKind === "trailers"
           ? "videos,images"
           : sectionKind === "cast"
-            ? "credits,images"
+            ? "credits,images,external_ids"
             : "similar,recommendations,images";
         let data = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES", append_to_response: append } });
         if (!data && tmdbType === "tv") {
@@ -86,7 +89,7 @@ export default function DetailSectionPage() {
           data = await tmdbFetch<any>(`/${tmdbType}/${tmdbId}`, { params: { language: "en-US", append_to_response: append } });
         }
         if (!data) {
-          setError("No se pudo cargar la sección.");
+          setError("No se pudo cargar la secciï¿½n.");
           return;
         }
         const logoPath = pickLogoPath(data.images?.logos);
@@ -98,6 +101,12 @@ export default function DetailSectionPage() {
         };
         if (!cancelled) setMedia(nextMedia);
 
+        const genreIds = new Set<number>((data.genres ?? []).map((g: any) => Number(g?.id)).filter((id: number) => Number.isFinite(id)));
+        const isAnime = isAnimeFromUrl
+          || (data.genres ?? []).some((g: any) => String(g?.name ?? "").toLowerCase() === "anime")
+          || (genreIds.has(16) && data.original_language === "ja");
+        if (isAnime && !isAnimeFromUrl && !cancelled) setIsAnimeDetected(true);
+
         if (sectionKind === "trailers") {
           const items = mapTrailers(data.videos?.results);
           if (!items.length) {
@@ -107,14 +116,19 @@ export default function DetailSectionPage() {
             setTrailers(items);
           }
         } else if (sectionKind === "cast") {
-          const items = mapPeople(data.credits);
-          if (!cancelled) setPeople(items);
+          if (isAnime) {
+            const items = await mapAnimeCharacters(id, data, tmdbId);
+            if (!cancelled) setPeople(items);
+          } else {
+            const items = mapPeople(data.credits);
+            if (!cancelled) setPeople(items);
+          }
         } else {
           const items = mapRelated(data, tmdbType);
           if (!cancelled) setRelated(items);
         }
       } catch {
-        if (!cancelled) setError("No se pudo cargar la sección.");
+        if (!cancelled) setError("No se pudo cargar la secciï¿½n.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -152,7 +166,7 @@ export default function DetailSectionPage() {
 
         {sectionKind === "cast" ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(204px, 204px))", gap: "34px 40px" }}>
-            {people.map(person => <PersonGridCard key={`${person.id}-${person.role}`} person={person} />)}
+            {people.map(person => <PersonGridCard key={`${person.id}-${person.role}`} person={person} disabled={isAnimeDetected} />)}
           </div>
         ) : null}
 
@@ -219,14 +233,15 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
   );
 }
 
-function PersonGridCard({ person }: { person: PersonItem }) {
+function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: boolean }) {
   const navigate = useNavigate();
+  const handleClick = disabled ? undefined : () => navigate(`/person/${person.id}`);
   return (
-    <button type="button" onClick={() => navigate(`/person/${person.id}`)} style={{ width: 204, border: "none", background: "none", padding: 0, cursor: "pointer", textAlign: "center" }}>
+    <button type="button" onClick={handleClick} disabled={disabled} style={{ width: 204, border: "none", background: "none", padding: 0, cursor: disabled ? "default" : "pointer", textAlign: "center" }}>
       {person.image ? (
         <img src={person.image} alt={person.name} loading="lazy" decoding="async" style={{ width: 180, height: 180, borderRadius: "50%", objectFit: "cover", margin: "0 auto 12px" }} />
       ) : (
-        <div style={{ width: 180, height: 180, borderRadius: "50%", background: "#9da3af", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 58, fontWeight: 500 }}>
+        <div style={{ width: 180, height: 180, borderRadius: "50%", background: "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)", boxShadow: "0 8px 16px rgba(0,0,0,0.4)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 58, fontWeight: 900, letterSpacing: 1, fontFamily: "Inter, system-ui, sans-serif" }}>
           {initials(person.name)}
         </div>
       )}
@@ -297,14 +312,42 @@ function mapPeople(credits: any): PersonItem[] {
       role: translateJob(item.job),
       image: imageUrl(item.profile_path, "w185"),
     }));
-  const seen = new Set<string>();
-  return [...cast, ...crew].filter((item: PersonItem) => {
-    if (!item.id || !item.name) return false;
-    const key = `${item.id}:${item.role}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 80);
+    const seen = new Set<string>();
+    return [...cast, ...crew].filter((item: PersonItem) => {
+      if (!item.id || !item.name) return false;
+      const key = `${item.id}:${item.role}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 80);
+}
+
+async function mapAnimeCharacters(id: string, tmdbData: any, tmdbId: number): Promise<PersonItem[]> {
+  const lower = id.toLowerCase();
+  let parsedMal: number | undefined;
+  if (lower.startsWith("mal:")) {
+    const mal = Number(id.split(":")[1]);
+    if (Number.isFinite(mal) && mal > 0) parsedMal = mal;
+  }
+  const malId = await resolveMalId({
+    malId: parsedMal,
+    imdbId: tmdbData?.external_ids?.imdb_id,
+    tmdbId,
+    title: tmdbData?.title ?? tmdbData?.name ?? tmdbData?.original_title ?? tmdbData?.original_name,
+    year: parseInt(String(tmdbData?.release_date ?? tmdbData?.first_air_date ?? "").slice(0, 4), 10) || undefined,
+  });
+  if (!malId) return [];
+  try {
+    const chars = await fetchAnimeCast(malId);
+    return chars.map((ch) => ({
+      id: ch.malId,
+      name: ch.name,
+      role: ch.voiceActor || ch.role || "",
+      image: ch.image,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 function mapRelated(data: any, fallbackType: string): RelatedItem[] {
@@ -355,11 +398,11 @@ function imageUrl(path: string | undefined | null, size: "original" | "w780" | "
 }
 
 function translateJob(value: string) {
-  if (value === "Executive Producer") return "Producción ejecutiva";
-  if (value === "Producer") return "Producción";
-  if (value === "Director") return "Dirección";
+  if (value === "Executive Producer") return "Producciï¿½n ejecutiva";
+  if (value === "Producer") return "Producciï¿½n";
+  if (value === "Director") return "Direcciï¿½n";
   if (value === "Writer") return "Guion";
-  if (value === "Creator") return "Creación";
+  if (value === "Creator") return "Creaciï¿½n";
   return value;
 }
 

@@ -93,7 +93,7 @@ export default function ProfileOnboarding() {
 
           <label className="block">
             <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold text-white/86">
-              <ProfileAvatar profile={previewProfile} className="relative flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-white text-black text-xs" />
+              <ProfileAvatar profile={previewProfile} className="relative flex h-7 w-7 items-center justify-center overflow-hidden rounded-full text-xs" />
               Foto de perfil
             </span>
             <input

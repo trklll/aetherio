@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { Image as ImageIcon, MoreHorizontal, Play, X, ChevronLeft, ChevronRight, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
+import { Image as ImageIcon, MoreHorizontal, Play, X, ChevronRight, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
 import addImageIcon from "../../assets/add-image-svgrepo-com.svg";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
@@ -12,6 +12,7 @@ import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow";
 import type { MediaStream } from "../../types/stream";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
 import { fetchDetailCollection, type DetailCollectionItem } from "../../services/detailCollections";
+import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
 import {
   CONTINUE_WATCHING_EVENT,
   formatResumeTime,
@@ -41,6 +42,7 @@ import {
 } from "../../trakt";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
+import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
 const IMG      = "https://image.tmdb.org/t/p";
 const DEBUG_LOGO = false;
 const DETAIL_LOGO_KEY = "aetherio-detail-logo";
@@ -90,7 +92,7 @@ interface BackgroundOption { url:string;label:string;source:"addon"|"tmdb"|"cach
 interface LogoOption { url:string;label:string;source:"addon"|"tmdb"|"cache"; }
 interface DetailData {
   id:string;name:string;type:string;
-  ids?:{ tmdb?:number; imdb?:string; trakt?:number };
+  ids?:{ tmdb?:number; imdb?:string; trakt?:number; mal?:number; anilist?:number };
   aliases?:string[];
   backdrop?:string;poster?:string;logo?:string;
   description?:string;year?:number;runtime?:string;
@@ -787,6 +789,16 @@ export default function DetailPage() {
     else setLogoStatus("idle");
   }, [data?.id, data?.logo, cachedLogo]);
 
+  useLayoutEffect(() => {
+    const name = getSharedElementName();
+    if (!name) return;
+    const target = heroRef.current ?? document.querySelector<HTMLElement>("[data-vt-hero-claim]");
+    if (!target) return;
+    playHeroExpandAnimation(target, () => { clearSharedElementName(); });
+  }, [loading, data?.id]);
+
+  useEffect(() => () => { clearSharedElementName(); }, []);
+
   useEffect(() => {
     setCachedLogo(readCachedLogo(getDetailLogoKey(type, id)));
   }, [type, id]);
@@ -976,6 +988,8 @@ export default function DetailPage() {
         ...d.ids,
         tmdb: tmdbId,
         imdb: main.external_ids?.imdb_id ?? d.ids?.imdb,
+        mal: d.ids?.mal,
+        anilist: d.ids?.anilist,
       };
       d.aliases = uniqueAliases(
         ...(d.aliases ?? []),
@@ -1008,6 +1022,11 @@ export default function DetailPage() {
       if (!d.description||t==="anime") d.description=main.overview;
       if (!d.year) d.year=parseInt((main.release_date??main.first_air_date??"").slice(0,4),10)||undefined;
       if (!d.genres?.length) d.genres=main.genres?.map((g:any)=>g.name);
+      const genreIds = new Set<number>((main.genres ?? []).map((g: any) => Number(g?.id)).filter((id: number) => Number.isFinite(id)));
+      const isActuallyAnime = t === "anime"
+        || (main.genres ?? []).some((g: any) => String(g?.name ?? "").toLowerCase() === "anime")
+        || (genreIds.has(16) && main.original_language === "ja");
+      if (isActuallyAnime) d.type = "anime";
       if (!d.name) d.name=main.title??main.name??"";
       if (typeof main.vote_average === "number") d.voteAverage=main.vote_average;
       if (!d.runtime){ const mins=t==="movie"?main.runtime:main.episode_run_time?.[0]; if(mins) d.runtime=formatRuntime(mins); }
@@ -1059,7 +1078,41 @@ export default function DetailPage() {
         items.findIndex(candidate=>String(candidate.id)===String(member.id))===index
       ));
       if (combinedCast.length) d.cast=combinedCast;
-      if (!d.director){ const dir=(main.credits?.crew??[]).find((c:any)=>c.job==="Director"); if(dir) { d.director=dir.name; d.directorId=dir.id; } }
+
+      if (isActuallyAnime) {
+        console.log("[anime-cast] isActuallyAnime=true, ids:", { mal: d.ids?.mal, imdb: d.ids?.imdb, tmdb: d.ids?.tmdb, type: t, name: d.name, year: d.year });
+        const malId = await resolveMalId({
+          malId: d.ids?.mal,
+          imdbId: d.ids?.imdb,
+          tmdbId: typeof tmdbId === "number" ? tmdbId : Number(tmdbId),
+          title: d.name || main.name || main.original_name || main.original_title,
+          year: d.year,
+        });
+        console.log("[anime-cast] resolved malId:", malId);
+        if (malId && Number.isFinite(malId)) {
+          d.ids.mal = malId;
+          try {
+            console.log("[anime-cast] fetching characters for mal:", malId);
+            const jikanChars = await fetchAnimeCast(malId);
+            console.log("[anime-cast] returned", jikanChars.length, "characters");
+            if (jikanChars.length) {
+              d.cast = jikanChars.map((ch) => ({
+                id: `jikan-char:${ch.malId}`,
+                name: ch.name,
+                character: ch.voiceActor || "",
+                profile_path: ch.image,
+                _role: ch.role,
+              } as CastMember & { _role?: string }));
+            }
+          } catch (err) {
+            console.warn("[anime-cast] Jikan fetch failed:", err);
+          }
+        } else {
+          console.warn("[anime-cast] no malId resolved, falling back to TMDB cast");
+        }
+      }
+
+      if (!d.director){ const crew = [...(main.credits?.crew ?? []), ...(main.aggregate_credits?.crew ?? [])]; const dir = crew.find((c:any)=>c.job==="Director" || c.jobs?.some((j:any)=>j.job==="Director")); if(dir) { d.director=dir.name; d.directorId=dir.id; } }
       let trailerResults = (main.videos?.results??[]).filter((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));
       if (!trailerResults.length) {
         try {
@@ -1261,7 +1314,23 @@ export default function DetailPage() {
     setSeason(current => current === targetSeason ? current : targetSeason);
   }, [focusTargetEpisode?.season]);
 
-  if (loading) return <div className="skeleton" style={{ width:"100vw", height:"100vh", marginTop:"calc(-1 * var(--app-shell-nav-height))" }} />;
+  if (loading) return (
+    <div
+      data-vt-hero-claim
+      style={{
+        position: "relative",
+        width: "100vw",
+        left: "50%",
+        marginLeft: "-50vw",
+        height: "calc(92vh + var(--app-shell-nav-height) - 150px)",
+        minHeight: 450,
+        marginTop: "calc(-1 * var(--app-shell-nav-height))",
+        overflow: "hidden",
+      }}
+    >
+      <div className="skeleton" style={{ width: "100%", height: "100%" }} />
+    </div>
+  );
   if (!data)   return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>Error cargando.</div>;
   const detailData = data;
 
@@ -1702,8 +1771,8 @@ export default function DetailPage() {
 
         {(data.cast?.length||data.director)&&(
           <div style={{ position:"absolute",bottom:20,right:0,padding:"0 var(--app-safe-x) 36px",textAlign:"right",maxWidth:300 }}>
-            {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"underline",textUnderlineOffset:2 }}>{castMember.name}</button></span>))}</p>)}
-            {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)" }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Dirección </span><button type="button" onClick={() => data.directorId && navigate(`/person/${encodeURIComponent(String(data.directorId))}`)} disabled={!data.directorId} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:data.directorId ? "pointer" : "default",fontSize:13,textDecoration:data.directorId ? "underline" : "none",textUnderlineOffset:2 }}>{data.director}</button></p>}
+            {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>{type==="anime"?"Personajes":"Reparto"} </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}{typeof castMember.id==="string"&&castMember.id.startsWith("jikan-char:")?(<span style={{ color:"rgba(255,255,255,0.8)",fontSize:13 }}>{castMember.name}</span>):(<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button>)}</span>))}</p>)}
+            {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)" }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Director </span><button type="button" onClick={() => data.directorId && navigate(`/person/${encodeURIComponent(String(data.directorId))}`)} disabled={!data.directorId} onMouseEnter={data.directorId?(e)=>e.currentTarget.style.color="#fff":undefined} onMouseLeave={data.directorId?(e)=>e.currentTarget.style.color="rgba(255,255,255,0.8)":undefined} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:data.directorId ? "pointer" : "default",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{data.director}</button></p>}
           </div>
         )}
         {showMore&&(
@@ -1908,9 +1977,9 @@ export default function DetailPage() {
 
         {!!data.cast?.length&&(
           <section>
-            <SectionH title="Reparto" />
+            <SectionH title={data.type==="anime"?"Personajes":"Reparto"} />
             <ScrollRow gap={25} initialScrollKey={`${data.id}:cast:start`}>
-              {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>navigate(`/person/${encodeURIComponent(String(c.id))}`)} />)}
+              {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>{ if(typeof c.id==="string"&&c.id.startsWith("jikan-char:")) return; navigate(`/person/${encodeURIComponent(String(c.id))}`); }} />)}
             </ScrollRow>
           </section>
         )}
@@ -2334,6 +2403,9 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
   const rowRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const leftArrowRef = useRef<HTMLDivElement>(null);
+  const rightArrowRef = useRef<HTMLDivElement>(null);
 
   function updateScrollState() {
     const row = rowRef.current;
@@ -2396,18 +2468,33 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
     scrollByGsap(row, direction === "right" ? row.clientWidth * 0.82 : -row.clientWidth * 0.82);
   };
 
+  useEffect(() => {
+    tweenTo(leftArrowRef.current, { opacity: hovered && canScrollLeft ? 1 : 0 }, 0.45);
+    tweenTo(rightArrowRef.current, { opacity: hovered && canScrollRight ? 1 : 0 }, 0.45);
+  }, [hovered, canScrollLeft, canScrollRight]);
+
   return (
-    <div style={{ position:"relative" }}>
-      {canScrollLeft ? (
+    <div
+      style={{ position:"relative" }}
+      onMouseEnter={()=>setHovered(true)}
+      onMouseLeave={()=>setHovered(false)}
+    >
+      <div
+        ref={leftArrowRef}
+        style={{ position:"absolute",left:0,top:"50%",zIndex:10,transform:"translate(-30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollLeft?"auto":"none" }}
+      >
         <button
           onClick={()=>move("left")}
           title="Anterior"
           aria-label="Anterior"
-          style={{ position:"absolute",left:0,top:"50%",zIndex:3,width:38,height:38,transform:"translate(-30%,-50%)",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.18)",background:"rgba(18,18,18,0.72)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
+          className="liquid-glass-arrow"
+          style={{ width:36,height:60,borderRadius:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
         >
-          <ChevronLeft size={18} />
+          <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ transform:"rotate(180deg)", overflow:"visible" }}>
+            <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+          </svg>
         </button>
-      ) : null}
+      </div>
       <div
         ref={rowRef}
         style={{
@@ -2427,16 +2514,22 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
         {children}
         <div aria-hidden="true" style={{ flex: `0 0 var(--app-safe-x)`, width: "var(--app-safe-x)", height: 1 }} />
       </div>
-      {canScrollRight ? (
+      <div
+        ref={rightArrowRef}
+        style={{ position:"absolute",right:0,top:"50%",zIndex:10,transform:"translate(30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollRight?"auto":"none" }}
+      >
         <button
           onClick={()=>move("right")}
           title="Siguiente"
           aria-label="Siguiente"
-          style={{ position:"absolute",right:0,top:"50%",zIndex:3,width:38,height:38,transform:"translate(30%,-50%)",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.18)",background:"rgba(18,18,18,0.72)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
+          className="liquid-glass-arrow"
+          style={{ width:36,height:60,borderRadius:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
         >
-          <ChevronRight size={18} />
+          <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ overflow:"visible" }}>
+            <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+          </svg>
         </button>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -2638,6 +2731,7 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
 
 function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>void;scrollKey?:string}) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [focused, setFocused] = useState(false);
   const portraitAvailable = Boolean(member.profile_path) && !imageFailed;
   const initials = member.name
     .split(/\s+/)
@@ -2647,8 +2741,8 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
     .join("");
   const character = member.character?.split("(")[0]?.trim();
   const setFocusedScale = (element:HTMLButtonElement,focused:boolean) => {
+    setFocused(focused);
     tweenTo(element, { scale: focused ? 1.05 : 1, y: focused ? -4 : 0, zIndex: focused ? 5 : 1 }, 0.32);
-    gsap.set(element, { boxShadow: focused ? "0 20px 42px rgba(0,0,0,0.48)" : "0 12px 28px rgba(0,0,0,0.28)" });
     const img = element.querySelector("img");
     if (img) tweenTo(img, { scale: focused ? 1.05 : 1 }, 0.32);
   };
@@ -2665,7 +2759,7 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
         flexShrink:0,
         width:188,
         border:0,
-        borderRadius:14,
+        borderRadius:0,
         padding:0,
         background:"transparent",
         color:"#fff",
@@ -2686,15 +2780,22 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
           loading="lazy"
           decoding="async"
           onError={()=>setImageFailed(true)}
-          style={{ width:154,height:154,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#2c2c2e" }}
+          style={{ width:154,height:154,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#272A2F" }}
         />
       ):(
-        <div style={{ width:154,height:154,borderRadius:"50%",background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:42,color:"#000",fontWeight:900,flexShrink:0 }}>
+        <div style={{
+          width:154,height:154,borderRadius:"50%",
+          background:"linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
+          boxShadow:"0 8px 16px rgba(0,0,0,0.4)",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:42,color:"rgba(255,255,255,0.94)",fontWeight:900,letterSpacing:1,flexShrink:0,
+          fontFamily:"Inter, system-ui, sans-serif"
+        }}>
           {initials}
         </div>
       )}
       <span style={{ width:"100%",fontSize:14,fontWeight:600,color:"#fff",textAlign:"center",lineHeight:"18px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden" }}>{member.name}</span>
-      {character&&<span style={{ width:"100%",fontSize:12,fontWeight:500,color:"rgba(255,255,255,0.56)",textAlign:"center",lineHeight:"16px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden" }}>{character}</span>}
+      {character&&<span style={{ width:"100%",fontSize:12,fontWeight:500,color:focused?"rgba(255,255,255,1)":"rgba(255,255,255,0.56)",textAlign:"center",lineHeight:"16px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",transition:"color 0.25s ease" }}>{character}</span>}
     </button>
   );
 }

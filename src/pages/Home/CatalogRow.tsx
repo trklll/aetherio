@@ -1,13 +1,13 @@
 ﻿import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Image as ImageIcon } from "lucide-react";
+import { Check, ChevronRight, Image as ImageIcon } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
 import type { HomePosterLayout } from "../../config/homePreferences";
 import { supportsAiringSchedule, useAiringSchedule } from "../../hooks/useAiringSchedule";
 import { useHorizontalVirtualWindow } from "../../hooks/useHorizontalVirtualWindow";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import { sanitizeLogoUrl } from "../../utils/artwork";
-import { buildMediaKey, CONTINUE_WATCHING_EVENT, readPlaybackStateEntries } from "../../utils/continueWatching";
+import { buildMediaKey, CONTINUE_WATCHING_EVENT, markMediaAsWatched, readPlaybackStateEntries } from "../../utils/continueWatching";
 import {
   HOME_CARD_ARTWORK_CHANGED_EVENT,
   readHomeCardArtwork,
@@ -17,6 +17,7 @@ import {
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
+import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
@@ -215,12 +216,12 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const { scrollRef } = virtualWindow;
 
   useEffect(() => {
-    tweenTo(leftArrowRef.current, { opacity: hovered && showLeft ? 1 : 0 }, 0.2);
-    tweenTo(rightArrowRef.current, { opacity: hovered && showRight ? 1 : 0 }, 0.2);
+    tweenTo(leftArrowRef.current, { opacity: hovered && showLeft ? 1 : 0 }, 0.45);
+    tweenTo(rightArrowRef.current, { opacity: hovered && showRight ? 1 : 0 }, 0.45);
   }, [hovered, showLeft, showRight]);
 
   return (
-    <section style={{ paddingLeft: 0, paddingRight: 0, contentVisibility: "auto" }}>
+    <section style={{ paddingLeft: 0, paddingRight: 0 }}>
       {!hideHeader ? (
         <button
           onClick={openCatalog}
@@ -240,10 +241,10 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
           ref={leftArrowRef}
           style={{
             position: "absolute",
-            left: 0,
+            left: embedded ? 0 : 20,
             top: "50%",
             zIndex: 10,
-            transform: "translate(-30%,-50%)",
+            transform: "translate(-35%,-50%)",
             opacity: 0,
             pointerEvents: hovered && showLeft ? "auto" : "none",
           }}
@@ -252,14 +253,11 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             onClick={() => scroll("left")}
             title="Anterior"
             aria-label="Anterior"
+            className="liquid-glass-arrow"
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: "50%",
-              border: "1px solid rgba(255,255,255,0.18)",
-              background: "rgba(18,18,18,0.72)",
-              backdropFilter: "blur(6px)",
-              WebkitBackdropFilter: "blur(6px)",
+              width: 36,
+              height: 60,
+              borderRadius: 18,
               color: "#fff",
               display: "flex",
               alignItems: "center",
@@ -267,7 +265,9 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
               cursor: "pointer",
             }}
           >
-            <ChevronLeft size={18} />
+            <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ transform: "rotate(180deg)", overflow:"visible" }}>
+              <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+            </svg>
           </button>
         </div>
 
@@ -325,10 +325,10 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
           ref={rightArrowRef}
           style={{
             position: "absolute",
-            right: 0,
+            right: embedded ? 0 : 20,
             top: "50%",
             zIndex: 10,
-            transform: "translate(30%,-50%)",
+            transform: "translate(35%,-50%)",
             opacity: 0,
             pointerEvents: hovered && showRight ? "auto" : "none",
           }}
@@ -337,14 +337,11 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             onClick={() => scroll("right")}
             title="Siguiente"
             aria-label="Siguiente"
+            className="liquid-glass-arrow"
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: "50%",
-              border: "1px solid rgba(255,255,255,0.18)",
-              background: "rgba(18,18,18,0.72)",
-              backdropFilter: "blur(6px)",
-              WebkitBackdropFilter: "blur(6px)",
+              width: 36,
+              height: 60,
+              borderRadius: 18,
               color: "#fff",
               display: "flex",
               alignItems: "center",
@@ -352,7 +349,9 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
               cursor: "pointer",
             }}
           >
-            <ChevronRight size={18} />
+            <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ overflow:"visible" }}>
+              <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+            </svg>
           </button>
         </div>
       </div>
@@ -396,6 +395,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       description: item.description,
       year: item.year,
     });
+    setSharedElementName(type, item.id);
+    captureCardRect(cardRef.current);
     navigate(`/detail/${encodeURIComponent(type)}/${encodeURIComponent(item.id)}`);
   }, [detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, navigate, type]);
 
@@ -475,6 +476,20 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         placement="below-start"
         width={238}
         items={[
+          ...(!watched ? [{
+            label: "Marcar como visto",
+            icon: <Check size={15} />,
+            onSelect: () => {
+              markMediaAsWatched({
+                type,
+                id: item.id,
+                name: item.name,
+                logo: item.logo,
+                background: detailBackground,
+                poster: item.poster,
+              });
+            },
+          }] : []),
           {
             label: artworkMode === "poster" ? "Elegir póster de la card" : "Elegir fondo de la card",
             icon: <ImageIcon size={15} />,
@@ -652,6 +667,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
           <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
         </div>
       ) : null}
+      {airingSchedule ? <AiringScheduleBadge label={airingSchedule.label} watched={watched} compact={posterLayout === "vertical"} /> : null}
+      {image ? <img src={image} alt={item.name} decoding="async" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "45%", background: "linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px" }}>
         {logo ? (

@@ -145,7 +145,12 @@ export function readImageFileAsDataUrl(file: File): Promise<string> {
 }
 
 export function getProfileInitial(profile: Pick<LocalProfile, "name"> | null | undefined) {
-  return (profile?.name.trim().charAt(0) || "A").toUpperCase();
+  return (profile?.name.trim() || "A")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part.charAt(0).toUpperCase())
+    .join("");
 }
 
 function writeProfiles(profiles: LocalProfile[]) {
