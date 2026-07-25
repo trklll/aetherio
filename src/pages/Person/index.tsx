@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { X } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
+import { fetchAniListCharacterPhotos } from "../../services/animeResolve";
 import "./person.css";
 import { scrollByGsap } from "../../utils/motion";
 
@@ -108,6 +110,28 @@ export default function PersonPage() {
         }))).then(knownFor => {
           if (!cancelled) setPerson(current => current ? { ...current, knownFor } : current);
         });
+
+        if (data.name) {
+          void fetchAniListCharacterPhotos(data.name).then(charPhotos => {
+            if (cancelled || !charPhotos.length) return;
+            const charImages = charPhotos
+              .map(cp => cp.characterImage)
+              .filter((img): img is string => Boolean(img));
+            if (charImages.length) {
+              setPerson(current => {
+                if (!current) return current;
+                const actorImages = current.images;
+                const interleaved: string[] = [];
+                const maxLen = Math.max(actorImages.length, charImages.length);
+                for (let i = 0; i < maxLen; i++) {
+                  if (i < actorImages.length) interleaved.push(actorImages[i]);
+                  if (i < charImages.length) interleaved.push(charImages[i]);
+                }
+                return { ...current, images: unique(interleaved).slice(0, 24) };
+              });
+            }
+          });
+        }
       } catch (error) {
         console.warn("Person load error:", error);
       } finally {
@@ -188,13 +212,27 @@ export default function PersonPage() {
         <CreditsSection credits={person.credits} onOpen={credit => openCredit(navigate, credit)} />
       </main>
 
-      {biographyOpen ? (
+      {biographyOpen ? createPortal(
         <div className="person-biography-dialog" role="presentation" onClick={() => setBiographyOpen(false)}>
-          <div role="dialog" aria-modal="true" aria-labelledby="person-biography-title" onClick={event => event.stopPropagation()}>
+          <div
+            className="liquid-glass-dark"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="person-biography-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <button
+              onClick={() => setBiographyOpen(false)}
+              aria-label="Cerrar"
+              style={{ position:"absolute",top:14,right:14,width:30,height:30,border:"none",borderRadius:999,background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.68)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}
+            >
+              <X size={16} />
+            </button>
             <h2 id="person-biography-title">{person.name}</h2>
-            <p>{person.biography}</p>
+            <p style={{ paddingRight: 24 }}>{person.biography}</p>
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );
@@ -287,12 +325,28 @@ function HorizontalRail({ className, label, resetKey, children }: { className: s
 
   return (
     <div className="person-rail-shell" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      <button className="person-rail-arrow person-rail-arrow-left" type="button" aria-label={`Anterior: ${label}`} onClick={() => move("left")} data-visible={hovered && canScrollLeft}>
-        <ChevronLeft size={18} />
+      <button
+        className="person-rail-arrow person-rail-arrow-left liquid-glass-arrow"
+        type="button"
+        aria-label={`Anterior: ${label}`}
+        onClick={() => move("left")}
+        data-visible={hovered && canScrollLeft}
+      >
+        <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ transform: "rotate(180deg)", overflow: "visible" }}>
+          <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+        </svg>
       </button>
       <div ref={railRef} className={className}>{children}</div>
-      <button className="person-rail-arrow person-rail-arrow-right" type="button" aria-label={`Siguiente: ${label}`} onClick={() => move("right")} data-visible={hovered && canScrollRight}>
-        <ChevronRight size={18} />
+      <button
+        className="person-rail-arrow person-rail-arrow-right liquid-glass-arrow"
+        type="button"
+        aria-label={`Siguiente: ${label}`}
+        onClick={() => move("right")}
+        data-visible={hovered && canScrollRight}
+      >
+        <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ overflow: "visible" }}>
+          <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+        </svg>
       </button>
     </div>
   );

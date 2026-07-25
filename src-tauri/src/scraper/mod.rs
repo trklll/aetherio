@@ -138,23 +138,14 @@ async fn scrape_single_site(
 
     if site.id == "animeav1" {
         match animeav1::search_and_resolve(client, query, season, episode).await {
-            Ok(candidates) if !candidates.is_empty() => {
-                let title_re =
-                    regex::Regex::new(r#"<title[^>]*>([^<]+)</title>"#).unwrap();
-                let search_html = generic::fetch_page(client, &search_url)
-                    .await
-                    .unwrap_or_default();
-                let page_title = title_re
-                    .captures(&search_html)
-                    .and_then(|cap| cap.get(1))
-                    .map(|m| m.as_str().trim().to_string());
+            Ok((candidates, episode_title)) if !candidates.is_empty() => {
                 return candidates
                     .into_iter()
                     .map(|candidate| ScrapedStream {
                         id: format!("animeav1|{}", candidate.url),
                         url: candidate.url,
                         name: site.name.to_string(),
-                        title: page_title.clone(),
+                        title: episode_title.clone(),
                         quality: candidate.quality,
                         languages: candidate.language.map(|l| vec![l]),
                         site_id: "animeav1".to_string(),

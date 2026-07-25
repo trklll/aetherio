@@ -584,7 +584,10 @@ export default function EpisodiePage() {
     return <div className="skeleton min-h-screen w-full bg-[#1f1f1f]" />;
   }
 
-  const episodeTitle = meta?.episodeTitle || episodeTitleParam || (query.type === "movie" ? meta?.name : `Episodio ${query.episode ?? 1}`);
+  const rawEpisodeTitle = meta?.episodeTitle || episodeTitleParam || (query.type === "movie" ? meta?.name : `Episodio ${query.episode ?? 1}`);
+  const episodeTitle = query.type !== "movie" && query.episode
+    ? `${query.episode}. ${rawEpisodeTitle}`
+    : rawEpisodeTitle;
   const mainTitle = meta?.name ?? query.id;
   const heroStill = heroStills[heroStillIndex % Math.max(heroStills.length, 1)]
     ?? ensureOriginalTmdbImage(meta?.episodeStill)

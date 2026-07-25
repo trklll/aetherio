@@ -74,13 +74,10 @@
 .person-known-section{margin-right:-72px;margin-left:-72px;}
 .person-known-section>h2{margin:0 72px 14px;}
 .person-known-row{display:flex;gap:18px;overflow-x:auto;padding:12px 72px 10px;scrollbar-width:none;}
-.person-rail-arrow{position:absolute;top:50%;z-index:5;display:flex;width:38px;height:38px;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.18);border-radius:50%;background:rgba(18,18,18,.72);color:#fff;cursor:pointer;opacity:0;pointer-events:none;transform:translateY(-50%);backdrop-filter:blur(6px);}
+.person-rail-arrow{position:absolute;top:50%;z-index:5;display:flex;width:36px;height:60px;align-items:center;justify-content:center;border-radius:18px;color:#fff;cursor:pointer;opacity:0;pointer-events:none;transform:translateY(-50%);}
 .person-rail-arrow[data-visible="true"]{opacity:1;pointer-events:auto;}
-.person-rail-arrow:hover,.person-rail-arrow:focus-visible{background:rgba(42,42,44,.9);outline:1px solid rgba(255,255,255,.55);}
-.person-rail-arrow-left{left:8px;}
-.person-rail-arrow-right{right:8px;}
-.person-known-section>.person-rail-shell .person-rail-arrow-left{left:54px;}
-.person-known-section>.person-rail-shell .person-rail-arrow-right{right:18px;}
+.person-rail-arrow-left{left:0;transform:translate(-30%,-50%);}
+.person-rail-arrow-right{right:0;transform:translate(30%,-50%);}
 .person-known-card{position:relative;flex:0 0 348px;width:348px;height:178px;overflow:hidden;border:0;border-radius:16px;padding:0;background:rgba(255,255,255,.06);cursor:pointer;}
 .person-known-card:hover,.person-known-card:focus-visible{z-index:2;background:rgba(255,255,255,.10);outline:none;transform:scale(1.035);}
 .person-known-artwork{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
@@ -101,10 +98,10 @@
 .person-credit-copy span{color:rgba(255,255,255,.58);font-size:16px;line-height:24px;}
 .person-credit-copy span+span{font-size:14px;line-height:21px;}
 .person-credit-copy b{color:rgba(255,255,255,.92);font-size:16px;font-weight:700;line-height:24px;}
-.person-biography-dialog{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.40);}
-.person-biography-dialog>div{width:min(728px,calc(100vw - 192px));max-height:76vh;overflow-y:auto;border-radius:24px;padding:24px 28px;background:rgba(42,37,33,.96);}
+.person-biography-dialog{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;padding:var(--app-safe-x);background:rgba(0,0,0,0.64);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+.person-biography-dialog>div{position:relative;width:min(728px,calc(100vw - var(--app-safe-x) * 2));max-height:min(72vh,620px);overflow-y:auto;border-radius:18px;padding:28px 30px;box-shadow:0 24px 80px rgba(0,0,0,0.58);}
 .person-biography-dialog h2{font-size:24px;font-weight:700;line-height:1.2;}
-.person-biography-dialog p{margin-top:14px;color:rgba(255,255,255,.88);font-size:16px;line-height:24px;}
+.person-biography-dialog p{margin-top:14px;color:rgba(255,255,255,0.82);font-size:15px;line-height:1.72;font-weight:400;}
 .person-loading,.person-empty{display:flex;min-height:80vh;align-items:center;padding:0 72px;color:#a3a7ae;font-size:24px;font-weight:700;}
 .person-empty{justify-content:center;color:rgba(255,255,255,.58);}
 @media(max-width:900px){

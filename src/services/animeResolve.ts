@@ -1,4 +1,5 @@
 import { fetchJikanAnimeCharacters, type JikanCharacter } from "./jikan";
+import { tmdbFetch } from "../config/apiKeys";
 
 const ARM_IMDB = "https://arm.haglund.dev/api/v2/imdb?id=";
 const ARM_TMDB = "https://arm.haglund.dev/api/v2/themoviedb?id=";
@@ -97,6 +98,29 @@ async function anilistToMal(title: string, year?: number): Promise<number | unde
   return undefined;
 }
 
+const tmdbPersonCache = new Map<string, number>();
+
+async function searchTmdbPerson(name: string): Promise<number | undefined> {
+  const key = name.trim().toLowerCase();
+  if (tmdbPersonCache.has(key)) return tmdbPersonCache.get(key);
+  if (resolveAttempts.has(`tmdb-person:${key}`)) return undefined;
+  resolveAttempts.add(`tmdb-person:${key}`);
+  try {
+    const data = await tmdbFetch<any>("/search/person", {
+      params: { query: name, language: "en-US", page: "1" },
+    });
+    const match = (data?.results ?? []).find(
+      (r: any) => r.known_for_department === "Acting" && r.name?.toLowerCase() === name.toLowerCase()
+    ) ?? (data?.results ?? [])[0];
+    if (match?.id) {
+      tmdbPersonCache.set(key, match.id);
+      return match.id;
+    }
+  } catch {
+  }
+  return undefined;
+}
+
 export interface AnimeResolveInput {
   malId?: number;
   imdbId?: string;
@@ -123,13 +147,69 @@ export async function resolveMalId(input: AnimeResolveInput): Promise<number | u
   return undefined;
 }
 
-export async function fetchAnimeCast(malId: number): Promise<JikanCharacter[]> {
+export interface AniListCharacterPhoto {
+  characterName: string;
+  characterImage?: string;
+  role?: string;
+}
+
+export async function fetchAniListCharacterPhotos(staffName: string): Promise<AniListCharacterPhoto[]> {
+  const key = `anilist:char-photos:${staffName.toLowerCase()}`;
+  if (resolveAttempts.has(key)) return [];
+  resolveAttempts.add(key);
+  const body = JSON.stringify({
+    query: `query($name: String!){ Staff(search: $name){ characters(perPage: 10, sort: FAVOURITES_DESC){ edges { role node { name { full } image { large medium } } } } } }`,
+    variables: { name: staffName },
+  });
   try {
-    const jikanChars = await fetchJikanAnimeCharacters(malId);
-    if (jikanChars.length) return jikanChars;
+    const res = await fetch(ANILIST_GRAPHQL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body,
+      signal: AbortSignal.timeout(ANILIST_TIMEOUT_MS),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const edges = json?.data?.Staff?.characters?.edges ?? [];
+    return edges
+      .filter((e: any) => e?.node?.image?.large || e?.node?.image?.medium)
+      .map((e: any) => ({
+        characterName: e.node.name?.full ?? "",
+        characterImage: e.node.image?.large || e.node.image?.medium || undefined,
+        role: e.role ?? undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function resolveVoiceActorIds(chars: JikanCharacter[]): Promise<JikanCharacter[]> {
+  const uniqueNames = [...new Set(chars.map((c) => c.voiceActor).filter((n): n is string => Boolean(n)))];
+  const idMap = new Map<string, number>();
+  await Promise.all(
+    uniqueNames.map(async (name) => {
+      const id = await searchTmdbPerson(name);
+      if (id) idMap.set(name, id);
+    })
+  );
+  return chars.map((c) => ({
+    ...c,
+    voiceActorId: c.voiceActor ? idMap.get(c.voiceActor) : undefined,
+  }));
+}
+
+export async function fetchAnimeCast(malId: number): Promise<JikanCharacter[]> {
+  let chars: JikanCharacter[];
+  try {
+    chars = await fetchJikanAnimeCharacters(malId);
+    if (chars.length) {
+      chars = await resolveVoiceActorIds(chars);
+      return chars;
+    }
   } catch {
   }
-  return await fetchAniListCharacters(malId);
+  chars = await fetchAniListCharacters(malId);
+  return await resolveVoiceActorIds(chars);
 }
 
 interface AniListCharEdge {

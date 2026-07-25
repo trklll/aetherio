@@ -58,7 +58,7 @@ export default function DetailSectionPage() {
   const title = sectionKind === "trailers"
     ? "Tráilers"
     : sectionKind === "cast"
-      ? (isAnimeDetected ? "Personajes" : "Reparto")
+      ? "Reparto"
       : "Más como esto";
 
   useEffect(() => {
@@ -335,7 +335,7 @@ async function mapAnimeCharacters(id: string, tmdbData: any, tmdbId: number): Pr
   try {
     const chars = await fetchAnimeCast(malId);
     return chars.map((ch) => ({
-      id: ch.malId,
+      id: ch.voiceActorId || ch.malId,
       name: ch.name,
       role: ch.voiceActor || ch.role || "",
       image: ch.image,

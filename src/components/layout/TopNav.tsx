@@ -27,6 +27,7 @@ export default function TopNav() {
   const [showSugg, setShowSugg] = useState(false);
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scrolled, setScrolled] = useState(false);
   const [hovering, setHovering] = useState(false);
@@ -77,7 +78,7 @@ export default function TopNav() {
   }
 
   const fetchSuggestions = useCallback(async (q: string) => {
-    if (q.length < 2) {
+    if (q.trim().length < 2) {
       setSuggestions([]);
       setShowSugg(false);
       return;
@@ -95,7 +96,7 @@ export default function TopNav() {
   function handleInput(val: string) {
     setQuery(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchSuggestions(val), 280);
+    debounceRef.current = setTimeout(() => fetchSuggestions(val), 200);
   }
 
   function handleSearch(q = query) {
@@ -128,8 +129,20 @@ export default function TopNav() {
     };
   }, []);
 
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      const container = searchContainerRef.current;
+      if (container && !container.contains(e.target as Node)) {
+        setShowSugg(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, []);
+
   return (
     <div
+      ref={searchContainerRef}
       className="relative z-50 flex items-center justify-center"
       data-tauri-drag-region
       onMouseEnter={() => setHovering(true)}
@@ -210,6 +223,7 @@ export default function TopNav() {
               ref={inputRef}
               value={query}
               onChange={e => handleInput(e.target.value)}
+              onFocus={() => { if (suggestions.length > 0) setShowSugg(true); }}
               onKeyDown={e => e.key === "Enter" && handleSearch()}
               placeholder="Buscar contenido..."
               className="flex-1 bg-transparent text-sm text-white placeholder-atv-secondary focus:outline-none min-w-0"

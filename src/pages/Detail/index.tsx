@@ -83,7 +83,7 @@ function addonSupportsMeta(addon: any, type: string, id: string) {
   return true;
 }
 
-interface CastMember { id:number|string;name:string;character:string;profile_path?:string; }
+interface CastMember { id:number|string;name:string;character:string;profile_path?:string;voiceActorId?:number; }
 interface Trailer    { key?:string;name:string;thumbnail?:string;stream?:MediaStream; }
 interface Related    { id:number;title?:string;poster_path?:string;media_type:string; }
 interface Episode    { id:string;episode:number;season:number;name?:string;overview?:string;still?:string;runtime?:number;airDate?:string; }
@@ -1097,10 +1097,11 @@ export default function DetailPage() {
             console.log("[anime-cast] returned", jikanChars.length, "characters");
             if (jikanChars.length) {
               d.cast = jikanChars.map((ch) => ({
-                id: `jikan-char:${ch.malId}`,
+                id: ch.voiceActorId || `jikan-char:${ch.malId}`,
                 name: ch.name,
                 character: ch.voiceActor || "",
                 profile_path: ch.image,
+                voiceActorId: ch.voiceActorId,
                 _role: ch.role,
               } as CastMember & { _role?: string }));
             }
@@ -1771,7 +1772,7 @@ export default function DetailPage() {
 
         {(data.cast?.length||data.director)&&(
           <div style={{ position:"absolute",bottom:20,right:0,padding:"0 var(--app-safe-x) 36px",textAlign:"right",maxWidth:300 }}>
-            {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>{type==="anime"?"Personajes":"Reparto"} </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}{typeof castMember.id==="string"&&castMember.id.startsWith("jikan-char:")?(<span style={{ color:"rgba(255,255,255,0.8)",fontSize:13 }}>{castMember.name}</span>):(<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button>)}</span>))}</p>)}
+            {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button></span>))}</p>)}
             {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)" }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Director </span><button type="button" onClick={() => data.directorId && navigate(`/person/${encodeURIComponent(String(data.directorId))}`)} disabled={!data.directorId} onMouseEnter={data.directorId?(e)=>e.currentTarget.style.color="#fff":undefined} onMouseLeave={data.directorId?(e)=>e.currentTarget.style.color="rgba(255,255,255,0.8)":undefined} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:data.directorId ? "pointer" : "default",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{data.director}</button></p>}
           </div>
         )}
@@ -1977,9 +1978,9 @@ export default function DetailPage() {
 
         {!!data.cast?.length&&(
           <section>
-            <SectionH title={data.type==="anime"?"Personajes":"Reparto"} />
+            <SectionH title="Reparto" />
             <ScrollRow gap={25} initialScrollKey={`${data.id}:cast:start`}>
-              {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>{ if(typeof c.id==="string"&&c.id.startsWith("jikan-char:")) return; navigate(`/person/${encodeURIComponent(String(c.id))}`); }} />)}
+              {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>{ navigate(`/person/${encodeURIComponent(String(c.id))}`); }} />)}
             </ScrollRow>
           </section>
         )}

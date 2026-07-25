@@ -23,58 +23,83 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const mouseBackAtRef = useRef(0);
   const [playerChromeVisible, setPlayerChromeVisible] = useState(true);
   const [playerTransparent, setPlayerTransparent] = useState(false);
-  const [windowControlsZone, setWindowControlsZone] = useState(false);
-  const hideTimerRef = useRef<number | null>(null);
+  const [backZone, setBackZone] = useState(false);
+  const [controlsZone, setControlsZone] = useState(false);
+  const backHideTimerRef = useRef<number | null>(null);
+  const controlsHideTimerRef = useRef<number | null>(null);
   const showBack = isEpisodePage || isPlayer || isDetailPage || isPersonPage;
-  const chromeVisible = isPlayer ? (playerChromeVisible || windowControlsZone) : showBack ? windowControlsZone : true;
+
+  // Back button visibility: independent zone (top-left corner)
+  const backVisible = isPlayer ? (playerChromeVisible || backZone) : showBack ? backZone : true;
+  // Window controls visibility: independent zone (top-right corner)
+  const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : showBack ? controlsZone : true;
   const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
-    const els = [backChromeRef.current, actionChromeRef.current].filter(Boolean);
-    gsap.set(els, { opacity: chromeVisible ? 1 : 0 });
-    tweenTo(els, { opacity: chromeVisible ? 1 : 0 }, 0.3);
-  }, [chromeVisible]);
+    const els = [backChromeRef.current].filter(Boolean);
+    gsap.set(els, { opacity: backVisible ? 1 : 0 });
+    tweenTo(els, { opacity: backVisible ? 1 : 0 }, 0.3);
+  }, [backVisible]);
 
   useEffect(() => {
-    function clearHideTimer() {
-      if (hideTimerRef.current !== null) {
-        window.clearTimeout(hideTimerRef.current);
-        hideTimerRef.current = null;
+    const els = [actionChromeRef.current].filter(Boolean);
+    gsap.set(els, { opacity: controlsVisible ? 1 : 0 });
+    tweenTo(els, { opacity: controlsVisible ? 1 : 0 }, 0.3);
+  }, [controlsVisible]);
+
+  useEffect(() => {
+    function clearHideTimer(ref: React.MutableRefObject<number | null>) {
+      if (ref.current !== null) {
+        window.clearTimeout(ref.current);
+        ref.current = null;
       }
     }
-    function scheduleHide() {
-      clearHideTimer();
-      hideTimerRef.current = window.setTimeout(() => {
-        setWindowControlsZone(false);
-      }, 1800);
+    function scheduleHide(ref: React.MutableRefObject<number | null>, setter: (v: boolean) => void) {
+      clearHideTimer(ref);
+      ref.current = window.setTimeout(() => setter(false), 1800);
     }
     function onMouseMove(event: MouseEvent) {
       const x = event.clientX;
       const y = event.clientY;
       const w = window.innerWidth;
-      const inCorner = x > w - 220 && y < 90;
-      if (inCorner) {
-        clearHideTimer();
-        setWindowControlsZone(prev => prev !== true ? true : prev);
+      // Top-left corner: back button
+      const inBackCorner = x < 220 && y < 90;
+      if (inBackCorner) {
+        clearHideTimer(backHideTimerRef);
+        setBackZone(prev => prev !== true ? true : prev);
       } else {
-        setWindowControlsZone(prev => {
-          if (prev) scheduleHide();
+        setBackZone(prev => {
+          if (prev) scheduleHide(backHideTimerRef, setBackZone);
+          return prev;
+        });
+      }
+      // Top-right corner: window controls
+      const inControlsCorner = x > w - 220 && y < 90;
+      if (inControlsCorner) {
+        clearHideTimer(controlsHideTimerRef);
+        setControlsZone(prev => prev !== true ? true : prev);
+      } else {
+        setControlsZone(prev => {
+          if (prev) scheduleHide(controlsHideTimerRef, setControlsZone);
           return prev;
         });
       }
     }
     function onMouseLeave() {
-      setWindowControlsZone(false);
+      setBackZone(false);
+      setControlsZone(false);
     }
     window.addEventListener("mousemove", onMouseMove, { passive: true });
     document.addEventListener("mouseout", onMouseLeave);
 
     if (isPlayer) {
-      setWindowControlsZone(true);
+      setBackZone(true);
+      setControlsZone(true);
     }
 
     return () => {
-      clearHideTimer();
+      clearHideTimer(backHideTimerRef);
+      clearHideTimer(controlsHideTimerRef);
       window.removeEventListener("mousemove", onMouseMove, { passive: true } as AddEventListenerOptions);
       document.removeEventListener("mouseout", onMouseLeave);
     };
@@ -253,7 +278,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             style={{
               left: "var(--app-safe-x)",
               top: "var(--app-safe-top)",
-              pointerEvents: chromeVisible ? "auto" : "none",
+              pointerEvents: backVisible ? "auto" : "none",
             }}
           >
             <BackButton onClick={goBack} />
@@ -275,7 +300,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           style={{
             right: "var(--app-safe-x)",
             top: "var(--app-safe-top)",
-            pointerEvents: chromeVisible ? "auto" : "none",
+            pointerEvents: controlsVisible ? "auto" : "none",
           }}
         >
           {!androidRuntime && (!isPlayer || showBack) && (

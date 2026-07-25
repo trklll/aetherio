@@ -49,10 +49,48 @@ function normalizeSearchText(value?: string | null) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/&/g, " and ")
-    .replace(/\b(the|a|an|el|la|los|las|un|una|unos|unas)\b/g, " ")
+    .replace(/\b(the|a|an|el|la|los|las|un|una|unos|unas|of|de|del|y|e)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function collapseSpaces(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const m = a.length, n = b.length;
+  const prev = new Array<number>(n + 1);
+  const curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost,
+      );
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+  return prev[n];
+}
+
+function wordSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length >= b.length ? b : a;
+  if (longer.includes(shorter) && shorter.length >= 2) return shorter.length / longer.length;
+  const distance = levenshtein(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  return Math.max(0, 1 - distance / maxLen);
 }
 
 function searchScore(item: UnifiedSearchResult, query: string) {
@@ -62,22 +100,39 @@ function searchScore(item: UnifiedSearchResult, query: string) {
 
   const queryWords = normalizedQuery.split(" ").filter(Boolean);
   const titleWords = normalizedTitle.split(" ").filter(Boolean);
-  const allWordsMatch = queryWords.every(word => titleWords.some(titleWord => titleWord.startsWith(word) || titleWord.includes(word)));
   const exact = normalizedTitle === normalizedQuery;
   const starts = normalizedTitle.startsWith(normalizedQuery);
   const contains = normalizedTitle.includes(normalizedQuery);
-  const popularity = Math.log10(Math.max(1, item.popularity ?? 0) + 1);
-  const voteCount = Math.log10(Math.max(1, item.voteCount ?? 0) + 1);
+
+  const wordMatchScores = queryWords.map(qw => {
+    let best = 0;
+    for (const tw of titleWords) {
+      const sim = wordSimilarity(qw, tw);
+      const prefix = tw.startsWith(qw) ? 0.15 : 0;
+      const contained = tw.includes(qw) && qw.length >= 2 ? 0.05 : 0;
+      best = Math.max(best, sim + prefix + contained);
+    }
+    return best;
+  });
+  const wordMatchRatio = queryWords.length
+    ? wordMatchScores.reduce((sum, s) => sum + s, 0) / queryWords.length
+    : 0;
+  const allWordsNearMatch = wordMatchScores.every(s => s >= 0.7);
+
+  const rawPopularity = Math.max(0, item.popularity ?? 0);
+  const popularityTier = rawPopularity >= 50 ? 60 : rawPopularity >= 20 ? 40 : rawPopularity >= 5 ? 18 : rawPopularity >= 1 ? 7 : 1;
+  const voteTier = (item.voteCount ?? 0) >= 1000 ? 14 : (item.voteCount ?? 0) >= 200 ? 7 : (item.voteCount ?? 0) >= 50 ? 2 : 0;
 
   return (
     (item.searchScore ?? 0) +
-    (exact ? 90 : 0) +
-    (starts ? 56 : 0) +
-    (contains ? 34 : 0) +
-    (allWordsMatch ? 24 : 0) +
+    (exact ? 110 : 0) +
+    (starts ? 70 : 0) +
+    (contains ? 42 : 0) +
+    (allWordsNearMatch ? 30 : 0) +
+    wordMatchRatio * 50 +
     (item.source === "tmdb" ? 4 : 0) +
-    popularity +
-    voteCount
+    popularityTier +
+    voteTier
   );
 }
 
@@ -109,11 +164,27 @@ export function mergeSearchResults(results: UnifiedSearchResult[], limit = 42, q
 }
 
 export async function searchTmdb(query: string): Promise<UnifiedSearchResult[]> {
-  const json = await tmdbFetch("/search/multi", { params: { query, language: "es-ES", page: "1", include_adult: "false" } });
-  if (!json) return [];
-  return (json.results ?? [])
-    .filter((item: any) => item.media_type === "movie" || item.media_type === "tv")
-    .slice(0, 28)
+  const normalizedQuery = collapseSpaces(normalizeSearchText(query));
+  const raw = collapseSpaces(query).replace(/[^\w\s-]/g, "").trim();
+  const queries = Array.from(new Set([collapseSpaces(query), raw, normalizedQuery].filter(Boolean)));
+  let results: any[] = [];
+  for (const q of queries) {
+    const json = await tmdbFetch("/search/multi", { params: { query: q, language: "es-ES", page: "1", include_adult: "false" } });
+    if (json?.results?.length) {
+      results = results.concat(json.results);
+      if (results.length >= 28) break;
+    }
+  }
+  if (!results.length) return [];
+  const seen = new Set<number>();
+  return results
+    .filter((item: any) => {
+      if (item.media_type !== "movie" && item.media_type !== "tv") return false;
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .slice(0, 32)
     .map((item: any): UnifiedSearchResult => {
       const type = item.media_type === "movie" ? "movie" : "series";
       const id = `tmdb:${item.id}`;

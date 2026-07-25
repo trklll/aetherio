@@ -191,6 +191,8 @@ export interface JikanCharacter {
   image?: string;
   role?: string;
   voiceActor?: string;
+  voiceActorId?: number;
+  voiceActorImage?: string;
 }
 
 export async function fetchJikanAnimeCharacters(malId: number): Promise<JikanCharacter[]> {
