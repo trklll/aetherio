@@ -30,6 +30,7 @@ pub struct ScraperSite {
 }
 
 const DEFAULT_SCRAPER_SITE_IDS: &[&str] = &[
+    "animeav1",
     "cineby",
     "rive",
     "flixer",
@@ -37,11 +38,32 @@ const DEFAULT_SCRAPER_SITE_IDS: &[&str] = &[
     "kickassanime",
     "animetsu",
     "okru",
-    "animeav1",
 ];
 
 pub fn all_recommended_sites() -> Vec<ScraperSite> {
     vec![
+        // ── Anime (primario) ──────────────────────────────────────────────
+        ScraperSite {
+            id: "animeav1",
+            name: "AnimeAV1",
+            base_url: "https://animeav1.com",
+            category: SiteCategory::Anime,
+            search_style: SearchStyle::UrlSlug,
+            search_path: "/catalogo?search={query}",
+            types: &["anime"],
+            enabled_by_default: true,
+        },
+        ScraperSite {
+            id: "okru",
+            name: "OK.ru",
+            base_url: "https://ok.ru",
+            category: SiteCategory::DedicatedServer,
+            search_style: SearchStyle::QueryParam,
+            search_path: "/video/search?st.v.sq={query}",
+            types: &["movie"],
+            enabled_by_default: true,
+        },
+        // ── Stream Aggregators ────────────────────────────────────────────
         ScraperSite {
             id: "okru",
             name: "OK.ru",
@@ -327,16 +349,6 @@ pub fn all_recommended_sites() -> Vec<ScraperSite> {
             enabled_by_default: true,
         },
         // ── Anime ─────────────────────────────────────────────────────────
-        ScraperSite {
-            id: "animeav1",
-            name: "AnimeAV1",
-            base_url: "https://animeav1.com",
-            category: SiteCategory::Anime,
-            search_style: SearchStyle::UrlSlug,
-            search_path: "/catalogo?search={query}",
-            types: &["anime"],
-            enabled_by_default: true,
-        },
         ScraperSite {
             id: "miruro",
             name: "Miruro",

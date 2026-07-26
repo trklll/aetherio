@@ -24,11 +24,6 @@ const SCROBBLE_DEDUP_MS = 8000;
 const SCROBBLE_PROGRESS_WINDOW = 1.5;
 const AUTHORIZATION_PENDING_TTL_MS = 10 * 60 * 1000;
 const TRAKT_CLIENT_ID = (import.meta.env.VITE_TRAKT_CLIENT_ID as string | undefined)?.trim() ?? "";
-const TRAKT_COMMENTS_SORT = "likes";
-const TRAKT_COMMENTS_LIMIT = 50;
-const TRAKT_COMMENTS_CACHE_TTL_MS = 10 * 60 * 1000;
-const INLINE_SPOILER_REGEX = /\[spoiler\][\s\S]*?\[\/spoiler\]/i;
-const INLINE_SPOILER_TAG_REGEX = /\[\/?spoiler\]/gi;
 
 export const TRAKT_AUTH_CHANGED_EVENT = "aetherio-trakt-auth-changed";
 export const TRAKT_SYNC_CHANGED_EVENT = "aetherio-trakt-sync-changed";
@@ -63,59 +58,11 @@ export type TraktAuthorizationResult =
   | { status: "success"; username?: string }
   | { status: "ignored" };
 
-export interface TraktCommentReview {
-  id: number;
-  authorDisplayName: string;
-  authorUsername?: string;
-  comment: string;
-  spoiler: boolean;
-  containsInlineSpoilers: boolean;
-  review: boolean;
-  likes: number;
-  rating?: number;
-  createdAt?: string;
-  updatedAt?: string;
-  hasSpoilerContent: boolean;
-}
-
-export interface TraktCommentsPage {
-  items: TraktCommentReview[];
-  currentPage: number;
-  pageCount: number;
-  itemCount: number;
-}
-
-export interface TraktCommentsMediaInput {
-  type: string;
-  id: string;
-  ids?: TraktIds;
-  season?: number;
-  episode?: number;
-  page?: number;
-}
-
 interface TraktIds {
   trakt?: number;
   imdb?: string;
   tmdb?: number;
   slug?: string;
-}
-
-interface TraktCommentDto {
-  id?: number;
-  created_at?: string;
-  updated_at?: string;
-  comment?: string;
-  spoiler?: boolean;
-  review?: boolean;
-  likes?: number;
-  user_stats?: {
-    rating?: number;
-  };
-  user?: {
-    username?: string;
-    name?: string;
-  };
 }
 
 type TraktQueueKind = "scrobble" | "history-add" | "history-remove" | "playback-remove";
@@ -138,12 +85,6 @@ interface TraktPlaybackRemovePayload {
   entry: ContinueWatchingEntry;
 }
 
-interface TraktApiGetResult {
-  status: number;
-  headers: Record<string, string>;
-  body: string;
-}
-
 interface ScrobbleStamp {
   action: string;
   itemKey: string;
@@ -152,7 +93,6 @@ interface ScrobbleStamp {
 }
 
 let lastScrobbleStamp: ScrobbleStamp | null = null;
-const commentsCache = new Map<string, { page: TraktCommentsPage; expiresAt: number }>();
 
 export function getTraktAuthSnapshot(): TraktAuthSnapshot {
   const state = readAuthState();
@@ -328,173 +268,6 @@ export async function syncTraktNow() {
   dispatchSyncChanged();
   traktLog("sync completed", { imported: imported.length, queued: readQueue().length });
   return { imported: imported.length, queued: readQueue().length };
-}
-
-export async function fetchTraktCommentsForMedia(input: TraktCommentsMediaInput): Promise<TraktCommentsPage> {
-  const target = await resolveTraktCommentsTarget(input);
-  if (!target) {
-    return { items: [], currentPage: input.page ?? 1, pageCount: 0, itemCount: 0 };
-  }
-
-  const page = Math.max(1, input.page ?? 1);
-  const cacheKey = [
-    target.kind,
-    target.pathId,
-    target.season ?? "",
-    target.episode ?? "",
-    page,
-  ].join("|");
-  const cached = commentsCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.page;
-
-  const headers = await commentsTraktHeaders();
-  if (!headers) throw new Error("Trakt no esta configurado para cargar comentarios.");
-
-  const path = target.kind === "movie"
-    ? `/movies/${encodeURIComponent(target.pathId)}/comments/${TRAKT_COMMENTS_SORT}`
-    : target.kind === "episode"
-      ? `/shows/${encodeURIComponent(target.pathId)}/seasons/${target.season}/episodes/${target.episode}/comments/${TRAKT_COMMENTS_SORT}`
-      : `/shows/${encodeURIComponent(target.pathId)}/comments/${TRAKT_COMMENTS_SORT}`;
-  const url = new URL(`${BASE_URL}${path}`);
-  url.searchParams.set("page", String(page));
-  url.searchParams.set("limit", String(TRAKT_COMMENTS_LIMIT));
-
-  const response = await traktApiGet(url.toString(), headers);
-  if (response.status === 404) {
-    return { items: [], currentPage: page, pageCount: 0, itemCount: 0 };
-  }
-  if (response.status <= 0) {
-    return { items: [], currentPage: page, pageCount: 0, itemCount: 0 };
-  }
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`No se pudieron cargar comentarios de Trakt (${response.status}).`);
-  }
-
-  const raw = JSON.parse(response.body || "[]") as TraktCommentDto[];
-  const items = raw
-    .filter(item => typeof item.comment === "string" && item.comment.trim())
-    .map(mapTraktCommentReview);
-  const result = {
-    items,
-    currentPage: page,
-    pageCount: Number(readHeader(response.headers, "x-pagination-page-count")) || page,
-    itemCount: Number(readHeader(response.headers, "x-pagination-item-count")) || items.length,
-  };
-  commentsCache.set(cacheKey, { page: result, expiresAt: Date.now() + TRAKT_COMMENTS_CACHE_TTL_MS });
-  return result;
-}
-
-async function resolveTraktCommentsTarget(input: TraktCommentsMediaInput): Promise<{ kind: "movie" | "show" | "episode"; pathId: string; season?: number; episode?: number } | null> {
-  const isMovie = input.type === "movie";
-  const kind = !isMovie && typeof input.season === "number" && input.episode ? "episode" : isMovie ? "movie" : "show";
-  const mergedIds = { ...parseTraktContentIds(input.id), ...(input.ids ?? {}) };
-  const direct = mergedIds.imdb || (mergedIds.trakt ? String(mergedIds.trakt) : "") || mergedIds.slug;
-  if (direct) {
-    return {
-      kind,
-      pathId: direct,
-      season: input.season,
-      episode: input.episode,
-    };
-  }
-
-  if (!mergedIds.tmdb) return null;
-  const headers = await commentsTraktHeaders();
-  if (!headers) return null;
-  const searchType = isMovie ? "movie" : "show";
-  const response = await traktApiGet(`${BASE_URL}/search/tmdb/${mergedIds.tmdb}?type=${searchType}`, headers).catch(() => null);
-  if (!response || response.status < 200 || response.status >= 300) return null;
-  const results = JSON.parse(response.body || "[]") as Array<{ type?: string; movie?: { ids?: TraktIds }; show?: { ids?: TraktIds } }>;
-  const match = results.find(item => item.type === searchType);
-  const ids = isMovie ? match?.movie?.ids : match?.show?.ids;
-  const pathId = ids?.imdb || (ids?.trakt ? String(ids.trakt) : "") || ids?.slug;
-  return pathId ? { kind, pathId, season: input.season, episode: input.episode } : null;
-}
-
-async function commentsTraktHeaders() {
-  const authorized = await authorizedTraktHeaders();
-  if (authorized) return authorized;
-  if (!TRAKT_CLIENT_ID) return null;
-  return {
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-    "trakt-api-version": API_VERSION,
-    "trakt-api-key": TRAKT_CLIENT_ID,
-  };
-}
-
-function mapTraktCommentReview(item: TraktCommentDto): TraktCommentReview {
-  const comment = stripInlineSpoilerMarkup(item.comment);
-  const containsInlineSpoilers = INLINE_SPOILER_REGEX.test(item.comment ?? "");
-  const authorDisplayName = item.user?.name?.trim() || item.user?.username?.trim() || "Usuario de Trakt";
-  const spoiler = item.spoiler === true;
-  return {
-    id: Number(item.id) || Math.abs(hashString(`${authorDisplayName}:${comment}:${item.created_at ?? ""}`)),
-    authorDisplayName,
-    authorUsername: item.user?.username?.trim() || undefined,
-    comment,
-    spoiler,
-    containsInlineSpoilers,
-    review: item.review === true,
-    likes: Number(item.likes) || 0,
-    rating: Number.isFinite(Number(item.user_stats?.rating)) ? Number(item.user_stats?.rating) : undefined,
-    createdAt: item.created_at,
-    updatedAt: item.updated_at,
-    hasSpoilerContent: spoiler || containsInlineSpoilers,
-  };
-}
-
-function readHeader(headers: Record<string, string>, key: string) {
-  const normalized = key.toLowerCase();
-  return headers[normalized] ?? headers[key] ?? "";
-}
-
-async function traktApiGet(url: string, headers: Record<string, string>): Promise<TraktApiGetResult> {
-  try {
-    const desktop = await invokeCommand<TraktApiGetResult>("trakt_api_get", { url, headers });
-    return {
-      status: Number(desktop?.status ?? 0),
-      headers: normalizeHeaderMap(desktop?.headers),
-      body: typeof desktop?.body === "string" ? desktop.body : "",
-    };
-  } catch {
-    if (typeof window !== "undefined" && /^https?:$/i.test(window.location.protocol)) {
-      return { status: 0, headers: {}, body: "" };
-    }
-    const response = await fetch(url, { headers });
-    const body = await response.text();
-    const map: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      map[key.toLowerCase()] = value;
-    });
-    return { status: response.status, headers: map, body };
-  }
-}
-
-function normalizeHeaderMap(raw: unknown) {
-  if (!raw || typeof raw !== "object") return {};
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value !== "string") continue;
-    result[key.toLowerCase()] = value;
-  }
-  return result;
-}
-
-function stripInlineSpoilerMarkup(comment?: string) {
-  return (comment ?? "")
-    .replace(INLINE_SPOILER_TAG_REGEX, "")
-    .replace(/[\t ]+/g, " ")
-    .trim();
-}
-
-function hashString(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash) + value.charCodeAt(index);
-    hash |= 0;
-  }
-  return hash;
 }
 
 async function authorizedTraktHeaders(): Promise<Record<string, string> | null> {

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Image as ImageIcon, Info, MinusCircle, Play } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { tmdbFetch } from "../../config/apiKeys";
@@ -37,7 +37,6 @@ export default function ContinueWatchingRow() {
   const navigate = useNavigate();
   const artworkRequestsRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
-  const measureTimerRef = useRef<number | null>(null);
   const showLeftRef = useRef(false);
   const showRightRef = useRef(false);
   const [items, setItems] = useState<ContinueWatchingEntry[]>(() => getContinueWatchingRows());
@@ -69,13 +68,19 @@ export default function ContinueWatchingRow() {
     };
   }, []);
 
+  const missingArtworkKey = useMemo(
+    () => items.filter(needsArtworkEnrichment).slice(0, 8).map(entry => entry.key).join("|"),
+    [items],
+  );
+
   useEffect(() => {
-    const missingArtwork = items.filter(needsArtworkEnrichment);
+    if (!missingArtworkKey) return;
+    const missingArtwork = items.filter(entry => needsArtworkEnrichment(entry) && !artworkRequestsRef.current.has(entry.key)).slice(0, 8);
     if (!missingArtwork.length) return;
     let cancelled = false;
 
     async function enrichMissingArtwork() {
-      for (const entry of missingArtwork.slice(0, 8)) {
+      for (const entry of missingArtwork) {
         if (cancelled) return;
         if (artworkRequestsRef.current.has(entry.key)) continue;
         artworkRequestsRef.current.add(entry.key);
@@ -89,21 +94,23 @@ export default function ContinueWatchingRow() {
             poster: cached.poster,
           });
           if (!shouldFetchEpisodeStill) {
-            artworkRequestsRef.current.delete(entry.key);
             continue;
           }
         }
 
         try {
           const artwork = await fetchContinueWatchingArtwork(entry);
-          if (!cancelled && artwork) updateContinueWatchingEntryArtwork(entry.key, artwork);
+          if (!cancelled && artwork) {
+            updateContinueWatchingEntryArtwork(entry.key, artwork);
+            artworkRequestsRef.current.delete(entry.key);
+          }
         } catch (error) {
           console.warn("[AETHERIO:CONTINUE:ARTWORK] enrichment failed", {
             key: entry.key,
             error: String(error),
           });
-        } finally {
-          artworkRequestsRef.current.delete(entry.key);
+          // Guard persistente entre renders: si TMDB falla (rate-limit/red),
+          // no liberamos el slot para evitar reintentos en cada re-render de `items`.
         }
       }
     }
@@ -112,7 +119,7 @@ export default function ContinueWatchingRow() {
     return () => {
       cancelled = true;
     };
-  }, [items]);
+  }, [missingArtworkKey, items]);
 
   useEffect(() => {
     const pending = items.filter(entry => entry.type !== "movie" && (entry.entryKind === "next" || entry.entryKind === "new"));
@@ -122,8 +129,8 @@ export default function ContinueWatchingRow() {
     async function sanitizeUpcomingEntries() {
       for (const entry of pending.slice(0, 12)) {
         if (cancelled) return;
-        const available = await isPromptEpisodeAvailable(entry).catch(() => false);
-        if (cancelled || available) continue;
+        const available = await isPromptEpisodeAvailable(entry);
+        if (cancelled || available !== false) continue;
         removeContinueWatchingEntry(entry.key);
       }
     }
@@ -134,19 +141,10 @@ export default function ContinueWatchingRow() {
     };
   }, [items]);
 
-  useEffect(() => {
-    measureTimerRef.current = window.setTimeout(updateArrows, 100);
-    return () => {
-      if (measureTimerRef.current !== null) {
-        window.clearTimeout(measureTimerRef.current);
-        measureTimerRef.current = null;
-      }
-    };
-  }, [items.length]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    updateArrows();
     el.addEventListener("scroll", scheduleArrowUpdate, { passive: true });
     return () => {
       el.removeEventListener("scroll", scheduleArrowUpdate);
@@ -216,7 +214,8 @@ export default function ContinueWatchingRow() {
       }
     }
 
-    const q = new URLSearchParams({ type: entry.type, id: entry.id, continue: "1" });
+    const q = new URLSearchParams({ type: entry.type, id: entry.id });
+    if (!entry.completed) q.set("continue", "1");
     if (typeof entry.season === "number") q.set("season", String(entry.season));
     if (entry.episode) q.set("ep", String(entry.episode));
     if (entry.episodeName) q.set("epTitle", entry.episodeName);
@@ -225,15 +224,16 @@ export default function ContinueWatchingRow() {
 
   function removeWithAnimation(entry: ContinueWatchingEntry) {
     setRemovingKeys(keys => new Set(keys).add(entry.key));
-    window.setTimeout(() => {
-      const removed = removeContinueWatchingEntry(entry.key);
-      void syncTraktRemovePlayback(removed);
-      setRemovingKeys(keys => {
-        const next = new Set(keys);
-        next.delete(entry.key);
-        return next;
-      });
-    }, 220);
+  }
+
+  function commitRemove(entry: ContinueWatchingEntry) {
+    const removed = removeContinueWatchingEntry(entry.key);
+    void syncTraktRemovePlayback(removed);
+    setRemovingKeys(keys => {
+      const next = new Set(keys);
+      next.delete(entry.key);
+      return next;
+    });
   }
 
   return (
@@ -276,6 +276,7 @@ export default function ContinueWatchingRow() {
                   removing={removingKeys.has(entry.key)}
                   onClick={() => { void resume(entry); }}
                   onRemove={() => removeWithAnimation(entry)}
+                  onCommitRemove={() => commitRemove(entry)}
                 />
               </div>
             );
@@ -370,8 +371,8 @@ async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
       ? tmdbImage(details?.backdrop_path, "original")
       : tmdbImage(episodeDetails?.still_path, "original"),
     episodeStill: entry.type !== "movie" ? tmdbImage(episodeDetails?.still_path, "original") : undefined,
-    poster: tmdbImage(details?.poster_path, "w780"),
-    logo: entry.logo ?? sanitizeLogoUrl(tmdbImage(logoPath, "w500")),
+    poster: tmdbImage(details?.poster_path, "original"),
+    logo: entry.logo ?? sanitizeLogoUrl(tmdbImage(logoPath, "original")),
     episodeName: episodeDetails?.name ?? entry.episodeName,
   };
 }
@@ -473,13 +474,12 @@ async function createNextEpisodePromptFromEntry(entry: ContinueWatchingEntry | n
   return null;
 }
 
-async function isPromptEpisodeAvailable(entry: ContinueWatchingEntry) {
+async function isPromptEpisodeAvailable(entry: ContinueWatchingEntry): Promise<boolean | null> {
   if (entry.type === "movie" || typeof entry.season !== "number" || !entry.episode) return true;
-  const promptEntry = entry.entryKind === "next" || entry.entryKind === "new";
-  const tmdbId = await resolveTmdbId(entry, "tv");
-  if (!tmdbId) return !promptEntry;
-  const episode = await tmdbFetch<{ air_date?: string }>(`/tv/${tmdbId}/season/${entry.season}/episode/${entry.episode}`, { params: { language: "es-ES" } });
-  if (!episode) return !promptEntry;
+  const tmdbId = await resolveTmdbId(entry, "tv").catch(() => undefined);
+  if (!tmdbId) return null;
+  const episode = await tmdbFetch<{ air_date?: string }>(`/tv/${tmdbId}/season/${entry.season}/episode/${entry.episode}`, { params: { language: "es-ES" } }).catch(() => null);
+  if (!episode) return null;
   const airDate = typeof episode?.air_date === "string" ? episode.air_date : "";
   const airAt = parseTmdbAirDate(airDate);
   if (!airDate || !airAt) return false;
@@ -551,16 +551,168 @@ function pickTmdbLogoPath(logos: unknown) {
   return logo?.file_path;
 }
 
+const cardBaseStyle: React.CSSProperties = {
+  position: "relative",
+  zIndex: 1,
+  flexShrink: 0,
+  width: CARD_W,
+  height: CARD_H,
+  borderRadius: 12,
+  overflow: "hidden",
+  cursor: "pointer",
+  opacity: 1,
+  transform: "scale(1)",
+  background: "#1c1c1e",
+  border: "1px solid rgba(225,230,238,0.10)",
+  boxShadow: "0 12px 28px rgba(0,0,0,0.28)",
+  padding: 0,
+  textAlign: "left",
+};
+
+const gradientOverlayTop: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  background: "linear-gradient(to top, rgba(0,0,0,0.86) 0%, rgba(0,0,0,0.52) 24%, rgba(0,0,0,0.08) 68%, transparent 100%)",
+};
+
+const gradientOverlayRight: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  background: "linear-gradient(to right, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.08) 46%, rgba(0,0,0,0.18) 100%)",
+};
+
+const bottomContentStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  padding: "0 12px 10px",
+};
+
+const logoStyle: React.CSSProperties = {
+  maxHeight: 40,
+  maxWidth: 172,
+  objectFit: "contain",
+  filter: "drop-shadow(0 1px 8px rgba(0,0,0,0.95))",
+  marginBottom: 17,
+};
+
+const nameStyle: React.CSSProperties = {
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+  fontSize: 20,
+  fontWeight: 500,
+  color: "#fff",
+  textShadow: "0 1px 8px rgba(0,0,0,0.95)",
+  marginBottom: 18,
+};
+
+const progressRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 7,
+  paddingRight: 34,
+};
+
+const playIconStyle: React.CSSProperties = {
+  color: "rgba(255,255,255,0.9)",
+  flexShrink: 0,
+};
+
+const progressBarBgStyle: React.CSSProperties = {
+  width: 24,
+  height: 4,
+  overflow: "hidden",
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.42)",
+  flexShrink: 0,
+};
+
+const progressBarFillStyle: React.CSSProperties = {
+  height: "100%",
+  background: "#fff",
+  borderRadius: 999,
+};
+
+const episodeLabelStyle: React.CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  fontSize: 12,
+  fontWeight: 500,
+  color: "rgba(255,255,255,0.88)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const menuButtonStyle: React.CSSProperties = {
+  position: "absolute",
+  right: 9,
+  bottom: 7,
+  zIndex: 3,
+  width: 28,
+  height: 24,
+  border: "none",
+  background: "transparent",
+  color: "rgba(255,255,255,0.82)",
+  fontSize: 20,
+  fontWeight: 800,
+  lineHeight: 1,
+  letterSpacing: 1.2,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  cursor: "pointer",
+};
+
+const artworkImgStyle: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  transform: "scale(1)",
+};
+
+const badgeBaseStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 11,
+  left: 14,
+  zIndex: 2,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 125,
+  height: 29,
+  boxSizing: "border-box",
+  padding: "0 10px",
+  borderRadius: 8,
+  backdropFilter: "blur(5px) saturate(150%)",
+  WebkitBackdropFilter: "blur(10px) saturate(150%)",
+  fontSize: 12,
+  fontWeight: 400,
+  fontFamily: "Inter, system-ui, sans-serif",
+  lineHeight: 1.1,
+  letterSpacing: 0,
+  whiteSpace: "nowrap",
+  textTransform: "none",
+};
+
 const ContinueCard = memo(function ContinueCard({
   entry,
   removing,
   onClick,
   onRemove,
+  onCommitRemove,
 }: {
   entry: ContinueWatchingEntry;
   removing: boolean;
   onClick: () => void;
   onRemove: () => void;
+  onCommitRemove: () => void;
 }) {
   const baseArtwork = getContinueCardArtwork(entry);
   const [, setArtworkVersion] = useState(0);
@@ -583,7 +735,11 @@ const ContinueCard = memo(function ContinueCard({
     : "Película";
 
   useEffect(() => {
-    tweenTo(cardRef.current, { opacity: removing ? 0 : 1, scale: removing ? 0.96 : 1 });
+    if (!removing) {
+      tweenTo(cardRef.current, { opacity: 1, scale: 1 });
+      return;
+    }
+    tweenTo(cardRef.current, { opacity: 0, scale: 0.96, onComplete: onCommitRemove });
   }, [removing]);
 
   useEffect(() => {
@@ -633,22 +789,8 @@ const ContinueCard = memo(function ContinueCard({
         setMenuOpen(true);
       }}
       style={{
-        position: "relative",
-        zIndex: 1,
-        flexShrink: 0,
-        width: CARD_W,
-        height: CARD_H,
-        borderRadius: 12,
-        overflow: "hidden",
-        cursor: "pointer",
-        opacity: 1,
-        transform: "scale(1)",
+        ...cardBaseStyle,
         marginRight: removing ? -CARD_W - GAP : 0,
-        background: "#1c1c1e",
-        border: "1px solid rgba(225,230,238,0.10)",
-        boxShadow: "0 12px 28px rgba(0,0,0,0.28)",
-        padding: 0,
-        textAlign: "left",
       }}
       onMouseEnter={event => {
         if (removing) {
@@ -671,63 +813,43 @@ const ContinueCard = memo(function ContinueCard({
         if (img) tweenTo(img, { scale: 1 });
       }}
     >
-      {artwork.image && <img src={artwork.image} alt={entry.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} />}
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.86) 0%, rgba(0,0,0,0.52) 24%, rgba(0,0,0,0.08) 68%, transparent 100%)" }} />
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.08) 46%, rgba(0,0,0,0.18) 100%)" }} />
+      {artwork.image && <img src={artwork.image} alt={entry.name} loading="lazy" decoding="async" style={artworkImgStyle} />}
+      <div style={gradientOverlayTop} />
+      <div style={gradientOverlayRight} />
       {badgeLabel && (
         <div
           style={{
-            position: "absolute",
-            top: 11,
-            left: 14,
-            zIndex: 2,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 125,
-            height: 29,
-            boxSizing: "border-box",
-            padding: "0 10px",
-            borderRadius: 8,
+            ...badgeBaseStyle,
             background: entry.entryKind === "new"
               ? "linear-gradient(180deg, rgba(255,255,255,0.92), rgba(236,239,244,0.76))"
               : "rgba(35,35,37,0.72)",
             border: entry.entryKind === "new"
               ? "1px solid rgba(255,255,255,0.82)"
               : "1px solid rgba(255,255,255,0.23)",
-            backdropFilter: "blur(5px) saturate(150%)",
-            WebkitBackdropFilter: "blur(10px) saturate(150%)",
             boxShadow: entry.entryKind === "new"
               ? "0 10px 22px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.96)"
               : "0 5px 16px rgba(0,0,0,0.22)",
             color: entry.entryKind === "new" ? "rgba(18,18,18,0.96)" : "rgba(255,255,255,0.94)",
-            fontSize: 12,
-            fontWeight: 400,
-            fontFamily: "Inter, system-ui, sans-serif",
-            lineHeight: 1.1,
-            letterSpacing: 0,
-            whiteSpace: "nowrap",
-            textTransform: "none",
           }}
         >
           {badgeLabel}
         </div>
       )}
 
-      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 12px 10px" }}>
+      <div style={bottomContentStyle}>
         {logo ? (
-          <img src={logo} alt={entry.name} loading="lazy" decoding="async" style={{ maxHeight: 40, maxWidth: 172, objectFit: "contain", filter: "drop-shadow(0 1px 8px rgba(0,0,0,0.95))", marginBottom: 17 }} />
+          <img src={logo} alt={entry.name} loading="lazy" decoding="async" style={logoStyle} />
         ) : (
-          <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", fontSize: 20, fontWeight: 500, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)", marginBottom: 18 }}>
+          <span style={nameStyle}>
             {entry.name}
           </span>
         )}
-        <div style={{ display: "flex", alignItems: "center", gap: 7, paddingRight: 34 }}>
-          <Play size={11} fill="rgba(255,255,255,0.9)" style={{ color: "rgba(255,255,255,0.9)", flexShrink: 0 }} />
-          <div style={{ width: 24, height: 4, overflow: "hidden", borderRadius: 999, background: "rgba(255,255,255,0.42)", flexShrink: 0 }}>
-            <div style={{ width: `${progressPercent(entry)}%`, height: "100%", background: "#fff", borderRadius: 999 }} />
+        <div style={progressRowStyle}>
+          <Play size={11} fill="rgba(255,255,255,0.9)" style={playIconStyle} />
+          <div style={progressBarBgStyle}>
+            <div style={{ ...progressBarFillStyle, width: `${progressPercent(entry)}%` }} />
           </div>
-          <div style={{ minWidth: 0, flex: 1, fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.88)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={episodeLabelStyle}>
             {episodeLabel.includes(" - ") ? episodeLabel.split(" - ")[0] : episodeLabel}{entry.entryKind === "next" || entry.entryKind === "new" ? "" : `, ${formatResumeTime(entry.currentTime)}`}
           </div>
         </div>
@@ -741,7 +863,7 @@ const ContinueCard = memo(function ContinueCard({
           event.stopPropagation();
           setMenuOpen(value => !value);
         }}
-        style={{ position: "absolute", right: 9, bottom: 7, zIndex: 3, width: 28, height: 24, border: "none", background: "transparent", color: "rgba(255,255,255,0.82)", fontSize: 20, fontWeight: 800, lineHeight: 1, letterSpacing: 1.2, display: "flex", alignItems: "center", justifyContent: "center", padding: 0, cursor: "pointer" }}
+        style={menuButtonStyle}
       >
         ...
       </button>

@@ -231,9 +231,10 @@ export function getContinueWatchingAudioSelection(query: StreamQuery | null | un
 }
 
 export function saveContinueWatchingProgress(input: ContinueWatchingInput) {
-  const currentTime = clampFinite(input.currentTime);
-  const duration = clampFinite(input.duration);
+  let currentTime = clampFinite(input.currentTime);
+  let duration = clampFinite(input.duration);
   if (currentTime < MIN_SAVE_SECONDS) return null;
+  if (duration > 0 && currentTime > duration) currentTime = duration * 0.99;
 
   const completed = isCompleted(currentTime, duration);
   const key = buildContinueWatchingKey(input.query);

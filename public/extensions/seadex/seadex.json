@@ -1,0 +1,26 @@
+{
+  "id": "seadex",
+  "name": "SeaDex",
+  "description": "SeaDex provider for high quality torrents",
+  "manifestURI": "/extensions/seadex/seadex.json",
+  "version": "1.0.4",
+  "author": "Island",
+  "type": "anime-torrent-provider",
+  "icon": "/extensions/seadex/seadex.png",
+  "language": "typescript",
+  "lang": "multi",
+  "userConfig": {
+    "requiresConfig": false,
+    "version": 1,
+    "fields": [
+      {
+        "name": "apiUrl",
+        "label": "API URL",
+        "type": "text",
+        "default": "https://releases.moe/api/collections/entries/records"
+      }
+    ]
+  },
+  "payloadURI": "seadex.ts",
+  "payload": ""
+}

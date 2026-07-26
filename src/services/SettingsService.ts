@@ -125,15 +125,15 @@ type WorkerMessage =
   | { type: "error"; error: string };
 
 const DEFAULT_MANIFEST_URLS = [
+  "https://island.clap.ing/api/extensions/anime-torrent-providers/seadex/seadex.json",
+  "https://island.clap.ing/api/extensions/anime-torrent-providers/animetosho/animetosho.json",
   "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeKai/manifest.json",
   "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeSaturn/manifest.json",
   "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeUnity/animeunity.json",
   "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeWorld/manifest.json",
   "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/GojoWtf/manifest.json",
-  "https://island.clap.ing/api/extensions/anime-torrent-providers/seadex/seadex.json",
   "https://raw.githubusercontent.com/dot-fx/seanime-extensions/master/src/TPB/manifest.json",
   "https://island.clap.ing/api/extensions/anime-torrent-providers/nyaa/nyaa.json",
-  "https://island.clap.ing/api/extensions/anime-torrent-providers/animetosho/animetosho.json",
 ];
 const CONFIG_STORAGE_KEY = "aetherio-seanime-config";
 const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;

@@ -9,6 +9,59 @@
   animation-timing-function:cubic-bezier(0.22,1,0.36,1);
 }
 
+.player-timeline {
+  height: 14px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.player-timeline::-webkit-slider-runnable-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.94) 0 var(--player-progress),
+    rgba(255, 255, 255, 0.28) var(--player-progress) 100%
+  );
+}
+
+.player-timeline::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.player-timeline::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.player-timeline::-moz-range-progress {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.player-timeline::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+}
+
 @media (prefers-reduced-motion: reduce){
   ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation-duration:0s!important}
 }
@@ -144,6 +197,51 @@ html.aetherio-android-tv .scroll-row{
   left:0 !important;
   width:100% !important;
   margin-left:0 !important;
+}
+
+/* Detail typography sits directly over artwork, so keep one consistent,
+   glyph-shaped shadow across the hero and every content row. */
+.detail-page-scale :where(
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  p,
+  span,
+  a,
+  label,
+  li,
+  button
+){
+  text-shadow:
+    0 1px 2px rgba(0,0,0,0.92),
+    0 2px 6px rgba(0,0,0,0.52);
+}
+
+.detail-page-scale .detail-hero-credits :where(p, span, button){
+  text-shadow:
+    0 1px 2px rgba(0,0,0,0.98),
+    0 2px 8px rgba(0,0,0,0.68);
+}
+
+.detail-award-logo-adaptive{
+  /*
+   * Los assets son negros: invert los convierte en blancos y difference los
+   * hace negros únicamente donde el backdrop es claro, incluso dentro de un
+   * mismo logo.
+   */
+  filter:invert(1);
+  mix-blend-mode:difference;
+}
+
+.detail-page-scale .detail-episode-card__eyebrow,
+.detail-page-scale .detail-episode-card__title,
+.detail-page-scale .detail-episode-card__overview{
+  text-shadow:
+    0 1px 2px rgba(0,0,0,0.9),
+    0 2px 5px rgba(0,0,0,0.48);
 }
 
 /* Keep the PickStreams backdrop on the same resize/crop surface as Detail.
@@ -312,6 +410,7 @@ html.aetherio-android-tv .scroll-row{
   line-height:16.5px;
   -webkit-box-orient:vertical;
   -webkit-line-clamp:2;
+  transition:color 0.25s ease;
 }
 
 .aetherio-page-curtain{

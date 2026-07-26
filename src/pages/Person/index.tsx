@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import { X } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
 import { fetchAniListCharacterPhotos } from "../../services/animeResolve";
 import "./person.css";
-import { scrollByGsap } from "../../utils/motion";
+import { gsap, scrollByGsap } from "../../utils/motion";
 
 const IMG = "https://image.tmdb.org/t/p";
 
@@ -52,6 +52,7 @@ export default function PersonPage() {
   const [person, setPerson] = useState<PersonDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [biographyOpen, setBiographyOpen] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,11 +153,32 @@ export default function PersonPage() {
     return () => window.removeEventListener("keydown", close);
   }, [biographyOpen]);
 
+  useLayoutEffect(() => {
+    const root = pageRef.current;
+    if (loading || !person || !root) return;
+    const background = root.querySelector<HTMLElement>(".person-background");
+    const items = Array.from(root.querySelectorAll<HTMLElement>(
+      ".person-header, .person-overview, .person-section",
+    ));
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    timeline.fromTo(background, { opacity: 0 }, { opacity: 1, duration: 0.64 }, 0);
+    timeline.fromTo(
+      items,
+      { opacity: 0, y: 18 },
+      { opacity: 1, y: 0, duration: 0.5, stagger: 0.075, clearProps: "transform" },
+      0.06,
+    );
+    return () => {
+      timeline.kill();
+      gsap.set(items, { clearProps: "opacity,transform" });
+    };
+  }, [loading, person?.id]);
+
   if (loading) return <PersonLoading />;
   if (!person) return <div className="person-empty">No se encontró la persona.</div>;
 
   return (
-    <div className="person-page">
+    <div ref={pageRef} className="person-page">
       <PersonBackground person={person} />
       <main className="person-content">
         <header className="person-header"><h1>{person.name}</h1></header>
@@ -398,7 +420,39 @@ function CreditCard({ credit, onClick }: { credit: PersonCredit; onClick: () => 
 }
 
 function PersonLoading() {
-  return <div className="person-loading">Cargando actor</div>;
+  return (
+    <div className="person-page">
+      <div className="person-background">
+        <div className="skeleton" style={{ position:"absolute",inset:0,opacity:0.28 }} />
+        <div className="person-background-radial" />
+        <div className="person-background-bottom" />
+      </div>
+      <main className="person-content">
+        <header className="person-header">
+          <div className="skeleton" style={{ width:230,height:28,borderRadius:999 }} />
+        </header>
+        <section className="person-overview">
+          <div className="person-gallery-column">
+            <div className="person-gallery" aria-hidden="true">
+              {[0,1,2,3].map(item => (
+                <div key={item} className="skeleton" style={{ flex:"0 0 174px",width:174,height:246,borderRadius:16 }} />
+              ))}
+            </div>
+            <div className="skeleton" style={{ width:"100%",height:126,borderRadius:20 }} />
+          </div>
+          <div className="skeleton" style={{ width:"100%",maxWidth:520,height:260,borderRadius:18 }} />
+        </section>
+        <section className="person-section person-known-section">
+          <div className="skeleton" style={{ width:170,height:24,borderRadius:999,margin:"0 72px 14px" }} />
+          <div className="person-known-row">
+            {[0,1,2,3].map(item => (
+              <div key={item} className="skeleton" style={{ flex:"0 0 348px",width:348,height:178,borderRadius:16 }} />
+            ))}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
 }
 
 async function resolvePersonId(rawId: string) {

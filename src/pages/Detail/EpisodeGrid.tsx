@@ -235,11 +235,21 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
 
 function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: boolean }) {
   const navigate = useNavigate();
+  const [imgFailed, setImgFailed] = useState(false);
   const handleClick = disabled ? undefined : () => navigate(`/person/${person.id}`);
+  const hasImage = Boolean(person.image) && !imgFailed;
   return (
     <button type="button" onClick={handleClick} disabled={disabled} style={{ width: 204, border: "none", background: "none", padding: 0, cursor: disabled ? "default" : "pointer", textAlign: "center" }}>
-      {person.image ? (
-        <img src={person.image} alt={person.name} loading="lazy" decoding="async" style={{ width: 180, height: 180, borderRadius: "50%", objectFit: "cover", margin: "0 auto 12px" }} />
+      {hasImage ? (
+        <img
+          src={person.image}
+          alt={person.name}
+          loading="lazy"
+          decoding="async"
+          onError={() => setImgFailed(true)}
+          onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth < 10 || img.naturalHeight < 10) setImgFailed(true); }}
+          style={{ width: 180, height: 180, borderRadius: "50%", objectFit: "cover", margin: "0 auto 12px" }}
+        />
       ) : (
         <div style={{ width: 180, height: 180, borderRadius: "50%", background: "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)", boxShadow: "0 8px 16px rgba(0,0,0,0.4)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 58, fontWeight: 900, letterSpacing: 1, fontFamily: "Inter, system-ui, sans-serif" }}>
           {initials(person.name)}

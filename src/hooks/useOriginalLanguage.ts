@@ -3,9 +3,19 @@ import { tmdbFetch } from "../config/apiKeys.ts";
 import { useAddonStore, type InstalledAddon } from "../store/addonStore.ts";
 import type { MediaStream, StreamQuery } from "../types/stream.ts";
 
+const ORIGINAL_LANGUAGE_CACHE = new Map<string, string | null>();
+
+function originalLanguageCacheKey(query: StreamQuery | null) {
+  return query ? `${query.type}:${query.id}` : "";
+}
+
 export function useOriginalLanguage(query: StreamQuery | null, stream?: MediaStream | null) {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
-  const [originalLanguage, setOriginalLanguage] = useState<string | null>(null);
+  const cacheKey = originalLanguageCacheKey(query);
+  const [originalLanguage, setOriginalLanguage] = useState<string | null>(() => (
+    extractOriginalLanguage(stream)
+    ?? (cacheKey && ORIGINAL_LANGUAGE_CACHE.has(cacheKey) ? ORIGINAL_LANGUAGE_CACHE.get(cacheKey) ?? null : null)
+  ));
 
   useEffect(() => {
     let cancelled = false;
@@ -18,26 +28,36 @@ export function useOriginalLanguage(query: StreamQuery | null, stream?: MediaStr
 
       const fromStream = extractOriginalLanguage(stream);
       if (fromStream) {
+        ORIGINAL_LANGUAGE_CACHE.set(cacheKey, fromStream);
         setOriginalLanguage(fromStream);
+        return;
+      }
+
+      if (ORIGINAL_LANGUAGE_CACHE.has(cacheKey)) {
+        setOriginalLanguage(ORIGINAL_LANGUAGE_CACHE.get(cacheKey) ?? null);
         return;
       }
 
       const tmdbLanguage = await fetchTmdbOriginalLanguage(query).catch(() => null);
       if (cancelled) return;
       if (tmdbLanguage) {
+        ORIGINAL_LANGUAGE_CACHE.set(cacheKey, tmdbLanguage);
         setOriginalLanguage(tmdbLanguage);
         return;
       }
 
       const addonLanguage = await fetchAddonOriginalLanguage(query, stream, getEnabledAddons()).catch(() => null);
-      if (!cancelled) setOriginalLanguage(addonLanguage);
+      if (!cancelled) {
+        ORIGINAL_LANGUAGE_CACHE.set(cacheKey, addonLanguage);
+        setOriginalLanguage(addonLanguage);
+      }
     }
 
     void load();
     return () => {
       cancelled = true;
     };
-  }, [getEnabledAddons, query, stream]);
+  }, [cacheKey, getEnabledAddons, query, stream]);
 
   return originalLanguage;
 }

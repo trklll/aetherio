@@ -17,6 +17,7 @@ import {
   type YouTubeClipCandidate,
 } from "../../services/youtubeClips.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
+import { useAwards } from "../../hooks/useAwards.ts";
 
 interface Props {
   item: MediaItem;
@@ -31,7 +32,7 @@ interface Props {
 const START_TIME = 60;
 
 function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () => void; side: "left" | "right" }) {
-  const bg = tmdbImage(item.background, "w780") ?? "";
+  const bg = tmdbImage(item.background, "original") ?? "";
   if (!bg) return null;
   return (
     <div
@@ -106,9 +107,10 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
   const [isMuted, setIsMuted] = useState(true);
   const videoEndHandledRef = useRef(false);
 
-  const bg = tmdbImage(displayItem.background, "w1280") ?? "";
+  const bg = tmdbImage(displayItem.background, "original") ?? "";
   const logo = sanitizeLogoUrl(displayItem.logo);
   const [mdbListRatings, setMdbListRatings] = useState<MdbListRatings | null>(displayItem.mdbListRatings ?? null);
+  const awards = useAwards(displayItem.type, displayItem.id, true);
 
   const clipInfo = clipCandidates[clipIndex] ?? null;
   const { stream, loading: streamLoading, error: streamError } = useYouTubePlayer(
@@ -439,6 +441,61 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
             style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 42px 22px 36px", display: "flex", alignItems: "flex-end", zIndex: 11 }}
           >
             <div style={{ maxWidth: 560 }}>
+              {awards.length > 0 && awards[0] && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    marginBottom: 12,
+                    fontFamily:
+                      '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif',
+                    filter: "drop-shadow(0 2px 16px rgba(0,0,0,0.7))",
+                  }}
+                >
+                  {awards[0].awardLogoUrl && (
+                    <img
+                      src={awards[0].awardLogoUrl}
+                      alt={awards[0].awardName}
+                      decoding="async"
+                      style={{
+                        height: 80,
+                        width: "auto",
+                        maxWidth: 150,
+                        objectFit: "contain",
+                        filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.6))",
+                        flexShrink: 0,
+                      }}
+                    />
+                  )}
+                  <div style={{ color: "#fff", lineHeight: 1.1 }}>
+                    <div
+                      style={{
+                        fontSize: 20,
+                        fontWeight: 700,
+                        letterSpacing: -0.2,
+                        textShadow: "0 2px 12px rgba(0,0,0,0.7)",
+                      }}
+                    >
+                      {awards[0].winner ? "Ganadora del" : "Nominada al"} {awards[0].awardName}
+                      {awards[0].year ? ` ${awards[0].year}` : ""}
+                    </div>
+                    {awards[0].category && (
+                      <div
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 500,
+                          color: "rgba(255,255,255,0.75)",
+                          marginTop: 2,
+                          textShadow: "0 2px 10px rgba(0,0,0,0.7)",
+                        }}
+                      >
+                        {awards[0].category}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               {logo ? (
                 <img
                   src={logo}

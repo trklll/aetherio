@@ -71,7 +71,9 @@ export function useHorizontalVirtualWindow({
 
   const beforeWidth = range.start * stride;
   const renderedCount = Math.max(0, range.end - range.start);
-  const renderedWidth = renderedCount > 0 ? renderedCount * itemWidth + Math.max(0, renderedCount - 1) * gap : 0;
+  const renderedWidth = renderedCount > 0
+    ? renderedCount * itemWidth + (renderedCount - (range.end >= itemCount ? 1 : 0)) * gap
+    : 0;
   const totalWidth = itemCount > 0 ? itemCount * itemWidth + Math.max(0, itemCount - 1) * gap : 0;
   const afterWidth = Math.max(0, totalWidth - beforeWidth - renderedWidth);
 

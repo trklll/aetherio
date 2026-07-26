@@ -159,7 +159,7 @@ export function mergeSearchResults(results: UnifiedSearchResult[], limit = 42, q
   }
   return Array.from(byKey.values())
     .map(item => ({ ...item, searchScore: searchScore(item, query) }))
-    .sort((a, b) => (b.searchScore ?? 0) - (a.searchScore ?? 0))
+    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0))
     .slice(0, limit);
 }
 

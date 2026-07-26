@@ -22,7 +22,7 @@ import {
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService.ts";
 import { fetchYouTubeClip } from "../services/youtubeClips.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
-import { isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
+import { HOME_CACHE_MAX_AGE, isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
 import type { CatalogRowData, MediaItem } from "../types/ui.ts";
 import { type ContentOrientation } from "../config/homePreferences.ts";
 import { sanitizeLogoUrl } from "../utils/artwork.ts";
@@ -32,8 +32,8 @@ import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/t
 
 const HERO_GROUP_FETCH_LIMIT = 7;
 const HERO_TOTAL_LIMIT = 15;
-const HOME_ROWS_STALE_TIME = 0;
-const HOME_HERO_STALE_TIME = 0;
+const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
+const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
 const HOME_ROWS_DATA_VERSION = "native-home-rails-v13";
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
@@ -1056,7 +1056,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
     initialDataUpdatedAt: initialRows ? useCacheStore.getState().home?.rowsUpdatedAt : undefined,
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
-    refetchOnMount: true,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
 
@@ -1068,7 +1068,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
     initialDataUpdatedAt: initialHero ? useCacheStore.getState().home?.heroUpdatedAt : undefined,
     staleTime: HOME_HERO_STALE_TIME,
     gcTime: HOME_GC_TIME,
-    refetchOnMount: true,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
 

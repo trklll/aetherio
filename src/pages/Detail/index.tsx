@@ -34,18 +34,20 @@ import {
   writeDetailMediaMeta,
 } from "../../utils/mediaMetadata";
 import {
-  fetchTraktCommentsForMedia,
   syncTraktMarkedUnwatched,
   syncTraktMarkedWatched,
   syncTraktRemovePlayback,
-  type TraktCommentReview,
 } from "../../trakt";
+import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../services/tmdbComments";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
 import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
+import { useAwardsByTmdbId } from "../../hooks/useAwards";
+import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 const IMG      = "https://image.tmdb.org/t/p";
 const DEBUG_LOGO = false;
 const DETAIL_LOGO_KEY = "aetherio-detail-logo";
+const DETAIL_HERO_HEIGHT = "calc(78vh + var(--app-shell-nav-height) - 150px)";
 
 function preloadImage(url?: string | null) {
   if (!url) return Promise.resolve();
@@ -108,8 +110,6 @@ interface DetailData {
   voteAverage?:number;
 }
 
-type TraktCommentsMode = "title" | "episode";
-
 function numberValue(value: unknown) {
   const next = Number(value);
   return Number.isFinite(next) && next > 0 ? next : undefined;
@@ -158,6 +158,10 @@ function formatDateLabel(value?: string) {
     month: "short",
     year: "numeric",
   });
+}
+
+function detailPageCacheKey(type?: string, id?: string) {
+  return type && id ? `${type}:${id}` : "";
 }
 
 function normalizeMojibakeText(value?: string | null) {
@@ -687,18 +691,18 @@ export default function DetailPage() {
   const { type, id } = useParams<{type:string;id:string}>();
   const navigate = useNavigate();
   const location = useLocation();
-  const [data, setData]         = useState<DetailData|null>(null);
-  const [loading, setLoading]   = useState(true);
+  const routeCacheKey = detailPageCacheKey(type, id);
+  const initialCachedDetail = readPageDataCache<DetailData>("detail", routeCacheKey);
+  const [data, setData]         = useState<DetailData|null>(() => initialCachedDetail);
+  const [loading, setLoading]   = useState(() => !initialCachedDetail);
   const [season, setSeason]     = useState(1);
   const [showMore, setShowMore] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
   const [logoStatus, setLogoStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [cachedLogo, setCachedLogo] = useState<string | null>(() => readCachedLogo(getDetailLogoKey(type, id)));
-  const [commentsMode, setCommentsMode] = useState<TraktCommentsMode>("title");
-  const [commentsEpisodeTarget, setCommentsEpisodeTarget] = useState<Episode | null>(null);
-  const [traktComments, setTraktComments] = useState<TraktCommentReview[]>([]);
-  const [traktCommentsLoading, setTraktCommentsLoading] = useState(false);
-  const [traktCommentsError, setTraktCommentsError] = useState("");
+  const [tmdbComments, setTmdbComments] = useState<TmdbCommentReview[]>([]);
+  const [tmdbCommentsLoading, setTmdbCommentsLoading] = useState(false);
+  const [tmdbCommentsError, setTmdbCommentsError] = useState("");
   const [detailMenuOpen, setDetailMenuOpen] = useState(false);
   const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
@@ -706,9 +710,20 @@ export default function DetailPage() {
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const detailMenuButtonRef = useRef<HTMLButtonElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
+  const awardBadgeRef = useRef<HTMLDivElement>(null);
+  const detailContentRef = useRef<HTMLDivElement>(null);
+  const detailScrollRef = useRef<HTMLDivElement>(null);
+  const backdropImageRef = useRef<HTMLImageElement>(null);
+  const backdropBlurAmountRef = useRef(0);
+  const metadataVignetteRef = useRef<HTMLDivElement>(null);
+  const metadataVignetteOpacityRef = useRef(1);
+  const darkOverlayRef = useRef<HTMLDivElement>(null);
+  const darkOverlayOpacityRef = useRef(0);
   const getEnabled = useAddonStore(s => s.getEnabledAddons);
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const mdbListSettings = useMdbListSettings();
+  const tmdbIdForAwards = data?.ids?.tmdb ?? (id?.startsWith("tmdb:") ? Number(id.replace("tmdb:", "")) : null);
+  const awards = useAwardsByTmdbId(type ?? "", typeof tmdbIdForAwards === "number" ? tmdbIdForAwards : null, Boolean(type && (tmdbIdForAwards !== null)));
   const fullMdbListSettings = ({
     ...mdbListSettings,
     showTrakt: true,
@@ -743,11 +758,6 @@ export default function DetailPage() {
   ]);
 
   useEffect(() => {
-    setCommentsMode("title");
-    setCommentsEpisodeTarget(null);
-  }, [type, id]);
-
-  useEffect(() => {
     if (!showMore && !backgroundPickerOpen && !logoPickerOpen) return;
     const scrollY = window.scrollY;
     const previousBodyOverflow = document.body.style.overflow;
@@ -755,7 +765,8 @@ export default function DetailPage() {
     const previousBodyPosition = document.body.style.position;
     const previousBodyTop = document.body.style.top;
     const previousBodyWidth = document.body.style.width;
-    const shellScroll = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    const shellScroll = heroRef.current?.closest<HTMLElement>("[data-aetherio-scroll-shell]")
+      ?? document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
     const previousShellOverflowY = shellScroll?.style.overflowY ?? "";
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
@@ -797,6 +808,79 @@ export default function DetailPage() {
     playHeroExpandAnimation(target, () => { clearSharedElementName(); });
   }, [loading, data?.id]);
 
+  useLayoutEffect(() => {
+    if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    backdropBlurAmountRef.current = 0;
+    metadataVignetteOpacityRef.current = 1;
+    gsap.set(backdropImageRef.current, { filter: "blur(0px)", scale: 1 });
+    gsap.set(metadataVignetteRef.current, { opacity: 1 });
+  }, [type, id]);
+
+  useLayoutEffect(() => {
+    backdropBlurAmountRef.current = -1;
+    updateBackdropBlur(detailScrollRef.current?.scrollTop ?? 0);
+  }, [data?.backdrop, data?.poster]);
+
+  useLayoutEffect(() => {
+    const root = detailContentRef.current;
+    if (loading || !data || !root) return;
+    const items = Array.from(root.querySelectorAll<HTMLElement>(
+      ".detail-page-hero > div, .detail-page-content > *",
+    ));
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    timeline.fromTo(
+      backdropImageRef.current,
+      { opacity: 0, scale: 1.02 },
+      { opacity: 1, scale: 1, duration: 0.68 },
+      0,
+    );
+    timeline.fromTo(
+      items,
+      { opacity: 0, y: 16 },
+      { opacity: 1, y: 0, duration: 0.5, stagger: 0.06, clearProps: "transform" },
+      0.08,
+    );
+    return () => {
+      timeline.kill();
+      gsap.set(items, { clearProps: "opacity,transform" });
+    };
+  }, [loading, data?.id]);
+
+  useLayoutEffect(() => {
+    const badge = awardBadgeRef.current;
+    const award = awards[0];
+    if (!badge || !award) return;
+
+    const tween = gsap.fromTo(
+      badge,
+      {
+        autoAlpha: 0,
+        x: 14,
+        y: 8,
+        scale: 0.96,
+      },
+      {
+        autoAlpha: 1,
+        x: 0,
+        y: 0,
+        scale: 1,
+        duration: 0.52,
+        ease: "power3.out",
+        clearProps: "transform,visibility",
+      },
+    );
+
+    return () => {
+      tween.kill();
+      gsap.set(badge, { clearProps: "opacity,transform,visibility" });
+    };
+  }, [
+    awards[0]?.awardName,
+    awards[0]?.category,
+    awards[0]?.year,
+    awards[0]?.winner,
+  ]);
+
   useEffect(() => () => { clearSharedElementName(); }, []);
 
   useEffect(() => {
@@ -822,7 +906,15 @@ export default function DetailPage() {
   }, []);
 
   async function load(t:string, mediaId:string) {
+    const cacheKey = detailPageCacheKey(t, mediaId);
+    const cachedDetail = readPageDataCache<DetailData>("detail", cacheKey);
+    if (cachedDetail) {
+      setData(cachedDetail);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setData(null);
     const shouldUseTmdbArtwork = allowTmdbArtworkFallback || mediaId.startsWith("tmdb:");
     const logoOverride = readDetailLogoOverride(t, mediaId);
     const hasLogoOverride = logoOverride !== undefined;
@@ -856,6 +948,11 @@ export default function DetailPage() {
       logoLog("detail data ready", { resolvedLogo: next.logo ?? null });
       if (next.logo) setCachedLogo(writeCachedLogo(getDetailLogoKey(t, mediaId), next.logo) ?? null);
       else setCachedLogo(null);
+      await Promise.all([
+        preloadImage(next.backdrop),
+        preloadImage(next.poster),
+        preloadImage(next.logo),
+      ]);
       writeDetailMediaMeta({
         id: next.id,
         type: next.type,
@@ -867,13 +964,9 @@ export default function DetailPage() {
         year: next.year,
         mdbListRatings: next.mdbListRatings,
       });
+      writePageDataCache("detail", cacheKey, next);
       setData(next);
       setLoading(false);
-      void Promise.all([
-        preloadImage(next.backdrop),
-        preloadImage(next.poster),
-        preloadImage(next.logo),
-      ]);
     };
     const finishWithRatings = async (next: DetailData) => {
       if (!fullMdbListSettings.enabled || !fullMdbListSettings.apiKey.trim()) {
@@ -1262,51 +1355,58 @@ export default function DetailPage() {
 
   useEffect(() => {
     if (!data) {
-      setTraktComments([]);
-      setTraktCommentsError("");
-      setTraktCommentsLoading(false);
+      setTmdbComments([]);
+      setTmdbCommentsError("");
+      setTmdbCommentsLoading(false);
       return;
     }
 
     let cancelled = false;
-    const targetEpisode = commentsMode === "episode" ? commentsEpisodeTarget : null;
-    if (commentsMode === "episode" && !targetEpisode) {
-      setCommentsMode("title");
+
+    const commentsCacheKey = `tmdb:${data.type}:${data.id}`;
+    const cachedComments = readPageDataCache<TmdbCommentReview[]>("detail-comments", commentsCacheKey);
+    if (cachedComments) {
+      setTmdbComments(cachedComments);
+      setTmdbCommentsError("");
+      setTmdbCommentsLoading(false);
       return;
     }
 
-    setTraktCommentsLoading(true);
-    setTraktCommentsError("");
-    void fetchTraktCommentsForMedia({
+    if (!data.ids?.tmdb && !data.id.startsWith("tmdb:") && !data.ids?.imdb) {
+      setTmdbComments([]);
+      setTmdbCommentsError("");
+      setTmdbCommentsLoading(false);
+      return;
+    }
+
+    setTmdbCommentsLoading(true);
+    setTmdbCommentsError("");
+    void fetchTmdbCommentsForMedia({
       type: data.type,
       id: data.id,
-      ids: data.ids,
-      season: targetEpisode?.season,
-      episode: targetEpisode?.episode,
-    }).then(page => {
+      tmdbId: data.ids?.tmdb,
+      imdbId: data.ids?.imdb,
+    }).then(items => {
       if (cancelled) return;
-      setTraktComments(page.items);
-      setTraktCommentsError("");
+      writePageDataCache("detail-comments", commentsCacheKey, items);
+      setTmdbComments(items);
+      setTmdbCommentsError("");
     }).catch(error => {
       if (cancelled) return;
-      setTraktComments([]);
-      setTraktCommentsError(String(error instanceof Error ? error.message : error));
+      setTmdbComments([]);
+      setTmdbCommentsError(String(error instanceof Error ? error.message : error));
     }).finally(() => {
-      if (!cancelled) setTraktCommentsLoading(false);
+      if (!cancelled) setTmdbCommentsLoading(false);
     });
 
     return () => {
       cancelled = true;
     };
   }, [
-    commentsMode,
     data?.id,
     data?.ids?.imdb,
     data?.ids?.tmdb,
-    data?.ids?.trakt,
     data?.type,
-    commentsEpisodeTarget?.episode,
-    commentsEpisodeTarget?.season,
   ]);
 
   useEffect(() => {
@@ -1323,13 +1423,36 @@ export default function DetailPage() {
         width: "100vw",
         left: "50%",
         marginLeft: "-50vw",
-        height: "calc(92vh + var(--app-shell-nav-height) - 150px)",
-        minHeight: 450,
+        height: "100vh",
         marginTop: "calc(-1 * var(--app-shell-nav-height))",
         overflow: "hidden",
+        background: "#08090b",
       }}
     >
-      <div className="skeleton" style={{ width: "100%", height: "100%" }} />
+      <div className="detail-page-scale" style={{ position:"relative",minHeight:"100vh" }}>
+        <div style={{ position:"relative",width:"100vw",left:"50%",marginLeft:"-50vw",height:DETAIL_HERO_HEIGHT,minHeight:450,overflow:"hidden" }}>
+          <div className="skeleton" style={{ position:"absolute",inset:0,opacity:0.38 }} />
+          <div style={{ position:"absolute",inset:0,background:"linear-gradient(90deg, rgba(0,0,0,0.78), rgba(0,0,0,0.18) 58%, transparent)" }} />
+          <div style={{ position:"absolute",left:"var(--app-safe-x)",bottom:4,width:460,maxWidth:"42vw",paddingBottom:22,display:"flex",flexDirection:"column",gap:11 }}>
+            <div className="skeleton" style={{ width:250,height:72,borderRadius:12 }} />
+            <div className="skeleton" style={{ width:285,height:15,borderRadius:999 }} />
+            <div className="skeleton" style={{ width:"100%",height:13,borderRadius:999 }} />
+            <div className="skeleton" style={{ width:"82%",height:13,borderRadius:999 }} />
+            <div style={{ display:"flex",gap:12,marginTop:9 }}>
+              <div className="skeleton" style={{ width:180,height:48,borderRadius:999 }} />
+              <div className="skeleton" style={{ width:48,height:48,borderRadius:999 }} />
+            </div>
+          </div>
+        </div>
+        <div style={{ padding:"36px var(--app-safe-x)",overflow:"hidden" }}>
+          <div className="skeleton" style={{ width:150,height:18,borderRadius:999,marginBottom:18 }} />
+          <div style={{ display:"flex",gap:10 }}>
+            {[0,1,2,3,4].map(item => (
+              <div key={item} className="skeleton" style={{ width:302,height:196,borderRadius:14,flexShrink:0 }} />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
   if (!data)   return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>Error cargando.</div>;
@@ -1596,14 +1719,6 @@ export default function DetailPage() {
     goToStreams();
   }
 
-  function showEpisodeTraktComments(episode: Episode) {
-    setCommentsEpisodeTarget(episode);
-    setCommentsMode("episode");
-    window.setTimeout(() => {
-      scrollToElementGsap(commentsSectionRef.current);
-    }, 80);
-  }
-
   function applyDetailBackground(background: string) {
     writeDetailBackgroundOverride(detailData.type, detailData.id, background);
     writeDetailMediaMeta({
@@ -1616,7 +1731,12 @@ export default function DetailPage() {
       description: detailData.description,
       year: detailData.year,
     });
-    setData(current => current ? { ...current, backdrop: background } : current);
+    setData(current => {
+      if (!current) return current;
+      const next = { ...current, backdrop: background };
+      writePageDataCache("detail", routeCacheKey, next);
+      return next;
+    });
     setBackgroundPickerOpen(false);
   }
 
@@ -1665,22 +1785,129 @@ export default function DetailPage() {
       year: detailData.year,
       mdbListRatings: detailData.mdbListRatings,
     });
-    setData(current => current ? { ...current, logo: nextLogo } : current);
+    setData(current => {
+      if (!current) return current;
+      const next = { ...current, logo: nextLogo };
+      writePageDataCache("detail", routeCacheKey, next);
+      return next;
+    });
     setLogoPickerOpen(false);
   }
 
-  return (
-    <div className="detail-page-scale aetherio-detail-fade" key={`detail-fade-${data.id}`} style={{ minHeight:"100vh", background:"#1f1f1f" }}>
-      {/* HERO full-bleed */}
-      <div className="detail-page-hero" ref={heroRef} style={{ position:"relative", width:"100vw", left:"50%", marginLeft:"-50vw", height:"calc(92vh + var(--app-shell-nav-height) - 150px)", minHeight:450, marginTop:"calc(-1 * var(--app-shell-nav-height))", overflow:"hidden" }}>
-        {(data.backdrop??data.poster)&&(
-          <img src={data.backdrop??data.poster} alt="" width="1920" height="1080"
-            style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"center top",aspectRatio:"1920/1080" }} />
-        )}
-        <div style={{ position:"absolute",inset:0,background:"linear-gradient(to right,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.4) 40%,transparent 65%)",pointerEvents:"none" }} />
-        <div style={{ position:"absolute",inset:0,background:"linear-gradient(to top,rgba(31,31,31,1) 0%,rgba(31,31,31,0.55) 22%,transparent 52%)",pointerEvents:"none" }} />
+  function updateBackdropBlur(scrollTop: number) {
+    const blur = Math.round(Math.min(28, Math.max(0, scrollTop / 12)));
+    const vignetteOpacity = Math.round(Math.max(0, 1 - scrollTop / 240) * 100) / 100;
+    const darkOpacity = Math.round(Math.min(0.55, Math.max(0, scrollTop / 400)) * 100) / 100;
+    if (blur !== backdropBlurAmountRef.current) {
+      backdropBlurAmountRef.current = blur;
+      tweenTo(backdropImageRef.current, {
+        filter: `blur(${blur}px)`,
+        scale: 1 + blur * 0.0018,
+      }, 0.28);
+    }
+    if (vignetteOpacity !== metadataVignetteOpacityRef.current) {
+      metadataVignetteOpacityRef.current = vignetteOpacity;
+      tweenTo(metadataVignetteRef.current, { opacity: vignetteOpacity }, 0.24);
+    }
+    if (darkOpacity !== darkOverlayOpacityRef.current) {
+      darkOverlayOpacityRef.current = darkOpacity;
+      tweenTo(darkOverlayRef.current, { opacity: darkOpacity }, 0.24);
+    }
+  }
 
-        <div style={{ position:"absolute",bottom:20,left:0,padding:"0 var(--app-safe-x) 36px",maxWidth:520 }}>
+  return (
+    <div
+      style={{
+        position:"relative",
+        width:"100%",
+        height:"100vh",
+        marginTop:"calc(-1 * var(--app-shell-nav-height))",
+        overflow:"hidden",
+        background:"#000",
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          position:"absolute",
+          inset:0,
+          zIndex:0,
+          overflow:"hidden",
+          background:"#000",
+          pointerEvents:"none",
+        }}
+      >
+        {(data.backdrop ?? data.poster) ? (
+          <div
+            style={{
+              position:"absolute",
+              left:"50%",
+              top:"50%",
+              width:"max(100vw, 177.777778vh)",
+              height:"max(100vh, 56.25vw)",
+              aspectRatio:"16 / 9",
+              transform:"translate(-50%, -50%)",
+            }}
+          >
+            <img
+              ref={backdropImageRef}
+              src={data.backdrop ?? data.poster}
+              alt=""
+              width="1920"
+              height="1080"
+              style={{
+                width:"100%",
+                height:"100%",
+                objectFit:"cover",
+                objectPosition:"center",
+                filter:"blur(0px)",
+                transform:"scale(1)",
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+      <div
+        ref={metadataVignetteRef}
+        aria-hidden="true"
+        style={{
+          position:"absolute",
+          inset:0,
+          zIndex:1,
+          opacity:1,
+          background:"radial-gradient(ellipse 55% 85% at center, transparent 44%, rgba(0,0,0,0.28) 68%, rgba(0,0,0,0.9) 100%)",
+          pointerEvents:"none",
+        }}
+      />
+      <div
+        ref={darkOverlayRef}
+        aria-hidden="true"
+        style={{
+          position:"absolute",
+          inset:0,
+          zIndex:1,
+          opacity:0,
+          background:"rgba(0,0,0,1)",
+          pointerEvents:"none",
+        }}
+      />
+      <div
+        ref={detailScrollRef}
+        data-aetherio-scroll-shell
+        onScroll={event => updateBackdropBlur(event.currentTarget.scrollTop)}
+        style={{
+          position:"absolute",
+          inset:0,
+          zIndex:2,
+          overflowY:"auto",
+          overflowX:"hidden",
+          overscrollBehavior:"contain",
+        }}
+      >
+      <div ref={detailContentRef} className="detail-page-scale" key={`detail-content-${data.id}`} style={{ position:"relative",minHeight:"100vh",background:"transparent" }}>
+      {/* HERO full-bleed */}
+      <div className="detail-page-hero" ref={heroRef} style={{ position:"relative", width:"100vw", left:"50%", marginLeft:"-50vw", height:DETAIL_HERO_HEIGHT, minHeight:450, overflow:"hidden" }}>
+        <div style={{ position:"absolute",bottom:4,left:0,padding:"0 var(--app-safe-x) 22px",maxWidth:520 }}>
           {displayLogo && logoStatus !== "error" ? (
             <div style={{ minHeight:100,display:"flex",alignItems:"center",marginBottom:14,position:"relative" }}>
               <button
@@ -1708,22 +1935,22 @@ export default function DetailPage() {
             <h1 style={{ fontSize:"2.6rem",fontWeight:900,color:"#fff",marginBottom:14,lineHeight:1.05,textShadow:"0 2px 20px rgba(0,0,0,0.8)" }}>{data.name}</h1>
           )}
           <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:10,flexWrap:"wrap" }}>
-            <span style={{ fontSize:15,color:"rgba(255,255,255,0.65)",fontWeight:500 }}>{typeLabel}</span>
-            {data.genres?.slice(0,2).map(g=><span key={g} style={{ fontSize:15,color:"rgba(255,255,255,0.55)" }}>· {g}</span>)}
+            <span style={{ fontSize:15,color:"rgba(255,255,255,0.8)",fontWeight:500 }}>{typeLabel}</span>
+            {data.genres?.slice(0,2).map(g=><span key={g} style={{ fontSize:15,color:"rgba(255,255,255,0.75)" }}>· {g}</span>)}
           </div>
           <div style={{ marginBottom:12 }}>
-            <span style={{ fontSize:15,color:"rgba(255,255,255,0.65)",lineHeight:1.6 }}>{descShort}</span>
-            {hasMore&&<button onClick={openShowMore} style={{ fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.7)",background:"none",border:"none",cursor:"pointer",marginLeft:6 }}>MÁS</button>}
+            <span style={{ fontSize:15,color:"rgba(255,255,255,0.8)",lineHeight:1.6 }}>{descShort}</span>
+            {hasMore&&<button onClick={openShowMore} style={{ fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.85)",background:"none",border:"none",cursor:"pointer",marginLeft:6 }}>MÁS</button>}
           </div>
           {data.mdbListRatings ? <MDBListRatingsRow ratings={data.mdbListRatings} compact /> : null}
           <div style={{ display:"flex",alignItems:"center",gap:7,marginTop:8,marginBottom:18,flexWrap:"wrap" }}>
-            {data.year&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.5)" }}>{data.year}</span>}
-            {data.runtime&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.5)" }}>· {formatRuntime(data.runtime) || data.runtime}</span>}
+            {data.year&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.7)" }}>{data.year}</span>}
+            {data.runtime&&<span style={{ fontSize:13,color:"rgba(255,255,255,0.7)" }}>· {formatRuntime(data.runtime) || data.runtime}</span>}
           </div>
           <div style={{ display:"flex",alignItems:"center",gap:12 }}>
             {/* Reproducir -> /episode */}
             <button onClick={playFromDetail}
-              style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 3px 12px rgba(0,0,0,0.38)" }}>
+              style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 3px 12px rgba(0,0,0,0.38)",textShadow:"none" }}>
               <Play size={16} fill="black" /> {playLabel}
             </button>
             <button
@@ -1771,7 +1998,41 @@ export default function DetailPage() {
         </div>
 
         {(data.cast?.length||data.director)&&(
-          <div style={{ position:"absolute",bottom:20,right:0,padding:"0 var(--app-safe-x) 36px",textAlign:"right",maxWidth:300 }}>
+          <div className="detail-hero-credits" style={{ position:"absolute",bottom:4,right:0,padding:"0 var(--app-safe-x) 22px",textAlign:"right",maxWidth:300 }}>
+            {awards.length > 0 && awards[0] && (
+              <div
+                ref={awardBadgeRef}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  marginBottom: 10,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif',
+                }}
+              >
+                <div style={{ color: "#fff", lineHeight: 1.1, textShadow: "0 2px 10px rgba(0,0,0,0.7)", textAlign: "right" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: -0.2 }}>
+                    {awards[0].winner ? "Ganadora del" : "Nominada al"} {awards[0].awardName}{awards[0].year ? ` ${awards[0].year}` : ""}
+                  </div>
+                  {awards[0].category && (
+                    <div style={{ fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.75)", marginTop: 2 }}>
+                      {awards[0].category}
+                    </div>
+                  )}
+                </div>
+                {awards[0].awardLogoUrl && (
+                  <img
+                    className="detail-award-logo-adaptive"
+                    src={awards[0].awardLogoUrl}
+                    alt={awards[0].awardName}
+                    loading="lazy"
+                    decoding="async"
+                    style={{ height: 50, width: "auto", maxWidth: 100, objectFit: "contain", flexShrink: 0 }}
+                  />
+                )}
+              </div>
+            )}
             {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button></span>))}</p>)}
             {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)" }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Director </span><button type="button" onClick={() => data.directorId && navigate(`/person/${encodeURIComponent(String(data.directorId))}`)} disabled={!data.directorId} onMouseEnter={data.directorId?(e)=>e.currentTarget.style.color="#fff":undefined} onMouseLeave={data.directorId?(e)=>e.currentTarget.style.color="rgba(255,255,255,0.8)":undefined} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:data.directorId ? "pointer" : "default",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{data.director}</button></p>}
           </div>
@@ -1779,7 +2040,7 @@ export default function DetailPage() {
         {showMore&&(
           <div
             onClick={()=>setShowMore(false)}
-            style={{ position:"absolute",inset:0,zIndex:20,display:"flex",alignItems:"center",justifyContent:"center",padding:"var(--app-safe-x)",background:"rgba(0,0,0,0.64)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)" }}
+            style={{ position:"fixed",inset:0,zIndex:20,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"calc(var(--app-shell-nav-height) + 24px) var(--app-safe-x) var(--app-safe-x)",background:"rgba(0,0,0,0.64)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)" }}
           >
             <div
               className="liquid-glass-dark"
@@ -1794,7 +2055,7 @@ export default function DetailPage() {
         {backgroundPickerOpen&&(
           <div
             onClick={()=>setBackgroundPickerOpen(false)}
-            style={{ position:"absolute",inset:0,zIndex:22,display:"flex",alignItems:"center",justifyContent:"center",padding:"var(--app-safe-x)",background:"rgba(0,0,0,0.66)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)" }}
+            style={{ position:"fixed",inset:0,zIndex:22,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"calc(var(--app-shell-nav-height) + 24px) var(--app-safe-x) var(--app-safe-x)",background:"rgba(0,0,0,0.66)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)" }}
           >
             <div
               className="liquid-glass-dark"
@@ -1832,7 +2093,7 @@ export default function DetailPage() {
         {logoPickerOpen&&(
           <div
             onClick={()=>setLogoPickerOpen(false)}
-            style={{ position:"absolute",inset:0,zIndex:22,display:"flex",alignItems:"center",justifyContent:"center",padding:"var(--app-safe-x)",background:"rgba(0,0,0,0.66)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)" }}
+            style={{ position:"fixed",inset:0,zIndex:22,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"calc(var(--app-shell-nav-height) + 24px) var(--app-safe-x) var(--app-safe-x)",background:"rgba(0,0,0,0.66)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)" }}
           >
             <div
               className="liquid-glass-dark"
@@ -1877,7 +2138,7 @@ export default function DetailPage() {
       </div>
 
       {/* SECCIONES INFERIORES */}
-      <div style={{ padding:"36px var(--app-safe-x)",display:"flex",flexDirection:"column",gap:44,background:"#1f1f1f" }}>
+      <div className="detail-page-content" style={{ padding:"36px var(--app-safe-x)",display:"flex",flexDirection:"column",gap:44,background:"transparent" }}>
 
         {/* Episodios */}
         {!isMovie&&curSeason&&(
@@ -1903,7 +2164,7 @@ export default function DetailPage() {
                   fallbackImage={data.backdrop ?? undefined}
                   locked={isEpisodeLocked(ep)}
                   progressEntry={episodeProgressMap.get(`${ep.season}:${ep.episode}`)}
-                  seasonMarked={seasonMarkedMap.get(curSeason.number) ?? false}
+                  seasonMarked={seasonMarkedMap.get(0) ?? false}
                   previousMarked={arePreviousEpisodesMarked(ep.season, ep.episode)}
                   onPlay={()=>goToStreams(ep.season,ep.episode,ep.name)}
                   onMarkWatched={() => markEpisodeFromCard(ep)}
@@ -1911,7 +2172,8 @@ export default function DetailPage() {
                   onMarkSeasonUnwatched={() => markSeasonAsUnwatched(ep.season)}
                   onMarkPreviousSeasonWatched={() => markPreviousEpisodesAsWatched(ep.season, ep.episode)}
                   onMarkPreviousSeasonUnwatched={() => markPreviousEpisodesAsUnwatched(ep.season, ep.episode)}
-                  onShowTraktComments={() => showEpisodeTraktComments(ep)}
+                  onShowComments={() => scrollToElementGsap(commentsSectionRef.current)}
+                  hasTmdbComments={tmdbComments.length > 0}
                   onMarkUnwatched={(entry) => {
                     const removed = removeContinueWatchingEntry(entry.key);
                     void syncTraktRemovePlayback(removed ?? entry);
@@ -1943,7 +2205,8 @@ export default function DetailPage() {
                   onMarkSeasonUnwatched={() => markSeasonAsUnwatched(ep.season)}
                   onMarkPreviousSeasonWatched={() => markPreviousEpisodesAsWatched(ep.season, ep.episode)}
                   onMarkPreviousSeasonUnwatched={() => markPreviousEpisodesAsUnwatched(ep.season, ep.episode)}
-                  onShowTraktComments={() => showEpisodeTraktComments(ep)}
+                  onShowComments={() => scrollToElementGsap(commentsSectionRef.current)}
+                  hasTmdbComments={tmdbComments.length > 0}
                   onMarkUnwatched={(entry) => {
                     const removed = removeContinueWatchingEntry(entry.key);
                     void syncTraktRemovePlayback(removed ?? entry);
@@ -1965,14 +2228,10 @@ export default function DetailPage() {
         )}
 
         <div ref={commentsSectionRef}>
-          <TraktCommentsSection
-            comments={traktComments}
-            loading={traktCommentsLoading}
-            error={traktCommentsError}
-            mode={commentsMode}
-            episodeLabel={commentsEpisodeTarget ? `T${commentsEpisodeTarget.season} E${commentsEpisodeTarget.episode}` : ""}
-            canSwitchMode={Boolean(commentsEpisodeTarget)}
-            onModeChange={setCommentsMode}
+          <TmdbCommentsSection
+            comments={tmdbComments}
+            loading={tmdbCommentsLoading}
+            error={tmdbCommentsError}
           />
         </div>
 
@@ -2066,6 +2325,8 @@ export default function DetailPage() {
         )}
       </div>
 
+      </div>
+      </div>
     </div>
   );
 }
@@ -2155,22 +2416,14 @@ function SectionH({ title, onClick }:{title:string;onClick?:()=>void}) {
   );
 }
 
-function TraktCommentsSection({
+function TmdbCommentsSection({
   comments,
   loading,
   error,
-  mode,
-  episodeLabel,
-  canSwitchMode,
-  onModeChange,
 }: {
-  comments: TraktCommentReview[];
+  comments: TmdbCommentReview[];
   loading: boolean;
   error: string;
-  mode: TraktCommentsMode;
-  episodeLabel: string;
-  canSwitchMode: boolean;
-  onModeChange: (mode: TraktCommentsMode) => void;
 }) {
   if (!loading && !error && !comments.length) return null;
 
@@ -2178,17 +2431,9 @@ function TraktCommentsSection({
     <section>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,marginBottom:16 }}>
         <div>
-          <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>Comentarios de Trakt</h2>
-          <p style={{ marginTop:6,fontSize:12,color:"rgba(255,255,255,0.42)" }}>
-            {mode === "episode" && episodeLabel ? `Comentarios del episodio ${episodeLabel}` : "Comentarios del título"}
-          </p>
+          <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>Comentarios de TMDB</h2>
+          <p style={{ marginTop:6,fontSize:12,color:"rgba(255,255,255,0.42)" }}>Comentarios del título</p>
         </div>
-        {canSwitchMode ? (
-          <div className="liquid-glass-pill" style={{ display:"flex",alignItems:"center",gap:4,padding:4 }}>
-            <CommentModeButton active={mode === "title"} onClick={() => onModeChange("title")}>Título</CommentModeButton>
-            <CommentModeButton active={mode === "episode"} onClick={() => onModeChange("episode")}>{episodeLabel || "Episodio"}</CommentModeButton>
-          </div>
-        ) : null}
       </div>
       {error ? (
         <div className="liquid-glass-dark" style={{ borderRadius:14,padding:"14px 16px",fontSize:13,fontWeight:500,color:"rgba(255,255,255,0.58)" }}>
@@ -2200,57 +2445,19 @@ function TraktCommentsSection({
         </div>
       ) : (
         <ScrollRow gap={10}>
-          {comments.slice(0, 18).map(comment => <TraktCommentCard key={comment.id} comment={comment} />)}
+          {comments.slice(0, 18).map(comment => <TmdbCommentCard key={comment.id} comment={comment} />)}
         </ScrollRow>
       )}
     </section>
   );
 }
 
-function CommentModeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        minWidth:80,
-        border:"none",
-        borderRadius:999,
-        padding:"7px 12px",
-        background:active ? "rgba(255,255,255,0.92)" : "transparent",
-        color:active ? "#111" : "rgba(255,255,255,0.62)",
-        fontSize:12,
-        fontWeight:600,
-        cursor:"pointer",
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function TraktCommentCard({ comment }: { comment: TraktCommentReview }) {
-  const [spoilerRevealed, setSpoilerRevealed] = useState(false);
-  const spoilerHidden = comment.hasSpoilerContent && !spoilerRevealed;
-  const commentText = spoilerHidden
-    ? "Comentario con spoiler oculto."
-    : comment.comment;
+function TmdbCommentCard({ comment }: { comment: TmdbCommentReview }) {
+  const commentText = comment.comment;
   return (
     <article
       className="liquid-glass-dark"
-      role={comment.hasSpoilerContent ? "button" : undefined}
-      tabIndex={comment.hasSpoilerContent ? 0 : undefined}
-      onClick={() => {
-        if (comment.hasSpoilerContent) setSpoilerRevealed(true);
-      }}
-      onKeyDown={event => {
-        if (!comment.hasSpoilerContent) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          setSpoilerRevealed(true);
-        }
-      }}
-      style={{ width:320,minHeight:144,flexShrink:0,borderRadius:14,padding:16,display:"flex",flexDirection:"column",gap:10,cursor:comment.hasSpoilerContent ? "pointer" : "default" }}
+      style={{ width:320,minHeight:144,flexShrink:0,borderRadius:14,padding:16,display:"flex",flexDirection:"column",gap:10,cursor:"default" }}
     >
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12 }}>
         <div style={{ minWidth:0 }}>
@@ -2267,12 +2474,11 @@ function TraktCommentCard({ comment }: { comment: TraktCommentReview }) {
           </span>
         ) : null}
       </div>
-      <p style={{ fontSize:13,lineHeight:1.5,fontWeight:400,color:spoilerHidden ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.66)",display:"-webkit-box",WebkitLineClamp:4,WebkitBoxOrient:"vertical",overflow:"hidden" }}>
+      <p style={{ fontSize:13,lineHeight:1.5,fontWeight:400,color:"rgba(255,255,255,0.66)",display:"-webkit-box",WebkitLineClamp:4,WebkitBoxOrient:"vertical",overflow:"hidden" }}>
         {commentText}
       </p>
       <div style={{ marginTop:"auto",display:"flex",alignItems:"center",gap:8,fontSize:11,fontWeight:500,color:"rgba(255,255,255,0.38)" }}>
         {comment.review ? <span>Review</span> : null}
-        {comment.likes > 0 ? <span>{comment.likes} likes</span> : null}
       </div>
     </article>
   );
@@ -2503,11 +2709,11 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
           gap,
           overflowX: "auto",
           overflowY: "visible",
-          margin: "0 calc(-1 * var(--app-safe-x))",
-          paddingTop: 20,
-          paddingBottom: 20,
+          margin: "-12px calc(-1 * var(--app-safe-x)) -28px",
+          paddingTop: 32,
+          paddingBottom: 48,
           paddingLeft: "var(--app-safe-x)",
-          paddingRight: 0,
+          paddingRight: "var(--app-safe-x)",
           scrollPaddingInline: 0,
           scrollbarWidth: "none",
         }}
@@ -2549,9 +2755,10 @@ function EpCard({
   onMarkSeasonUnwatched,
   onMarkPreviousSeasonWatched,
   onMarkPreviousSeasonUnwatched,
-  onShowTraktComments,
+  onShowComments,
+  hasTmdbComments,
   onMarkUnwatched,
-}:{ep:Episode; scrollKey:string; locked?:boolean; progressEntry?: ContinueWatchingEntry; fallbackImage?:string; onPlay:()=>void; onMarkWatched:()=>void; seasonMarked:boolean; previousMarked:boolean; onMarkSeasonWatched:()=>void; onMarkSeasonUnwatched:()=>void; onMarkPreviousSeasonWatched:()=>void; onMarkPreviousSeasonUnwatched:()=>void; onShowTraktComments:()=>void; onMarkUnwatched:(entry: ContinueWatchingEntry)=>void}) {
+}:{ep:Episode; scrollKey:string; locked?:boolean; progressEntry?: ContinueWatchingEntry; fallbackImage?:string; onPlay:()=>void; onMarkWatched:()=>void; seasonMarked:boolean; previousMarked:boolean; onMarkSeasonWatched:()=>void; onMarkSeasonUnwatched:()=>void; onMarkPreviousSeasonWatched:()=>void; onMarkPreviousSeasonUnwatched:()=>void; onShowComments:()=>void; hasTmdbComments?:boolean; onMarkUnwatched:(entry: ContinueWatchingEntry)=>void}) {
   const watched = Boolean(progressEntry?.completed);
   const progress = progressEntry ? progressPercent(progressEntry) : 0;
   const showProgress = !watched && progress > 0.5;
@@ -2563,6 +2770,7 @@ function EpCard({
         ? formatRuntime(ep.runtime)
         : "";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -2586,6 +2794,7 @@ function EpCard({
       }}
       style={{ opacity:locked ? 0.58 : 1, cursor:locked ? "not-allowed" : "pointer" }}
       onMouseEnter={(e)=>{
+        setFocused(true);
         const card = e.currentTarget as HTMLDivElement;
         tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
         gsap.set(card,{boxShadow:"0 18px 40px rgba(0,0,0,0.42)"});
@@ -2593,6 +2802,7 @@ function EpCard({
         if(img) tweenTo(img,{scale:1.04},0.28);
       }}
       onMouseLeave={(e)=>{
+        setFocused(false);
         const card = e.currentTarget as HTMLDivElement;
         tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
         gsap.set(card,{boxShadow:"none"});
@@ -2635,7 +2845,7 @@ function EpCard({
         <p className="detail-episode-card__eyebrow">EPISODIO {ep.episode}</p>
         <p className="detail-episode-card__title">{ep.name??`Episodio ${ep.episode}`}</p>
         {ep.overview ? (
-          <p className="detail-episode-card__overview">{ep.overview}</p>
+          <p className="detail-episode-card__overview" style={focused ? { color:"rgba(255,255,255,0.92)" } : undefined}>{ep.overview}</p>
         ) : ep.airDate ? (
           <p className="detail-episode-card__overview">{formatDateLabel(ep.airDate)}</p>
         ) : null}
@@ -2656,7 +2866,7 @@ function EpCard({
           previousMarked
             ? { label: "Marcar anteriores episodios a este como no vistos", icon: <EyeOff size={15} />, onSelect: onMarkPreviousSeasonUnwatched }
             : { label: "Marcar anteriores episodios a este como vistos", icon: <Check size={15} />, onSelect: onMarkPreviousSeasonWatched },
-          { label: "Mostrar comentarios de Trakt", icon: <UsersRound size={15} />, onSelect: onShowTraktComments },
+          ...(hasTmdbComments ? [{ label: "Mostrar comentarios de TMDB", icon: <UsersRound size={15} />, onSelect: onShowComments }] : []),
         ]}
       />}
     </div>
@@ -2666,9 +2876,9 @@ function EpCard({
 function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
   const navigate = useNavigate();
   const fallbackThumb = media.backdrop ?? media.poster ?? "";
-  const [thumbSrc, setThumbSrc] = useState(
-    trailer.thumbnail ?? (trailer.key ? `https://img.youtube.com/vi/${trailer.key}/maxresdefault.jpg` : fallbackThumb)
-  );
+  const initialThumb = trailer.thumbnail ?? (trailer.key ? `https://img.youtube.com/vi/${trailer.key}/maxresdefault.jpg` : fallbackThumb);
+  const [thumbSrc, setThumbSrc] = useState(initialThumb);
+  const [thumbFailed, setThumbFailed] = useState(false);
 
   function playTrailer() {
     const stream: MediaStream = trailer.stream ?? {
@@ -2697,6 +2907,8 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     navigate(`/player?${q.toString()}`);
   }
 
+  if (thumbFailed) return null;
+
   return (
     <button
       type="button"
@@ -2717,7 +2929,13 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     >
       {thumbSrc ? (
         <img src={thumbSrc} alt={trailer.name}
-          onError={() => setThumbSrc(trailer.key ? `https://img.youtube.com/vi/${trailer.key}/hqdefault.jpg` : fallbackThumb)}
+          onError={() => {
+            if (trailer.key && /maxresdefault/.test(thumbSrc)) {
+              setThumbSrc(`https://img.youtube.com/vi/${trailer.key}/hqdefault.jpg`);
+            } else {
+              setThumbFailed(true);
+            }
+          }}
           loading="lazy"
           decoding="async"
           style={{ width:"100%",height:"100%",objectFit:"cover",transform:"scale(1)" }} />
@@ -2744,8 +2962,15 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
   const setFocusedScale = (element:HTMLButtonElement,focused:boolean) => {
     setFocused(focused);
     tweenTo(element, { scale: focused ? 1.05 : 1, y: focused ? -4 : 0, zIndex: focused ? 5 : 1 }, 0.32);
-    const img = element.querySelector("img");
-    if (img) tweenTo(img, { scale: focused ? 1.05 : 1 }, 0.32);
+    const portrait = element.querySelector<HTMLElement>("[data-cast-portrait]");
+    if (portrait) {
+      tweenTo(portrait, {
+        scale: focused ? 1.05 : 1,
+        boxShadow: focused
+          ? "0 18px 38px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.18)"
+          : "0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)",
+      }, 0.32);
+    }
   };
   return (
     <button
@@ -2776,18 +3001,23 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
     >
       {portraitAvailable?(
         <img
+          data-cast-portrait
           src={member.profile_path}
           alt={member.name}
           loading="lazy"
           decoding="async"
           onError={()=>setImageFailed(true)}
-          style={{ width:154,height:154,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#272A2F" }}
+          onLoad={(e)=>{
+            const img=e.currentTarget;
+            if(img.naturalWidth<10||img.naturalHeight<10) setImageFailed(true);
+          }}
+          style={{ width:154,height:154,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#272A2F",boxShadow:"0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)" }}
         />
       ):(
-        <div style={{
+        <div data-cast-portrait style={{
           width:154,height:154,borderRadius:"50%",
           background:"linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
-          boxShadow:"0 8px 16px rgba(0,0,0,0.4)",
+          boxShadow:"0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)",
           display:"flex",alignItems:"center",justifyContent:"center",
           fontSize:42,color:"rgba(255,255,255,0.94)",fontWeight:900,letterSpacing:1,flexShrink:0,
           fontFamily:"Inter, system-ui, sans-serif"

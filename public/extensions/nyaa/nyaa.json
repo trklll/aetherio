@@ -1,0 +1,33 @@
+{
+  "id": "nyaa",
+  "name": "Nyaa",
+  "description": "Nyaa provider for english-translated torrents.",
+  "manifestURI": "/extensions/nyaa/nyaa.json",
+  "version": "2.1.0",
+  "semverConstraint": ">= 3.5.1",
+  "author": "Island",
+  "type": "anime-torrent-provider",
+  "icon": "/extensions/nyaa/nyaa.png",
+  "language": "typescript",
+  "lang": "multi",
+  "userConfig": {
+    "requiresConfig": false,
+    "version": 1,
+    "fields": [
+      {
+        "name": "apiUrl",
+        "label": "API URL",
+        "type": "text",
+        "default": "https://nyaa.si"
+      },
+      {
+        "name": "category",
+        "label": "Category",
+        "type": "text",
+        "default": "1_2"
+      }
+    ]
+  },
+  "payloadURI": "nyaa.ts",
+  "payload": ""
+}

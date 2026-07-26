@@ -1,6 +1,6 @@
 {
   "productName": "aetherio",
-  "version": "0.3.22",
+  "version": "0.4.0",
   "identifier": "com.aetherio",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -18,10 +18,10 @@
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
-        "fullscreen": false,
+        "fullscreen": true,
         "decorations": false,
-        "transparent": true,
-        "backgroundColor": "#1f1f1fff",
+        "transparent": false,
+        "backgroundColor": "#000000ff",
         "center": true
       }
     ],

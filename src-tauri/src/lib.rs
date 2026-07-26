@@ -28,14 +28,7 @@ use librqbit::{
 use reqwest::blocking::Client;
 #[cfg(not(target_os = "android"))]
 use std::sync::mpsc;
-#[cfg(target_os = "windows")]
-use std::sync::{Once, OnceLock};
 use tauri::{Emitter, Manager, Runtime};
-
-#[cfg(target_os = "windows")]
-static MOUSE_NAV_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
-#[cfg(target_os = "windows")]
-static MOUSE_NAV_WINDOW_LABEL: OnceLock<String> = OnceLock::new();
 
 #[tauri::command]
 fn playback_capabilities(app: tauri::AppHandle) -> serde_json::Value {
@@ -353,10 +346,6 @@ struct MpvState {
     session: Mutex<Option<MpvSession>>,
     open_generation: AtomicU64,
     last_status: Mutex<serde_json::Value>,
-    #[cfg(target_os = "windows")]
-    surface_rect: Mutex<Option<MpvSurfaceRect>>,
-    #[cfg(target_os = "windows")]
-    surface_visible: Mutex<bool>,
 }
 
 const LIBMPV_DLL_NAME: &str = "libmpv-2.dll";
@@ -381,6 +370,8 @@ const MPV_EVENT_PROPERTY_CHANGE: c_int = 22;
 const MAX_MPV_CSTRING_LEN: usize = 16_384;
 const MAX_HTTP_HEADERS_TOTAL_LEN: usize = 8_192;
 const MAX_HTTP_HEADER_VALUE_LEN: usize = 2_048;
+const PLAYER_CONTROLS_BLUR_SHADER_SOURCE: &str =
+    include_str!("../resources/player-controls-blur.glsl");
 
 #[repr(C)]
 struct MpvHandle {
@@ -458,29 +449,7 @@ unsafe impl Sync for MpvClient {}
 struct MpvSession {
     client: Arc<MpvClient>,
     p2p: Option<P2pPlaybackInfo>,
-    #[cfg(target_os = "windows")]
-    surface: Option<MpvVideoSurface>,
 }
-
-#[cfg(target_os = "windows")]
-struct MpvVideoSurface {
-    hwnd: isize,
-    owner: tauri::WebviewWindow,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Clone, Copy)]
-struct MpvSurfaceRect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-#[cfg(target_os = "windows")]
-unsafe impl Send for MpvVideoSurface {}
-#[cfg(target_os = "windows")]
-unsafe impl Sync for MpvVideoSurface {}
 
 #[cfg(not(target_os = "android"))]
 struct P2pState {
@@ -551,92 +520,12 @@ impl MpvSession {
     }
 }
 
-#[cfg(target_os = "windows")]
-impl Drop for MpvVideoSurface {
-    fn drop(&mut self) {
-        if self.hwnd != 0 {
-            let hwnd = self.hwnd;
-            let _ = self.owner.app_handle().run_on_main_thread(move || {
-                use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
-                unsafe {
-                    DestroyWindow(hwnd as _);
-                }
-            });
-        }
-    }
-}
-
 impl Drop for MpvClient {
     fn drop(&mut self) {
         if !self.handle.0.is_null() {
             unsafe {
                 (self.api.terminate_destroy)(self.handle.0);
             }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl MpvSurfaceRect {
-    fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            x: x.max(0),
-            y: y.max(0),
-            width: width.max(1),
-            height: height.max(1),
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl MpvVideoSurface {
-    fn set_visible(&self, visible: bool) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
-
-        unsafe {
-            ShowWindow(self.hwnd as _, if visible { SW_SHOW } else { SW_HIDE });
-        }
-    }
-
-    fn move_to_rect(&self, rect: MpvSurfaceRect) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, HWND_BOTTOM, SWP_NOACTIVATE,
-        };
-
-        unsafe {
-            SetWindowPos(
-                self.hwnd as _,
-                HWND_BOTTOM,
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                SWP_NOACTIVATE,
-            );
-        }
-    }
-
-    fn resize_to_parent(&self, parent_hwnd: isize) {
-        use windows_sys::Win32::Foundation::RECT;
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
-
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 1280,
-            bottom: 720,
-        };
-        unsafe {
-            let parent = parent_hwnd as _;
-            if GetClientRect(parent, &mut rect) == 0 {
-                return;
-            }
-            self.move_to_rect(MpvSurfaceRect::new(
-                0,
-                0,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
-            ));
         }
     }
 }
@@ -654,55 +543,47 @@ fn stop_current_mpv(state: &MpvState) -> Option<P2pPlaybackInfo> {
 }
 
 fn set_player_window_transparent(window: &tauri::WebviewWindow, transparent: bool) {
-    let alpha = if transparent { 0 } else { 255 };
-    let _ = window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, alpha)));
-}
-
-#[cfg(target_os = "windows")]
-fn resize_current_mpv_surface(state: &MpvState, parent_hwnd: isize) {
-    let rect = match state.surface_rect.lock() {
-        Ok(current) => *current,
-        Err(poisoned) => *poisoned.into_inner(),
-    };
-    let current = match state.session.lock() {
-        Ok(current) => current,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(session) = current.as_ref() {
-        if let Some(surface) = session.surface.as_ref() {
-            if let Some(rect) = rect {
-                surface.move_to_rect(rect);
-            } else {
-                surface.resize_to_parent(parent_hwnd);
+    // Keep the native top-level window opaque. Only WebView2 becomes transparent
+    // while libmpv renders into the shared host HWND, matching Stremio's model.
+    // Making the whole Tauri window layered/transparent creates a separate
+    // composition boundary and prevents real-time backdrop-filter sampling.
+    #[cfg(target_os = "windows")]
+    {
+        let controller_alpha = if transparent { 0 } else { 255 };
+        // with_webview requires Send + 'static; we cannot capture `transparent` by
+        // reference, so copy into a u8 and move it into the closure.
+        let alpha_value = controller_alpha;
+        let window_handle = window.clone();
+        let _ = window_handle.with_webview(move |webview| {
+            use webview2_com::Microsoft::Web::WebView2::Win32::{
+                ICoreWebView2Controller2, COREWEBVIEW2_COLOR,
+            };
+            use windows::core::Interface;
+            let controller = webview.controller();
+            match controller.cast::<ICoreWebView2Controller2>() {
+                Ok(controller2) => {
+                    let color = COREWEBVIEW2_COLOR {
+                        R: 0,
+                        G: 0,
+                        B: 0,
+                        A: alpha_value,
+                    };
+                    if let Err(error) = unsafe { controller2.SetDefaultBackgroundColor(color) } {
+                        eprintln!(
+                            "[AETHERIO:PLAYER] SetDefaultBackgroundColor failed: {}",
+                            error
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[AETHERIO:PLAYER] ICoreWebView2Controller2 cast failed: {}",
+                        error
+                    );
+                }
             }
-        }
+        });
     }
-}
-
-#[cfg(target_os = "windows")]
-fn current_mpv_surface_rect(state: &MpvState, parent_hwnd: isize) -> MpvSurfaceRect {
-    if let Ok(current) = state.surface_rect.lock() {
-        if let Some(rect) = *current {
-            return rect;
-        }
-    }
-
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
-
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 1280,
-        bottom: 720,
-    };
-    unsafe {
-        let parent = parent_hwnd as _;
-        if GetClientRect(parent, &mut rect) == 0 {
-            return MpvSurfaceRect::new(0, 0, 1280, 720);
-        }
-    }
-    MpvSurfaceRect::new(0, 0, rect.right - rect.left, rect.bottom - rect.top)
 }
 
 fn current_mpv_client(state: &MpvState) -> Result<Arc<MpvClient>, String> {
@@ -716,6 +597,23 @@ fn current_mpv_client(state: &MpvState) -> Result<Arc<MpvClient>, String> {
     } else {
         Err(String::from("MPV no esta iniciado."))
     }
+}
+
+fn ensure_player_controls_blur_shader(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let shader_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("No se pudo ubicar el cache para el shader de MPV: {error}"))?
+        .join("mpv");
+    fs::create_dir_all(&shader_dir)
+        .map_err(|error| format!("No se pudo crear el cache para el shader de MPV: {error}"))?;
+    let shader_path = shader_dir.join("aetherio-player-controls-blur.glsl");
+    let current = fs::read_to_string(&shader_path).ok();
+    if current.as_deref() != Some(PLAYER_CONTROLS_BLUR_SHADER_SOURCE) {
+        fs::write(&shader_path, PLAYER_CONTROLS_BLUR_SHADER_SOURCE)
+            .map_err(|error| format!("No se pudo instalar el shader de blur de MPV: {error}"))?;
+    }
+    Ok(shader_path)
 }
 
 fn find_mpv_runtime_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -1190,205 +1088,6 @@ async fn youtube_resolve_stream(
         );
     }
     Ok(stream)
-}
-
-#[cfg(target_os = "windows")]
-fn prepare_mpv_parent_window(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CLIPCHILDREN,
-    };
-
-    unsafe {
-        let hwnd = hwnd as _;
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let next_style = style | WS_CLIPCHILDREN as isize;
-        if next_style != style {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, next_style);
-            SetWindowPos(
-                hwnd,
-                0 as _,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-            );
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn emit_mouse_back_button() {
-    if let (Some(app), Some(label)) = (MOUSE_NAV_APP.get(), MOUSE_NAV_WINDOW_LABEL.get()) {
-        let _ = app.emit_to(label, "aetherio-mouse-back", serde_json::json!({}));
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn is_mouse_back_button(wparam: windows_sys::Win32::Foundation::WPARAM) -> bool {
-    ((wparam >> 16) & 0xffff) == 1
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn mpv_surface_wnd_proc(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-    msg: u32,
-    wparam: windows_sys::Win32::Foundation::WPARAM,
-    lparam: windows_sys::Win32::Foundation::LPARAM,
-) -> windows_sys::Win32::Foundation::LRESULT {
-    const WM_XBUTTONDOWN: u32 = 0x020B;
-    const WM_XBUTTONUP: u32 = 0x020C;
-
-    if (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP) && is_mouse_back_button(wparam) {
-        if msg == WM_XBUTTONUP {
-            emit_mouse_back_button();
-        }
-        return 1;
-    }
-
-    windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
-}
-
-#[cfg(target_os = "windows")]
-fn wide_null(value: &str) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    std::ffi::OsStr::new(value)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
-#[cfg(target_os = "windows")]
-fn ensure_mpv_surface_class() -> Result<(), String> {
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        RegisterClassW, CS_HREDRAW, CS_VREDRAW, WNDCLASSW,
-    };
-
-    static REGISTER: Once = Once::new();
-    static mut REGISTERED: bool = false;
-
-    REGISTER.call_once(|| {
-        let class_name = wide_null("AetherioMpvSurface");
-        unsafe {
-            let instance = GetModuleHandleW(ptr::null());
-            let class = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(mpv_surface_wnd_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: instance,
-                hIcon: ptr::null_mut(),
-                hCursor: ptr::null_mut(),
-                hbrBackground: ptr::null_mut(),
-                lpszMenuName: ptr::null(),
-                lpszClassName: class_name.as_ptr(),
-            };
-            REGISTERED = RegisterClassW(&class) != 0;
-        }
-    });
-
-    unsafe {
-        if REGISTERED {
-            Ok(())
-        } else {
-            Err(String::from(
-                "No se pudo registrar la superficie nativa de MPV.",
-            ))
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn create_mpv_video_surface(
-    parent_hwnd: isize,
-    rect: MpvSurfaceRect,
-    visible: bool,
-    owner: tauri::WebviewWindow,
-) -> Result<MpvVideoSurface, String> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SW_HIDE, SW_SHOW,
-        WS_CHILD, WS_CLIPCHILDREN,
-    };
-
-    ensure_mpv_surface_class()?;
-    let class_name = wide_null("AetherioMpvSurface");
-    let title = wide_null("Aetherio MPV Surface");
-
-    unsafe {
-        let parent = parent_hwnd as _;
-        let hwnd = CreateWindowExW(
-            0,
-            class_name.as_ptr(),
-            title.as_ptr(),
-            WS_CHILD | WS_CLIPCHILDREN,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            parent,
-            ptr::null_mut(),
-            GetModuleHandleForSurface(),
-            ptr::null_mut(),
-        );
-
-        if hwnd.is_null() {
-            return Err(String::from(
-                "No se pudo crear la superficie nativa de MPV.",
-            ));
-        }
-
-        SetWindowPos(
-            hwnd,
-            HWND_BOTTOM,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            SWP_NOACTIVATE,
-        );
-        ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
-
-        Ok(MpvVideoSurface {
-            hwnd: hwnd as isize,
-            owner,
-        })
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn create_mpv_video_surface_on_main_thread(
-    app: &tauri::AppHandle,
-    window: &tauri::WebviewWindow,
-) -> Result<MpvVideoSurface, String> {
-    let (tx, rx) = mpsc::sync_channel(1);
-    let task_app = app.clone();
-    let task_window = window.clone();
-    let owner = window.clone();
-    app.run_on_main_thread(move || {
-        let result = (|| {
-            let parent_hwnd = task_window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-            prepare_mpv_parent_window(parent_hwnd);
-            let state = task_app.state::<MpvState>();
-            let initial_rect = current_mpv_surface_rect(&state, parent_hwnd);
-            let initial_visible = match state.surface_visible.lock() {
-                Ok(visible) => *visible,
-                Err(poisoned) => *poisoned.into_inner(),
-            };
-            create_mpv_video_surface(parent_hwnd, initial_rect, initial_visible, owner)
-        })();
-        let _ = tx.send(result);
-    })
-    .map_err(|error| format!("No se pudo programar la superficie MPV: {}", error))?;
-    rx.recv_timeout(Duration::from_secs(5))
-        .map_err(|_| String::from("La superficie MPV no se creo a tiempo."))?
-}
-
-#[cfg(target_os = "windows")]
-#[allow(non_snake_case)]
-unsafe fn GetModuleHandleForSurface() -> windows_sys::Win32::Foundation::HINSTANCE {
-    windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null())
 }
 
 #[cfg(target_os = "windows")]
@@ -3926,6 +3625,7 @@ const ALLOWED_MPV_PROPERTIES: &[&str] = &[
     "sid",
     "aid",
     "sub-delay",
+    "sub-pos",
     "audio-delay",
     "playlist-pos",
     "loop",
@@ -4050,21 +3750,35 @@ async fn open_mpv(
     let window_label = window.label().to_string();
 
     #[cfg(target_os = "windows")]
-    let video_surface = create_mpv_video_surface_on_main_thread(&app, &window)?;
-    #[cfg(not(target_os = "windows"))]
-    let parent_hwnd = 0isize;
+    let player_hwnd = window
+        .hwnd()
+        .map_err(|error| {
+            format!(
+                "No se pudo obtener la ventana principal para MPV: {}",
+                error
+            )
+        })?
+        .0 as isize;
 
     let api = MpvApi::load(&runtime_dir)?;
     let client = create_mpv_client(api)?;
+    let controls_blur_shader = ensure_player_controls_blur_shader(&app)?;
     mpv_bridge_log(
         "libmpv_loaded",
         serde_json::json!({ "runtimeDir": runtime_dir.display().to_string() }),
     );
 
     #[cfg(target_os = "windows")]
-    mpv_set_option_string(&client, "wid", &video_surface.hwnd.to_string())?;
-    #[cfg(not(target_os = "windows"))]
-    let _ = parent_hwnd;
+    mpv_set_option_string(&client, "wid", &player_hwnd.to_string())?;
+    mpv_set_option_string(
+        &client,
+        "glsl-shaders",
+        &controls_blur_shader.display().to_string(),
+    )?;
+    mpv_bridge_log(
+        "controls_blur_shader_configured",
+        serde_json::json!({ "path": controls_blur_shader.display().to_string() }),
+    );
 
     let ytdl_enabled = looks_like_ytdlp_url(&target);
 
@@ -4159,21 +3873,10 @@ async fn open_mpv(
             .session
             .lock()
             .map_err(|_| String::from("No se pudo guardar la sesion de MPV."))?;
-        #[cfg(target_os = "windows")]
-        {
-            *current = Some(MpvSession {
-                client: client.clone(),
-                p2p: playback_target.p2p.clone(),
-                surface: Some(video_surface),
-            });
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            *current = Some(MpvSession {
-                client: client.clone(),
-                p2p: playback_target.p2p.clone(),
-            });
-        }
+        *current = Some(MpvSession {
+            client: client.clone(),
+            p2p: playback_target.p2p.clone(),
+        });
     }
 
     let normalized_start_time = start_time.filter(|value| value.is_finite() && *value >= 1.0);
@@ -4264,80 +3967,204 @@ async fn open_mpv(
 }
 
 #[tauri::command]
-fn set_mpv_surface_rect(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, MpvState>,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let rect = MpvSurfaceRect::new(x, y, width, height);
-        {
-            let mut current_rect = state
-                .surface_rect
-                .lock()
-                .map_err(|_| String::from("No se pudo guardar el layout de MPV."))?;
-            *current_rect = Some(rect);
-        }
-
-        let current = state
-            .session
-            .lock()
-            .map_err(|_| String::from("No se pudo acceder a la sesion de MPV."))?;
-        if let Some(session) = current.as_ref() {
-            if let Some(surface) = session.surface.as_ref() {
-                surface.move_to_rect(rect);
-            }
-        }
-        let _ = window;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (window, state, x, y, width, height);
-    }
-
+fn set_mpv_surface_visible(window: tauri::WebviewWindow, visible: bool) -> Result<(), String> {
+    set_player_window_transparent(&window, visible);
     Ok(())
 }
 
-#[tauri::command]
-fn set_mpv_surface_visible(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, MpvState>,
-    visible: bool,
+fn update_mpv_controls_blur(
+    client: &Arc<MpvClient>,
+    enabled: bool,
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+    corner_radius: f64,
+    viewport_width: f64,
+    viewport_height: f64,
+    episode_enabled: bool,
+    episode_left: f64,
+    episode_top: f64,
+    episode_right: f64,
+    episode_bottom: f64,
+    episode_corner_radius: f64,
+    subtitle_panel_enabled: bool,
+    subtitle_panel_left: f64,
+    subtitle_panel_top: f64,
+    subtitle_panel_right: f64,
+    subtitle_panel_bottom: f64,
+    subtitle_panel_corner_radius: f64,
 ) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        {
-            let mut current_visible = state
-                .surface_visible
-                .lock()
-                .map_err(|_| String::from("No se pudo guardar la visibilidad de MPV."))?;
-            *current_visible = visible;
-        }
-
-        let current = state
-            .session
-            .lock()
-            .map_err(|_| String::from("No se pudo acceder a la sesion de MPV."))?;
-        if let Some(session) = current.as_ref() {
-            if let Some(surface) = session.surface.as_ref() {
-                surface.set_visible(visible);
-            }
-        }
-        set_player_window_transparent(&window, visible);
+    if !enabled {
+        return mpv_command_value_async(
+            client,
+            serde_json::json!([
+                "set",
+                "glsl-shader-opts",
+                "aetherio_blur_enabled=0"
+            ]),
+        );
     }
 
-    #[cfg(not(target_os = "windows"))]
+    let coordinates = [
+        left,
+        top,
+        right,
+        bottom,
+        corner_radius,
+        viewport_width,
+        viewport_height,
+        episode_left,
+        episode_top,
+        episode_right,
+        episode_bottom,
+        episode_corner_radius,
+        subtitle_panel_left,
+        subtitle_panel_top,
+        subtitle_panel_right,
+        subtitle_panel_bottom,
+        subtitle_panel_corner_radius,
+    ];
+    if coordinates.iter().any(|value| !value.is_finite())
+        || left < 0.0
+        || top < 0.0
+        || right <= left
+        || bottom <= top
+        || viewport_width <= 0.0
+        || viewport_height <= 0.0
+        || right > viewport_width
+        || bottom > viewport_height
+        || right > 99_999.0
+        || bottom > 99_999.0
+        || (episode_enabled
+            && (episode_left < 0.0
+                || episode_top < 0.0
+                || episode_right <= episode_left
+                || episode_bottom <= episode_top
+                || episode_right > viewport_width
+                || episode_bottom > viewport_height))
+        || (subtitle_panel_enabled
+            && (subtitle_panel_left < 0.0
+                || subtitle_panel_top < 0.0
+                || subtitle_panel_right <= subtitle_panel_left
+                || subtitle_panel_bottom <= subtitle_panel_top
+                || subtitle_panel_right > viewport_width
+                || subtitle_panel_bottom > viewport_height))
     {
-        set_player_window_transparent(&window, visible);
-        let _ = (state, visible);
+        return Err(String::from("La geometria del blur del reproductor es invalida."));
     }
 
-    Ok(())
+    let shader_options = format!(
+        "aetherio_blur_left={:.3},aetherio_blur_top={:.3},aetherio_blur_right={:.3},aetherio_blur_bottom={:.3},aetherio_blur_radius={:.3},aetherio_blur_viewport_width={:.3},aetherio_blur_viewport_height={:.3},aetherio_episode_blur_enabled={},aetherio_episode_blur_left={:.3},aetherio_episode_blur_top={:.3},aetherio_episode_blur_right={:.3},aetherio_episode_blur_bottom={:.3},aetherio_episode_blur_radius={:.3},aetherio_subtitle_blur_enabled={},aetherio_subtitle_blur_left={:.3},aetherio_subtitle_blur_top={:.3},aetherio_subtitle_blur_right={:.3},aetherio_subtitle_blur_bottom={:.3},aetherio_subtitle_blur_radius={:.3},aetherio_blur_enabled=1",
+        left,
+        top,
+        right,
+        bottom,
+        corner_radius.clamp(0.0, 256.0),
+        viewport_width,
+        viewport_height,
+        if episode_enabled { 1 } else { 0 },
+        episode_left,
+        episode_top,
+        episode_right,
+        episode_bottom,
+        episode_corner_radius.clamp(0.0, 256.0),
+        if subtitle_panel_enabled { 1 } else { 0 },
+        subtitle_panel_left,
+        subtitle_panel_top,
+        subtitle_panel_right,
+        subtitle_panel_bottom,
+        subtitle_panel_corner_radius.clamp(0.0, 256.0),
+    );
+    mpv_command_value_async(
+        client,
+        serde_json::json!(["set", "glsl-shader-opts", shader_options]),
+    )
+}
+
+#[tauri::command]
+async fn set_mpv_controls_blur(
+    app: tauri::AppHandle,
+    enabled: bool,
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+    corner_radius: f64,
+    viewport_width: f64,
+    viewport_height: f64,
+    episode_enabled: bool,
+    episode_left: f64,
+    episode_top: f64,
+    episode_right: f64,
+    episode_bottom: f64,
+    episode_corner_radius: f64,
+    subtitle_panel_enabled: bool,
+    subtitle_panel_left: f64,
+    subtitle_panel_top: f64,
+    subtitle_panel_right: f64,
+    subtitle_panel_bottom: f64,
+    subtitle_panel_corner_radius: f64,
+) -> Result<(), String> {
+    let client = {
+        let state = app.state::<MpvState>();
+        current_mpv_client(&state)?
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = update_mpv_controls_blur(
+            &client,
+            enabled,
+            left,
+            top,
+            right,
+            bottom,
+            corner_radius,
+            viewport_width,
+            viewport_height,
+            episode_enabled,
+            episode_left,
+            episode_top,
+            episode_right,
+            episode_bottom,
+            episode_corner_radius,
+            subtitle_panel_enabled,
+            subtitle_panel_left,
+            subtitle_panel_top,
+            subtitle_panel_right,
+            subtitle_panel_bottom,
+            subtitle_panel_corner_radius,
+        );
+        if result.is_ok() {
+            mpv_bridge_log(
+                "controls_blur_updated",
+                serde_json::json!({
+                    "enabled": enabled,
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                    "cornerRadius": corner_radius,
+                    "viewportWidth": viewport_width,
+                    "viewportHeight": viewport_height,
+                    "episodeEnabled": episode_enabled,
+                    "episodeLeft": episode_left,
+                    "episodeTop": episode_top,
+                    "episodeRight": episode_right,
+                    "episodeBottom": episode_bottom,
+                    "episodeCornerRadius": episode_corner_radius,
+                    "subtitlePanelEnabled": subtitle_panel_enabled,
+                    "subtitlePanelLeft": subtitle_panel_left,
+                    "subtitlePanelTop": subtitle_panel_top,
+                    "subtitlePanelRight": subtitle_panel_right,
+                    "subtitlePanelBottom": subtitle_panel_bottom,
+                    "subtitlePanelCornerRadius": subtitle_panel_corner_radius,
+                }),
+            );
+        }
+        result
+    })
+    .await
+    .map_err(|error| format!("Fallo la tarea del blur de MPV: {error}"))?
 }
 
 #[tauri::command]
@@ -4488,13 +4315,6 @@ async fn stop_mpv(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result
     })
     .await
     .map_err(|error| format!("Fallo la tarea de cierre MPV: {}", error))??;
-    #[cfg(target_os = "windows")]
-    {
-        let state = app.state::<MpvState>();
-        if let Ok(mut current_visible) = state.surface_visible.lock() {
-            *current_visible = false;
-        };
-    }
     set_player_window_transparent(&window, false);
     Ok(())
 }
@@ -4765,15 +4585,10 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             {
-                let _ = MOUSE_NAV_APP.set(app.handle().clone());
                 let main_window = app.get_webview_window("main");
                 if let Some(window) = main_window.as_ref() {
                     set_player_window_transparent(window, false);
                 }
-                let label = main_window
-                    .map(|window| window.label().to_string())
-                    .unwrap_or_else(|| String::from("main"));
-                let _ = MOUSE_NAV_WINDOW_LABEL.set(label);
             }
             Ok(())
         })
@@ -4795,8 +4610,8 @@ pub fn run() {
             toggle_window_maximize,
             toggle_window_fullscreen,
             open_mpv,
-            set_mpv_surface_rect,
             set_mpv_surface_visible,
+            set_mpv_controls_blur,
             mpv_command,
             mpv_set_property,
             mpv_autocrop,
@@ -4813,21 +4628,11 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             let state = window.state::<MpvState>();
-            match event {
-                tauri::WindowEvent::Destroyed => {
-                    state.open_generation.fetch_add(1, Ordering::AcqRel);
-                    let p2p_state = window.state::<P2pState>();
-                    schedule_p2p_cleanup(take_pending_p2p(&p2p_state));
-                    schedule_p2p_cleanup(stop_current_mpv(&state));
-                }
-                tauri::WindowEvent::Resized(_) =>
-                {
-                    #[cfg(target_os = "windows")]
-                    if let Ok(hwnd) = window.hwnd() {
-                        resize_current_mpv_surface(&state, hwnd.0 as isize);
-                    }
-                }
-                _ => {}
+            if let tauri::WindowEvent::Destroyed = event {
+                state.open_generation.fetch_add(1, Ordering::AcqRel);
+                let p2p_state = window.state::<P2pState>();
+                schedule_p2p_cleanup(take_pending_p2p(&p2p_state));
+                schedule_p2p_cleanup(stop_current_mpv(&state));
             }
         })
         .run(tauri::generate_context!())

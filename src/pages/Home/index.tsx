@@ -17,6 +17,7 @@ import StreamingProviderRowsGroup, {
   STREAMING_PROVIDERS,
   type StreamingProviderTheme,
 } from "./StreamingProviderRowsGroup";
+import { gsap } from "../../utils/motion";
 
 export type { CatalogRowData, MediaItem };
 
@@ -27,6 +28,7 @@ export default function HomePage() {
   const { rows, heroItems, loading } = useHomeCatalogs(addons, homePreferences.contentOrientation);
   const { gradient } = useProfileGradient();
   const restoredVerticalRef = useRef(false);
+  const pageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (gradient) {
@@ -48,6 +50,24 @@ export default function HomePage() {
       }
     }
   }, [loading]);
+
+  useLayoutEffect(() => {
+    const root = pageRef.current;
+    if (loading || !root) return;
+    const items = Array.from(root.querySelectorAll<HTMLElement>(
+      ":scope > *, :scope > div:last-child > *",
+    ));
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    timeline.fromTo(
+      items,
+      { opacity: 0, y: 16 },
+      { opacity: 1, y: 0, duration: 0.5, stagger: 0.055, clearProps: "transform" },
+    );
+    return () => {
+      timeline.kill();
+      gsap.set(items, { clearProps: "opacity,transform" });
+    };
+  }, [loading, location.search]);
 
   const typeFilter = new URLSearchParams(location.search).get("type");
   const visibleRows = useMemo(
@@ -107,7 +127,7 @@ export default function HomePage() {
             ?? images?.logos?.find((l: any) => l?.iso_639_1 === null && typeof l?.file_path === "string")
             ?? images?.logos?.find((l: any) => typeof l?.file_path === "string");
           if (logo?.file_path) {
-            item.logo = `https://image.tmdb.org/t/p/w342${logo.file_path}`;
+            item.logo = `https://image.tmdb.org/t/p/original${logo.file_path}`;
           }
         } catch {}
       }
@@ -119,7 +139,7 @@ export default function HomePage() {
   if (loading) return <Skeleton />;
 
   return (
-    <div className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
+    <div ref={pageRef} className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
       {!typeFilter && (
         <HomeHero items={heroItems} />
       )}
@@ -228,17 +248,29 @@ function HomeHero({ items }: { items: MediaItem[] }) {
 
 function Skeleton() {
   return (
-    <div className="gsap-pulse">
-      <div className="w-full skeleton" style={{ height: "74vh" }} />
-      <div className="flex flex-col gap-8 px-10 py-8">
-        {[0, 1, 2].map(i => (
-          <div key={i}>
-            <div className="h-4 w-40 skeleton rounded mb-4" />
-            <div className="flex gap-3">
-              {[0, 1, 2, 3, 4].map(j => <div key={j} className="skeleton rounded-card shrink-0" style={{ width: 300, height: 170 }} />)}
+    <div className="home-page-scale gsap-pulse relative min-h-screen overflow-hidden" style={{ marginTop:"calc(-1 * var(--app-shell-nav-height))",paddingTop:"var(--app-shell-nav-height)",background:"#08090b" }}>
+      <div style={{ position:"relative",width:"100vw",left:"50%",marginLeft:"-50vw",paddingBottom:24 }}>
+        <div style={{ position:"relative",display:"flex",alignItems:"center",justifyContent:"center",height:"clamp(340px, 42vw, 680px)",width:"100%" }}>
+          <div className="skeleton" style={{ position:"absolute",left:"-4%",width:"17%",height:"82%",borderRadius:22,opacity:0.44 }} />
+          <div className="skeleton" style={{ position:"relative",width:"76%",height:"100%",borderRadius:24,overflow:"hidden" }}>
+            <div style={{ position:"absolute",left:34,bottom:34,width:390,maxWidth:"46%",display:"flex",flexDirection:"column",gap:11 }}>
+              <div className="skeleton" style={{ width:230,height:62,borderRadius:12 }} />
+              <div className="skeleton" style={{ width:270,height:14,borderRadius:999 }} />
+              <div className="skeleton" style={{ width:"100%",height:12,borderRadius:999 }} />
+              <div className="skeleton" style={{ width:"78%",height:12,borderRadius:999 }} />
+              <div className="skeleton" style={{ width:160,height:44,borderRadius:999,marginTop:8 }} />
             </div>
           </div>
-        ))}
+          <div className="skeleton" style={{ position:"absolute",right:"-4%",width:"17%",height:"82%",borderRadius:22,opacity:0.44 }} />
+        </div>
+      </div>
+      <div style={{ padding:"8px var(--app-safe-x) 32px" }}>
+        <div className="skeleton" style={{ width:170,height:18,borderRadius:999,marginBottom:16 }} />
+        <div style={{ display:"flex",gap:12,overflow:"hidden" }}>
+          {[0,1,2,3,4].map(item => (
+            <div key={item} className="skeleton" style={{ width:300,height:170,borderRadius:14,flexShrink:0 }} />
+          ))}
+        </div>
       </div>
     </div>
   );

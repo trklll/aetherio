@@ -73,7 +73,7 @@ import {
 } from "../../trakt";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "trakt" | "mdblist";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "omdb" | "trakt" | "mdblist";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 
 const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
@@ -585,6 +585,7 @@ function AccountPanel({
           <NavRow title="MDBList" description="Configura ratings externos para la pantalla de detalle." onClick={() => onViewChange("mdblist")} />
           <NavRow title="IntroDB" description="Busca segmentos de intro y resumen para mostrar botones de salto cuando existan." onClick={() => onViewChange("introdb")} />
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
+          <NavRow title="OMDb" description=" clave opcional de OMDb API para mostrar badges de premios en el detalle cuando Wikidata no tiene datos." onClick={() => onViewChange("omdb")} />
           <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
         </PillBlock>
       </PanelScaffold>
@@ -637,7 +638,7 @@ function AccountPanel({
     );
   }
 
-  if (view === "introdb" || view === "anime-skip") {
+  if (view === "introdb" || view === "anime-skip" || view === "omdb") {
     const details = {
       introdb: {
         title: "IntroDB",
@@ -656,6 +657,15 @@ function AccountPanel({
         docsUrl: "https://anime-skip.com/",
         docsLabel: "Obtener Client ID",
         placeholder: "X-Client-ID de anime-skip.com",
+      },
+      omdb: {
+        title: "OMDb",
+        description: "OMDb API provee el campo de premios cuando Wikidata no lo tiene. Solo necesario para badges de premios.",
+        key: "omdbApiKey" as const,
+        label: "OMDb API Key",
+        docsUrl: "https://www.omdbapi.com/apikey.aspx",
+        docsLabel: "Obtener API Key (gratis, 1000 req/día)",
+        placeholder: "Clave gratuita de omdbapi.com",
       },
     }[view];
 

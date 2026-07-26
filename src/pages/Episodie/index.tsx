@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, ChevronLeft, ChevronRight, Film, RefreshCw, User, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys.ts";
@@ -31,9 +31,10 @@ import {
   getExactResumeForQuery,
 } from "../../utils/continueWatching.ts";
 import { readDetailMediaMeta, readDetailBackgroundOverride } from "../../utils/mediaMetadata.ts";
-import { tweenTo } from "../../utils/motion.ts";
+import { gsap, tweenTo } from "../../utils/motion.ts";
 import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/streamFormatters.ts";
 import { getReportedSeeders } from "../../utils/torrentHealth.ts";
+import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
 import {
   AUTO_NEXT_SOURCE_KEY,
   IMG,
@@ -132,6 +133,17 @@ function numberValue(value: unknown) {
   return Number.isFinite(next) && next > 0 ? next : undefined;
 }
 
+function episodePageCacheKey(query: StreamQuery | null, episodeTitle: string) {
+  if (!query) return "";
+  return [
+    query.type,
+    query.id,
+    query.season ?? "",
+    query.episode ?? "",
+    episodeTitle,
+  ].join(":");
+}
+
 export default function EpisodiePage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -148,26 +160,6 @@ export default function EpisodiePage() {
     showMetacritic: true,
   }), [mdbListSettings]);
   const { allowTmdbArtworkFallback } = useHomePreferences();
-  const autoSelectedKeyRef = useRef("");
-  const [meta, setMeta] = useState<EpisodePageMeta | null>(null);
-  const [metaReady, setMetaReady] = useState(false);
-  const [selectedStreamId, setSelectedStreamId] = useState("");
-  const [selectedSource, setSelectedSource] = useState<string | null>(null);
-  const audioChoice = AUTO_OPTION;
-  const subtitleChoice = AUTO_OPTION;
-  const [heroStillIndex, setHeroStillIndex] = useState(0);
-  const [playerTransitioning, setPlayerTransitioning] = useState(false);
-  const playerTransitionTimerRef = useRef<number | null>(null);
-  const playStreamRef = useRef<(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) => void>(() => {});
-  const allStreamsRef = useRef<MediaStream[]>([]);
-
-  const handleSelectStream = useCallback((streamId: string) => {
-    const stream = allStreamsRef.current.find(c => c.id === streamId);
-    if (!stream) return;
-    setSelectedStreamId(streamId);
-    playStreamRef.current(stream);
-  }, []);
-
   const query = useMemo<StreamQuery | null>(() => {
     const type = params.get("type");
     const id = params.get("id");
@@ -181,6 +173,29 @@ export default function EpisodiePage() {
       episode: Number.isFinite(episode) && episode > 0 ? episode : undefined,
     };
   }, [params]);
+  const episodeTitleParam = params.get("epTitle")?.trim() ?? "";
+  const routeCacheKey = episodePageCacheKey(query, episodeTitleParam);
+  const initialCachedMeta = readPageDataCache<EpisodePageMeta>("episode", routeCacheKey);
+  const autoSelectedKeyRef = useRef("");
+  const [meta, setMeta] = useState<EpisodePageMeta | null>(() => initialCachedMeta);
+  const [metaReady, setMetaReady] = useState(() => Boolean(initialCachedMeta));
+  const [selectedStreamId, setSelectedStreamId] = useState("");
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  const audioChoice = AUTO_OPTION;
+  const subtitleChoice = AUTO_OPTION;
+  const [heroStillIndex, setHeroStillIndex] = useState(0);
+  const [playerTransitioning, setPlayerTransitioning] = useState(false);
+  const playerTransitionTimerRef = useRef<number | null>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const playStreamRef = useRef<(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) => void>(() => {});
+  const allStreamsRef = useRef<MediaStream[]>([]);
+
+  const handleSelectStream = useCallback((streamId: string) => {
+    const stream = allStreamsRef.current.find(c => c.id === streamId);
+    if (!stream) return;
+    setSelectedStreamId(streamId);
+    playStreamRef.current(stream);
+  }, []);
 
   const { streams, loading, error, reload, streamId } = useStreams(query);
   const {
@@ -206,11 +221,17 @@ export default function EpisodiePage() {
   const autoplayRequested = params.get(AUTO_PLAY_PARAM) === "1";
   const continueRequested = params.get(CONTINUE_PLAY_PARAM) === "1";
   const returnedFromPlayer = params.get(FROM_PLAYER_PARAM) === "1";
-  const episodeTitleParam = params.get("epTitle")?.trim() ?? "";
   const { subtitles: addonSubtitles } = useSubtitles(query, selectedStream, subtitleChoice);
 
   useEffect(() => {
     let cancelled = false;
+    const cacheKey = episodePageCacheKey(query, episodeTitleParam);
+    const cachedMeta = readPageDataCache<EpisodePageMeta>("episode", cacheKey);
+    if (cachedMeta) {
+      setMeta(cachedMeta);
+      setMetaReady(true);
+      return;
+    }
     setMeta(null);
     setMetaReady(false);
 
@@ -404,8 +425,9 @@ export default function EpisodiePage() {
         };
       }
 
+      if (nextMeta.logo) nextMeta.logo = writeCachedLogo(getDetailLogoKey(query.type, query.id), nextMeta.logo) ?? nextMeta.logo;
+      writePageDataCache("episode", cacheKey, nextMeta);
       if (!cancelled) {
-        if (nextMeta.logo) nextMeta.logo = writeCachedLogo(getDetailLogoKey(query.type, query.id), nextMeta.logo) ?? nextMeta.logo;
         setMeta(nextMeta);
         setMetaReady(true);
       }
@@ -572,6 +594,27 @@ export default function EpisodiePage() {
     return () => window.clearInterval(timer);
   }, [heroStills.length, query?.type]);
 
+  useLayoutEffect(() => {
+    const root = pageRef.current;
+    if (!metaReady || !meta || !root) return;
+    const background = root.querySelector<HTMLElement>(".pick-streams-background");
+    const items = Array.from(root.querySelectorAll<HTMLElement>(
+      ".episode-media-card, .episode-hero-copy, .episode-page-layout > div:last-child",
+    ));
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    timeline.fromTo(background, { opacity: 0 }, { opacity: 1, duration: 0.62 }, 0);
+    timeline.fromTo(
+      items,
+      { opacity: 0, y: 18 },
+      { opacity: 1, y: 0, duration: 0.5, stagger: 0.08, clearProps: "transform" },
+      0.06,
+    );
+    return () => {
+      timeline.kill();
+      gsap.set(items, { clearProps: "opacity,transform" });
+    };
+  }, [metaReady, meta?.name, query?.id, query?.season, query?.episode]);
+
   if (!query) {
     return (
       <div className="flex h-screen items-center justify-center bg-black text-white/60">
@@ -581,7 +624,7 @@ export default function EpisodiePage() {
   }
 
   if (!metaReady || !meta) {
-    return <div className="skeleton min-h-screen w-full bg-[#1f1f1f]" />;
+    return <EpisodePageLoading />;
   }
 
   const rawEpisodeTitle = meta?.episodeTitle || episodeTitleParam || (query.type === "movie" ? meta?.name : `Episodio ${query.episode ?? 1}`);
@@ -657,7 +700,7 @@ export default function EpisodiePage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#111111] text-white">
+    <div ref={pageRef} className="relative min-h-screen overflow-hidden bg-[#111111] text-white">
       <div className="pick-streams-background absolute left-0 top-0 overflow-hidden" aria-hidden="true">
         {background ? (
           <img
@@ -772,6 +815,43 @@ export default function EpisodiePage() {
               query={query}
               onSelect={handleSelectStream}
             />
+          </div>
+        </section>
+      </PageContainer>
+    </div>
+  );
+}
+
+function EpisodePageLoading() {
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-[#111111]">
+      <div className="absolute inset-0 bg-[#0b0b0c]">
+        <div className="skeleton absolute inset-0 opacity-25" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/35 via-[#171719]/78 to-[#1f1f1f]" />
+      </div>
+      <PageContainer fullBleed className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1920px] flex-col pb-9 pt-[88px]">
+        <section className="episode-page-layout grid min-h-[calc(100vh-160px)] grid-cols-1 items-center gap-12 lg:grid-cols-[0.82fr_1fr]">
+          <div className="flex min-w-0 flex-col items-center justify-center pb-1">
+            <div className="skeleton mx-auto mb-8 aspect-video w-full max-w-[800px] rounded-2xl" />
+            <div className="flex w-full max-w-[800px] flex-col items-center gap-11">
+              <div className="skeleton h-16 w-64 rounded-xl" />
+              <div className="skeleton h-5 w-72 rounded-full" />
+              <div className="flex gap-4">
+                <div className="skeleton h-4 w-24 rounded-full" />
+                <div className="skeleton h-4 w-20 rounded-full" />
+                <div className="skeleton h-4 w-28 rounded-full" />
+              </div>
+            </div>
+          </div>
+          <div className="w-full min-w-0 self-center">
+            <div className="liquid-glass-dark rounded-2xl p-6">
+              <div className="skeleton mb-6 h-6 w-48 rounded-full" />
+              <div className="flex flex-col gap-3">
+                {[0,1,2,3].map(item => (
+                  <div key={item} className="skeleton h-[72px] w-full rounded-xl" />
+                ))}
+              </div>
+            </div>
           </div>
         </section>
       </PageContainer>

@@ -53,12 +53,11 @@ export default function EpisodePanel({
       style={{ top: "calc(var(--app-safe-top) + 62px)", right: "var(--app-safe-x)", bottom: 126 }}
     >
       <div
-        className="flex h-full flex-col rounded-[28px] border border-white/[0.075] p-5 shadow-[0_34px_90px_rgba(0,0,0,0.76)]"
+        data-player-episode-panel-glass
+        className="flex h-full flex-col overflow-hidden rounded-[28px] p-5 shadow-[0_34px_90px_rgba(0,0,0,0.76)]"
         style={{
-          background: "linear-gradient(135deg, rgba(64,64,64,0.52), rgba(28,28,30,0.74))",
-          backdropFilter: "blur(24px) saturate(190%)",
-          WebkitBackdropFilter: "blur(24px) saturate(190%)",
-          boxShadow: "0 34px 90px rgba(0,0,0,0.76), inset 0 1px 0 rgba(255,255,255,0.055)",
+          background: "rgba(70, 70, 70, 0.22)",
+          boxShadow: "0 34px 90px rgba(0,0,0,0.76)",
         }}
       >
         <div className="mb-4 flex items-start justify-between gap-4">

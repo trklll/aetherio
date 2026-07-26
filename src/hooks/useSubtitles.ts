@@ -5,6 +5,7 @@ import { useOriginalLanguage } from "./useOriginalLanguage";
 import { useAddonStore, type InstalledAddon } from "../store/addonStore.ts";
 import type { MediaStream, StreamQuery } from "../types/stream.ts";
 import type { SubtitleSource } from "../types/subtitle.ts";
+import { readPageDataCache, writePageDataCache } from "../utils/pageDataCache.ts";
 
 const OPEN_SUBTITLES_PRO_URL = "https://opensubtitlesv3-pro.dexter21767.com/eyJsYW5ncyI6WyJzcGFuaXNoIiwic3BhbmlzaC1sYSJdLCJzb3VyY2UiOiJhbGwiLCJhaVRyYW5zbGF0ZWQiOnRydWUsImF1dG9BZGp1c3RtZW50Ijp0cnVlfQ==/manifest.json";
 const OPEN_SUBTITLES_PRO_ADDON: InstalledAddon = {
@@ -298,6 +299,30 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
 
       setLoading(true);
       setReady(false);
+      const addonsFingerprint = subtitleAddons(getEnabledAddons())
+        .map(addon => addon.id || addon.url)
+        .sort()
+        .join("|");
+      const cacheKey = [
+        query.type,
+        videoId,
+        stream?.id ?? "",
+        subtitleLookup?.videoHash ?? "",
+        subtitleLookup?.videoSize ?? "",
+        subtitleLookup?.filename ?? "",
+        forcedSubtitleUrl,
+        playbackPreferences.addonSubtitleLoadMode,
+        playbackPreferences.preferredSubtitleLanguage,
+        originalLanguage ?? "",
+        addonsFingerprint,
+      ].join(":");
+      const cachedSubtitles = readPageDataCache<SubtitleSource[]>("subtitles", cacheKey);
+      if (cachedSubtitles) {
+        setSubtitles(cachedSubtitles);
+        setLoading(false);
+        setReady(true);
+        return;
+      }
       const loaded: SubtitleSource[] = [];
       const imdbId = await resolveImdbId(query).catch(() => null);
       const requestType = subtitleRequestType(query);
@@ -368,8 +393,9 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
       }
 
       if (!cancelled) {
+        const next = dedupe(loaded);
+        writePageDataCache("subtitles", cacheKey, next);
         setSubtitles(prev => {
-          const next = dedupe(loaded);
           if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
           return next;
         });

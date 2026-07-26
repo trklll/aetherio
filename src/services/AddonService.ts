@@ -279,11 +279,6 @@ export async function setNativeAutocrop(enabled: boolean) {
   return invokeCommand("mpv_autocrop", { enabled });
 }
 
-export async function setNativeMpvSurfaceRect(rect: { x: number; y: number; width: number; height: number }) {
-  if (isAndroidRuntime()) return;
-  await invokeCommand("set_mpv_surface_rect", rect);
-}
-
 export async function setNativeMpvSurfaceVisible(visible: boolean) {
   if (isAndroidRuntime()) return;
   await invokeCommand("set_mpv_surface_visible", { visible });

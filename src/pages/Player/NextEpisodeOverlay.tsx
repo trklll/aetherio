@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, SkipForward } from "lucide-react";
 import {
@@ -33,7 +33,6 @@ import {
   openExternalUrl,
   sendNativePlaybackCommand,
   setNativeAutocrop,
-  setNativeMpvSurfaceRect,
   setNativeMpvSurfaceVisible,
   stopNativePlayback,
 } from "../../runtime/platform";
@@ -165,8 +164,6 @@ export default function PlayerPage() {
   const holdSpeedTimerRef = useRef<number | null>(null);
   const holdSpeedActiveRef = useRef(false);
   const ignoreNextScreenClickRef = useRef(false);
-  const nativeSurfaceRef = useRef<HTMLDivElement>(null);
-  const nativeSurfaceRectKeyRef = useRef("");
   const traktStartedKeyRef = useRef("");
   const traktStoppedKeyRef = useRef("");
   const nextEpisodePromptKeyRef = useRef("");
@@ -261,56 +258,6 @@ export default function PlayerPage() {
       }));
     };
   }, [nativeSurfaceVisible]);
-
-  useEffect(() => {
-    if (androidPlayback) return;
-    const node = nativeSurfaceRef.current;
-    if (!node) return;
-
-    let animationFrame = 0;
-    let disposed = false;
-
-    const syncSurfaceRect = () => {
-      if (disposed) return;
-      const rect = node.getBoundingClientRect();
-      if (rect.width < 2 || rect.height < 2) return;
-      const scale = window.devicePixelRatio || 1;
-      const payload = {
-        x: Math.round(rect.left * scale),
-        y: Math.round(rect.top * scale),
-        width: Math.max(1, Math.round(rect.width * scale)),
-        height: Math.max(1, Math.round(rect.height * scale)),
-      };
-      const key = `${payload.x}:${payload.y}:${payload.width}:${payload.height}`;
-      if (nativeSurfaceRectKeyRef.current === key) return;
-      nativeSurfaceRectKeyRef.current = key;
-      void setNativeMpvSurfaceRect(payload).catch(error => {
-        console.warn("[AETHERIO:PLAYER:SURFACE] layout sync failed", String(error));
-      });
-    };
-
-    const scheduleSync = () => {
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = window.requestAnimationFrame(syncSurfaceRect);
-    };
-
-    const resizeObserver = new ResizeObserver(scheduleSync);
-    resizeObserver.observe(node);
-    window.addEventListener("resize", scheduleSync);
-    const timers = [
-      window.setTimeout(scheduleSync, 50),
-      window.setTimeout(scheduleSync, 250),
-    ];
-    scheduleSync();
-
-    return () => {
-      disposed = true;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", scheduleSync);
-      timers.forEach(timer => window.clearTimeout(timer));
-    };
-  }, [androidPlayback, mpvBundled, mpvStatus, stream]);
 
   useEffect(() => {
     if (androidPlayback) return;
@@ -2147,7 +2094,6 @@ if (!stream) {
     || "",
   );
   const controlsReady = !androidPlayback && (playbackStarted || (mpvReadyForCommands && mpvFileLoaded));
-  const nativeSurfaceStyle: CSSProperties = { inset: 0 };
   const playerCursor = !androidPlayback && playbackStarted && !controlsActive ? "none" : "default";
   const playerShellClassName = !showFallbackPanel
     ? `relative h-screen w-screen overflow-hidden ${nativeSurfaceVisible ? "bg-transparent" : "bg-black"} text-white`
@@ -2181,14 +2127,6 @@ if (!stream) {
       ) : null}
       {showPrePlaybackBackdrop && !backgroundArtwork ? (
         <div className="pointer-events-none absolute inset-0 bg-[#101014]" />
-      ) : null}
-      {!showFallbackPanel && !androidPlayback ? (
-        <div
-          ref={nativeSurfaceRef}
-          className="pointer-events-none absolute overflow-hidden"
-          style={nativeSurfaceStyle}
-          aria-hidden="true"
-        />
       ) : null}
       {showFallbackPanel ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black px-8 text-center">

@@ -21,6 +21,31 @@ import type { SelectOption, VideoScaleMode } from "./types";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
 import { tweenTo } from "../../utils/motion";
+import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
+
+type MpvBlurGeometry = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  cornerRadius: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  episodePanel?: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    cornerRadius: number;
+  };
+  subtitlePanel?: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    cornerRadius: number;
+  };
+};
 
 interface PlayerControlsProps {
   active: boolean;
@@ -106,11 +131,194 @@ export default function PlayerControls({
   onNavigateEpisode,
 }: PlayerControlsProps) {
   const controlsRef = useRef<HTMLDivElement>(null);
+  const controlsGlassRef = useRef<HTMLDivElement>(null);
+  const lastBlurGeometryRef = useRef("");
+  const blurErrorLoggedRef = useRef(false);
+  const blurCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingBlurCommandRef = useRef<{ enabled: boolean; rect?: MpvBlurGeometry } | null>(null);
+  const blurCommandInFlightRef = useRef(false);
+  const subtitlePositionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastSubtitlePositionRef = useRef<number | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
 
   useEffect(() => {
     tweenTo(controlsRef.current, { opacity: active ? 1 : 0 }, 0.3);
   }, [active]);
+
+  useEffect(() => {
+    let animationFrame = 0;
+    const configuredPosition = Math.max(0, Math.min(150, 100 - subtitleVerticalPercent));
+
+    const syncSubtitlePosition = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        let nextPosition = configuredPosition;
+        const controlsGlass = controlsGlassRef.current;
+        if (active && controlsGlass) {
+          const controlsTop = controlsGlass.getBoundingClientRect().top;
+          const positionAboveControls = ((controlsTop - 18) / Math.max(1, window.innerHeight)) * 100;
+          nextPosition = Math.min(configuredPosition, Math.max(0, positionAboveControls));
+        }
+        nextPosition = Number(nextPosition.toFixed(2));
+        if (lastSubtitlePositionRef.current === nextPosition) return;
+        lastSubtitlePositionRef.current = nextPosition;
+        const next = subtitlePositionQueueRef.current
+          .catch(() => undefined)
+          .then(() => sendNativePlaybackCommand(["set_property", "sub-pos", nextPosition]));
+        subtitlePositionQueueRef.current = next;
+        void next.catch(error => {
+          lastSubtitlePositionRef.current = null;
+          console.warn("[PlayerControls] No se pudo ajustar la posicion de los subtitulos.", error);
+        });
+      });
+    };
+
+    syncSubtitlePosition();
+    const observer = new ResizeObserver(syncSubtitlePosition);
+    if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
+    window.addEventListener("resize", syncSubtitlePosition);
+    window.visualViewport?.addEventListener("resize", syncSubtitlePosition);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", syncSubtitlePosition);
+      window.visualViewport?.removeEventListener("resize", syncSubtitlePosition);
+      window.cancelAnimationFrame(animationFrame);
+      lastSubtitlePositionRef.current = configuredPosition;
+      const restore = subtitlePositionQueueRef.current
+        .catch(() => undefined)
+        .then(() => sendNativePlaybackCommand(["set_property", "sub-pos", configuredPosition]));
+      subtitlePositionQueueRef.current = restore;
+      void restore.catch(() => undefined);
+    };
+  }, [active, subtitleVerticalPercent]);
+
+  useEffect(() => {
+    let disposed = false;
+    let animationFrame = 0;
+    let resizeSettleTimers: number[] = [];
+
+    const flushLatestBlurCommand = () => {
+      const command = pendingBlurCommandRef.current;
+      if (!command) {
+        blurCommandInFlightRef.current = false;
+        return;
+      }
+      pendingBlurCommandRef.current = null;
+      const next = blurCommandQueueRef.current
+        .catch(() => undefined)
+        .then(() => setNativeMpvControlsBlur(command.enabled, command.rect));
+      blurCommandQueueRef.current = next;
+      void next.then(
+        () => {
+          blurErrorLoggedRef.current = false;
+          flushLatestBlurCommand();
+        },
+        error => {
+          lastBlurGeometryRef.current = "";
+          if (!blurErrorLoggedRef.current) {
+            blurErrorLoggedRef.current = true;
+            console.warn("[PlayerControls] No se pudo activar el blur GPU de MPV.", error);
+          }
+          flushLatestBlurCommand();
+        },
+      );
+    };
+    const queueBlurCommand = (
+      enabled: boolean,
+      rect?: MpvBlurGeometry,
+    ) => {
+      pendingBlurCommandRef.current = { enabled, rect };
+      if (blurCommandInFlightRef.current) return;
+      blurCommandInFlightRef.current = true;
+      flushLatestBlurCommand();
+    };
+    const disableBlur = () => {
+      lastBlurGeometryRef.current = "";
+      queueBlurCommand(false);
+    };
+    if (!active || controlsLocked) {
+      disableBlur();
+      return;
+    }
+
+    const syncBlurGeometry = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        if (disposed) return;
+        const glass = controlsGlassRef.current;
+        if (!glass) return;
+        const rect = glass.getBoundingClientRect();
+        const episodePanel = showEpisodePanel
+          ? document.querySelector<HTMLElement>("[data-player-episode-panel-glass]")
+          : null;
+        const episodeRect = episodePanel?.getBoundingClientRect();
+        const subtitlePanel = openMenu === "subtitles"
+          ? document.querySelector<HTMLElement>("[data-player-subtitle-panel-glass]")
+          : null;
+        const subtitleRect = subtitlePanel?.getBoundingClientRect();
+        const scale = window.devicePixelRatio || 1;
+        const geometry = {
+          left: rect.left * scale,
+          top: rect.top * scale,
+          right: rect.right * scale,
+          bottom: rect.bottom * scale,
+          cornerRadius: 26 * scale,
+          viewportWidth: window.innerWidth * scale,
+          viewportHeight: window.innerHeight * scale,
+          episodePanel: episodeRect
+            ? {
+                left: episodeRect.left * scale,
+                top: episodeRect.top * scale,
+                right: episodeRect.right * scale,
+                bottom: episodeRect.bottom * scale,
+                cornerRadius: 28 * scale,
+              }
+            : undefined,
+          subtitlePanel: subtitleRect
+            ? {
+                left: subtitleRect.left * scale,
+                top: subtitleRect.top * scale,
+                right: subtitleRect.right * scale,
+                bottom: subtitleRect.bottom * scale,
+                cornerRadius: 8 * scale,
+              }
+            : undefined,
+        };
+        const geometryKey = JSON.stringify(geometry);
+        if (geometryKey === lastBlurGeometryRef.current) return;
+        lastBlurGeometryRef.current = geometryKey;
+        queueBlurCommand(true, geometry);
+      });
+    };
+    const syncBlurAfterResize = () => {
+      resizeSettleTimers.forEach(timer => window.clearTimeout(timer));
+      resizeSettleTimers = [];
+      syncBlurGeometry();
+      for (const delay of [50, 120, 250, 500]) {
+        resizeSettleTimers.push(window.setTimeout(syncBlurGeometry, delay));
+      }
+    };
+
+    syncBlurGeometry();
+    const observer = new ResizeObserver(syncBlurAfterResize);
+    if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
+    const episodePanel = document.querySelector<HTMLElement>("[data-player-episode-panel-glass]");
+    if (episodePanel) observer.observe(episodePanel);
+    const subtitlePanel = document.querySelector<HTMLElement>("[data-player-subtitle-panel-glass]");
+    if (subtitlePanel) observer.observe(subtitlePanel);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", syncBlurAfterResize);
+    window.visualViewport?.addEventListener("resize", syncBlurAfterResize);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.removeEventListener("resize", syncBlurAfterResize);
+      window.visualViewport?.removeEventListener("resize", syncBlurAfterResize);
+      window.cancelAnimationFrame(animationFrame);
+      resizeSettleTimers.forEach(timer => window.clearTimeout(timer));
+      disableBlur();
+    };
+  }, [active, controlsLocked, openMenu, showEpisodePanel]);
 
   function runControlAction(action: () => void) {
     setOpenMenu(null);
@@ -129,11 +337,10 @@ export default function PlayerControls({
       onClick={event => event.stopPropagation()}
     >
       <div
-        className="mx-auto w-full max-w-[1240px] rounded-[26px] border border-white/[0.08] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)]"
+        ref={controlsGlassRef}
+        className="relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)]"
         style={{
-          background: "linear-gradient(135deg, rgba(64,64,64,0.44), rgba(18,18,20,0.68))",
-          backdropFilter: "blur(20px) saturate(180%)",
-          WebkitBackdropFilter: "blur(20px) saturate(180%)",
+          background: "rgba(70, 70, 70, 0.22)",
         }}
       >
         <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
@@ -156,8 +363,12 @@ export default function PlayerControls({
             value={Math.min(currentTime, duration || currentTime)}
             onChange={event => onSeek(Number(event.target.value))}
             disabled={!duration}
-            style={{ pointerEvents: controlsLocked ? "none" : "auto", opacity: controlsLocked ? 0.42 : 1 }}
-            className="h-1.5 flex-1 accent-white disabled:opacity-35"
+            style={{
+              pointerEvents: controlsLocked ? "none" : "auto",
+              opacity: controlsLocked ? 0.42 : 1,
+              "--player-progress": `${duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0}%`,
+            } as CSSProperties}
+            className="player-timeline flex-1 disabled:opacity-35"
           />
           <span className="w-12 text-xs text-white/84">{formatTime(duration)}</span>
         </div>
@@ -380,15 +591,14 @@ function SubtitleMenu({
       {open && !disabled ? (
         <div
           ref={menuRef}
+          data-player-subtitle-panel-glass
           role="dialog"
           aria-label="Subtitulos"
-          className="fixed bottom-[81px] left-1/2 z-[45] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-white/12 text-white shadow-[0_24px_70px_rgba(0,0,0,0.68)]"
+          className="fixed bottom-[81px] left-1/2 z-[45] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg text-white shadow-[0_24px_70px_rgba(0,0,0,0.68)]"
           style={{
             height: "min(460px, calc(100vh - 190px))",
             minHeight: 300,
-            background: "linear-gradient(135deg, rgba(20,20,22,0.96), rgba(7,7,9,0.94))",
-            backdropFilter: "blur(18px) saturate(155%)",
-            WebkitBackdropFilter: "blur(18px) saturate(155%)",
+            background: "rgba(70, 70, 70, 0.22)",
           }}
         >
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-4">

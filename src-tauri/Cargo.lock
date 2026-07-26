@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aetherio"
-version = "0.3.22"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -61,6 +61,8 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite",
  "urlencoding",
+ "webview2-com",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

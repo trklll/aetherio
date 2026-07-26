@@ -51,6 +51,7 @@ export interface ApiKeys {
   tmdbApiKey: string;
   introDbApiKey: string;
   animeSkipClientId: string;
+  omdbApiKey: string;
 }
 
 export const API_KEYS_STORAGE_KEY = "aetherio-api-keys";
@@ -60,6 +61,7 @@ export const EMPTY_API_KEYS: ApiKeys = {
   tmdbApiKey: "",
   introDbApiKey: "",
   animeSkipClientId: "",
+  omdbApiKey: "",
 };
 
 export function getApiKeys(): ApiKeys {
@@ -71,6 +73,7 @@ export function getApiKeys(): ApiKeys {
       tmdbApiKey: typeof parsed.tmdbApiKey === "string" ? parsed.tmdbApiKey.trim() : "",
       introDbApiKey: typeof parsed.introDbApiKey === "string" ? parsed.introDbApiKey.trim() : "",
       animeSkipClientId: typeof parsed.animeSkipClientId === "string" ? parsed.animeSkipClientId.trim() : "",
+      omdbApiKey: typeof parsed.omdbApiKey === "string" ? parsed.omdbApiKey.trim() : "",
     };
   } catch {
     return EMPTY_API_KEYS;
@@ -82,6 +85,7 @@ export function saveApiKeys(keys: ApiKeys) {
     tmdbApiKey: keys.tmdbApiKey.trim(),
     introDbApiKey: keys.introDbApiKey.trim(),
     animeSkipClientId: keys.animeSkipClientId.trim(),
+    omdbApiKey: keys.omdbApiKey.trim(),
   };
   localStorage.setItem(getApiKeysStorageKey(), JSON.stringify(normalized));
   window.dispatchEvent(new CustomEvent(API_KEYS_CHANGED_EVENT, { detail: normalized }));
@@ -97,6 +101,7 @@ export function getApiKeysForProfile(profileId: string): ApiKeys {
       tmdbApiKey: typeof parsed.tmdbApiKey === "string" ? parsed.tmdbApiKey.trim() : "",
       introDbApiKey: typeof parsed.introDbApiKey === "string" ? parsed.introDbApiKey.trim() : "",
       animeSkipClientId: typeof parsed.animeSkipClientId === "string" ? parsed.animeSkipClientId.trim() : "",
+      omdbApiKey: typeof parsed.omdbApiKey === "string" ? parsed.omdbApiKey.trim() : "",
     };
   } catch {
     return EMPTY_API_KEYS;

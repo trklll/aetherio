@@ -285,12 +285,58 @@ export async function setNativeAutocrop(enabled: boolean) {
   return invokeCommand("mpv_autocrop", { enabled });
 }
 
-export async function setNativeMpvSurfaceRect(rect: { x: number; y: number; width: number; height: number }) {
-  if (isAndroidRuntime()) return;
-  await invokeCommand("set_mpv_surface_rect", rect);
-}
-
 export async function setNativeMpvSurfaceVisible(visible: boolean) {
   if (isAndroidRuntime()) return;
   await invokeCommand("set_mpv_surface_visible", { visible });
+}
+
+export async function setNativeMpvControlsBlur(
+  enabled: boolean,
+  rect?: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    cornerRadius: number;
+    viewportWidth: number;
+    viewportHeight: number;
+    episodePanel?: {
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+      cornerRadius: number;
+    };
+    subtitlePanel?: {
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+      cornerRadius: number;
+    };
+  },
+) {
+  if (!isTauriRuntime() || isAndroidRuntime()) return;
+  await invokeCommand("set_mpv_controls_blur", {
+    enabled,
+    left: rect?.left ?? 0,
+    top: rect?.top ?? 0,
+    right: rect?.right ?? 0,
+    bottom: rect?.bottom ?? 0,
+    cornerRadius: rect?.cornerRadius ?? 0,
+    viewportWidth: rect?.viewportWidth ?? 1,
+    viewportHeight: rect?.viewportHeight ?? 1,
+    episodeEnabled: Boolean(rect?.episodePanel),
+    episodeLeft: rect?.episodePanel?.left ?? 0,
+    episodeTop: rect?.episodePanel?.top ?? 0,
+    episodeRight: rect?.episodePanel?.right ?? 0,
+    episodeBottom: rect?.episodePanel?.bottom ?? 0,
+    episodeCornerRadius: rect?.episodePanel?.cornerRadius ?? 0,
+    subtitlePanelEnabled: Boolean(rect?.subtitlePanel),
+    subtitlePanelLeft: rect?.subtitlePanel?.left ?? 0,
+    subtitlePanelTop: rect?.subtitlePanel?.top ?? 0,
+    subtitlePanelRight: rect?.subtitlePanel?.right ?? 0,
+    subtitlePanelBottom: rect?.subtitlePanel?.bottom ?? 0,
+    subtitlePanelCornerRadius: rect?.subtitlePanel?.cornerRadius ?? 0,
+  });
 }

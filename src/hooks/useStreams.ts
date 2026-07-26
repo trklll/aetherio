@@ -146,14 +146,6 @@ function streamRequestTypes(addon: any, queryType: string) {
   return candidates.filter((type, index) => candidates.indexOf(type) === index && addonSupportsType(addon, type));
 }
 
-function hasP2pStream(streams: MediaStream[]) {
-  return streams.some(stream =>
-    Boolean(stream.infoHash) ||
-    /^(magnet:|stremio:)/i.test(stream.url ?? "") ||
-    (stream.sources ?? []).some(source => /^(magnet:|stremio:)/i.test(source))
-  );
-}
-
 async function fetchStreamPayload(url: string, attempts = 2) {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -281,12 +273,22 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
 
 export function useStreams(query: StreamQuery | null): UseStreamsResult {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
-  const [streams, setStreams] = useState<MediaStream[]>([]);
-  const [loading, setLoading] = useState(false);
+  const streamId = useMemo(() => (query ? buildStreamId(query) : ""), [query]);
+  const initialCachedStreams = useMemo(() => {
+    if (!query || !streamId) return [] as MediaStream[];
+    const addonsFingerprint = getEnabledAddons()
+      .filter(addonHasStreams)
+      .map(addon => addon.id || addon.url)
+      .sort()
+      .join("|");
+    const cached = STREAM_CACHE.get(`${query.type}:${streamId}:${addonsFingerprint}`);
+    if (!cached || Date.now() - cached.updatedAt >= STREAM_CACHE_TTL_MS) return [];
+    return cached.streams.filter(isPlayableMediaStream);
+  }, [getEnabledAddons, query, streamId]);
+  const [streams, setStreams] = useState<MediaStream[]>(() => initialCachedStreams);
+  const [loading, setLoading] = useState(() => false);
   const [error,   setError]   = useState<string | null>(null);
   const [tick,    setTick]    = useState(0);
-
-  const streamId = useMemo(() => (query ? buildStreamId(query) : ""), [query]);
 
   // Ref para acumular resultados sin stale-closure
   const accRef = useRef<MediaStream[]>([]);
@@ -308,7 +310,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     const cached = STREAM_CACHE.get(cacheKey);
     const cachedStreams = cached?.streams.filter(isPlayableMediaStream);
     const cachedIsFresh = cached ? Date.now() - cached.updatedAt < STREAM_CACHE_TTL_MS : false;
-    const cachedLooksComplete = Boolean(cachedStreams?.length && hasP2pStream(cachedStreams));
+    const cachedLooksComplete = Boolean(cachedStreams?.length);
 
     accRef.current = cachedStreams ? [...cachedStreams] : [];
     setStreams(cachedStreams ? [...cachedStreams] : []);
