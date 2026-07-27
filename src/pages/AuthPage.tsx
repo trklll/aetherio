@@ -1,23 +1,47 @@
-import { type FormEvent, useLayoutEffect, useRef, useState } from "react";
-import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowRight, Eye, EyeOff, Globe2, HardDrive, LockKeyhole, Mail, MessageCircle, UserRound } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
 import { gsap } from "../utils/motion";
 import {
+  continueLocally,
+  getOAuthProviders,
   loginAccount,
   registerAccount,
+  startSocialLogin,
   type AetherioUser,
+  type OAuthProvider,
 } from "../auth/authClient";
 import "./AuthPage.css";
 
-export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: AetherioUser) => void }) {
+export default function AuthPage({
+  initialError = "",
+  onAuthenticated,
+  onContinueLocal,
+}: {
+  initialError?: string;
+  onAuthenticated: (user: AetherioUser) => void;
+  onContinueLocal: () => void;
+}) {
   const rootRef = useRef<HTMLElement>(null);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState(false);
+  const [socialBusy, setSocialBusy] = useState<OAuthProvider | null>(null);
+  const [providers, setProviders] = useState<Record<OAuthProvider, boolean> | null>(null);
+
+  useEffect(() => {
+    setError(initialError);
+  }, [initialError]);
+
+  useEffect(() => {
+    void getOAuthProviders()
+      .then(setProviders)
+      .catch(() => setProviders(null));
+  }, []);
 
   useLayoutEffect(() => {
     if (!rootRef.current) return;
@@ -88,6 +112,26 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
     });
   }
 
+  async function startSocial(provider: OAuthProvider) {
+    if (providers && !providers[provider]) {
+      setError(`${provider === "google" ? "Google" : "Discord"} todavía necesita sus credenciales OAuth.`);
+      return;
+    }
+    setSocialBusy(provider);
+    setError("");
+    try {
+      await startSocialLogin(provider);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo abrir el proveedor.");
+      setSocialBusy(null);
+    }
+  }
+
+  function enterLocalMode() {
+    continueLocally();
+    onContinueLocal();
+  }
+
   return (
     <main ref={rootRef} className="auth-page">
       <div className="auth-ambient" aria-hidden="true">
@@ -123,6 +167,19 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
             Crear cuenta
           </button>
         </div>
+
+        <div className="auth-social auth-reveal">
+          <button type="button" onClick={() => void startSocial("google")} disabled={socialBusy !== null}>
+            <Globe2 size={18} />
+            <span>{socialBusy === "google" ? "Abriendo Google…" : "Continuar con Google"}</span>
+          </button>
+          <button type="button" onClick={() => void startSocial("discord")} disabled={socialBusy !== null}>
+            <MessageCircle size={18} />
+            <span>{socialBusy === "discord" ? "Abriendo Discord…" : "Continuar con Discord"}</span>
+          </button>
+        </div>
+
+        <div className="auth-divider auth-reveal"><span>o usa tu correo</span></div>
 
         <form onSubmit={submit}>
           {mode === "register" ? (
@@ -197,8 +254,17 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
           </button>
         </form>
 
+        <button type="button" className="auth-local auth-reveal" onClick={enterLocalMode}>
+          <HardDrive size={17} />
+          <span>
+            <strong>Continuar localmente</strong>
+            <small>Sin cuenta y conservando los perfiles de este dispositivo</small>
+          </span>
+          <ArrowRight size={17} />
+        </button>
+
         <p className="auth-footnote auth-reveal">
-          Tus perfiles y preferencias permanecen en este dispositivo.
+          Puedes conectar una cuenta más adelante desde Ajustes.
         </p>
       </section>
     </main>

@@ -1,6 +1,6 @@
-export interface AuthEnv {
-  USERS_DB: D1Database;
-}
+import { handleOAuthRequest, type OAuthEnv } from "./oauth";
+
+export interface AuthEnv extends OAuthEnv {}
 
 interface UserRow {
   id: string;
@@ -28,6 +28,9 @@ export async function handleAuthRequest(request: Request, env: AuthEnv, pathname
   }
 
   try {
+    const oauthResponse = await handleOAuthRequest(request, env, pathname);
+    if (oauthResponse) return oauthResponse;
+
     if (pathname === "/api/auth/register" && request.method === "POST") {
       return register(request, env);
     }

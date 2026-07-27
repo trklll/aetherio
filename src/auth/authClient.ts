@@ -1,3 +1,5 @@
+import { openExternalUrl } from "../runtime/platform";
+
 export interface AetherioUser {
   id: string;
   email: string;
@@ -14,8 +16,10 @@ const API_BASE = import.meta.env.VITE_AETHERIO_API_URL?.replace(/\/$/, "")
   ?? "https://aetherio.aetherio.workers.dev";
 const TOKEN_KEY = "aetherio-account-token-v1";
 const USER_KEY = "aetherio-account-user-v1";
+const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
 
 export const AETHERIO_AUTH_CHANGED_EVENT = "aetherio-auth-changed";
+export type OAuthProvider = "google" | "discord";
 
 export async function registerAccount(input: {
   displayName: string;
@@ -73,6 +77,64 @@ export async function logoutAccount() {
   }
 }
 
+export async function getOAuthProviders() {
+  return authRequest<Record<OAuthProvider, boolean>>("/api/auth/providers");
+}
+
+export async function startSocialLogin(provider: OAuthProvider) {
+  const startUrl = new URL(`${API_BASE}/api/auth/oauth/${provider}/start`);
+  startUrl.searchParams.set("return_to", "aetherio://auth/callback");
+  await openExternalUrl(startUrl.toString());
+}
+
+export function isOAuthCallbackUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "aetherio:"
+      && url.hostname === "auth"
+      && url.pathname.replace(/\/$/, "") === "/callback";
+  } catch {
+    return false;
+  }
+}
+
+export async function completeOAuthAuthorization(rawUrl: string) {
+  const url = new URL(rawUrl);
+  const providerError = url.searchParams.get("error");
+  if (providerError) {
+    const messages: Record<string, string> = {
+      access_denied: "Cancelaste el inicio de sesión.",
+      email_not_verified: "El proveedor no confirmó tu correo electrónico.",
+      provider_failed: "El proveedor no pudo completar el inicio de sesión.",
+      missing_code: "El proveedor no devolvió un código de acceso.",
+    };
+    throw new Error(messages[providerError] ?? "No se pudo completar el inicio de sesión social.");
+  }
+  const code = url.searchParams.get("code")?.trim();
+  if (!code) throw new Error("El acceso social no devolvió un código válido.");
+  const response = await authRequest<AuthResponse>("/api/auth/oauth/exchange", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+  persistAuth(response);
+  return response.user;
+}
+
+export function continueLocally() {
+  localStorage.setItem(LOCAL_MODE_KEY, "1");
+  clearStoredAuth();
+  window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT));
+}
+
+export function leaveLocalMode() {
+  localStorage.removeItem(LOCAL_MODE_KEY);
+  window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT));
+}
+
+export function isLocalModeEnabled() {
+  return localStorage.getItem(LOCAL_MODE_KEY) === "1";
+}
+
 export function getStoredAccount(): AetherioUser | null {
   try {
     const raw = localStorage.getItem(USER_KEY);
@@ -90,6 +152,7 @@ function getAccountToken() {
 }
 
 function persistAuth(response: AuthResponse) {
+  localStorage.removeItem(LOCAL_MODE_KEY);
   localStorage.setItem(TOKEN_KEY, response.token);
   localStorage.setItem(USER_KEY, JSON.stringify(response.user));
   window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT, {

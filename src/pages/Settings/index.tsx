@@ -73,7 +73,7 @@ import {
   TRAKT_AUTH_CHANGED_EVENT,
   type TraktAuthEventDetail,
 } from "../../trakt";
-import { getStoredAccount, logoutAccount } from "../../auth/authClient";
+import { getStoredAccount, leaveLocalMode, logoutAccount } from "../../auth/authClient";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
 type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "omdb" | "trakt" | "mdblist";
@@ -714,7 +714,16 @@ function AccountPanel({
               Cerrar sesión
             </ActionButton>
           </PillRow>
-        ) : null}
+        ) : (
+          <PillRow
+            title="Modo local"
+            description="Tus perfiles permanecen sólo en este dispositivo. Puedes conectar una cuenta cuando quieras."
+          >
+            <ActionButton onClick={leaveLocalMode} icon={<LogIn size={15} />}>
+              Conectar cuenta
+            </ActionButton>
+          </PillRow>
+        )}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
         <NavRow title="Integraciones" description="Configurar TMDB, MDBList, IntroDB, Anime Skip y Trakt." onClick={() => onViewChange("integrations")} />
       </PillBlock>

@@ -65,7 +65,7 @@ La etiqueta inicia el workflow. Cuando termina, la Release pública contiene el 
 
 ## Cuentas de Aetherio
 
-Aetherio requiere una cuenta global antes de mostrar Quick Start, los perfiles o la biblioteca. Las cuentas y sesiones se guardan en Cloudflare D1; los perfiles, preferencias y progreso continúan siendo locales en cada dispositivo.
+La cuenta global de Aetherio es opcional. Tanto los usuarios anteriores como los nuevos pueden continuar en modo local; sus perfiles, preferencias y progreso permanecen en el dispositivo. Quien prefiera sincronizar su identidad puede usar correo y contraseña, Google o Discord. Las cuentas y sesiones globales se guardan en Cloudflare D1.
 
 El backend de autenticación vive en [`website/worker/auth.ts`](website/worker/auth.ts) y ofrece registro, inicio de sesión, restauración de sesión y cierre de sesión. Las contraseñas se derivan con PBKDF2 y sal aleatoria; la base sólo conserva el hash. Los tokens de sesión también se guardan como hashes y expiran después de 30 días.
 
@@ -76,3 +76,22 @@ cd website
 npx wrangler d1 migrations apply aetherio-users --remote
 npm run deploy
 ```
+
+### Activar Google y Discord
+
+Configura estas URL de redirección en las consolas de cada proveedor:
+
+- Google: `https://aetherio.aetherio.workers.dev/api/auth/oauth/google/callback`
+- Discord: `https://aetherio.aetherio.workers.dev/api/auth/oauth/discord/callback`
+
+Después guarda las credenciales exclusivamente como secretos del Worker:
+
+```powershell
+cd website
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put DISCORD_CLIENT_ID
+npx wrangler secret put DISCORD_CLIENT_SECRET
+```
+
+No añadas estos valores al repositorio. El Worker realiza el intercambio OAuth y devuelve a la aplicación un código de un solo uso mediante `aetherio://auth/callback`.

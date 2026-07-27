@@ -12,7 +12,10 @@ import { hasCompletedQuickStart } from "./config/quickStart.ts";
 import AuthPage from "./pages/AuthPage.tsx";
 import {
   AETHERIO_AUTH_CHANGED_EVENT,
+  completeOAuthAuthorization,
   getStoredAccount,
+  isLocalModeEnabled,
+  isOAuthCallbackUrl,
   restoreAccountSession,
   type AetherioUser,
 } from "./auth/authClient.ts";
@@ -44,6 +47,8 @@ export default function App() {
   const isCreatingProfile = location.pathname === "/quick-start/profile";
   const [quickStartCompleted, setQuickStartCompleted] = useState(() => hasCompletedQuickStart());
   const [account, setAccount] = useState<AetherioUser | null | undefined>(() => getStoredAccount() ?? undefined);
+  const [localMode, setLocalMode] = useState(() => isLocalModeEnabled());
+  const [authError, setAuthError] = useState("");
   const profiles = getLocalProfiles();
   const addons = useAddonStore(s => s.addons);
   const enabledAddons = useMemo(() => addons.filter(addon => addon.enabled), [addons]);
@@ -53,9 +58,14 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     void restoreAccountSession().then(user => {
-      if (!disposed) setAccount(user);
+      if (!disposed) {
+        setAccount(current => current && !user ? current : user);
+      }
     });
-    const refresh = () => setAccount(getStoredAccount());
+    const refresh = () => {
+      setAccount(getStoredAccount());
+      setLocalMode(isLocalModeEnabled());
+    };
     window.addEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
     return () => {
       disposed = true;
@@ -80,6 +90,22 @@ export default function App() {
 
     const handleUrls = async (urls: string[] | null | undefined) => {
       for (const url of urls ?? []) {
+        if (isOAuthCallbackUrl(url)) {
+          try {
+            const user = await completeOAuthAuthorization(url);
+            if (!disposed) {
+              setAccount(user);
+              setLocalMode(false);
+              setAuthError("");
+              navigate("/", { replace: true });
+            }
+          } catch (error) {
+            if (!disposed) {
+              setAuthError(error instanceof Error ? error.message : "No se pudo iniciar sesión.");
+            }
+          }
+          continue;
+        }
         const callbackKey = getTraktCallbackKey(url);
         if (callbackKey && hasProcessedTraktCallback(callbackKey)) continue;
         try {
@@ -119,8 +145,22 @@ export default function App() {
     return <RouteFallback />;
   }
 
-  if (!account) {
-    return <AuthPage onAuthenticated={setAccount} />;
+  if (!account && !localMode) {
+    return (
+      <AuthPage
+        initialError={authError}
+        onAuthenticated={user => {
+          setAccount(user);
+          setLocalMode(false);
+          setAuthError("");
+        }}
+        onContinueLocal={() => {
+          setAccount(null);
+          setLocalMode(true);
+          setAuthError("");
+        }}
+      />
+    );
   }
 
   if (isCreatingProfile || profiles.length === 0 || (!hasProfile && !quickStartCompleted)) {
