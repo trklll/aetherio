@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "aetherio",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-07-27",
+  "workers_dev": true,
+  "preview_urls": true,
+  "d1_databases": [
+    {
+      "binding": "USERS_DB",
+      "database_name": "aetherio-users",
+      "database_id": "5b6d77fc-7696-4223-aaaa-fba956e00123"
+    }
+  ],
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/download/*"]
+  }
+}

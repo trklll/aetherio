@@ -10,6 +10,7 @@ import {
   ImagePlus,
   Info,
   LogIn,
+  LogOut,
   Palette,
   PlayCircle,
   Plus,
@@ -72,6 +73,7 @@ import {
   TRAKT_AUTH_CHANGED_EVENT,
   type TraktAuthEventDetail,
 } from "../../trakt";
+import { getStoredAccount, logoutAccount } from "../../auth/authClient";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
 type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "omdb" | "trakt" | "mdblist";
@@ -457,6 +459,7 @@ function AccountPanel({
   onMdbListChange: (patch: Partial<MdbListSettings>) => void;
   onSaveIntegrations: () => void;
 }) {
+  const account = getStoredAccount();
   const [traktAuth, setTraktAuth] = useState(() => getTraktAuthSnapshot());
   const [traktStatus, setTraktStatus] = useState("");
   const [traktError, setTraktError] = useState("");
@@ -702,6 +705,16 @@ function AccountPanel({
   return (
     <PanelScaffold title="Cuenta">
       <PillBlock>
+        {account ? (
+          <PillRow
+            title={account.displayName}
+            description={account.email}
+          >
+            <ActionButton onClick={() => void logoutAccount()} icon={<LogOut size={15} />}>
+              Cerrar sesión
+            </ActionButton>
+          </PillRow>
+        ) : null}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
         <NavRow title="Integraciones" description="Configurar TMDB, MDBList, IntroDB, Anime Skip y Trakt." onClick={() => onViewChange("integrations")} />
       </PillBlock>

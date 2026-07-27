@@ -49,3 +49,5 @@ jobs:
           releaseBody: "Nueva versión de Aetherio. Consulta los cambios incluidos en esta versión y descarga el instalador para Windows."
           releaseDraft: false
           prerelease: false
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: true

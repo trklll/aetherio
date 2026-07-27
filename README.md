@@ -30,11 +30,13 @@ npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-## Actualizaciones mediante GitHub Releases
+## Actualizaciones mediante Aetherio Web y GitHub Releases
 
-La aplicación consulta automáticamente el archivo `latest.json` de la última Release de GitHub. Cuando encuentra una versión semántica superior, muestra el popup de actualización, descarga el instalador firmado, valida su firma, lo instala y reinicia Aetherio.
+La aplicación consulta el endpoint dinámico de Aetherio Web alojado en Cloudflare. El servicio revisa la última Release pública de GitHub y responde directamente con los datos que necesita el updater, sin generar ni publicar un archivo `latest.json`. Cuando encuentra una versión semántica superior, la aplicación muestra el popup de actualización, descarga el instalador firmado, valida su firma, lo instala y reinicia Aetherio.
 
-El workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) compila y publica los artefactos de Windows. GitHub debe tener configurado el secret `TAURI_SIGNING_PRIVATE_KEY` con el contenido completo de la clave privada de Tauri.
+El sitio público está disponible en [aetherio.aetherio.workers.dev](https://aetherio.aetherio.workers.dev). Su código vive en [`website/`](website/) y el mismo Worker sirve la web, la descarga del instalador y el endpoint del updater.
+
+El workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) compila y publica el instalador y su firma de Windows. GitHub debe tener configurado el secret `TAURI_SIGNING_PRIVATE_KEY` con el contenido completo de la clave privada de Tauri.
 
 La clave privada:
 
@@ -57,6 +59,20 @@ git push origin main
 git push origin v0.2.0
 ```
 
-La etiqueta inicia el workflow. Cuando termina, la Release pública contiene el instalador, su firma y `latest.json`; desde ese momento las instalaciones con una versión anterior reciben el popup.
+La etiqueta inicia el workflow. Cuando termina, la Release pública contiene el instalador y su firma; Aetherio Web detecta la nueva versión y las instalaciones anteriores reciben el popup.
 
 > No publiques una etiqueta cuya versión sea distinta de la configurada en la aplicación.
+
+## Cuentas de Aetherio
+
+Aetherio requiere una cuenta global antes de mostrar Quick Start, los perfiles o la biblioteca. Las cuentas y sesiones se guardan en Cloudflare D1; los perfiles, preferencias y progreso continúan siendo locales en cada dispositivo.
+
+El backend de autenticación vive en [`website/worker/auth.ts`](website/worker/auth.ts) y ofrece registro, inicio de sesión, restauración de sesión y cierre de sesión. Las contraseñas se derivan con PBKDF2 y sal aleatoria; la base sólo conserva el hash. Los tokens de sesión también se guardan como hashes y expiran después de 30 días.
+
+Para aplicar nuevas migraciones y desplegar:
+
+```powershell
+cd website
+npx wrangler d1 migrations apply aetherio-users --remote
+npm run deploy
+```

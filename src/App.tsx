@@ -9,6 +9,13 @@ import { useFullscreen } from "./hooks/useFullscreen.ts";
 import { completeTraktAuthorization, TRAKT_AUTH_CHANGED_EVENT, type TraktAuthEventDetail } from "./trakt";
 import { getCurrentDeepLinks, listenOpenUrls } from "./runtime/platform.ts";
 import { hasCompletedQuickStart } from "./config/quickStart.ts";
+import AuthPage from "./pages/AuthPage.tsx";
+import {
+  AETHERIO_AUTH_CHANGED_EVENT,
+  getStoredAccount,
+  restoreAccountSession,
+  type AetherioUser,
+} from "./auth/authClient.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();
@@ -36,11 +43,25 @@ export default function App() {
   const activeProfile = getActiveProfile();
   const isCreatingProfile = location.pathname === "/quick-start/profile";
   const [quickStartCompleted, setQuickStartCompleted] = useState(() => hasCompletedQuickStart());
+  const [account, setAccount] = useState<AetherioUser | null | undefined>(() => getStoredAccount() ?? undefined);
   const profiles = getLocalProfiles();
   const addons = useAddonStore(s => s.addons);
   const enabledAddons = useMemo(() => addons.filter(addon => addon.enabled), [addons]);
 
   useFullscreen();
+
+  useEffect(() => {
+    let disposed = false;
+    void restoreAccountSession().then(user => {
+      if (!disposed) setAccount(user);
+    });
+    const refresh = () => setAccount(getStoredAccount());
+    window.addEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
+    return () => {
+      disposed = true;
+      window.removeEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (!hasProfile || !enabledAddons.length) return;
@@ -93,6 +114,14 @@ export default function App() {
       if (unlisten) unlisten();
     };
   }, [navigate]);
+
+  if (account === undefined) {
+    return <RouteFallback />;
+  }
+
+  if (!account) {
+    return <AuthPage onAuthenticated={setAccount} />;
+  }
 
   if (isCreatingProfile || profiles.length === 0 || (!hasProfile && !quickStartCompleted)) {
     return (

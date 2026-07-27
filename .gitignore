@@ -22,6 +22,7 @@ src-tauri/target
 .playwright-cli/
 output/
 refs_/
+website/.wrangler/
 
 # Generated provider bundle (rebuilt by npm scripts)
 public/nuvio-provider-deps.js
