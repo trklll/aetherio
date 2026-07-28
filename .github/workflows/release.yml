@@ -37,7 +37,19 @@ jobs:
         shell: pwsh
         run: ./scripts/install-mpv.ps1
 
+      - name: Verify updater key lineage
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP "aetherio-updater-key-check.bin"
+          Set-Content -LiteralPath $probe -Value "Aetherio updater key check" -NoNewline
+          & ".\node_modules\.bin\tauri.cmd" signer sign "--password=" $probe
+          node scripts/verify-updater-signature.mjs "$probe.sig"
+
       - name: Build and publish signed update
+        id: publish
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,3 +63,55 @@ jobs:
           prerelease: false
           uploadUpdaterJson: false
           uploadUpdaterSignatures: true
+
+      - name: Publish release to Aetherio updater
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_LEGACY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          AETHERIO_RELEASE_TOKEN: ${{ secrets.AETHERIO_RELEASE_TOKEN }}
+        run: |
+          $installer = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*_x64-setup.exe" |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "No se encontro el instalador NSIS del updater."
+          }
+
+          $currentSignaturePath = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $currentSignaturePath)) {
+            throw "No se encontro la firma actual del updater."
+          }
+
+          $savedCurrentSignaturePath = "$currentSignaturePath.current"
+          $legacySignaturePath = "$($installer.FullName).legacy.sig"
+          Move-Item -LiteralPath $currentSignaturePath -Destination $savedCurrentSignaturePath
+          try {
+            & ".\node_modules\.bin\tauri.cmd" signer sign "--password=" "$($installer.FullName)"
+            Move-Item -LiteralPath $currentSignaturePath -Destination $legacySignaturePath
+          } finally {
+            Move-Item -LiteralPath $savedCurrentSignaturePath -Destination $currentSignaturePath -Force
+          }
+
+          $version = "${{ steps.publish.outputs.appVersion }}"
+          $tagName = "v$version"
+          gh release upload $tagName $legacySignaturePath --repo "${{ github.repository }}" --clobber
+
+          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/$tagName/$($installer.Name)"
+          $payload = @{
+            version = $version
+            notes = "Nueva version de Aetherio."
+            pubDate = (Get-Date).ToUniversalTime().ToString("o")
+            url = $assetUrl
+            size = $installer.Length
+            sha256 = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            signatureCurrent = (Get-Content -LiteralPath $currentSignaturePath -Raw).Trim()
+            signatureLegacy = (Get-Content -LiteralPath $legacySignaturePath -Raw).Trim()
+          } | ConvertTo-Json -Compress
+
+          Invoke-RestMethod `
+            -Uri "https://aetherio.aetherio.workers.dev/api/internal/releases" `
+            -Method Post `
+            -Headers @{ Authorization = "Bearer $env:AETHERIO_RELEASE_TOKEN" } `
+            -ContentType "application/json" `
+            -Body $payload

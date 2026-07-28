@@ -30,13 +30,15 @@ npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-## Actualizaciones mediante Aetherio Web y GitHub Releases
+## Actualizaciones mediante Aetherio Web
 
-La aplicación consulta el endpoint dinámico de Aetherio Web alojado en Cloudflare. El servicio revisa la última Release pública de GitHub y responde directamente con los datos que necesita el updater, sin generar ni publicar un archivo `latest.json`. Cuando encuentra una versión semántica superior, la aplicación muestra el popup de actualización, descarga el instalador firmado, valida su firma, lo instala y reinicia Aetherio.
+La aplicación consulta el endpoint dinámico de Aetherio Web alojado en Cloudflare. El registro de versiones, hashes SHA-256 y firmas vive en Cloudflare D1; GitHub Releases se utiliza únicamente como almacenamiento gratuito de los instaladores. No se necesita `latest.json`.
+
+Cuando encuentra una versión SemVer superior, Aetherio muestra el popup, descarga el instalador, valida la firma minisign incluida en el registro interno, lo instala y reinicia. El pipeline comprueba antes de publicar que la firma fue creada por la misma clave pública incluida en la aplicación.
 
 El sitio público está disponible en [aetherio.aetherio.workers.dev](https://aetherio.aetherio.workers.dev). Su código vive en [`website/`](website/) y el mismo Worker sirve la web, la descarga del instalador y el endpoint del updater.
 
-El workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) compila y publica el instalador y su firma de Windows. GitHub debe tener configurado el secret `TAURI_SIGNING_PRIVATE_KEY` con el contenido completo de la clave privada de Tauri.
+El workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) compila el instalador, publica sus firmas y registra el release en Aetherio Web. GitHub debe tener configurados `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_LEGACY` y `AETHERIO_RELEASE_TOKEN`.
 
 La clave privada:
 
@@ -45,6 +47,8 @@ La clave privada:
 - no puede reemplazarse sin romper las actualizaciones de instalaciones existentes.
 
 La clave pública sí vive en `src-tauri/tauri.conf.json` y únicamente sirve para verificar firmas.
+
+La clave estable de Aetherio es `A0C57F8E4D799EDB`. Las instalaciones `0.3.0–0.4.0` incluyeron por error otra clave pública mientras sus releases seguían firmándose con la clave estable. Esas instalaciones requieren descargar una vez el instalador de reparación desde Aetherio Web. Después de reinstalar, vuelven al canal interno normal.
 
 ### Publicar una versión
 
