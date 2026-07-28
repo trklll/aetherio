@@ -64,7 +64,7 @@ export async function handleReleaseRequest(
     return updateManifest(env, url);
   }
 
-  if (url.pathname === "/download/windows" && request.method === "GET") {
+  if (url.pathname === "/download/windows" && ["GET", "HEAD"].includes(request.method)) {
     const release = await getLatestRelease(env);
     if (!release) return releaseJson({ error: "No hay un instalador compatible disponible." }, 404);
     return Response.redirect(release.installer_url, 302);
@@ -161,7 +161,7 @@ async function releaseInfo(env: ReleaseEnv) {
         name: `Aetherio ${release.version}`,
         notes: release.notes,
         publishedAt: release.published_at,
-        downloadUrl: release.installer_url,
+        downloadUrl: "/download/windows",
         size: release.installer_size,
         sha256: release.installer_sha256,
       },

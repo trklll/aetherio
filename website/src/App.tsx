@@ -27,6 +27,7 @@ interface ReleaseInfo {
 }
 
 const REPOSITORY_URL = "https://github.com/trklll/aetherio";
+const WINDOWS_DOWNLOAD_URL = "/download/windows";
 
 function App() {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -117,8 +118,6 @@ function App() {
     });
   }
 
-  const downloadUrl = release?.downloadUrl ?? `${REPOSITORY_URL}/releases/latest`;
-
   return (
     <div ref={rootRef} className="site">
       <div className="ambient" aria-hidden="true">
@@ -161,7 +160,7 @@ function App() {
             <div className="hero-actions" data-hero-reveal>
               <a
                 className="button button--primary"
-                href={downloadUrl}
+                href={WINDOWS_DOWNLOAD_URL}
                 onMouseEnter={event => animateHover(event, true)}
                 onMouseLeave={event => animateHover(event, false)}
               >
@@ -265,13 +264,13 @@ function App() {
             {release
               ? `Versión ${release.version} · ${formatBytes(release.size)} · Publicada ${formatDate(release.publishedAt)}`
               : releaseError
-                ? "Consulta la última versión disponible en GitHub."
+                ? "La descarga sigue disponible aunque no podamos mostrar sus detalles."
                 : "Buscando la versión más reciente…"}
           </p>
           <div className="download-actions">
             <a
               className="button button--primary button--large"
-              href={downloadUrl}
+              href={WINDOWS_DOWNLOAD_URL}
               onMouseEnter={event => animateHover(event, true)}
               onMouseLeave={event => animateHover(event, false)}
             >

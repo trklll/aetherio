@@ -64,7 +64,7 @@ jobs:
           uploadUpdaterJson: false
           uploadUpdaterSignatures: true
 
-      - name: Publish release to Aetherio updater
+      - name: Publish release to Aetherio updater and website
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,3 +115,26 @@ jobs:
             -Headers @{ Authorization = "Bearer $env:AETHERIO_RELEASE_TOKEN" } `
             -ContentType "application/json" `
             -Body $payload
+
+          $websiteRelease = Invoke-RestMethod `
+            -Uri "https://aetherio.aetherio.workers.dev/api/release?version=$version"
+          if ($websiteRelease.version -ne $version) {
+            throw "La web no anuncia la version $version."
+          }
+          if ($websiteRelease.downloadUrl -ne "/download/windows") {
+            throw "La web no usa la ruta de descarga directa."
+          }
+
+          $download = Invoke-WebRequest `
+            -Uri "https://aetherio.aetherio.workers.dev/download/windows?version=$version" `
+            -Method Head `
+            -MaximumRedirection 0 `
+            -SkipHttpErrorCheck
+          if ($download.StatusCode -ne 302) {
+            throw "La descarga web no respondio con una redireccion directa."
+          }
+          $expectedAsset = "https://github.com/${{ github.repository }}/releases/download/$tagName/"
+          if (-not $download.Headers.Location.StartsWith($expectedAsset) -or
+              -not $download.Headers.Location.EndsWith("_x64-setup.exe")) {
+            throw "La descarga web no apunta al instalador del release."
+          }

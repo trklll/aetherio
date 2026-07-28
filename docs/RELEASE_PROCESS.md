@@ -11,6 +11,9 @@ El updater actual es interno:
 - GitHub Releases almacena gratuitamente el instalador y sus firmas.
 - No se genera ni se publica `latest.json`.
 - La publicación completa la realiza `.github/workflows/release.yml`.
+- La web obtiene la versión publicada desde D1 y descarga mediante
+  `/download/windows`; un release normal no requiere desplegar nuevamente la
+  web.
 
 ## Reglas obligatorias
 
@@ -151,6 +154,8 @@ El workflow debe completar estas etapas:
 4. Generar la firma actual y la firma heredada.
 5. Subir la firma heredada como asset.
 6. Registrar versión, URL, tamaño, SHA-256 y ambas firmas en Cloudflare.
+7. Comprobar que la web anuncia la nueva versión y que
+   `/download/windows` redirige al instalador `.exe` de ese release.
 
 Si falla, no mover ni recrear el tag. Corregir el problema en un nuevo commit y
 volver a ejecutar el workflow sobre el mismo tag solamente si el commit del tag
@@ -202,6 +207,48 @@ Finalmente, probar desde una instalación anterior:
 5. reiniciar;
 6. confirmar que la versión instalada es la nueva.
 
+## Web y descarga directa
+
+Los dos botones de descarga de la web deben usar siempre esta ruta estable:
+
+```text
+https://aetherio.aetherio.workers.dev/download/windows
+```
+
+El Worker consulta D1 y responde con una redirección al asset
+`Aetherio_<versión>_x64-setup.exe`. No enlazar los botones a
+`/releases/latest`: esa URL abre la página de GitHub en lugar de iniciar la
+descarga.
+
+La automatización está integrada en `.github/workflows/release.yml`. Cada
+release registra la versión en D1 y, en el mismo job, comprueba que la web
+anuncie esa versión y que la descarga apunte al `.exe` correcto. No hay que
+editar ni volver a desplegar la web solo para cambiar el número de versión.
+
+Si cambia el código o el diseño de `website/`, desplegar ese cambio desde una
+sesión autorizada de Wrangler:
+
+```powershell
+Set-Location website
+npm ci
+npm run deploy
+```
+
+Verificación de la web:
+
+```powershell
+$release = Invoke-RestMethod `
+  -Uri "https://aetherio.aetherio.workers.dev/api/release"
+$release.version
+$release.downloadUrl
+
+curl.exe -sS -D - -o NUL --max-redirs 0 `
+  "https://aetherio.aetherio.workers.dev/download/windows"
+```
+
+`downloadUrl` debe ser `/download/windows`; la segunda respuesta debe ser
+`302` y su cabecera `Location` debe terminar en `_x64-setup.exe`.
+
 ## Reintentos y fallos
 
 ### La firma fue creada con otra clave
@@ -249,5 +296,7 @@ HTTP 200. No cambiar el pin a una versión inventada.
 - [ ] GitHub Actions completado.
 - [ ] Assets y ambas firmas presentes.
 - [ ] Registro interno de Cloudflare completado.
+- [ ] Web anunciando la versión nueva.
+- [ ] `/download/windows` redirigiendo al instalador `.exe`.
 - [ ] Endpoint probado desde una versión anterior.
 - [ ] Actualización real probada desde la aplicación.
