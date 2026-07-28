@@ -4,14 +4,19 @@ export interface OAuthEnv {
   GOOGLE_CLIENT_SECRET?: string;
   DISCORD_CLIENT_ID?: string;
   DISCORD_CLIENT_SECRET?: string;
+  MAL_CLIENT_ID?: string;
+  MAL_CLIENT_SECRET?: string;
+  OAUTH_TOKEN_ENCRYPTION_KEY?: string;
 }
 
-type OAuthProvider = "google" | "discord";
+type OAuthProvider = "google" | "discord" | "mal";
 
 interface OAuthStateRow {
   provider: OAuthProvider;
   return_to: string;
   expires_at: number;
+  pkce_verifier: string | null;
+  link_user_id: string | null;
 }
 
 interface OAuthProfile {
@@ -19,6 +24,13 @@ interface OAuthProfile {
   email: string;
   displayName: string;
   emailVerified: boolean;
+  username?: string;
+}
+
+interface OAuthTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: number;
 }
 
 interface UserRow {
@@ -43,15 +55,16 @@ export async function handleOAuthRequest(
     return oauthJson({
       google: providerConfigured(env, "google"),
       discord: providerConfigured(env, "discord"),
+      mal: providerConfigured(env, "mal"),
     });
   }
 
-  const startMatch = /^\/api\/auth\/oauth\/(google|discord)\/start$/.exec(pathname);
+  const startMatch = /^\/api\/auth\/oauth\/(google|discord|mal)\/start$/.exec(pathname);
   if (startMatch && request.method === "GET") {
     return startOAuth(request, env, startMatch[1] as OAuthProvider);
   }
 
-  const callbackMatch = /^\/api\/auth\/oauth\/(google|discord)\/callback$/.exec(pathname);
+  const callbackMatch = /^\/api\/auth\/oauth\/(google|discord|mal)\/callback$/.exec(pathname);
   if (callbackMatch && request.method === "GET") {
     return finishOAuth(request, env, callbackMatch[1] as OAuthProvider);
   }
@@ -59,16 +72,37 @@ export async function handleOAuthRequest(
   if (pathname === "/api/auth/oauth/exchange" && request.method === "POST") {
     return exchangeAppCode(request, env);
   }
+  if (pathname === "/api/integrations/mal/connect" && request.method === "POST") {
+    const userId = await authenticatedUserId(request, env);
+    if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
+    const redirect = await startOAuth(request, env, "mal", userId);
+    if (redirect.status !== 302) return redirect;
+    const authorizationUrl = redirect.headers.get("Location");
+    if (!authorizationUrl) return oauthJson({ error: "No se pudo iniciar la conexión con MyAnimeList." }, 500);
+    return oauthJson({ authorizationUrl });
+  }
+  if (pathname === "/api/integrations/mal/anime" && request.method === "GET") {
+    return getMalAnimeList(request, env);
+  }
+  const malUpdateMatch = /^\/api\/integrations\/mal\/anime\/(\d+)$/.exec(pathname);
+  if (malUpdateMatch && request.method === "PUT") {
+    return updateMalAnime(request, env, Number(malUpdateMatch[1]));
+  }
 
   return null;
 }
 
-async function startOAuth(request: Request, env: OAuthEnv, provider: OAuthProvider) {
+async function startOAuth(
+  request: Request,
+  env: OAuthEnv,
+  provider: OAuthProvider,
+  linkUserId: string | null = null,
+) {
   const config = providerConfig(env, provider);
   if (!config) {
     return oauthPage(
       "Proveedor pendiente",
-      `${provider === "google" ? "Google" : "Discord"} todavía no tiene credenciales configuradas en Cloudflare.`,
+      `${providerLabel(provider)} todavía no tiene credenciales configuradas en Cloudflare.`,
       503,
     );
   }
@@ -81,13 +115,22 @@ async function startOAuth(request: Request, env: OAuthEnv, provider: OAuthProvid
 
   const now = unixNow();
   const state = randomToken(32);
+  const pkceVerifier = provider === "mal" ? randomToken(72) : null;
   await env.USERS_DB.batch([
     env.USERS_DB.prepare("DELETE FROM oauth_states WHERE expires_at <= ?").bind(now),
     env.USERS_DB.prepare(
       `INSERT INTO oauth_states (
-        state_hash, provider, return_to, created_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?)`,
-    ).bind(await sha256(state), provider, returnTo, now, now + STATE_LIFETIME_SECONDS),
+        state_hash, provider, return_to, created_at, expires_at, pkce_verifier, link_user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      await sha256(state),
+      provider,
+      returnTo,
+      now,
+      now + STATE_LIFETIME_SECONDS,
+      pkceVerifier,
+      linkUserId,
+    ),
   ]);
 
   const callbackUrl = callbackFor(requestUrl.origin, provider);
@@ -95,9 +138,14 @@ async function startOAuth(request: Request, env: OAuthEnv, provider: OAuthProvid
   authorizationUrl.searchParams.set("client_id", config.clientId);
   authorizationUrl.searchParams.set("redirect_uri", callbackUrl);
   authorizationUrl.searchParams.set("response_type", "code");
-  authorizationUrl.searchParams.set("scope", config.scope);
+  if (config.scope) authorizationUrl.searchParams.set("scope", config.scope);
   authorizationUrl.searchParams.set("state", state);
-  authorizationUrl.searchParams.set("prompt", provider === "google" ? "select_account" : "consent");
+  if (provider === "mal") {
+    authorizationUrl.searchParams.set("code_challenge", pkceVerifier!);
+    authorizationUrl.searchParams.set("code_challenge_method", "plain");
+  } else {
+    authorizationUrl.searchParams.set("prompt", provider === "google" ? "select_account" : "consent");
+  }
   return Response.redirect(authorizationUrl.toString(), 302);
 }
 
@@ -108,7 +156,7 @@ async function finishOAuth(request: Request, env: OAuthEnv, provider: OAuthProvi
 
   const stateHash = await sha256(state);
   const stored = await env.USERS_DB.prepare(
-    `SELECT provider, return_to, expires_at
+    `SELECT provider, return_to, expires_at, pkce_verifier, link_user_id
      FROM oauth_states WHERE state_hash = ?`,
   )
     .bind(stateHash)
@@ -131,12 +179,18 @@ async function finishOAuth(request: Request, env: OAuthEnv, provider: OAuthProvi
   if (!code) return redirectToApp(stored.return_to, { error: "missing_code" });
 
   try {
-    const profile = await fetchOAuthProfile(request, env, provider, code);
+    const { profile, tokens } = await fetchOAuthProfile(request, env, provider, code, stored.pkce_verifier);
     if (!profile.email || !profile.emailVerified) {
       return redirectToApp(stored.return_to, { error: "email_not_verified" });
     }
 
-    const user = await findOrCreateOAuthUser(env, provider, profile);
+    const user = await findOrCreateOAuthUser(
+      env,
+      provider,
+      profile,
+      tokens,
+      stored.link_user_id,
+    );
     const appCode = randomToken(32);
     const now = unixNow();
     await env.USERS_DB.batch([
@@ -201,7 +255,8 @@ async function fetchOAuthProfile(
   env: OAuthEnv,
   provider: OAuthProvider,
   code: string,
-): Promise<OAuthProfile> {
+  pkceVerifier: string | null,
+): Promise<{ profile: OAuthProfile; tokens: OAuthTokens | null }> {
   const config = providerConfig(env, provider);
   if (!config) throw new Error("OAuth provider is not configured.");
 
@@ -213,6 +268,10 @@ async function fetchOAuthProfile(
     code,
     redirect_uri: callbackUrl,
   });
+  if (provider === "mal") {
+    if (!pkceVerifier) throw new Error("MAL PKCE verifier is missing.");
+    tokenBody.set("code_verifier", pkceVerifier);
+  }
   const tokenResponse = await fetch(config.tokenUrl, {
     method: "POST",
     headers: {
@@ -224,7 +283,11 @@ async function fetchOAuthProfile(
   if (!tokenResponse.ok) {
     throw new Error(`${provider} token exchange failed with ${tokenResponse.status}.`);
   }
-  const token = await tokenResponse.json<{ access_token?: string }>();
+  const token = await tokenResponse.json<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>();
   if (!token.access_token) throw new Error(`${provider} did not return an access token.`);
 
   const profileResponse = await fetch(config.profileUrl, {
@@ -246,10 +309,36 @@ async function fetchOAuthProfile(
       name?: string;
     }>();
     return {
-      id: profile.sub ?? "",
-      email: profile.email?.trim().toLowerCase() ?? "",
-      displayName: profile.name?.trim() || profile.email?.split("@")[0] || "Aetherio",
-      emailVerified: profile.email_verified === true,
+      profile: {
+        id: profile.sub ?? "",
+        email: profile.email?.trim().toLowerCase() ?? "",
+        displayName: profile.name?.trim() || profile.email?.split("@")[0] || "Aetherio",
+        emailVerified: profile.email_verified === true,
+      },
+      tokens: null,
+    };
+  }
+
+  if (provider === "mal") {
+    const profile = await profileResponse.json<{
+      id?: number;
+      name?: string;
+    }>();
+    const id = typeof profile.id === "number" ? String(profile.id) : "";
+    const username = profile.name?.trim() || `mal-${id}`;
+    return {
+      profile: {
+        id,
+        email: `${username.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}-${id}@mal.aetherio.local`,
+        displayName: username,
+        emailVerified: true,
+        username,
+      },
+      tokens: {
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+        expiresAt: unixNow() + Math.max(60, token.expires_in ?? 3600),
+      },
     };
   }
 
@@ -261,10 +350,13 @@ async function fetchOAuthProfile(
     username?: string;
   }>();
   return {
-    id: profile.id ?? "",
-    email: profile.email?.trim().toLowerCase() ?? "",
-    displayName: profile.global_name?.trim() || profile.username?.trim() || "Aetherio",
-    emailVerified: profile.verified === true,
+    profile: {
+      id: profile.id ?? "",
+      email: profile.email?.trim().toLowerCase() ?? "",
+      displayName: profile.global_name?.trim() || profile.username?.trim() || "Aetherio",
+      emailVerified: profile.verified === true,
+    },
+    tokens: null,
   };
 }
 
@@ -272,6 +364,8 @@ async function findOrCreateOAuthUser(
   env: OAuthEnv,
   provider: OAuthProvider,
   profile: OAuthProfile,
+  tokens: OAuthTokens | null,
+  linkUserId: string | null,
 ) {
   if (!profile.id) throw new Error("OAuth profile does not contain an id.");
 
@@ -283,13 +377,24 @@ async function findOrCreateOAuthUser(
   )
     .bind(provider, profile.id)
     .first<UserRow>();
-  if (linked) return linked;
+  if (linked) {
+    if (linkUserId && linked.id !== linkUserId) {
+      throw new Error(`${provider} account is already linked to another Aetherio user.`);
+    }
+    if (provider === "mal" && tokens) {
+      await saveMalTokens(env, linked.id, profile, tokens);
+    }
+    return linked;
+  }
 
   const existing = await env.USERS_DB.prepare(
-    "SELECT id, email, display_name, created_at FROM users WHERE email = ?",
+    linkUserId
+      ? "SELECT id, email, display_name, created_at FROM users WHERE id = ?"
+      : "SELECT id, email, display_name, created_at FROM users WHERE email = ?",
   )
-    .bind(profile.email)
+    .bind(linkUserId ?? profile.email)
     .first<UserRow>();
+  if (linkUserId && !existing) throw new Error("Aetherio account to link no longer exists.");
 
   const now = unixNow();
   const user = existing ?? {
@@ -319,12 +424,32 @@ async function findOrCreateOAuthUser(
       ),
     );
   }
+  if (linkUserId && provider === "mal") {
+    statements.push(
+      env.USERS_DB.prepare(
+        "DELETE FROM oauth_accounts WHERE provider = 'mal' AND user_id = ?",
+      ).bind(linkUserId),
+    );
+  }
   statements.push(
     env.USERS_DB.prepare(
       `INSERT INTO oauth_accounts (
-        provider, provider_user_id, user_id, provider_email, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(provider, profile.id, user.id, profile.email, now, now),
+        provider, provider_user_id, user_id, provider_email, provider_username,
+        access_token_ciphertext, refresh_token_ciphertext, token_expires_at,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      provider,
+      profile.id,
+      user.id,
+      profile.email,
+      profile.username ?? null,
+      provider === "mal" && tokens ? await encryptSecret(env, tokens.accessToken) : null,
+      provider === "mal" && tokens?.refreshToken ? await encryptSecret(env, tokens.refreshToken) : null,
+      provider === "mal" ? tokens?.expiresAt ?? null : null,
+      now,
+      now,
+    ),
   );
   await env.USERS_DB.batch(statements);
   return user;
@@ -351,6 +476,241 @@ async function createSession(env: OAuthEnv, userId: string, request: Request) {
   return token;
 }
 
+async function getMalAnimeList(request: Request, env: OAuthEnv) {
+  const userId = await authenticatedUserId(request, env);
+  if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
+  const accessToken = await getMalAccessToken(env, userId);
+  if (!accessToken) return oauthJson({ error: "Conecta MyAnimeList para sincronizar tu biblioteca." }, 404);
+
+  const entries: unknown[] = [];
+  let nextUrl: string | null = "https://api.myanimelist.net/v2/users/@me/animelist"
+    + "?limit=1000&fields=list_status,num_episodes,main_picture,alternative_titles,start_date";
+
+  for (let page = 0; nextUrl && page < 20; page += 1) {
+    const parsed: URL = new URL(nextUrl);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "api.myanimelist.net") {
+      throw new Error("MAL returned an unsafe paging URL.");
+    }
+    const response: Response = await fetch(parsed.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        "User-Agent": "Aetherio/0.4",
+      },
+    });
+    if (!response.ok) throw new Error(`MAL anime list failed with ${response.status}.`);
+    const payload = await response.json() as {
+      data?: Array<{
+        node?: {
+          id?: number;
+          title?: string;
+          num_episodes?: number;
+          main_picture?: { medium?: string; large?: string };
+          alternative_titles?: { en?: string; ja?: string };
+          start_date?: string;
+        };
+        list_status?: {
+          status?: string;
+          score?: number;
+          num_episodes_watched?: number;
+          updated_at?: string;
+        };
+      }>;
+      paging?: { next?: string };
+    };
+    for (const item of payload.data ?? []) {
+      if (!item.node?.id || !item.node.title || !item.list_status?.status) continue;
+      entries.push({
+        malId: item.node.id,
+        title: item.node.alternative_titles?.en || item.node.title,
+        originalTitle: item.node.title,
+        status: item.list_status.status,
+        score: item.list_status.score ?? 0,
+        watchedEpisodes: item.list_status.num_episodes_watched ?? 0,
+        totalEpisodes: item.node.num_episodes ?? 0,
+        poster: item.node.main_picture?.large ?? item.node.main_picture?.medium,
+        year: item.node.start_date ? Number(item.node.start_date.slice(0, 4)) || undefined : undefined,
+        updatedAt: item.list_status.updated_at ?? null,
+      });
+    }
+    nextUrl = payload.paging?.next ?? null;
+  }
+
+  return oauthJson({ entries, syncedAt: Date.now() });
+}
+
+async function updateMalAnime(request: Request, env: OAuthEnv, malId: number) {
+  const userId = await authenticatedUserId(request, env);
+  if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
+  const accessToken = await getMalAccessToken(env, userId);
+  if (!accessToken) return oauthJson({ error: "MyAnimeList no está conectado." }, 404);
+
+  let input: { status?: unknown; watchedEpisodes?: unknown; score?: unknown };
+  try {
+    input = await request.json<typeof input>();
+  } catch {
+    return oauthJson({ error: "Actualización MAL inválida." }, 400);
+  }
+  const allowedStatuses = new Set(["watching", "completed", "on_hold", "dropped", "plan_to_watch"]);
+  const status = typeof input.status === "string" && allowedStatuses.has(input.status) ? input.status : null;
+  const watchedEpisodes = Number.isInteger(input.watchedEpisodes) && Number(input.watchedEpisodes) >= 0
+    ? Number(input.watchedEpisodes)
+    : null;
+  const score = Number.isInteger(input.score) && Number(input.score) >= 0 && Number(input.score) <= 10
+    ? Number(input.score)
+    : null;
+  if (!status && watchedEpisodes === null && score === null) {
+    return oauthJson({ error: "No hay cambios válidos para MyAnimeList." }, 400);
+  }
+
+  const body = new URLSearchParams();
+  if (status) body.set("status", status);
+  if (watchedEpisodes !== null) body.set("num_watched_episodes", String(watchedEpisodes));
+  if (score !== null) body.set("score", String(score));
+  const response = await fetch(`https://api.myanimelist.net/v2/anime/${malId}/my_list_status`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      "User-Agent": "Aetherio/0.4",
+    },
+    body,
+  });
+  if (!response.ok) throw new Error(`MAL list update failed with ${response.status}.`);
+  return oauthJson(await response.json());
+}
+
+async function authenticatedUserId(request: Request, env: OAuthEnv) {
+  const authorization = request.headers.get("Authorization") ?? "";
+  const token = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim();
+  if (!token) return null;
+  const session = await env.USERS_DB.prepare(
+    "SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?",
+  )
+    .bind(await sha256(token), unixNow())
+    .first<{ user_id: string }>();
+  return session?.user_id ?? null;
+}
+
+async function getMalAccessToken(env: OAuthEnv, userId: string) {
+  const account = await env.USERS_DB.prepare(
+    `SELECT access_token_ciphertext, refresh_token_ciphertext, token_expires_at
+     FROM oauth_accounts WHERE provider = 'mal' AND user_id = ?
+     ORDER BY updated_at DESC LIMIT 1`,
+  )
+    .bind(userId)
+    .first<{
+      access_token_ciphertext: string | null;
+      refresh_token_ciphertext: string | null;
+      token_expires_at: number | null;
+    }>();
+  if (!account?.access_token_ciphertext) return null;
+  if ((account.token_expires_at ?? 0) > unixNow() + 60) {
+    return decryptSecret(env, account.access_token_ciphertext);
+  }
+  if (!account.refresh_token_ciphertext) return null;
+
+  const config = providerConfig(env, "mal");
+  if (!config) return null;
+  const refreshToken = await decryptSecret(env, account.refresh_token_ciphertext);
+  const response = await fetch(config.tokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!response.ok) throw new Error(`MAL token refresh failed with ${response.status}.`);
+  const token = await response.json<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>();
+  if (!token.access_token) throw new Error("MAL did not refresh the access token.");
+  await env.USERS_DB.prepare(
+    `UPDATE oauth_accounts SET access_token_ciphertext = ?, refresh_token_ciphertext = ?,
+      token_expires_at = ?, updated_at = ? WHERE provider = 'mal' AND user_id = ?`,
+  )
+    .bind(
+      await encryptSecret(env, token.access_token),
+      await encryptSecret(env, token.refresh_token || refreshToken),
+      unixNow() + Math.max(60, token.expires_in ?? 3600),
+      unixNow(),
+      userId,
+    )
+    .run();
+  return token.access_token;
+}
+
+async function saveMalTokens(
+  env: OAuthEnv,
+  userId: string,
+  profile: OAuthProfile,
+  tokens: OAuthTokens,
+) {
+  await env.USERS_DB.prepare(
+    `UPDATE oauth_accounts SET provider_username = ?, access_token_ciphertext = ?,
+      refresh_token_ciphertext = ?, token_expires_at = ?, updated_at = ?
+     WHERE provider = 'mal' AND user_id = ?`,
+  )
+    .bind(
+      profile.username ?? null,
+      await encryptSecret(env, tokens.accessToken),
+      tokens.refreshToken ? await encryptSecret(env, tokens.refreshToken) : null,
+      tokens.expiresAt ?? null,
+      unixNow(),
+      userId,
+    )
+    .run();
+}
+
+async function encryptSecret(env: OAuthEnv, value: string) {
+  if (!env.OAUTH_TOKEN_ENCRYPTION_KEY) throw new Error("OAuth encryption key is missing.");
+  const key = await encryptionKey(env.OAUTH_TOKEN_ENCRYPTION_KEY);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    encoder.encode(value),
+  ));
+  return bytesToBase64Url(new Uint8Array([...iv, ...encrypted]));
+}
+
+async function decryptSecret(env: OAuthEnv, value: string) {
+  if (!env.OAUTH_TOKEN_ENCRYPTION_KEY) throw new Error("OAuth encryption key is missing.");
+  const packed = base64UrlToBytes(value);
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: packed.slice(0, 12) },
+    await encryptionKey(env.OAUTH_TOKEN_ENCRYPTION_KEY),
+    packed.slice(12),
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+async function encryptionKey(secret: string) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
+  return crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+function bytesToBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return Uint8Array.from(atob(padded), character => character.charCodeAt(0));
+}
+
 function providerConfig(env: OAuthEnv, provider: OAuthProvider) {
   if (provider === "google") {
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return null;
@@ -363,14 +723,25 @@ function providerConfig(env: OAuthEnv, provider: OAuthProvider) {
       scope: "openid email profile",
     };
   }
-  if (!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET) return null;
+  if (provider === "discord") {
+    if (!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET) return null;
+    return {
+      clientId: env.DISCORD_CLIENT_ID,
+      clientSecret: env.DISCORD_CLIENT_SECRET,
+      authorizationUrl: "https://discord.com/oauth2/authorize",
+      tokenUrl: "https://discord.com/api/v10/oauth2/token",
+      profileUrl: "https://discord.com/api/v10/users/@me",
+      scope: "identify email",
+    };
+  }
+  if (!env.MAL_CLIENT_ID || !env.MAL_CLIENT_SECRET || !env.OAUTH_TOKEN_ENCRYPTION_KEY) return null;
   return {
-    clientId: env.DISCORD_CLIENT_ID,
-    clientSecret: env.DISCORD_CLIENT_SECRET,
-    authorizationUrl: "https://discord.com/oauth2/authorize",
-    tokenUrl: "https://discord.com/api/v10/oauth2/token",
-    profileUrl: "https://discord.com/api/v10/users/@me",
-    scope: "identify email",
+    clientId: env.MAL_CLIENT_ID,
+    clientSecret: env.MAL_CLIENT_SECRET,
+    authorizationUrl: "https://myanimelist.net/v1/oauth2/authorize",
+    tokenUrl: "https://myanimelist.net/v1/oauth2/token",
+    profileUrl: "https://api.myanimelist.net/v2/users/@me",
+    scope: "",
   };
 }
 
@@ -380,6 +751,12 @@ function providerConfigured(env: OAuthEnv, provider: OAuthProvider) {
 
 function callbackFor(origin: string, provider: OAuthProvider) {
   return `${origin}/api/auth/oauth/${provider}/callback`;
+}
+
+function providerLabel(provider: OAuthProvider) {
+  if (provider === "google") return "Google";
+  if (provider === "discord") return "Discord";
+  return "MyAnimeList";
 }
 
 function redirectToApp(returnTo: string, values: Record<string, string>) {

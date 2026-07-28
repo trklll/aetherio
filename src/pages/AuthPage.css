@@ -188,6 +188,10 @@
   opacity: 0.56;
 }
 
+.auth-social button:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
 .auth-divider {
   display: flex;
   align-items: center;
@@ -385,6 +389,10 @@
 
   .auth-social {
     grid-template-columns: 1fr;
+  }
+
+  .auth-social button:nth-child(3) {
+    grid-column: auto;
   }
 }
 

@@ -14,7 +14,7 @@ export default {
       return json({ ok: true, service: "aetherio-web" }, 200, 60);
     }
 
-    if (url.pathname.startsWith("/api/auth/")) {
+    if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/api/integrations/")) {
       return handleAuthRequest(request, env, url.pathname);
     }
 

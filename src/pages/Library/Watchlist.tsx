@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookMarked, Compass, Film, Tv } from "lucide-react";
+import { BookMarked, Compass, Film, RefreshCw, Tv } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import { applyHomeCatalogPreferences, useHomePreferences } from "../../config/homePreferences";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
@@ -12,6 +12,14 @@ import {
 } from "../../utils/continueWatching";
 import CatalogRow from "../Home/CatalogRow";
 import ContinueWatchingRow from "../Home/ContinueWatchingRow";
+import {
+  MAL_LIBRARY_CHANGED_EVENT,
+  readMalLibrary,
+  syncMyAnimeListLibrary,
+  type MalLibraryEntry,
+  type MalAnimeStatus,
+} from "../../integrations/myAnimeList";
+import { connectMyAnimeListAccount } from "../../auth/authClient";
 
 type LibraryTab = "library" | "discover";
 
@@ -21,20 +29,26 @@ export default function LibraryPage() {
   const { rows, loading } = useHomeCatalogs(addons);
   const [tab, setTab] = useState<LibraryTab>("library");
   const [version, setVersion] = useState(0);
+  const [malSyncing, setMalSyncing] = useState(false);
+  const [malError, setMalError] = useState("");
 
   useEffect(() => {
     const refresh = () => setVersion(value => value + 1);
     window.addEventListener(CONTINUE_WATCHING_EVENT, refresh as EventListener);
+    window.addEventListener(MAL_LIBRARY_CHANGED_EVENT, refresh as EventListener);
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
     return () => {
       window.removeEventListener(CONTINUE_WATCHING_EVENT, refresh as EventListener);
+      window.removeEventListener(MAL_LIBRARY_CHANGED_EVENT, refresh as EventListener);
       window.removeEventListener("storage", refresh);
       window.removeEventListener("focus", refresh);
     };
   }, []);
 
   const libraryRows = useMemo(() => buildLibraryRows(readPlaybackStateEntries()), [version]);
+  const malEntries = useMemo(() => readMalLibrary(), [version]);
+  const malRows = useMemo(() => buildMalLibraryRows(malEntries), [malEntries]);
   const discoverRows = useMemo(
     () => applyHomeCatalogPreferences(rows, homePreferences),
     [homePreferences, rows],
@@ -59,8 +73,35 @@ export default function LibraryPage() {
 
       {tab === "library" ? (
         <div className="flex flex-col gap-9">
+          <MalSyncBanner
+            count={malEntries.length}
+            syncing={malSyncing}
+            error={malError}
+            onConnect={async () => {
+              setMalError("");
+              try {
+                await connectMyAnimeListAccount();
+              } catch (error) {
+                setMalError(error instanceof Error ? error.message : "No se pudo conectar MyAnimeList.");
+              }
+            }}
+            onSync={async () => {
+              setMalSyncing(true);
+              setMalError("");
+              try {
+                await syncMyAnimeListLibrary();
+              } catch (error) {
+                setMalError(error instanceof Error ? error.message : "No se pudo sincronizar MyAnimeList.");
+              } finally {
+                setMalSyncing(false);
+              }
+            }}
+          />
           <LibrarySummary entriesVersion={version} />
           <ContinueWatchingRow />
+          {malRows.map(row => (
+            <CatalogRow key={`${row.type}-${row.catalogId}`} row={row} posterLayout={homePreferences.posterLayout} />
+          ))}
           {libraryRows.length ? (
             libraryRows.map(row => (
               <CatalogRow key={`${row.type}-${row.catalogId}`} row={row} posterLayout={homePreferences.posterLayout} />
@@ -83,6 +124,52 @@ export default function LibraryPage() {
         </div>
       )}
     </PageContainer>
+  );
+}
+
+function MalSyncBanner({
+  count,
+  syncing,
+  error,
+  onConnect,
+  onSync,
+}: {
+  count: number;
+  syncing: boolean;
+  error: string;
+  onConnect: () => Promise<void>;
+  onSync: () => Promise<void>;
+}) {
+  return (
+    <div className="liquid-glass flex flex-wrap items-center justify-between gap-4 rounded-2xl px-5 py-4">
+      <div>
+        <p className="text-sm font-black text-white">MyAnimeList</p>
+        <p className="mt-1 text-xs font-semibold text-white/48">
+          {error || (count
+            ? `${count} animes sincronizados. El progreso se actualiza al completar episodios.`
+            : "Conecta MyAnimeList al iniciar sesión para importar y mantener tu lista.")}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void onConnect()}
+          disabled={syncing}
+          className="gsap-transition inline-flex h-10 items-center rounded-full border border-white/12 px-4 text-xs font-black text-white disabled:opacity-55"
+        >
+          Conectar cuenta
+        </button>
+        <button
+          type="button"
+          onClick={() => void onSync()}
+          disabled={syncing}
+          className="gsap-transition inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-xs font-black text-black disabled:opacity-55"
+        >
+          <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
+          {syncing ? "Sincronizando…" : "Sincronizar ahora"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -158,6 +245,28 @@ function buildLibraryRows(entries: ContinueWatchingEntry[]): CatalogRowData[] {
     movies.length ? buildRow("library-movies", "movie", "Peliculas vistas", movies) : null,
     shows.length ? buildRow("library-series", "series", "Series vistas", shows) : null,
   ].filter((row): row is CatalogRowData => row !== null);
+}
+
+function buildMalLibraryRows(entries: MalLibraryEntry[]): CatalogRowData[] {
+  const groups: Array<{ status: MalAnimeStatus; name: string }> = [
+    { status: "watching", name: "Viendo en MyAnimeList" },
+    { status: "plan_to_watch", name: "Planeados en MyAnimeList" },
+    { status: "completed", name: "Completados en MyAnimeList" },
+    { status: "on_hold", name: "En pausa en MyAnimeList" },
+    { status: "dropped", name: "Abandonados en MyAnimeList" },
+  ];
+  return groups.flatMap(({ status, name }) => {
+    const items: MediaItem[] = entries
+      .filter(entry => entry.status === status)
+      .map(entry => ({
+        id: entry.mediaId,
+        type: "series",
+        name: entry.title,
+        poster: entry.poster,
+        year: entry.year,
+      }));
+    return items.length ? [buildRow(`mal-${status}`, "series", name, items)] : [];
+  });
 }
 
 function uniqueMediaItems(entries: ContinueWatchingEntry[]) {

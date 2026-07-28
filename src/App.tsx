@@ -19,6 +19,10 @@ import {
   restoreAccountSession,
   type AetherioUser,
 } from "./auth/authClient.ts";
+import {
+  initializeMyAnimeListProgressSync,
+  syncMyAnimeListLibrary,
+} from "./integrations/myAnimeList.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();
@@ -72,6 +76,12 @@ export default function App() {
       window.removeEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (!account) return;
+    void syncMyAnimeListLibrary().catch(() => undefined);
+    return initializeMyAnimeListProgressSync();
+  }, [account]);
 
   useEffect(() => {
     if (!hasProfile || !enabledAddons.length) return;

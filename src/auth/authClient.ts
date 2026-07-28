@@ -19,7 +19,7 @@ const USER_KEY = "aetherio-account-user-v1";
 const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
 
 export const AETHERIO_AUTH_CHANGED_EVENT = "aetherio-auth-changed";
-export type OAuthProvider = "google" | "discord";
+export type OAuthProvider = "google" | "discord" | "mal";
 
 export async function registerAccount(input: {
   displayName: string;
@@ -87,6 +87,14 @@ export async function startSocialLogin(provider: OAuthProvider) {
   await openExternalUrl(startUrl.toString());
 }
 
+export async function connectMyAnimeListAccount() {
+  const response = await authenticatedRequest<{ authorizationUrl: string }>(
+    "/api/integrations/mal/connect",
+    { method: "POST" },
+  );
+  await openExternalUrl(response.authorizationUrl);
+}
+
 export function isOAuthCallbackUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl);
@@ -147,8 +155,20 @@ export function getStoredAccount(): AetherioUser | null {
   }
 }
 
-function getAccountToken() {
+export function getAccountToken() {
   return localStorage.getItem(TOKEN_KEY)?.trim() || null;
+}
+
+export async function authenticatedRequest<T>(path: string, init: RequestInit = {}) {
+  const token = getAccountToken();
+  if (!token) throw new Error("Inicia sesión en Aetherio para sincronizar tu cuenta.");
+  return authRequest<T>(path, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...init.headers,
+    },
+  });
 }
 
 function persistAuth(response: AuthResponse) {

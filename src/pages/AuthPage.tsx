@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowRight, Eye, EyeOff, Globe2, HardDrive, LockKeyhole, Mail, MessageCircle, UserRound } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, Globe2, HardDrive, ListVideo, LockKeyhole, Mail, MessageCircle, UserRound } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
 import { gsap } from "../utils/motion";
 import {
@@ -114,7 +114,8 @@ export default function AuthPage({
 
   async function startSocial(provider: OAuthProvider) {
     if (providers && !providers[provider]) {
-      setError(`${provider === "google" ? "Google" : "Discord"} todavía necesita sus credenciales OAuth.`);
+      const label = provider === "google" ? "Google" : provider === "discord" ? "Discord" : "MyAnimeList";
+      setError(`${label} todavía necesita sus credenciales OAuth.`);
       return;
     }
     setSocialBusy(provider);
@@ -176,6 +177,10 @@ export default function AuthPage({
           <button type="button" onClick={() => void startSocial("discord")} disabled={socialBusy !== null}>
             <MessageCircle size={18} />
             <span>{socialBusy === "discord" ? "Abriendo Discord…" : "Continuar con Discord"}</span>
+          </button>
+          <button type="button" onClick={() => void startSocial("mal")} disabled={socialBusy !== null}>
+            <ListVideo size={18} />
+            <span>{socialBusy === "mal" ? "Abriendo MyAnimeList…" : "Continuar con MyAnimeList"}</span>
           </button>
         </div>
 
