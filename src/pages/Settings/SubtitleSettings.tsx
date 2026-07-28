@@ -5,26 +5,26 @@ import {
   getSourcePreferences,
   isProviderEnabled,
   isRepositoryEnabled,
-  isSeanimeExtensionEnabled,
+  isMediaExtensionEnabled,
   isScraperSiteEnabled,
   saveSourcePreferences,
   type SourcePreferences,
 } from "../../config/sourcePreferences.ts";
 import {
-  addNuvioProviderRepository,
-  getNuvioProviderRepositories,
-  refreshNuvioProviderRepositories,
-  removeNuvioProviderRepository,
-  type NuvioProviderRepositoryInfo,
-} from "../../services/nuvioProviderService.ts";
+  addProviderRuntimeRepository,
+  getProviderRuntimeRepositories,
+  refreshProviderRuntimeRepositories,
+  removeProviderRuntimeRepository,
+  type ProviderRuntimeRepositoryInfo,
+} from "../../services/providerRuntimeService.ts";
 import { getScraperSites, type ScraperSiteInfo } from "../../services/scraperService.ts";
 import {
-  getSeanimeExtensionInventory,
-  getSeanimeExtensionUserConfig,
-  saveSeanimeExtensionUserConfig,
-  type SeanimeExtensionInventory,
-  type SeanimeExtensionManifest,
-} from "../../services/seanimeExtensionService.ts";
+  getMediaExtensionInventory,
+  getMediaExtensionUserConfig,
+  saveMediaExtensionUserConfig,
+  type MediaExtensionInventory,
+  type MediaExtensionManifest,
+} from "../../services/mediaExtensionService.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
 import {
   getGlobalCloudstreamRepositories,
@@ -44,13 +44,13 @@ export default function SourcesPanel() {
   const enableAddon = useAddonStore(state => state.enableAddon);
   const disableAddon = useAddonStore(state => state.disableAddon);
   const [preferences, setPreferences] = useState<SourcePreferences>(() => getSourcePreferences());
-  const [repositories, setRepositories] = useState<NuvioProviderRepositoryInfo[]>([]);
+  const [repositories, setRepositories] = useState<ProviderRuntimeRepositoryInfo[]>([]);
   const [sites, setSites] = useState<ScraperSiteInfo[]>([]);
-  const [seanime, setSeanime] = useState<SeanimeExtensionInventory>({
+  const [mediaExtension, setMediaExtension] = useState<MediaExtensionInventory>({
     installed: [],
     errors: [],
   });
-  const [configExtension, setConfigExtension] = useState<SeanimeExtensionManifest | null>(null);
+  const [configExtension, setConfigExtension] = useState<MediaExtensionManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [repositoryUrl, setRepositoryUrl] = useState("");
@@ -61,16 +61,16 @@ export default function SourcesPanel() {
     setLoading(true);
     setError("");
     try {
-      const [nextRepositories, nextSites, nextSeanime] = await Promise.all([
-        refresh ? refreshNuvioProviderRepositories() : getNuvioProviderRepositories(),
+      const [nextRepositories, nextSites, nextMediaExtension] = await Promise.all([
+        refresh ? refreshProviderRuntimeRepositories() : getProviderRuntimeRepositories(),
         getScraperSites(),
-        getSeanimeExtensionInventory(refresh),
+        getMediaExtensionInventory(refresh),
       ]);
       setRepositories(nextRepositories);
       setSites(nextSites);
-      setSeanime(nextSeanime);
+      setMediaExtension(nextMediaExtension);
       setCloudstreamRepositories(await getGlobalCloudstreamRepositories(nextRepositories, refresh));
-      if (nextSeanime.errors.length) setError(nextSeanime.errors.join("\n"));
+      if (nextMediaExtension.errors.length) setError(nextMediaExtension.errors.join("\n"));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
@@ -121,10 +121,10 @@ export default function SourcesPanel() {
     }));
   }
 
-  function setSeanimeEnabled(extensionId: string, enabled: boolean) {
+  function setMediaExtensionEnabled(extensionId: string, enabled: boolean) {
     updatePreferences(current => ({
       ...current,
-      seanimeExtensionOverrides: { ...current.seanimeExtensionOverrides, [extensionId]: enabled },
+      mediaExtensionOverrides: { ...current.mediaExtensionOverrides, [extensionId]: enabled },
     }));
   }
 
@@ -148,19 +148,19 @@ export default function SourcesPanel() {
     }));
   }
 
-  function setAllSeanime(enabled: boolean) {
+  function setAllMediaExtension(enabled: boolean) {
     updatePreferences(current => ({
       ...current,
-      seanimeExtensionOverrides: {
-        ...current.seanimeExtensionOverrides,
-        ...Object.fromEntries(seanime.installed.map(extension => [extension.id, enabled])),
+      mediaExtensionOverrides: {
+        ...current.mediaExtensionOverrides,
+        ...Object.fromEntries(mediaExtension.installed.map(extension => [extension.id, enabled])),
       },
     }));
   }
 
   const activeRepositoryCount = repositories.filter(repository => isRepositoryEnabled(preferences, repository.key)).length;
   const activeSiteCount = sites.filter(site => isScraperSiteEnabled(preferences, site.id, site.enabledByDefault)).length;
-  const activeSeanimeCount = seanime.installed.filter(extension => isSeanimeExtensionEnabled(preferences, extension.id)).length;
+  const activeMediaExtensionCount = mediaExtension.installed.filter(extension => isMediaExtensionEnabled(preferences, extension.id)).length;
   const activeAddonCount = addons.filter(addon => addon.enabled).length;
 
   function setAllAddons(enabled: boolean) {
@@ -176,7 +176,7 @@ export default function SourcesPanel() {
     setAddingRepository(true);
     setError("");
     try {
-      await addNuvioProviderRepository(repositoryUrl);
+      await addProviderRuntimeRepository(repositoryUrl);
       setRepositoryUrl("");
       await loadInventory(true);
     } catch (addError) {
@@ -189,7 +189,7 @@ export default function SourcesPanel() {
   async function removeRepository(url: string) {
     setError("");
     try {
-      const nextRepositories = await removeNuvioProviderRepository(url);
+      const nextRepositories = await removeProviderRuntimeRepository(url);
       setRepositories(nextRepositories);
     } catch (removeError) {
       setError(removeError instanceof Error ? removeError.message : String(removeError));
@@ -202,7 +202,7 @@ export default function SourcesPanel() {
         <div>
           <h2 className="text-3xl font-black text-white">Fuentes</h2>
           <p className="mt-1 text-sm font-semibold text-white/45">
-            {activeAddonCount} add-ons Stremio · {activeRepositoryCount} repositorios · {cloudstreamRepositories.length} repos CloudStream · {activeSiteCount} sitios · {activeSeanimeCount} providers Seanime
+            {activeAddonCount} add-ons de catálogo · {activeRepositoryCount} repositorios · {cloudstreamRepositories.length} repos CloudStream · {activeSiteCount} sitios · {activeMediaExtensionCount} extensiones
           </p>
           <p className="mt-1 text-xs font-semibold text-white/32">Fuentes integradas globales; AIOMetadata y AIOStreams pertenecen únicamente al perfil activo.</p>
         </div>
@@ -226,7 +226,7 @@ export default function SourcesPanel() {
 
       <div className="grid gap-8">
         <SourceSection
-          title="ADD-ONS STREMIO"
+          title="ADD-ONS DE CATÁLOGO"
           count={`${activeAddonCount}/${addons.length}`}
           onEnableAll={() => setAllAddons(true)}
           onDisableAll={() => setAllAddons(false)}
@@ -252,11 +252,11 @@ export default function SourcesPanel() {
               )}
             />
           ))}
-          {addons.length === 0 ? <EmptyRow label="No hay add-ons Stremio instalados." /> : null}
+          {addons.length === 0 ? <EmptyRow label="No hay add-ons de catálogo instalados." /> : null}
         </SourceSection>
 
         <SourceSection
-          title="REPOSITORIOS NUVIO JS"
+          title="REPOSITORIOS DE PROVIDERS JS"
           count={`${activeRepositoryCount}/${repositories.length}`}
           onEnableAll={() => setAllRepositories(true)}
           onDisableAll={() => setAllRepositories(false)}
@@ -268,7 +268,7 @@ export default function SourcesPanel() {
               onChange={event => setRepositoryUrl(event.target.value)}
               placeholder="https://.../manifest.json"
               className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none placeholder:text-white/25 focus:border-white/30"
-              aria-label="URL del repositorio Nuvio JS"
+              aria-label="URL del repositorio de providers JS"
               required
             />
             <button
@@ -280,7 +280,7 @@ export default function SourcesPanel() {
             </button>
           </form>
           <p className="border-b border-white/[0.05] px-5 py-3 text-xs font-semibold text-white/38">
-            Admite manifests JavaScript de Nuvio. Los repositorios CloudStream globales aparecen abajo y reutilizan automáticamente los providers que tienen un adaptador compatible.
+            Admite manifests JavaScript de providers. Los repositorios CloudStream globales aparecen abajo y reutilizan automáticamente los providers que tienen un adaptador compatible.
           </p>
           {repositories.map(repository => {
             const repositoryEnabled = isRepositoryEnabled(preferences, repository.key);
@@ -389,18 +389,18 @@ export default function SourcesPanel() {
         </SourceSection>
 
         <SourceSection
-          title="PROVIDERS SEANIME"
-          count={`${activeSeanimeCount}/${seanime.installed.length}`}
-          onEnableAll={() => setAllSeanime(true)}
-          onDisableAll={() => setAllSeanime(false)}
+          title="EXTENSIONES MULTIMEDIA"
+          count={`${activeMediaExtensionCount}/${mediaExtension.installed.length}`}
+          onEnableAll={() => setAllMediaExtension(true)}
+          onDisableAll={() => setAllMediaExtension(false)}
         >
-          {seanime.installed.map(extension => (
+          {mediaExtension.installed.map(extension => (
             <SourceRow
               key={extension.id}
               title={extension.name}
               description={`${extension.type === "anime-torrent-provider" ? "Torrent" : "Servidor"} · ${extension.lang?.toUpperCase() ?? "MULTI"} · v${extension.version}`}
-              checked={isSeanimeExtensionEnabled(preferences, extension.id)}
-              onChange={checked => setSeanimeEnabled(extension.id, checked)}
+              checked={isMediaExtensionEnabled(preferences, extension.id)}
+              onChange={checked => setMediaExtensionEnabled(extension.id, checked)}
               action={(
                 <div className="flex items-center gap-1">
                   <a
@@ -429,7 +429,7 @@ export default function SourcesPanel() {
               compact
             />
           ))}
-          {!loading && seanime.installed.length === 0 ? <EmptyRow label="No hay providers Seanime instalados." /> : null}
+          {!loading && mediaExtension.installed.length === 0 ? <EmptyRow label="No hay extensiones multimedia instaladas." /> : null}
         </SourceSection>
 
         <SourceSection
@@ -459,7 +459,7 @@ export default function SourcesPanel() {
         </SourceSection>
       </div>
       {configExtension ? (
-        <SeanimeConfigDialog extension={configExtension} onClose={() => setConfigExtension(null)} />
+        <MediaExtensionConfigDialog extension={configExtension} onClose={() => setConfigExtension(null)} />
       ) : null}
     </section>
   );
@@ -565,8 +565,8 @@ function EmptyRow({ label }: { label: string }) {
   return <p className="px-5 py-4 text-sm font-semibold text-white/42">{label}</p>;
 }
 
-function SeanimeConfigDialog({ extension, onClose }: { extension: SeanimeExtensionManifest; onClose: () => void }) {
-  const [values, setValues] = useState<Record<string, string>>(() => getSeanimeExtensionUserConfig(extension));
+function MediaExtensionConfigDialog({ extension, onClose }: { extension: MediaExtensionManifest; onClose: () => void }) {
+  const [values, setValues] = useState<Record<string, string>>(() => getMediaExtensionUserConfig(extension));
 
   function updateValue(name: string, value: string) {
     setValues(current => ({ ...current, [name]: value }));
@@ -579,7 +579,7 @@ function SeanimeConfigDialog({ extension, onClose }: { extension: SeanimeExtensi
         className="relative z-10 w-full max-w-lg rounded-lg border border-white/12 bg-[#181818] p-5 shadow-2xl"
         onSubmit={event => {
           event.preventDefault();
-          saveSeanimeExtensionUserConfig(extension, values);
+          saveMediaExtensionUserConfig(extension, values);
           onClose();
         }}
       >

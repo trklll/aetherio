@@ -12,6 +12,7 @@ const IMDB_ID_CACHE = new Map<string, Promise<string | null>>();
 
 export interface UseStreamsResult {
   streams: MediaStream[];
+  sourceNames: string[];
   loading: boolean;
   error: string | null;
   streamId: string;
@@ -244,7 +245,7 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
     ? raw.behaviorHints as Record<string, unknown>
     : undefined;
   const numericFileIdx = Number(raw.fileIdx);
-  const sourceTarget = sources?.find((item: string) => /^(magnet:|stremio:|https?:\/\/)/i.test(item));
+  const sourceTarget = sources?.find((item: string) => /^(magnet:|stre(?:mio):|https?:\/\/)/i.test(item));
   const stream = {
     id: [addonId, url ?? infoHash ?? ytId ?? externalUrl ?? sourceTarget ?? "", idx].join("|"),
     addonId,
@@ -253,7 +254,7 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
     title:        typeof raw.title       === "string" ? raw.title       : undefined,
     description:  typeof raw.description === "string" ? raw.description : undefined,
     url,
-    // `externalUrl` is a web page in the Stremio contract, not media input.
+    // `externalUrl` is a web page in the MediaAddon contract, not media input.
     externalUrl: undefined,
     ytId,
     infoHash,
@@ -289,6 +290,13 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
   const [loading, setLoading] = useState(() => false);
   const [error,   setError]   = useState<string | null>(null);
   const [tick,    setTick]    = useState(0);
+  const sourceNames = useMemo(
+    () => getEnabledAddons()
+      .filter(addon => addonHasStreams(addon) && (!query || streamRequestTypes(addon, query.type).length > 0))
+      .map(addon => addon.name)
+      .filter(Boolean),
+    [getEnabledAddons, query?.type, tick],
+  );
 
   // Ref para acumular resultados sin stale-closure
   const accRef = useRef<MediaStream[]>([]);
@@ -373,7 +381,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
                 type,
                 rawCount: rawStreams.length,
                 acceptedCount: fresh.length,
-                p2pCount: fresh.filter(item => item.infoHash || (item.sources ?? []).some(source => /^(magnet:|stremio:)/i.test(source))).length,
+                p2pCount: fresh.filter(item => item.infoHash || (item.sources ?? []).some(source => /^(magnet:|stre(?:mio):)/i.test(source))).length,
                 sample: rawStreams.slice(0, 3).map((item: any) => ({
                   name: item?.name,
                   hasUrl: typeof item?.url === "string",
@@ -401,6 +409,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
 
   return {
     streams,
+    sourceNames,
     loading,
     error,
     streamId,

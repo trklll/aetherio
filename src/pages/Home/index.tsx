@@ -12,6 +12,7 @@ import type { CatalogRowData, MediaItem } from "../../types/ui";
 import { tmdbFetch } from "../../config/apiKeys";
 import CatalogRow from "./CatalogRow";
 import ContinueWatchingRow from "./ContinueWatchingRow";
+import GenreShowcase from "./GenreShowcase";
 import HeroSection from "./HeroSection";
 import StreamingProviderRowsGroup, {
   STREAMING_PROVIDERS,
@@ -79,15 +80,22 @@ export default function HomePage() {
     () => typeFilter ? visibleRows.filter(row => row.type === typeFilter) : visibleRows,
     [typeFilter, visibleRows],
   );
+
+  const { otherRows, baseRows, animeRows } = useMemo(() => {
+    const base = filteredRows.filter(row => row.type !== "anime");
+    const anime = filteredRows.filter(row => row.type === "anime");
+    return { otherRows: filteredRows, baseRows: base, animeRows: anime };
+  }, [filteredRows]);
+
   const streamingProviderGroups = useMemo(
-    () => buildStreamingProviderGroups(filteredRows),
-    [filteredRows],
+    () => buildStreamingProviderGroups(baseRows),
+    [baseRows],
   );
 
   useEffect(() => {
-    if (!filteredRows.length) return;
+    if (!otherRows.length) return;
     const streamingItems: MediaItem[] = [];
-    for (const group of buildStreamingProviderGroups(filteredRows)) {
+    for (const group of buildStreamingProviderGroups(otherRows)) {
       for (const item of group.seriesRow.items) {
         if (!item.logo) streamingItems.push(item);
       }
@@ -134,7 +142,7 @@ export default function HomePage() {
     }
     void enrich();
     return () => { cancelled = true; };
-  }, [filteredRows]);
+  }, [otherRows]);
 
   if (loading) return <Skeleton />;
 
@@ -143,10 +151,9 @@ export default function HomePage() {
       {!typeFilter && (
         <HomeHero items={heroItems} />
       )}
-      <div className="relative flex min-h-full flex-col">
+      <div className="relative flex min-h-full flex-col" style={{ paddingBottom: 56 }}>
         {!typeFilter && <ContinueWatchingRow />}
-        {filteredRows.length ? (
-          filteredRows.map((row, i) => {
+        {baseRows.map((row, i) => {
             const providerGroup = streamingProviderGroups.find(group => group.anchorIndex === i);
             if (providerGroup) {
               return (
@@ -163,8 +170,14 @@ export default function HomePage() {
             const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
             const saved = getHomeScroll();
             return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} />;
-          })
-        ) : (
+          })}
+        {!typeFilter && homePreferences.contentOrientation !== "movies-series" && <GenreShowcase />}
+        {animeRows.map((row, i) => {
+            const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
+            const saved = getHomeScroll();
+            return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} />;
+          })}
+        {!baseRows.length && !animeRows.length && (
           <Empty typeFilter={typeFilter} />
         )}
       </div>

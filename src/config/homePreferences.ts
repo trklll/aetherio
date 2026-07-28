@@ -79,10 +79,14 @@ export function mergedCatalogOrder(rows: CatalogRowData[], catalogOrder: string[
 export function sortHomeCatalogRows(rows: CatalogRowData[], preferences: HomePreferences) {
   const order = mergedCatalogOrder(rows, preferences.catalogOrder);
   const orderIndex = new Map(order.map((key, index) => [key, index]));
-  return [...rows].sort((a, b) => (
-    (orderIndex.get(catalogPreferenceKey(a)) ?? Number.MAX_SAFE_INTEGER)
-    - (orderIndex.get(catalogPreferenceKey(b)) ?? Number.MAX_SAFE_INTEGER)
-  ));
+  return [...rows].sort((a, b) => {
+    const aIdx = orderIndex.get(catalogPreferenceKey(a));
+    const bIdx = orderIndex.get(catalogPreferenceKey(b));
+    if (aIdx != null && bIdx != null) return aIdx - bIdx;
+    if (aIdx != null) return -1;
+    if (bIdx != null) return 1;
+    return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER);
+  });
 }
 
 export function applyContentOrientationToItems<T extends { type: string }>(items: T[], orientation: ContentOrientation) {
@@ -99,9 +103,13 @@ export function matchesContentOrientation(type: string, orientation: ContentOrie
 
 export function applyHomeCatalogPreferences(rows: CatalogRowData[], preferences: HomePreferences) {
   const hidden = new Set(preferences.hiddenCatalogKeys);
-  return sortHomeCatalogRows(rows, preferences)
+  const filtered = rows
     .filter(row => !hidden.has(catalogPreferenceKey(row)))
-    .filter(row => matchesContentOrientation(row.type, preferences.contentOrientation))
+    .filter(row => matchesContentOrientation(row.type, preferences.contentOrientation));
+
+  if (preferences.contentOrientation === "both") return filtered;
+
+  return sortHomeCatalogRows(filtered, preferences)
     .sort((a, b) => (
       contentOrientationPriority(a.type, preferences.contentOrientation)
       - contentOrientationPriority(b.type, preferences.contentOrientation)

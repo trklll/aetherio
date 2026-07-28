@@ -46,6 +46,7 @@ const PlayerPage = lazy(() => import("./pages/Player"));
 const PersonPage = lazy(() => import("./pages/Person"));
 const EntityPage = lazy(() => import("./pages/Entity"));
 const SearchPage = lazy(() => import("./pages/Search"));
+const GenreListingPage = lazy(() => import("./pages/GenreListing"));
 const QuickStart = lazy(() => import("./pages/QuickStart"));
 const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
 
@@ -300,6 +301,7 @@ export default function App() {
               <Route path="/person/:id"        element={<PersonPage />} />
               <Route path="/entity/:kind/:id"   element={<EntityPage />} />
               <Route path="/search"            element={<SearchPage />} />
+              <Route path="/genre"              element={<GenreListingPage />} />
             </Routes>
           </Suspense>
         </div>

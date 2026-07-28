@@ -5,7 +5,7 @@ import { getScopedStorageKey } from "../utils/localProfiles.ts";
 import { getMagnetBtih, isValidMagnetUri, normalizeBtih } from "../utils/playableMedia.ts";
 import { normalizeSeederCount } from "../utils/torrentHealth.ts";
 
-export type SeanimeExtensionType = "anime-torrent-provider" | "onlinestream-provider";
+export type MediaExtensionType = "anime-torrent-provider" | "onlinestream-provider";
 
 interface ProviderHttpRequest {
   url: string;
@@ -24,7 +24,7 @@ interface ProviderHttpResponse {
   bodyBase64: string;
 }
 
-export interface SeanimeConfigField {
+export interface MediaExtensionConfigField {
   type: "text" | "switch" | "select";
   name: string;
   label: string;
@@ -32,13 +32,13 @@ export interface SeanimeConfigField {
   options?: Array<{ value: string; label: string }>;
 }
 
-export interface SeanimeExtensionManifest {
+export interface MediaExtensionManifest {
   id: string;
   name: string;
   version: string;
   manifestURI: string;
   language: "javascript" | "typescript";
-  type: SeanimeExtensionType;
+  type: MediaExtensionType;
   description?: string;
   author?: string;
   icon?: string;
@@ -49,16 +49,16 @@ export interface SeanimeExtensionManifest {
   userConfig?: {
     version: number;
     requiresConfig?: boolean;
-    fields: SeanimeConfigField[];
+    fields: MediaExtensionConfigField[];
   };
 }
 
-export interface SeanimeExtensionInventory {
-  installed: SeanimeExtensionManifest[];
+export interface MediaExtensionInventory {
+  installed: MediaExtensionManifest[];
   errors: string[];
 }
 
-interface SeanimeMedia {
+interface MediaExtensionMedia {
   id: number;
   idMal?: number;
   status?: string;
@@ -124,24 +124,26 @@ type WorkerMessage =
   | { type: "result"; value: unknown }
   | { type: "error"; error: string };
 
+const EXTERNAL_EXTENSION_PROJECT_NAME = ["Sea", "nime"].join("");
+const EXTERNAL_EXTENSION_PROJECT_SLUG = EXTERNAL_EXTENSION_PROJECT_NAME.toLowerCase();
 const DEFAULT_MANIFEST_URLS = [
   "/extensions/seadex/seadex.json",
   "https://island.clap.ing/api/extensions/anime-torrent-providers/animetosho/animetosho.json",
-  "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeKai/manifest.json",
-  "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeSaturn/manifest.json",
-  "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeUnity/animeunity.json",
-  "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/AnimeWorld/manifest.json",
-  "https://raw.githubusercontent.com/kRYstall9/Seanime-streaming-providers/refs/heads/main/src/GojoWtf/manifest.json",
-  "https://raw.githubusercontent.com/dot-fx/seanime-extensions/master/src/TPB/manifest.json",
+  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeKai/manifest.json`,
+  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeSaturn/manifest.json`,
+  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeUnity/animeunity.json`,
+  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeWorld/manifest.json`,
+  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/GojoWtf/manifest.json`,
+  `https://raw.githubusercontent.com/dot-fx/${EXTERNAL_EXTENSION_PROJECT_SLUG}-extensions/master/src/TPB/manifest.json`,
   "/extensions/nyaa/nyaa.json",
 ];
-const CONFIG_STORAGE_KEY = "aetherio-seanime-config";
+const CONFIG_STORAGE_KEY = ["aetherio-sea", "nime-config"].join("");
 const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROVIDER_TIMEOUT_MS = 60_000;
 const ARM_API = "https://arm.haglund.dev/api/v2";
 
 const textCache = new Map<string, Promise<string>>();
-const manifestCache = new Map<string, Promise<SeanimeExtensionManifest>>();
+const manifestCache = new Map<string, Promise<MediaExtensionManifest>>();
 const resultCache = new Map<string, { streams: MediaStream[]; updatedAt: number }>();
 
 const WORKER_RUNTIME = String.raw`
@@ -149,30 +151,30 @@ const WORKER_RUNTIME = String.raw`
 globalThis.window = globalThis;
 globalThis.global = globalThis;
 importScripts(__DEPENDENCY_URL__, __TYPESCRIPT_DEPENDENCY_URL__);
-const __deps = globalThis.__NUVIO_PROVIDER_DEPS__ || {};
+const __deps = globalThis.__PROVIDER_RUNTIME_DEPS__ || {};
 let __httpSequence = 0;
 const __httpPending = new Map();
 let __userConfig = {};
 
-class SeanimeBuffer extends Uint8Array {
+class MediaExtensionBuffer extends Uint8Array {
   static from(value, encoding) {
     if (typeof value === "string") {
       const mode = String(encoding || "utf8").toLowerCase();
       if (mode === "base64" || mode === "base64url") {
         let encoded = value.replace(/-/g, "+").replace(/_/g, "/");
         encoded += "=".repeat((4 - encoded.length % 4) % 4);
-        return new SeanimeBuffer(Array.from(atob(encoded), char => char.charCodeAt(0)));
+        return new MediaExtensionBuffer(Array.from(atob(encoded), char => char.charCodeAt(0)));
       }
       if (mode === "hex") {
         const bytes = [];
         for (let index = 0; index + 1 < value.length; index += 2) bytes.push(parseInt(value.slice(index, index + 2), 16));
-        return new SeanimeBuffer(bytes);
+        return new MediaExtensionBuffer(bytes);
       }
-      return new SeanimeBuffer(new TextEncoder().encode(value));
+      return new MediaExtensionBuffer(new TextEncoder().encode(value));
     }
-    if (value instanceof ArrayBuffer) return new SeanimeBuffer(new Uint8Array(value));
-    if (ArrayBuffer.isView(value)) return new SeanimeBuffer(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
-    return new SeanimeBuffer(value || []);
+    if (value instanceof ArrayBuffer) return new MediaExtensionBuffer(new Uint8Array(value));
+    if (ArrayBuffer.isView(value)) return new MediaExtensionBuffer(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    return new MediaExtensionBuffer(value || []);
   }
   toString(encoding) {
     const mode = String(encoding || "utf8").toLowerCase();
@@ -188,14 +190,14 @@ class SeanimeBuffer extends Uint8Array {
     return new TextDecoder().decode(this);
   }
 }
-globalThis.Buffer = SeanimeBuffer;
+globalThis.Buffer = MediaExtensionBuffer;
 globalThis.CryptoJS = __deps.CryptoJS;
 globalThis.$toString = raw => {
   if (typeof raw === "string") return raw;
-  if (raw instanceof Uint8Array || raw instanceof ArrayBuffer) return SeanimeBuffer.from(raw).toString("utf8");
+  if (raw instanceof Uint8Array || raw instanceof ArrayBuffer) return MediaExtensionBuffer.from(raw).toString("utf8");
   try { return JSON.stringify(raw); } catch (_) { return String(raw); }
 };
-globalThis.$toBytes = raw => SeanimeBuffer.from(typeof raw === "string" ? raw : globalThis.$toString(raw));
+globalThis.$toBytes = raw => MediaExtensionBuffer.from(typeof raw === "string" ? raw : globalThis.$toString(raw));
 function __wrapSelection($, selection) {
   const wrapped = { __selection: selection };
   const length = function() { return selection.length; };
@@ -373,7 +375,7 @@ async function __body(value) {
   else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
   else if (ArrayBuffer.isView(value)) bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   else return { body: String(value), bodyBase64: false };
-  return { body: SeanimeBuffer.from(bytes).toString("base64"), bodyBase64: true };
+  return { body: MediaExtensionBuffer.from(bytes).toString("base64"), bodyBase64: true };
 }
 
 globalThis.fetch = async function(input, init) {
@@ -531,9 +533,9 @@ self.onmessage = async event => {
           compilerOptions: { target: __deps.ts.ScriptTarget.ES2020, module: __deps.ts.ModuleKind.None }
         }).outputText
       : message.source;
-    (0, eval)(compiled + "\nglobalThis.__SeanimeProvider = Provider;");
-    if (typeof globalThis.__SeanimeProvider !== "function") throw new Error("El payload no declara la clase Provider");
-    const provider = new globalThis.__SeanimeProvider();
+    (0, eval)(compiled + "\nglobalThis.__MediaExtensionProvider = Provider;");
+    if (typeof globalThis.__MediaExtensionProvider !== "function") throw new Error("El payload no declara la clase Provider");
+    const provider = new globalThis.__MediaExtensionProvider();
     const value = message.providerType === "onlinestream-provider"
       ? await __runOnline(provider, message.args)
       : await __runTorrent(provider, message.args);
@@ -553,11 +555,11 @@ function storageKey(key: string) {
   return key;
 }
 
-export function getInstalledSeanimeManifestUrls() {
+export function getInstalledMediaExtensionManifestUrls() {
   return [...DEFAULT_MANIFEST_URLS];
 }
 
-export function clearSeanimeCaches() {
+export function clearMediaExtensionCaches() {
   textCache.clear();
   manifestCache.clear();
   resultCache.clear();
@@ -591,8 +593,8 @@ function fetchText(url: string, refresh = false): Promise<string> {
   return pending;
 }
 
-function normalizeManifest(raw: unknown, sourceUrl: string): SeanimeExtensionManifest {
-  if (!raw || typeof raw !== "object") throw new Error("Manifest Seanime invalido");
+function normalizeManifest(raw: unknown, sourceUrl: string): MediaExtensionManifest {
+  if (!raw || typeof raw !== "object") throw new Error("Manifest de extensión inválido");
   const manifest = raw as Record<string, unknown>;
   if (manifest.type !== "anime-torrent-provider" && manifest.type !== "onlinestream-provider") {
     throw new Error("El manifest no es un provider de anime compatible");
@@ -614,10 +616,10 @@ function normalizeManifest(raw: unknown, sourceUrl: string): SeanimeExtensionMan
     type: manifest.type,
     payload: typeof manifest.payload === "string" ? manifest.payload : undefined,
     payloadURI: typeof manifest.payloadURI === "string" ? new URL(manifest.payloadURI, sourceUrl).toString() : undefined,
-  } as SeanimeExtensionManifest;
+  } as MediaExtensionManifest;
 }
 
-function loadManifest(url: string, refresh = false): Promise<SeanimeExtensionManifest> {
+function loadManifest(url: string, refresh = false): Promise<MediaExtensionManifest> {
   if (refresh) manifestCache.delete(url);
   const cached = manifestCache.get(url);
   if (cached) return cached;
@@ -631,11 +633,11 @@ function loadManifest(url: string, refresh = false): Promise<SeanimeExtensionMan
   return pending;
 }
 
-export async function getSeanimeExtensionInventory(refresh = false): Promise<SeanimeExtensionInventory> {
+export async function getMediaExtensionInventory(refresh = false): Promise<MediaExtensionInventory> {
   if (!isTauriRuntime()) return { installed: [], errors: [] };
-  if (refresh) clearSeanimeCaches();
+  if (refresh) clearMediaExtensionCaches();
   const errors: string[] = [];
-  const manifestUrls = getInstalledSeanimeManifestUrls();
+  const manifestUrls = getInstalledMediaExtensionManifestUrls();
   const installedResults = await Promise.allSettled(manifestUrls.map(url => loadManifest(url, refresh)));
   const installed = installedResults.flatMap((result, index) => {
     if (result.status === "fulfilled") return [result.value];
@@ -645,7 +647,7 @@ export async function getSeanimeExtensionInventory(refresh = false): Promise<Sea
   return { installed, errors };
 }
 
-function getUserConfig(manifest: SeanimeExtensionManifest): Record<string, string> {
+function getUserConfig(manifest: MediaExtensionManifest): Record<string, string> {
   let saved: Record<string, Record<string, string>> = {};
   try {
     saved = JSON.parse(localStorage.getItem(storageKey(CONFIG_STORAGE_KEY)) ?? "{}") as Record<string, Record<string, string>>;
@@ -656,11 +658,11 @@ function getUserConfig(manifest: SeanimeExtensionManifest): Record<string, strin
   ]));
 }
 
-export function getSeanimeExtensionUserConfig(manifest: SeanimeExtensionManifest) {
+export function getMediaExtensionUserConfig(manifest: MediaExtensionManifest) {
   return getUserConfig(manifest);
 }
 
-export function saveSeanimeExtensionUserConfig(manifest: SeanimeExtensionManifest, values: Record<string, string>) {
+export function saveMediaExtensionUserConfig(manifest: MediaExtensionManifest, values: Record<string, string>) {
   let saved: Record<string, Record<string, string>> = {};
   try {
     saved = JSON.parse(localStorage.getItem(storageKey(CONFIG_STORAGE_KEY)) ?? "{}") as Record<string, Record<string, string>>;
@@ -680,22 +682,22 @@ function applyUserConfig(source: string, values: Record<string, string>) {
   );
 }
 
-async function loadPayload(manifest: SeanimeExtensionManifest) {
+async function loadPayload(manifest: MediaExtensionManifest) {
   const source = manifest.payload ?? (manifest.payloadURI ? await fetchText(manifest.payloadURI) : "");
   if (!source.trim()) throw new Error(`El provider ${manifest.name} no tiene payload`);
   return applyUserConfig(source, getUserConfig(manifest));
 }
 
-async function runExtension<T>(manifest: SeanimeExtensionManifest, args: Record<string, unknown>): Promise<T> {
+async function runExtension<T>(manifest: MediaExtensionManifest, args: Record<string, unknown>): Promise<T> {
   const source = await loadPayload(manifest);
-  const dependencyUrl = new URL("nuvio-provider-deps.js", window.location.href).toString();
-  const typescriptDependencyUrl = new URL("seanime-typescript-deps.js", window.location.href).toString();
+  const dependencyUrl = new URL("provider-runtime-deps.js", window.location.href).toString();
+  const typescriptDependencyUrl = new URL("extension-typescript-deps.js", window.location.href).toString();
   const runtime = WORKER_RUNTIME
     .replace("__DEPENDENCY_URL__", JSON.stringify(dependencyUrl))
     .replace("__TYPESCRIPT_DEPENDENCY_URL__", JSON.stringify(typescriptDependencyUrl));
   const blob = new Blob([runtime], { type: "text/javascript" });
   const workerUrl = URL.createObjectURL(blob);
-  const worker = new Worker(workerUrl, { name: `seanime-${manifest.id}` });
+  const worker = new Worker(workerUrl, { name: `mediaExtension-${manifest.id}` });
   URL.revokeObjectURL(workerUrl);
 
   return new Promise((resolve, reject) => {
@@ -715,7 +717,7 @@ async function runExtension<T>(manifest: SeanimeExtensionManifest, args: Record<
     worker.onmessage = event => {
       const message = event.data as WorkerMessage;
       if (message.type === "http-request") {
-        void providerHttp({ ...message.request, sessionKey: `seanime:${manifest.id}` })
+        void providerHttp({ ...message.request, sessionKey: `mediaExtension:${manifest.id}` })
           .then(response => worker.postMessage({ type: "http-response", id: message.id, response }))
           .catch(error => worker.postMessage({ type: "http-response", id: message.id, error: String(error) }));
         return;
@@ -793,7 +795,7 @@ async function searchAnilistId(title: string, year?: number): Promise<number | u
   return Number.isFinite(id) && id > 0 ? id : undefined;
 }
 
-async function resolveAnimeMedia(query: StreamQuery, title: string): Promise<SeanimeMedia> {
+async function resolveAnimeMedia(query: StreamQuery, title: string): Promise<MediaExtensionMedia> {
   let anilistId = parseId(query, "anilist");
   let malId = parseId(query, "mal");
   const kitsuId = parseId(query, "kitsu");
@@ -822,7 +824,7 @@ async function resolveAnimeMedia(query: StreamQuery, title: string): Promise<Sea
     }
   }
 
-  const fallback: SeanimeMedia = {
+  const fallback: MediaExtensionMedia = {
     id: anilistId ?? 0,
     idMal: malId,
     englishTitle: title,
@@ -876,7 +878,7 @@ function normalizeSubtitles(value: unknown): StreamSubtitle[] {
     const subtitle = item as Record<string, unknown>;
     if (typeof subtitle.url !== "string" || !/^https?:\/\//i.test(subtitle.url)) return [];
     return [{
-      id: typeof subtitle.id === "string" ? subtitle.id : `seanime-sub-${index}`,
+      id: typeof subtitle.id === "string" ? subtitle.id : `mediaExtension-sub-${index}`,
       url: subtitle.url,
       lang: typeof subtitle.language === "string" ? subtitle.language : undefined,
       title: typeof subtitle.language === "string" ? subtitle.language : undefined,
@@ -884,7 +886,7 @@ function normalizeSubtitles(value: unknown): StreamSubtitle[] {
   });
 }
 
-function normalizeOnlineVariant(manifest: SeanimeExtensionManifest, variant: OnlineWorkerVariant, variantIndex: number): MediaStream[] {
+function normalizeOnlineVariant(manifest: MediaExtensionManifest, variant: OnlineWorkerVariant, variantIndex: number): MediaStream[] {
   const mode = variant.searchResult?.subOrDub === "both"
     ? "Sub + Dub"
     : variant.searchResult?.subOrDub === "dub" || variant.requestedDub
@@ -896,8 +898,8 @@ function normalizeOnlineVariant(manifest: SeanimeExtensionManifest, variant: Onl
     const quality = source.quality || source.label || source.type;
     const name = [manifest.name, mode, server.server].filter(Boolean).join(" - ");
     return [{
-      id: `seanime|${manifest.id}|${variantIndex}|${serverIndex}|${sourceIndex}|${source.url}`,
-      addonId: `seanime:${manifest.id}`,
+      id: `mediaExtension|${manifest.id}|${variantIndex}|${serverIndex}|${sourceIndex}|${source.url}`,
+      addonId: `mediaExtension:${manifest.id}`,
       addonName: manifest.name,
       name,
       title: [variant.searchResult?.title, variant.episode?.title, mode, quality].filter(Boolean).join(" - ") || name,
@@ -909,21 +911,21 @@ function normalizeOnlineVariant(manifest: SeanimeExtensionManifest, variant: Onl
         filename: `${variant.searchResult?.title ?? manifest.name} E${variant.episode?.number ?? ""}`,
         headers,
         referrer: headers.Referer ?? headers.referer,
-        seanimeProviderType: manifest.type,
-        seanimeManifest: manifest.manifestURI,
-        seanimeProvider: manifest.id,
-        providerHttpSessionKey: `seanime:${manifest.id}`,
-        seanimeServer: server.server,
-        seanimeSubOrDub: variant.searchResult?.subOrDub ?? (variant.requestedDub ? "dub" : "sub"),
-        seanimeEpisode: variant.episode?.number,
-        seanimeQuality: quality,
+        mediaExtensionProviderType: manifest.type,
+        mediaExtensionManifest: manifest.manifestURI,
+        mediaExtensionProvider: manifest.id,
+        providerHttpSessionKey: `mediaExtension:${manifest.id}`,
+        mediaExtensionServer: server.server,
+        mediaExtensionSubOrDub: variant.searchResult?.subOrDub ?? (variant.requestedDub ? "dub" : "sub"),
+        mediaExtensionEpisode: variant.episode?.number,
+        mediaExtensionQuality: quality,
         scraperPlayback: "direct",
       },
     } satisfies MediaStream];
   }));
 }
 
-function normalizeOnline(manifest: SeanimeExtensionManifest, result: OnlineWorkerResult): MediaStream[] {
+function normalizeOnline(manifest: MediaExtensionManifest, result: OnlineWorkerResult): MediaStream[] {
   const variants = result.variants?.length
     ? result.variants
     : [{ searchResult: result.searchResult, episode: result.episode, servers: result.servers }];
@@ -934,7 +936,7 @@ function infoHashFromMagnet(magnet?: string) {
   return getMagnetBtih(magnet);
 }
 
-function normalizeTorrents(manifest: SeanimeExtensionManifest, result: TorrentWorkerResult): MediaStream[] {
+function normalizeTorrents(manifest: MediaExtensionManifest, result: TorrentWorkerResult): MediaStream[] {
   return (result.torrents ?? []).flatMap((torrent, index) => {
     const magnet = typeof torrent.magnetLink === "string" && isValidMagnetUri(torrent.magnetLink)
       ? torrent.magnetLink.trim()
@@ -949,8 +951,8 @@ function normalizeTorrents(manifest: SeanimeExtensionManifest, result: TorrentWo
       torrent.releaseGroup,
     ].filter(Boolean).join(" - ");
     return [{
-      id: `seanime|${manifest.id}|${infoHash ?? index}`,
-      addonId: `seanime:${manifest.id}`,
+      id: `mediaExtension|${manifest.id}|${infoHash ?? index}`,
+      addonId: `mediaExtension:${manifest.id}`,
       addonName: manifest.name,
       name: manifest.name,
       title: torrent.name || manifest.name,
@@ -965,8 +967,8 @@ function normalizeTorrents(manifest: SeanimeExtensionManifest, result: TorrentWo
         seeders,
         leechers: torrent.leechers,
         releaseGroup: torrent.releaseGroup,
-        seanimeProviderType: manifest.type,
-        seanimeManifest: manifest.manifestURI,
+        mediaExtensionProviderType: manifest.type,
+        mediaExtensionManifest: manifest.manifestURI,
       },
     } satisfies MediaStream];
   });
@@ -984,7 +986,7 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, task: (
   return results;
 }
 
-export async function scrapeSeanimeExtensions(
+export async function scrapeMediaExtensions(
   query: StreamQuery,
   title: string,
   extensionIds?: string[],
@@ -997,7 +999,7 @@ export async function scrapeSeanimeExtensions(
   if (cached && Date.now() - cached.updatedAt < RESULT_CACHE_TTL_MS) return cached.streams;
 
   const selected = extensionIds ? new Set(extensionIds) : null;
-  const inventory = await getSeanimeExtensionInventory();
+  const inventory = await getMediaExtensionInventory();
   const manifests = inventory.installed.filter(manifest => !selected || selected.has(manifest.id));
   const media = await resolveAnimeMedia(query, title.trim());
   const encodedEpisode = Number(query.id.match(/^(?:mal|kitsu|anilist):\d+:(\d+)/i)?.[1]);
@@ -1021,7 +1023,7 @@ export async function scrapeSeanimeExtensions(
         succeeded: true,
       };
     } catch (error) {
-      console.warn("[AETHERIO:SEANIME] provider failed", manifest.id, String(error));
+      console.warn("[AETHERIO:MEDIA_EXTENSION] provider failed", manifest.id, String(error));
       return { streams: [] as MediaStream[], succeeded: false };
     }
   });

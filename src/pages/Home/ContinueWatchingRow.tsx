@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Image as ImageIcon, Info, MinusCircle, Play } from "lucide-react";
+import { Check, Image as ImageIcon, Info, MinusCircle, Play } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { tmdbFetch } from "../../config/apiKeys";
 import ContextMenu from "../../components/ui/ContextMenu";
@@ -22,16 +22,17 @@ import {
   writeHomeCardArtwork,
 } from "../../utils/homeCardArtwork";
 import { readDetailMediaMeta, writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
+import { scrollByGsap, tweenTo } from "../../utils/motion";
 import { syncTraktMarkedWatched, syncTraktRemovePlayback } from "../../trakt";
 import type { MediaItem } from "../../types/ui";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const IMG = "https://image.tmdb.org/t/p";
-const CARD_W = 302;
+const CARD_W = 336;
 const CARD_H = 196;
-const GAP = 10;
-const ROW_SHADOW_GUTTER = 32;
+const GAP = 18;
+const ROW_SHADOW_TOP_GUTTER = 17;
+const ROW_SHADOW_BOTTOM_GUTTER = 42;
 
 export default function ContinueWatchingRow() {
   const navigate = useNavigate();
@@ -44,6 +45,8 @@ export default function ContinueWatchingRow() {
   const [hovered, setHovered] = useState(false);
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
+  const leftArrowRef = useRef<HTMLDivElement>(null);
+  const rightArrowRef = useRef<HTMLDivElement>(null);
   const virtualWindow = useHorizontalVirtualWindow({
     itemCount: items.length,
     itemWidth: CARD_W,
@@ -189,7 +192,13 @@ export default function ContinueWatchingRow() {
     scrollByGsap(scrollRef.current, dir === "right" ? (CARD_W + GAP) * 3 : -(CARD_W + GAP) * 3);
   }
 
+  useEffect(() => {
+    tweenTo(leftArrowRef.current, { opacity: hovered && showLeft ? 1 : 0 }, 0.45);
+    tweenTo(rightArrowRef.current, { opacity: hovered && showRight ? 1 : 0 }, 0.45);
+  }, [hovered, showLeft, showRight]);
+
   async function resume(entry: ContinueWatchingEntry) {
+    window.performance?.mark?.("continue:card_click");
     const cached = readDetailMediaMeta(entry.type, entry.id);
     writeDetailMediaMeta({
       id: entry.id,
@@ -237,8 +246,8 @@ export default function ContinueWatchingRow() {
   }
 
   return (
-    <section style={{ paddingLeft: 48, paddingRight: 48, paddingTop: 26 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+    <section style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: 48, paddingRight: 48 }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>Continuar viendo</span>
       </div>
       <div
@@ -246,7 +255,39 @@ export default function ContinueWatchingRow() {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <ScrollArrow visible={hovered && showLeft} side="left" onClick={() => scroll("left")} />
+        <div
+          ref={leftArrowRef}
+          style={{
+            position: "absolute",
+            left: 20,
+            top: "50%",
+            zIndex: 10,
+            transform: "translate(-35%,-50%)",
+            opacity: 0,
+            pointerEvents: hovered && showLeft ? "auto" : "none",
+          }}
+        >
+          <button
+            onClick={() => scroll("left")}
+            title="Anterior"
+            aria-label="Anterior"
+            className="liquid-glass-arrow"
+            style={{
+              width: 36,
+              height: 60,
+              borderRadius: 18,
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="18" height="30" viewBox="-0.5 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ transform: "rotate(180deg)", overflow: "visible" }}>
+              <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+            </svg>
+          </button>
+        </div>
 
         <div
           ref={scrollRef}
@@ -257,12 +298,12 @@ export default function ContinueWatchingRow() {
             overflowX: "auto",
             overflowY: "hidden",
             marginTop: -18,
-            marginLeft: -ROW_SHADOW_GUTTER,
-            marginRight: -ROW_SHADOW_GUTTER,
-            paddingLeft: ROW_SHADOW_GUTTER,
-            paddingRight: ROW_SHADOW_GUTTER,
-            paddingTop: ROW_SHADOW_GUTTER - 8,
-            paddingBottom: ROW_SHADOW_GUTTER - 4,
+            marginLeft: 0,
+            marginRight: 0,
+            paddingLeft: 48,
+            paddingRight: 48,
+            paddingTop: ROW_SHADOW_TOP_GUTTER + 8,
+            paddingBottom: ROW_SHADOW_BOTTOM_GUTTER + 8,
             scrollbarWidth: "none",
           }}
         >
@@ -284,49 +325,41 @@ export default function ContinueWatchingRow() {
           {virtualWindow.afterWidth > 0 ? <div aria-hidden="true" style={{ flex: `0 0 ${virtualWindow.afterWidth}px` }} /> : null}
         </div>
 
-        <ScrollArrow visible={hovered && showRight} side="right" onClick={() => scroll("right")} />
+        <div
+          ref={rightArrowRef}
+          style={{
+            position: "absolute",
+            right: 20,
+            top: "50%",
+            zIndex: 10,
+            transform: "translate(35%,-50%)",
+            opacity: 0,
+            pointerEvents: hovered && showRight ? "auto" : "none",
+          }}
+        >
+          <button
+            onClick={() => scroll("right")}
+            title="Siguiente"
+            aria-label="Siguiente"
+            className="liquid-glass-arrow"
+            style={{
+              width: 36,
+              height: 60,
+              borderRadius: 18,
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="18" height="30" viewBox="-0.5 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ overflow: "visible" }}>
+              <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
+            </svg>
+          </button>
+        </div>
       </div>
     </section>
-  );
-}
-
-function ScrollArrow({ visible, side, onClick }: { visible: boolean; side: "left" | "right"; onClick: () => void }) {
-  const motionRef = useGsapState<HTMLDivElement>({ opacity: visible ? 1 : 0 }, [visible]);
-  return (
-    <div
-      ref={motionRef}
-      style={{
-        position: "absolute",
-        [side]: 0,
-        top: "50%",
-        zIndex: 10,
-        transform: `translate(${side === "left" ? "-30%" : "30%"},-50%)`,
-        opacity: 0,
-        pointerEvents: visible ? "auto" : "none",
-      }}
-    >
-      <button
-        onClick={onClick}
-        title={side === "left" ? "Anterior" : "Siguiente"}
-        aria-label={side === "left" ? "Anterior" : "Siguiente"}
-        style={{
-          width: 38,
-          height: 38,
-          borderRadius: "50%",
-          border: "1px solid rgba(225,230,238,0.09)",
-          background: "rgba(18,18,18,0.72)",
-          backdropFilter: "blur(6px)",
-          WebkitBackdropFilter: "blur(6px)",
-          color: "#fff",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: "pointer",
-        }}
-      >
-        {side === "left" ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-      </button>
-    </div>
   );
 }
 
@@ -564,21 +597,17 @@ const cardBaseStyle: React.CSSProperties = {
   transform: "scale(1)",
   background: "#1c1c1e",
   border: "1px solid rgba(225,230,238,0.10)",
-  boxShadow: "0 12px 28px rgba(0,0,0,0.28)",
   padding: 0,
   textAlign: "left",
 };
 
-const gradientOverlayTop: React.CSSProperties = {
+const artworkImgStyle: React.CSSProperties = {
   position: "absolute",
   inset: 0,
-  background: "linear-gradient(to top, rgba(0,0,0,0.86) 0%, rgba(0,0,0,0.52) 24%, rgba(0,0,0,0.08) 68%, transparent 100%)",
-};
-
-const gradientOverlayRight: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  background: "linear-gradient(to right, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.08) 46%, rgba(0,0,0,0.18) 100%)",
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  transform: "scale(1)",
 };
 
 const bottomContentStyle: React.CSSProperties = {
@@ -587,6 +616,7 @@ const bottomContentStyle: React.CSSProperties = {
   right: 0,
   bottom: 0,
   padding: "0 12px 10px",
+  zIndex: 3,
 };
 
 const logoStyle: React.CSSProperties = {
@@ -666,15 +696,6 @@ const menuButtonStyle: React.CSSProperties = {
   justifyContent: "center",
   padding: 0,
   cursor: "pointer",
-};
-
-const artworkImgStyle: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  width: "100%",
-  height: "100%",
-  objectFit: "cover",
-  transform: "scale(1)",
 };
 
 const badgeBaseStyle: React.CSSProperties = {
@@ -792,31 +813,27 @@ const ContinueCard = memo(function ContinueCard({
         ...cardBaseStyle,
         marginRight: removing ? -CARD_W - GAP : 0,
       }}
-      onMouseEnter={event => {
-        if (removing) {
-          tweenTo(event.currentTarget, { scale: 0.96 });
-        } else {
-          tweenTo(event.currentTarget, { y: -3, zIndex: 5 });
-          gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-        }
-        const img = event.currentTarget.querySelector("img");
-        if (img) tweenTo(img, { scale: 1.04 });
-      }}
-      onMouseLeave={event => {
-        if (removing) {
-          tweenTo(event.currentTarget, { scale: 0.96, y: 0 });
-        } else {
-          tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 });
-          gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-        }
-        const img = event.currentTarget.querySelector("img");
-        if (img) tweenTo(img, { scale: 1 });
-      }}
+       onMouseEnter={event => {
+         if (removing) {
+           tweenTo(event.currentTarget, { scale: 0.96 });
+         } else {
+           tweenTo(event.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
+         }
+         const img = event.currentTarget.querySelector("img");
+         if (img) tweenTo(img, { scale: 1.04 });
+       }}
+       onMouseLeave={event => {
+         if (removing) {
+           tweenTo(event.currentTarget, { scale: 0.96, y: 0 });
+         } else {
+           tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+         }
+         const img = event.currentTarget.querySelector("img");
+         if (img) tweenTo(img, { scale: 1 });
+       }}
     >
       {artwork.image && <img src={artwork.image} alt={entry.name} loading="lazy" decoding="async" style={artworkImgStyle} />}
-      <div style={gradientOverlayTop} />
-      <div style={gradientOverlayRight} />
-      {badgeLabel && (
+       {badgeLabel && (
         <div
           style={{
             ...badgeBaseStyle,

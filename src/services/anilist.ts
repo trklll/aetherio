@@ -90,7 +90,7 @@ export async function fetchAnilistAiringAnime(): Promise<MediaItem[]> {
   const { season, seasonYear } = anilistSeason();
   const result = await anilistQuery<AniListPage>(
     `query ($season: MediaSeason, $seasonYear: Int) {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(status: RELEASING, type: ANIME, season: $season, seasonYear: $seasonYear, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -104,7 +104,7 @@ export async function fetchAnilistAiringAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistTopAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(type: ANIME, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -117,7 +117,7 @@ export async function fetchAnilistTopAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistMostFavorites(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(type: ANIME, sort: FAVOURITES_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -130,7 +130,7 @@ export async function fetchAnilistMostFavorites(): Promise<MediaItem[]> {
 export async function fetchAnilistTopAiring(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(status: RELEASING, type: ANIME, sort: SCORE_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -143,7 +143,7 @@ export async function fetchAnilistTopAiring(): Promise<MediaItem[]> {
 export async function fetchAnilistActionAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Action", type: ANIME, sort: SCORE_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -156,7 +156,7 @@ export async function fetchAnilistActionAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistAdventureAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Adventure", type: ANIME, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -169,7 +169,7 @@ export async function fetchAnilistAdventureAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistComedyAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Comedy", type: ANIME, sort: SCORE_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -182,7 +182,7 @@ export async function fetchAnilistComedyAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistDramaAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Drama", type: ANIME, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -195,7 +195,7 @@ export async function fetchAnilistDramaAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistRomanceAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Romance", type: ANIME, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -208,7 +208,7 @@ export async function fetchAnilistRomanceAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistFantasyAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Fantasy", type: ANIME, sort: SCORE_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -221,7 +221,7 @@ export async function fetchAnilistFantasyAnime(): Promise<MediaItem[]> {
 export async function fetchAnilistSciFiAnime(): Promise<MediaItem[]> {
   const result = await anilistQuery<AniListPage>(
     `query {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(genre: "Sci-Fi", type: ANIME, sort: POPULARITY_DESC) {
           ${MEDIA_FIELDS}
         }
@@ -245,7 +245,7 @@ export async function fetchAnilistLastYearBestAnime(): Promise<MediaItem[]> {
   const { season, seasonYear } = prevAnilistSeason();
   const result = await anilistQuery<AniListPage>(
     `query ($season: MediaSeason, $seasonYear: Int) {
-      Page(page: 1, perPage: 10) {
+      Page(page: 1, perPage: 25) {
         media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: SCORE_DESC) {
           ${MEDIA_FIELDS}
         }

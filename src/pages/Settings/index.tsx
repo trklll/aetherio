@@ -85,7 +85,7 @@ const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: "design", label: "DiseÃ±o", icon: <Palette size={17} /> },
   { id: "addons", label: "Complementos", icon: <Puzzle size={17} /> },
   { id: "sources", label: "Fuentes", icon: <RadioTower size={17} /> },
-  { id: "playback", label: "Reproduccion", icon: <PlayCircle size={17} /> },
+  { id: "playback", label: "Reproducción", icon: <PlayCircle size={17} /> },
   { id: "about", label: "Acerca de", icon: <Info size={17} /> },
 ];
 
@@ -1224,12 +1224,12 @@ function PlaybackPanel({
   saved: boolean;
 }) {
   return (
-    <PanelScaffold title="Reproduccion">
+    <PanelScaffold title="Reproducción">
       <div className="grid gap-5">
         <PillBlock title="REPRODUCTOR">
           <ToggleRow
-            title="Mostrar superposicion de carga"
-            description="Mostrar la superposicion de carga inicial mientras empieza a reproducirse un stream."
+            title="Mostrar superposición de carga"
+            description="Mostrar la superposición de carga inicial mientras empieza a reproducirse un stream."
             checked={playback.showLoadingOverlay}
             onChange={checked => onPlaybackChange("showLoadingOverlay", checked)}
           />

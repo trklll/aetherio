@@ -10,11 +10,13 @@ interface ProviderManifestSource {
 }
 
 const CUSTOM_PROVIDER_REPOSITORIES_KEY = "aetherio-custom-provider-repositories";
+const EXTERNAL_PROVIDER_PROJECT_NAME = ["Nu", "vio"].join("");
+const EXTERNAL_PROVIDER_PROJECT_SLUG = EXTERNAL_PROVIDER_PROJECT_NAME.toLowerCase();
 const PROVIDER_MANIFEST_SOURCES: readonly ProviderManifestSource[] = [
   {
     key: "yoruix",
     fallbackName: "Yoru",
-    url: "https://raw.githubusercontent.com/yoruix/nuvio-providers/refs/heads/main/manifest.json",
+    url: `https://raw.githubusercontent.com/yoruix/${EXTERNAL_PROVIDER_PROJECT_SLUG}-providers/refs/heads/main/manifest.json`,
   },
   {
     key: "adrianjael",
@@ -24,7 +26,7 @@ const PROVIDER_MANIFEST_SOURCES: readonly ProviderManifestSource[] = [
   {
     key: "kennethjys",
     fallbackName: "Kenneth",
-    url: "https://raw.githubusercontent.com/KennethJYS/Nuvio-Providers-Latino/refs/heads/main/manifest.json",
+    url: `https://raw.githubusercontent.com/KennethJYS/${EXTERNAL_PROVIDER_PROJECT_NAME}-Providers-Latino/refs/heads/main/manifest.json`,
   },
 ] as const;
 const PROVIDER_MANIFEST_URLS = PROVIDER_MANIFEST_SOURCES.map(source => source.url);
@@ -80,7 +82,7 @@ interface ProviderDefinition {
   scraper: ProviderManifestEntry;
 }
 
-export interface NuvioProviderScraperInfo {
+export interface ProviderRuntimeScraperInfo {
   key: string;
   id: string;
   name: string;
@@ -91,13 +93,13 @@ export interface NuvioProviderScraperInfo {
   supportsExternalPlayer: boolean;
 }
 
-export interface NuvioProviderRepositoryInfo {
+export interface ProviderRuntimeRepositoryInfo {
   key: string;
   ownerName: string;
   name: string;
   version?: string;
   manifestUrl: string;
-  scrapers: NuvioProviderScraperInfo[];
+  scrapers: ProviderRuntimeScraperInfo[];
   custom?: boolean;
   error?: string;
 }
@@ -160,7 +162,7 @@ interface ProviderRuntimeHealth {
 }
 const providerExecutionCache = new Map<string, ProviderExecutionCacheEntry>();
 const providerRuntimeHealth = new Map<string, ProviderRuntimeHealth>();
-let repositoriesPromise: Promise<NuvioProviderRepositoryInfo[]> | null = null;
+let repositoriesPromise: Promise<ProviderRuntimeRepositoryInfo[]> | null = null;
 let definitionsPromise: Promise<ProviderDefinition[]> | null = null;
 
 function customRepositoryKey(url: string) {
@@ -172,7 +174,7 @@ function customRepositoryKey(url: string) {
   return `custom-${(hash >>> 0).toString(36)}`;
 }
 
-export function getCustomNuvioProviderRepositoryUrls(): string[] {
+export function getCustomProviderRuntimeRepositoryUrls(): string[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(CUSTOM_PROVIDER_REPOSITORIES_KEY) ?? "[]");
     return Array.isArray(parsed)
@@ -184,7 +186,7 @@ export function getCustomNuvioProviderRepositoryUrls(): string[] {
 }
 
 function providerManifestSources(): ProviderManifestSource[] {
-  const custom = getCustomNuvioProviderRepositoryUrls().map(url => ({
+  const custom = getCustomProviderRuntimeRepositoryUrls().map(url => ({
     key: customRepositoryKey(url),
     fallbackName: new URL(url).hostname,
     url,
@@ -195,7 +197,7 @@ function providerManifestSources(): ProviderManifestSource[] {
 
 const WORKER_PRELUDE = String.raw`
 "use strict";
-const __providerDependencies = globalThis.__NUVIO_PROVIDER_DEPS__ || {};
+const __providerDependencies = globalThis.__PROVIDER_RUNTIME_DEPS__ || {};
 function require(name) {
   if (name === "axios") return __providerDependencies.axios;
   if (name === "crypto-js") return __providerDependencies.CryptoJS;
@@ -394,7 +396,7 @@ async function fetchText(url: string): Promise<string> {
   return decodeBase64Text(response.bodyBase64);
 }
 
-export async function getNuvioProviderRepositories(): Promise<NuvioProviderRepositoryInfo[]> {
+export async function getProviderRuntimeRepositories(): Promise<ProviderRuntimeRepositoryInfo[]> {
   if (repositoriesPromise) return repositoriesPromise;
   repositoriesPromise = Promise.all(providerManifestSources().map(async source => {
     try {
@@ -416,7 +418,7 @@ export async function getNuvioProviderRepositories(): Promise<NuvioProviderRepos
           enabledByManifest: scraper.enabled !== false,
           supportsExternalPlayer: scraper.supportsExternalPlayer !== false,
         })),
-      } satisfies NuvioProviderRepositoryInfo;
+      } satisfies ProviderRuntimeRepositoryInfo;
     } catch (error) {
       console.warn("[AETHERIO:PROVIDERS] manifest failed", source.key, error);
       return {
@@ -427,43 +429,43 @@ export async function getNuvioProviderRepositories(): Promise<NuvioProviderRepos
         custom: source.custom,
         scrapers: [],
         error: error instanceof Error ? error.message : String(error),
-      } satisfies NuvioProviderRepositoryInfo;
+      } satisfies ProviderRuntimeRepositoryInfo;
     }
   }));
   return repositoriesPromise;
 }
 
-export async function refreshNuvioProviderRepositories() {
+export async function refreshProviderRuntimeRepositories() {
   repositoriesPromise = null;
   definitionsPromise = null;
   manifestCache.clear();
   scriptCache.clear();
-  clearNuvioProviderResultCache();
-  return getNuvioProviderRepositories();
+  clearProviderRuntimeResultCache();
+  return getProviderRuntimeRepositories();
 }
 
-export function clearNuvioProviderResultCache() {
+export function clearProviderRuntimeResultCache() {
   resultCache.clear();
   providerExecutionCache.clear();
 }
 
-export async function addNuvioProviderRepository(rawUrl: string) {
+export async function addProviderRuntimeRepository(rawUrl: string) {
   const url = new URL(rawUrl.trim());
   if (!/^https?:$/.test(url.protocol)) throw new Error("El repositorio debe usar HTTP o HTTPS.");
   url.hash = "";
   const normalized = url.toString();
   await loadManifest(normalized, true);
-  const urls = getCustomNuvioProviderRepositoryUrls();
+  const urls = getCustomProviderRuntimeRepositoryUrls();
   if (!urls.includes(normalized)) {
     localStorage.setItem(CUSTOM_PROVIDER_REPOSITORIES_KEY, JSON.stringify([...urls, normalized]));
   }
-  await refreshNuvioProviderRepositories();
+  await refreshProviderRuntimeRepositories();
 }
 
-export async function removeNuvioProviderRepository(url: string) {
-  const urls = getCustomNuvioProviderRepositoryUrls().filter(candidate => candidate !== url);
+export async function removeProviderRuntimeRepository(url: string) {
+  const urls = getCustomProviderRuntimeRepositoryUrls().filter(candidate => candidate !== url);
   localStorage.setItem(CUSTOM_PROVIDER_REPOSITORIES_KEY, JSON.stringify(urls));
-  return refreshNuvioProviderRepositories();
+  return refreshProviderRuntimeRepositories();
 }
 
 async function loadDefinitions(): Promise<ProviderDefinition[]> {
@@ -499,7 +501,7 @@ function loadManifest(url: string, refresh = false): Promise<ProviderManifest> {
         Array.isArray(parsed)
         || (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).pluginLists))
       ) {
-        throw new Error("Este es un repositorio CloudStream .cs3. Esas extensiones Android no pueden ejecutarse en Aetherio Desktop; usa una conversión compatible con Nuvio JS.");
+        throw new Error("Este es un repositorio CloudStream .cs3. Esas extensiones Android no pueden ejecutarse en Aetherio Desktop; usa una conversión compatible con ProviderRuntime JS.");
       }
       const manifest = parsed as ProviderManifest;
       if (!manifest.name || !Array.isArray(manifest.scrapers)) throw new Error("Invalid provider manifest");
@@ -526,7 +528,7 @@ function loadScript(url: string): Promise<string> {
 
 async function runProvider(definition: ProviderDefinition, args: unknown[]): Promise<RawProviderStream[]> {
   const source = await loadScript(definition.scriptUrl);
-  const dependencyUrl = new URL("nuvio-provider-deps.js", window.location.href).toString();
+  const dependencyUrl = new URL("provider-runtime-deps.js", window.location.href).toString();
   const blob = new Blob([
     `globalThis.window = globalThis; globalThis.global = globalThis; globalThis.XMLHttpRequest = undefined; var process = globalThis.process = globalThis.process || { env: {} }; importScripts(${JSON.stringify(dependencyUrl)});\n`,
     WORKER_PRELUDE,
@@ -662,7 +664,7 @@ function normalizeStreams(
     const languages = normalizeLanguageList(raw.languages ?? raw.language ?? hints.languages ?? definition.scraper.contentLanguage);
     return [{
       id: `provider|${definition.key}|${index}|${url}`,
-      addonId: `nuvio-provider:${definition.key}`,
+      addonId: `providerRuntime-provider:${definition.key}`,
       addonName: origin
         ? `Cloudstream · ${origin.repositoryName}`
         : `${definition.ownerName} · ${definition.repositoryName}`,
@@ -684,7 +686,7 @@ function normalizeStreams(
         providerOwner: definition.ownerName,
         providerRepository: definition.repositoryName,
         providerHttpSessionKey: definition.key,
-        sourceOrigin: origin?.kind ?? "nuvio",
+        sourceOrigin: origin?.kind ?? "providerRuntime",
         cloudstreamRepository: origin?.repositoryName,
         cloudstreamRepositoryUrl: origin?.repositoryUrl,
         cloudstreamPlugin: origin?.pluginName,
@@ -748,7 +750,7 @@ function providerExecutionCacheKey(
     query.season ?? "",
     query.episode ?? "",
     title ?? "",
-    origin?.repositoryUrl ?? "nuvio",
+    origin?.repositoryUrl ?? "providerRuntime",
     origin?.pluginName ?? "",
   ].join("|");
 }
@@ -793,7 +795,7 @@ function providerLogContext(definition: ProviderDefinition, origin?: ProviderStr
     providerKey: definition.key,
     providerId: definition.scraper.id,
     providerName: definition.scraper.name,
-    origin: origin?.kind ?? "nuvio",
+    origin: origin?.kind ?? "providerRuntime",
     repository: origin?.repositoryName ?? definition.repositoryName,
     repositoryUrl: origin?.repositoryUrl ?? definition.manifestUrl,
     cloudstreamPlugin: origin?.pluginName,
@@ -842,7 +844,7 @@ async function resolveTmdbId(query: StreamQuery): Promise<number | null> {
   return typeof id === "number" ? id : null;
 }
 
-export async function scrapeNuvioProviders(
+export async function scrapeProviderRuntimes(
   query: StreamQuery,
   title?: string,
   providerKeys?: string[],

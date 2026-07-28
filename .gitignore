@@ -25,7 +25,7 @@ refs_/
 website/.wrangler/
 
 # Generated provider bundle (rebuilt by npm scripts)
-public/nuvio-provider-deps.js
+public/provider-runtime-deps.js
 
 # MPV runtime downloaded by scripts/install-mpv.ps1
 src-tauri/bin/mpv/libmpv-2.dll

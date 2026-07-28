@@ -1444,7 +1444,7 @@ export default function DetailPage() {
             </div>
           </div>
         </div>
-        <div style={{ padding:"36px var(--app-safe-x)",overflow:"hidden" }}>
+        <div style={{ padding:"24px var(--app-safe-x)",overflow:"hidden" }}>
           <div className="skeleton" style={{ width:150,height:18,borderRadius:999,marginBottom:18 }} />
           <div style={{ display:"flex",gap:10 }}>
             {[0,1,2,3,4].map(item => (
@@ -2138,7 +2138,7 @@ export default function DetailPage() {
       </div>
 
       {/* SECCIONES INFERIORES */}
-      <div className="detail-page-content" style={{ padding:"36px var(--app-safe-x)",display:"flex",flexDirection:"column",gap:44,background:"transparent" }}>
+      <div className="detail-page-content" style={{ padding:"24px var(--app-safe-x)",display:"flex",flexDirection:"column",gap:28,background:"transparent" }}>
 
         {/* Episodios */}
         {!isMovie&&curSeason&&(
@@ -2710,8 +2710,8 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
           overflowX: "auto",
           overflowY: "visible",
           margin: "-12px calc(-1 * var(--app-safe-x)) -28px",
-          paddingTop: 32,
-          paddingBottom: 48,
+          paddingTop: 20,
+          paddingBottom: 30,
           paddingLeft: "var(--app-safe-x)",
           paddingRight: "var(--app-safe-x)",
           scrollPaddingInline: 0,

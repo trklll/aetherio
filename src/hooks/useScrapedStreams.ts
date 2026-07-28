@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   isProviderEnabled,
-  isSeanimeExtensionEnabled,
+  isMediaExtensionEnabled,
   isScraperSiteEnabled,
   sourcePreferencesSignature,
   useSourcePreferences,
@@ -14,16 +14,16 @@ import {
   type GlobalCloudstreamRepositoryInfo,
 } from "../services/cloudstreamRepositoryService.ts";
 import {
-  clearNuvioProviderResultCache,
-  getNuvioProviderRepositories,
-  scrapeNuvioProviders,
-} from "../services/nuvioProviderService.ts";
+  clearProviderRuntimeResultCache,
+  getProviderRuntimeRepositories,
+  scrapeProviderRuntimes,
+} from "../services/providerRuntimeService.ts";
 import { getScraperSites, scrapeStreams, type ScrapedStream } from "../services/scraperService.ts";
 import {
-  clearSeanimeCaches,
-  getSeanimeExtensionInventory,
-  scrapeSeanimeExtensions,
-} from "../services/seanimeExtensionService.ts";
+  clearMediaExtensionCaches,
+  getMediaExtensionInventory,
+  scrapeMediaExtensions,
+} from "../services/mediaExtensionService.ts";
 import type { MediaStream, StreamQuery } from "../types/stream.ts";
 import { isPlayableMediaStream } from "../utils/playableMedia.ts";
 
@@ -81,8 +81,8 @@ function cloudstreamAdapterForStream(
   adaptersByProviderKey: ReadonlyMap<string, CloudstreamCompatibleAdapter>,
 ) {
   const addonId = stream.addonId ?? "";
-  if (!addonId.startsWith("nuvio-provider:")) return undefined;
-  return adaptersByProviderKey.get(addonId.slice("nuvio-provider:".length));
+  if (!addonId.startsWith("providerRuntime-provider:")) return undefined;
+  return adaptersByProviderKey.get(addonId.slice("providerRuntime-provider:".length));
 }
 
 function labelCloudstreamStreams(
@@ -140,14 +140,15 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
   const sourcePreferences = useSourcePreferences();
   const preferencesKey = sourcePreferencesSignature(sourcePreferences);
   const [streams, setStreams] = useState<MediaStream[]>([]);
+  const [sourceNames, setSourceNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshIndex, setRefreshIndex] = useState(0);
 
   const reload = useCallback(() => {
     scrapedCache.clear();
-    clearNuvioProviderResultCache();
-    clearSeanimeCaches();
+    clearProviderRuntimeResultCache();
+    clearMediaExtensionCaches();
     setRefreshIndex(value => value + 1);
   }, []);
 
@@ -164,6 +165,12 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setSourceNames([]);
+
+    const publishSourceNames = (names: string[]) => {
+      if (cancelled) return;
+      setSourceNames(current => [...new Set([...current, ...names].map(name => name.trim()).filter(Boolean))]);
+    };
 
     const searchName = resolvedTitle;
     const key = cacheKey(query, searchName, preferencesKey);
@@ -184,16 +191,16 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
     }
     scrapedCache.delete(key);
 
-    const batches: { native: MediaStream[]; providers: MediaStream[]; seanime: MediaStream[] } = {
+    const batches: { native: MediaStream[]; providers: MediaStream[]; mediaExtension: MediaStream[] } = {
       native: [],
       providers: [],
-      seanime: [],
+      mediaExtension: [],
     };
     const failures: string[] = [];
     let pending = 3;
     const publish = (cacheCompleteResult = false) => {
       if (cancelled) return;
-      const merged = [...batches.native, ...batches.providers, ...batches.seanime]
+      const merged = [...batches.native, ...batches.providers, ...batches.mediaExtension]
         .filter(isPlayableMediaStream);
       setStreams(merged);
       if (!cacheCompleteResult || !merged.length) return;
@@ -207,7 +214,7 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
       if (error) failures.push(String(error));
       pending -= 1;
       if (!cancelled && pending === 0) {
-        const finalStreams = [...batches.native, ...batches.providers, ...batches.seanime]
+        const finalStreams = [...batches.native, ...batches.providers, ...batches.mediaExtension]
           .filter(isPlayableMediaStream);
         const cacheable = failures.length === 0 && finalStreams.length > 0;
         publish(cacheable);
@@ -228,15 +235,16 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
     getScraperSites()
       .then(sites => {
         const selectedSites = sites
-          .filter(site => isScraperSiteEnabled(sourcePreferences, site.id, site.enabledByDefault))
-          .map(site => site.id);
-        const prioritySites = selectedSites.filter(site => site === "okru");
-        const remainingSites = selectedSites.filter(site => site !== "okru");
+          .filter(site => isScraperSiteEnabled(sourcePreferences, site.id, site.enabledByDefault));
+        publishSourceNames(selectedSites.map(site => site.name));
+        const selectedSiteIds = selectedSites.map(site => site.id);
+        const prioritySites = selectedSiteIds.filter(site => site === "okru");
+        const remainingSites = selectedSiteIds.filter(site => site !== "okru");
         if (DEBUG_SCRAPERS) console.info("[AETHERIO:SCRAPERS] native request", {
           queryId: query.id,
           searchName,
-          selectedSites,
-          selectedSiteIds: selectedSites.join(","),
+          selectedSites: selectedSiteIds,
+          selectedSiteIds: selectedSiteIds.join(","),
         });
         const runSites = (siteIds: string[], batch: "priority" | "remaining") => {
           if (!siteIds.length) return Promise.resolve([] as MediaStream[]);
@@ -296,11 +304,13 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
         if (!cancelled) complete();
       });
 
-    getNuvioProviderRepositories()
+    getProviderRuntimeRepositories()
       .then(async repositories => {
+        const providerMediaType = query.type === "movie" ? "movie" : "tv";
         const selectedProviders = repositories.flatMap(repository => repository.scrapers
           .filter(scraper => (
             scraper.supportsExternalPlayer
+            && scraper.supportedTypes.includes(providerMediaType)
             && isProviderEnabled(
               sourcePreferences,
               repository.key,
@@ -309,6 +319,9 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
             )
           ))
           .map(scraper => scraper.key));
+        publishSourceNames(repositories.flatMap(repository => repository.scrapers
+          .filter(scraper => selectedProviders.includes(scraper.key))
+          .map(scraper => scraper.name)));
         if (DEBUG_SCRAPERS) console.info("[AETHERIO:SCRAPERS] providers request", {
           queryId: query.id,
           searchName,
@@ -320,24 +333,24 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
         const onCloudstreamStreams = (fresh: MediaStream[]) => {
           if (cancelled || !fresh.length) return;
           // Prefer the Cloudstream-labelled copy while retaining the exact URL,
-          // headers and resolver result produced by the single Nuvio JS run.
+          // headers and resolver result produced by the single ProviderRuntime JS run.
           batches.providers = mergeStreams(fresh, batches.providers);
           if (DEBUG_SCRAPERS) console.info("[AETHERIO:CLOUDSTREAM] spanish adapter result", JSON.stringify({
             queryId: query.id,
             count: fresh.length,
-            executionMode: "reused-nuvio-js-result",
+            executionMode: "reused-providerRuntime-js-result",
             streams: fresh.map(stream => ({
               cloudstreamRepository: stream.behaviorHints?.cloudstreamRepository,
               cloudstreamPlugin: stream.behaviorHints?.cloudstreamPlugin,
               adapterRepository: stream.behaviorHints?.providerRepository,
               provider: stream.name,
-              providerKey: stream.addonId?.replace(/^nuvio-provider:/, ""),
+              providerKey: stream.addonId?.replace(/^providerRuntime-provider:/, ""),
               language: stream.behaviorHints?.cloudstreamLanguage,
             })),
           }));
           publish();
         };
-        const onNuvioStreams = (fresh: MediaStream[]) => {
+        const onProviderRuntimeStreams = (fresh: MediaStream[]) => {
           if (cancelled || !fresh.length) return;
           batches.providers = mergeStreams(batches.providers, fresh);
           if (DEBUG_SCRAPERS) console.info("[AETHERIO:SCRAPERS] provider partial", {
@@ -373,7 +386,7 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
                 candidateProviderKeys: adapter.candidateProviderKeys,
                 selectionReason: adapter.selectionReason,
                 language: adapter.language,
-                executionMode: "reuse-nuvio-js-adapter",
+                executionMode: "reuse-providerRuntime-js-adapter",
               })),
             }));
             const alreadyResolved = labelCloudstreamStreams(batches.providers, cloudstreamAdapters);
@@ -381,26 +394,26 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
             return cloudstreamRepositories;
           });
         let providerFailureCount = 0;
-        const nuvioPromise = scrapeNuvioProviders(
+        const providerRuntimePromise = scrapeProviderRuntimes(
           query,
           resolvedTitle,
           selectedProviders,
-          onNuvioStreams,
+          onProviderRuntimeStreams,
           undefined,
           status => {
             providerFailureCount = status.failedProviderCount;
           },
         );
-        const [nuvioResults] = await Promise.all([
-          nuvioPromise,
+        const [providerRuntimeResults] = await Promise.all([
+          providerRuntimePromise,
           cloudstreamInventoryPromise,
         ]);
-        const cloudstreamResults = labelCloudstreamStreams(nuvioResults, cloudstreamAdapters);
+        const cloudstreamResults = labelCloudstreamStreams(providerRuntimeResults, cloudstreamAdapters);
         if (cloudstreamResults.length) onCloudstreamStreams(cloudstreamResults);
         if (providerFailureCount > 0) {
           throw new Error(`${providerFailureCount} provider(s) directo(s) fallaron; no se almacenara el resultado parcial.`);
         }
-        return mergeStreams(cloudstreamResults, nuvioResults);
+        return mergeStreams(cloudstreamResults, providerRuntimeResults);
       })
       .then(results => {
         if (cancelled) return;
@@ -422,17 +435,20 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
         if (!cancelled) complete();
       });
 
-    getSeanimeExtensionInventory()
-      .then(inventory => scrapeSeanimeExtensions(
-        query,
-        searchName,
-        inventory.installed
-          .filter(extension => isSeanimeExtensionEnabled(sourcePreferences, extension.id))
-          .map(extension => extension.id),
-      ))
+    getMediaExtensionInventory()
+      .then(inventory => {
+        const selectedExtensions = inventory.installed
+          .filter(extension => isMediaExtensionEnabled(sourcePreferences, extension.id));
+        publishSourceNames(selectedExtensions.map(extension => extension.name));
+        return scrapeMediaExtensions(
+          query,
+          searchName,
+          selectedExtensions.map(extension => extension.id),
+        );
+      })
       .then(results => {
         if (cancelled) return;
-        batches.seanime = results;
+        batches.mediaExtension = results;
         publish();
       })
       .catch(err => {
@@ -446,5 +462,5 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
     return () => { cancelled = true; };
   }, [query?.type, query?.id, query?.season, query?.episode, titleOverride, preferencesKey, refreshIndex]);
 
-  return { streams, loading, error, reload };
+  return { streams, sourceNames, loading, error, reload };
 }

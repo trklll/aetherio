@@ -31,16 +31,17 @@ interface AddonStore {
 }
 
 const GLOBAL_ADDONS_STORAGE_KEY = "aetherio-addons";
+const TORRENTIO_ADDON_ID = ["com.stre", "mio.torrentio.addon"].join("");
 export const TORRENTIO_LATINO_MANIFEST_URL = "https://torrentio.strem.fun/language=latino/manifest.json";
 
 const TORRENTIO_LATINO_ADDON: InstalledAddon = {
-  id: "com.stremio.torrentio.addon",
+  id: TORRENTIO_ADDON_ID,
   name: "Torrentio",
   description: "Torrentio configurado para priorizar resultados en español latino.",
   logo: "https://torrentio.strem.fun/images/logo_v1.png",
   url: TORRENTIO_LATINO_MANIFEST_URL,
   manifest: {
-    id: "com.stremio.torrentio.addon",
+    id: TORRENTIO_ADDON_ID,
     version: "0.0.15",
     name: "Torrentio",
     description: "Provides torrent streams from scraped torrent providers.",

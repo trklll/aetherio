@@ -1,20 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
-import { useHomePreferences } from "../../config/homePreferences";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { useProfileGradient } from "../../hooks/useProfileGradient";
+import { gsap } from "../../utils/motion";
+import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 
 const IMG = "https://image.tmdb.org/t/p";
 const PAGE_LIMIT = 20;
 const MAX_ITEMS = 240;
-
-const HORIZONTAL_CARD = { width: 302, height: 196 };
-const VERTICAL_CARD = { width: 180, height: 271 };
 
 function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500") {
   if (!url) return url;
@@ -158,17 +157,48 @@ export default function CatalogPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const addons = useAddonStore(state => state.addons);
-  const preferences = useHomePreferences();
   const addonId = params.get("addon") ?? "";
   const type = params.get("type") ?? "";
   const catalogId = params.get("catalog") ?? "";
   const title = params.get("title") ?? "Catálogo";
   const extraParams = useMemo(() => readExtraParams(params.get("extras")), [params]);
   const addon = useMemo(() => addons.find(item => item.id === addonId), [addonId, addons]);
-  const [items, setItems] = useState<MediaItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { gradient } = useProfileGradient();
+  const cacheKey = `${addonId}:${catalogId}:${type}:${JSON.stringify(extraParams)}`;
+
+  useEffect(() => {
+    if (gradient) {
+      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
+    }
+    return () => {
+      document.documentElement.style.removeProperty("--aetherio-page-bg");
+    };
+  }, [gradient]);
+
+  const cachedItems = readPageDataCache<MediaItem[]>("catalog", cacheKey);
+  const [items, setItems] = useState<MediaItem[]>(() => cachedItems ?? []);
+  const [loading, setLoading] = useState(() => !cachedItems);
   const [error, setError] = useState("");
-  const cardSize = preferences.posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || items.length === 0) return;
+    const els = Array.from(root.querySelectorAll<HTMLElement>(
+      ":scope > div:not([data-catalog-header]) > div",
+    ));
+    if (!els.length) return;
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    timeline.fromTo(
+      els,
+      { opacity: 0, y: 16 },
+      { opacity: 1, y: 0, duration: 0.5, stagger: 0.04, clearProps: "transform" },
+    );
+    return () => {
+      timeline.kill();
+      gsap.set(els, { clearProps: "opacity,transform" });
+    };
+  }, [items, loading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,6 +208,8 @@ export default function CatalogPage() {
       setError("");
       setItems([]);
 
+      let collected: MediaItem[] = [];
+
       if ((!addon && addonId !== "tmdb" && addonId !== "aetherio-starter") || !type || !catalogId) {
         setError("No se encontró el catálogo.");
         setLoading(false);
@@ -186,7 +218,7 @@ export default function CatalogPage() {
 
       try {
         const seen = new Set<string>();
-        const collected: MediaItem[] = [];
+        collected = [];
 
         if (addonId === "tmdb" || addonId === "aetherio-starter") {
           const tmdbCatalog = tmdbCatalogParams(catalogId);
@@ -249,7 +281,12 @@ export default function CatalogPage() {
       } catch {
         if (!cancelled) setError("No se pudo cargar el catálogo.");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          if (collected.length > 0) {
+            writePageDataCache("catalog", cacheKey, collected);
+          }
+        }
       }
     }
 
@@ -261,23 +298,24 @@ export default function CatalogPage() {
 
   return (
     <PageContainer>
-      <div style={{ minHeight: "100vh", padding: "24px var(--app-safe-x) 56px", background: "#1f1f1f" }}>
-        <div style={{ marginBottom: 26, display: "flex", alignItems: "center", gap: 14 }}>
+      <div ref={rootRef} className="relative flex min-h-full flex-col" style={{ padding: "24px var(--app-safe-x) 56px" }}>
+        <div data-catalog-header style={{ marginBottom: 26, display: "flex", alignItems: "center", gap: 14 }}>
           <button
             type="button"
             onClick={() => navigate(-1)}
             aria-label="Volver"
             title="Volver"
-            style={{ width: 40, height: 40, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+            style={{ width: 40, height: 40, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}
           >
             <ChevronLeft size={19} />
           </button>
-          <div>
-            <h1 style={{ fontSize: 28, fontWeight: 900, color: "#fff", lineHeight: 1.1 }}>{title}</h1>
-            <p style={{ marginTop: 5, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
+          <div style={{ textAlign: "center", flex: 1 }}>
+            <h1 style={{ fontSize: 32, fontWeight: 900, color: "#fff", lineHeight: 1.1 }}>{title}</h1>
+            <p style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
               {loading ? "Cargando..." : `${items.length} títulos`}
             </p>
           </div>
+          <div style={{ width: 40, flexShrink: 0 }} />
         </div>
 
         {error ? (
@@ -287,9 +325,10 @@ export default function CatalogPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: `repeat(auto-fill, minmax(${cardSize.width}px, ${cardSize.width}px))`,
+            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 180px))",
             gap: 14,
             alignItems: "start",
+            justifyContent: "center",
           }}
         >
           {items.map((item, index) => (
@@ -297,9 +336,6 @@ export default function CatalogPage() {
               key={`${item.id}-${index}`}
               item={item}
               type={item.type || type}
-              width={cardSize.width}
-              height={cardSize.height}
-              posterLayout={preferences.posterLayout}
             />
           ))}
         </div>
@@ -308,24 +344,9 @@ export default function CatalogPage() {
   );
 }
 
-function CatalogGridCard({
-  item,
-  type,
-  width,
-  height,
-  posterLayout,
-}: {
-  item: MediaItem;
-  type: string;
-  width: number;
-  height: number;
-  posterLayout: "horizontal" | "vertical";
-}) {
+function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
   const navigate = useNavigate();
-  const image = posterLayout === "vertical"
-    ? item.poster ?? item.background ?? ""
-    : item.background ?? item.poster ?? "";
-  const logo = sanitizeLogoUrl(item.logo);
+  const image = item.poster ?? item.background ?? "";
   const openDetail = () => {
     writeDetailMediaMeta({
       id: item.id,
@@ -341,24 +362,19 @@ function CatalogGridCard({
   };
 
   return (
-    <button
-      type="button"
-      onClick={openDetail}
-      style={{ position: "relative", width, height, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", contentVisibility: "auto", containIntrinsicSize: `${width}px ${height}px` }}
-    >
-      {image ? (
-        <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-      ) : null}
-      {posterLayout !== "vertical" ? <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top,rgba(0,0,0,0.86) 0%,rgba(0,0,0,0.12) 62%,transparent 100%)", pointerEvents: "none" }} /> : null}
-      {posterLayout !== "vertical" ? <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 10px 10px" }}>
-        {logo ? (
-          <img src={logo} alt={item.name} loading="lazy" decoding="async" style={{ maxHeight: 28, maxWidth: 142, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 4 }} />
-        ) : (
-          <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", fontSize: 13, fontWeight: 700, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)" }}>
-            {item.name}
-          </span>
-        )}
-      </div> : null}
-    </button>
+    <div style={{ width: 180 }}>
+      <button
+        type="button"
+        onClick={openDetail}
+        style={{ position: "relative", width: 180, height: 271, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+      >
+        {image ? (
+          <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : null}
+      </button>
+      <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
+        {item.name}
+      </div>
+    </div>
   );
 }

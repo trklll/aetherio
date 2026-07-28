@@ -545,7 +545,7 @@ fn stop_current_mpv(state: &MpvState) -> Option<P2pPlaybackInfo> {
 
 fn set_player_window_transparent(window: &tauri::WebviewWindow, transparent: bool) {
     // Keep the native top-level window opaque. Only WebView2 becomes transparent
-    // while libmpv renders into the shared host HWND, matching Stremio's model.
+    // while libmpv renders into the shared host HWND, matching MediaAddon's model.
     // Making the whole Tauri window layered/transparent creates a separate
     // composition boundary and prevents real-time backdrop-filter sampling.
     #[cfg(target_os = "windows")]

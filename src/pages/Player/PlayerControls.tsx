@@ -168,7 +168,7 @@ export default function PlayerControls({
         subtitlePositionQueueRef.current = next;
         void next.catch(error => {
           lastSubtitlePositionRef.current = null;
-          console.warn("[PlayerControls] No se pudo ajustar la posicion de los subtitulos.", error);
+          console.warn("[PlayerControls] No se pudo ajustar la posición de los subtítulos.", error);
         });
       });
     };
@@ -413,9 +413,9 @@ export default function PlayerControls({
               onClose={() => setOpenMenu(null)}
             />
             <SubtitleMenu
-              label={subtitlesLoading ? "Cargando subtitulos" : "Subtitulos"}
+              label={subtitlesLoading ? "Cargando subtítulos" : "Subtítulos"}
               selectedSubtitleValue={selectedSubtitleValue}
-              subtitleOptions={[{ value: "", label: subtitlesLoading ? "Cargando subtitulos..." : "Apagado" }, ...subtitleOptions]}
+              subtitleOptions={[{ value: "", label: subtitlesLoading ? "Cargando subtítulos..." : "Apagado" }, ...subtitleOptions]}
               open={openMenu === "subtitles"}
               disabled={controlsLocked}
               subtitleDelayMs={subtitleDelayMs}
@@ -593,7 +593,7 @@ function SubtitleMenu({
           ref={menuRef}
           data-player-subtitle-panel-glass
           role="dialog"
-          aria-label="Subtitulos"
+          aria-label="Subtítulos"
           className="fixed bottom-[81px] left-1/2 z-[45] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg text-white shadow-[0_24px_70px_rgba(0,0,0,0.68)]"
           style={{
             height: "min(460px, calc(100vh - 190px))",
@@ -605,7 +605,7 @@ function SubtitleMenu({
             <div className="flex min-w-0 items-center gap-2.5">
               <Captions size={18} className="shrink-0 text-white/72" />
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-white">Subtitulos</h3>
+                <h3 className="text-sm font-bold text-white">Subtítulos</h3>
                 <p className="truncate text-xs text-white/48">{selectedOption?.label || "Apagados"}</p>
               </div>
             </div>
@@ -650,7 +650,7 @@ function SubtitleMenu({
                 <h4 className="mb-2 px-1 text-xs font-bold uppercase text-white/46">Pista</h4>
                 <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
                   {selectedLanguage === "off" ? (
-                    <p className="px-2 py-3 text-sm text-white/42">Subtitulos desactivados.</p>
+                    <p className="px-2 py-3 text-sm text-white/42">Subtítulos desactivados.</p>
                   ) : variantOptions.length ? (
                     variantOptions.map(option => (
                       <SubtitleVariantButton
@@ -890,7 +890,7 @@ function subtitleLanguageLabel(option: SelectOption) {
   const label = option.label.trim();
   const token = label.split(" - ")[0]?.trim() ?? label;
   if (!token) return "Otro";
-  if (/^es$|spa|spanish|espanol|español/i.test(token)) return "Espanol";
+  if (/^es$|spa|spanish|espanol|español/i.test(token)) return "Español";
   if (/^en$|eng|english/i.test(token)) return "English";
   return token.length <= 18 ? token : token.slice(0, 18);
 }

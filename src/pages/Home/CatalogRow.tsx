@@ -27,15 +27,14 @@ const RANKED_DOUBLE_CARD = { width: 298, height: 252 };
 const RANKED_POSTER = { width: 168, height: 252, singleLeft: 80, doubleLeft: 130 };
 const HORIZONTAL_GAP = 22;
 const RANKED_GAP = 10;
-const ROW_SHADOW_GUTTER = 32;
+const ROW_SHADOW_TOP_GUTTER = 17;
+const ROW_SHADOW_BOTTOM_GUTTER = 42;
 
 const RANKED_CATALOG_IDS = new Set([
   "tmdb.trending_movie",
   "tmdb.trending_series",
   "mal.top_anime",
   "jikan.top_movies",
-  "jikan.top_favorites",
-  "jikan.most_popular",
   "mal.last_year_best",
 ]);
 
@@ -284,8 +283,8 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             marginRight: 0,
             paddingLeft: embedded ? 0 : 48,
             paddingRight: embedded ? 0 : 48,
-            paddingTop: ROW_SHADOW_GUTTER + 8,
-            paddingBottom: ROW_SHADOW_GUTTER + 8,
+            paddingTop: ROW_SHADOW_TOP_GUTTER + 8,
+            paddingBottom: ROW_SHADOW_BOTTOM_GUTTER + 8,
             scrollbarWidth: "none",
           }}
         >
@@ -365,6 +364,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const scheduleEligible = supportsAiringSchedule(type, item.id);
   const [scheduleNearViewport, setScheduleNearViewport] = useState(false);
   const airingSchedule = useAiringSchedule(type, item.id, scheduleNearViewport);
+  const effectiveWatched = watched && !airingSchedule;
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
@@ -476,7 +476,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         placement="below-start"
         width={238}
         items={[
-          ...(!watched ? [{
+          ...(!effectiveWatched ? [{
             label: "Marcar como visto",
             icon: <Check size={15} />,
             onSelect: () => {
@@ -585,7 +585,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)",
           }}
         >
-          {watched ? (
+          {effectiveWatched ? (
             <div
               style={{
                 position: "absolute",
@@ -606,7 +606,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
             </div>
           ) : null}
-          {airingSchedule ? <AiringScheduleBadge label={airingSchedule.label} watched={watched} compact /> : null}
+          {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact /> : null}
           {image ? (
             <img
               data-card-artwork
@@ -617,14 +617,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }}
             />
           ) : null}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: "none",
-              background: "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 28%, rgba(0,0,0,0.16) 100%)",
-            }}
-          />
         </div>
         {artworkControls}
       </div>
@@ -646,7 +638,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
       }}
     >
-      {watched ? (
+      {effectiveWatched ? (
         <div
           style={{
             position: "absolute",
@@ -667,10 +659,10 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
           <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
         </div>
       ) : null}
-      {airingSchedule ? <AiringScheduleBadge label={airingSchedule.label} watched={watched} compact={posterLayout === "vertical"} /> : null}
+      {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} /> : null}
       {image ? <img src={image} alt={item.name} decoding="async" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
-      {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "45%", background: "linear-gradient(to top,rgba(0,0,0,0.82) 0%,transparent 100%)", pointerEvents: "none" }} /> : null}
-      {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px" }}>
+
+      {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
         {logo ? (
           <img src={logo} alt={item.name}
             decoding="async"

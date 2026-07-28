@@ -1,5 +1,5 @@
 import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
-import type { NuvioProviderRepositoryInfo } from "./nuvioProviderService.ts";
+import type { ProviderRuntimeRepositoryInfo } from "./providerRuntimeService.ts";
 
 export const GLOBAL_CLOUDSTREAM_REPOSITORY_URLS = [
   "https://raw.githubusercontent.com/redblacker8/storm-ext/refs/heads/builds/repo.json",
@@ -135,12 +135,12 @@ function isSpanishLanguage(language?: string) {
 
 function compatibleAdapters(
   plugins: CloudstreamPluginEntry[],
-  nuvioRepositories: NuvioProviderRepositoryInfo[],
+  providerRuntimeRepositories: ProviderRuntimeRepositoryInfo[],
   repositoryName: string,
   repositoryUrl: string,
 ) {
   const available = new Map<string, AdapterProviderCandidate[]>();
-  for (const repository of nuvioRepositories) {
+  for (const repository of providerRuntimeRepositories) {
     for (const scraper of repository.scrapers) {
       const provider = {
         key: scraper.key,
@@ -214,7 +214,7 @@ export function selectCloudstreamAdapters(
 }
 
 export async function getGlobalCloudstreamRepositories(
-  nuvioRepositories: NuvioProviderRepositoryInfo[],
+  providerRuntimeRepositories: ProviderRuntimeRepositoryInfo[],
   refresh = false,
 ): Promise<GlobalCloudstreamRepositoryInfo[]> {
   if (!isTauriRuntime()) return [];
@@ -228,7 +228,7 @@ export async function getGlobalCloudstreamRepositories(
       const plugins = batches.flat().filter(plugin => plugin.status !== 0 && typeof plugin.url === "string");
       const spanishPlugins = plugins.filter(plugin => isSpanishLanguage(plugin.language));
       const name = manifest.name?.trim() || new URL(url).hostname;
-      const adapters = compatibleAdapters(spanishPlugins, nuvioRepositories, name, url);
+      const adapters = compatibleAdapters(spanishPlugins, providerRuntimeRepositories, name, url);
       return {
         url,
         name,

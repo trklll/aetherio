@@ -31,4 +31,5 @@ export interface CatalogRowData {
   subtitle?: string;
   extraParams?: Record<string, string>;
   items: MediaItem[];
+  order?: number;
 }

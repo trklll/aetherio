@@ -181,7 +181,7 @@ export default function CatalogPage() {
 
   return (
     <PageContainer>
-      <div style={{ minHeight: "100vh", padding: "24px var(--app-safe-x) 56px", background: "#1f1f1f" }}>
+      <div style={{ minHeight: "100vh", padding: "16px var(--app-safe-x) 36px", background: "#1f1f1f" }}>
         <div style={{ marginBottom: 26, display: "flex", alignItems: "center", gap: 14 }}>
           <button
             type="button"

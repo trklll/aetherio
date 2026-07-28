@@ -5,14 +5,11 @@ import { getMdbListSettings } from "../config/mdblist.ts";
 import {
   fetchAnilistTopAnime,
   fetchAnilistAiringAnime,
-  fetchAnilistTopAiring,
-  fetchAnilistMostFavorites,
   resolveAnilistToTmdb,
 } from "../services/anilist.ts";
 import {
   fetchJikanTopAiring,
   fetchJikanUpcoming,
-  fetchJikanTopMovies,
   fetchJikanTopFavorites,
   fetchJikanMostPopular,
   fetchJikanRecommendations,
@@ -35,7 +32,7 @@ const HERO_TOTAL_LIMIT = 15;
 const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v13";
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v16";
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
 const HOME_RAIL_ITEM_LIMIT = 10;
@@ -58,7 +55,7 @@ interface TmdbHomeRailRequest {
   }>;
 }
 
-function upgradeTmdbImage(url: string | undefined, size: "w1280" | "w780" | "w500" | "w342" = "w500") {
+function upgradeTmdbImage(url: string | undefined, size: "original" | "w1280" | "w780" | "w500" | "w342" = "w500") {
   if (!url) return url;
   return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `https://image.tmdb.org/t/p/${size}/`);
 }
@@ -414,7 +411,7 @@ function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []
   const add = (item: MediaItem, group?: string) => {
     const key = `${item.type}:${item.id}`;
     if (seen.has(key)) return;
-    const background = upgradeTmdbImage(resolveDetailBackground(item.type, item.id, item.background), "w1280");
+    const background = upgradeTmdbImage(resolveDetailBackground(item.type, item.id, item.background), "original");
     if (!background || isAetherioDefaultArtwork(background)) return;
     seen.add(key);
     merged.push({
@@ -593,9 +590,8 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
   }
 
-  const shuffledAnime = [...validAnimeRows].sort(() => Math.random() - 0.5);
   const shuffledBase = [...baseRows].sort(() => Math.random() - 0.5).slice(0, 5);
-  const combined = shuffledAnime.length ? [...shuffledAnime, ...shuffledBase] : baseRows;
+  const combined = validAnimeRows.length ? [...validAnimeRows, ...shuffledBase] : baseRows;
 
   const allEnriched = await enrichAllItemsWithLogos(combined.flatMap(row => row.items));
   let offset = 0;
@@ -619,6 +615,10 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
     const results = await fetchStarterTmdbResults(request);
     const seen = new Set<string>();
     const items = results
+      .filter((item: any) => {
+        const lang = String(item?.original_language ?? "").toLowerCase();
+        return !lang.startsWith("zh");
+      })
       .map((item: any) => normalizeTmdbCatalogItem(item, request.type, request.title))
       .filter((item: MediaItem | null): item is MediaItem => {
         if (!item || seen.has(item.id)) return false;
@@ -666,19 +666,16 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
 
   // Order defines dedupe precedence: lower wins.
   const anilistEntries: AnimeEntry[] = [
-    { id: "mal.airing_anime", title: "Sonando fuerte esta temporada", fetch: fetchAnilistAiringAnime, kind: "current", tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) }, order: 1 },
-    { id: "mal.top_anime", title: "Los reyes del anime", fetch: fetchAnilistTopAnime, kind: "top", tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" }, order: 4 },
-    { id: "mal.most_favorites_anime", title: "Favoritos de la comunidad", fetch: fetchAnilistMostFavorites, kind: "top", tmdb: { sort_by: "vote_count.desc" }, order: 6 },
-    { id: "mal.top_airing_anime", title: "Mejor puntuados ahora", fetch: fetchAnilistTopAiring, kind: "current", tmdb: { sort_by: "vote_average.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "10" }, order: 2 },
+    { id: "mal.airing_anime", title: "En emisión", fetch: fetchAnilistAiringAnime, kind: "current", tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) }, order: 1 },
+    { id: "mal.top_anime", title: "Los reyes del anime", fetch: fetchAnilistTopAnime, kind: "top", tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" }, order: 5 },
   ];
 
   const jikanEntries: AnimeEntry[] = [
-    { id: "jikan.top_airing", title: "Las que están arrasando", fetch: fetchJikanTopAiring, kind: "current", order: 3, tmdb: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5" } },
+    { id: "jikan.recommendations", title: "La comunidad lo recomienda", fetch: fetchJikanRecommendations, kind: "other", order: 2, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" } },
+    { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 3, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "150" } },
     { id: "jikan.upcoming", title: "Lo que viene", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
-    { id: "jikan.top_movies", title: "Joyas cinematográficas", fetch: fetchJikanTopMovies, kind: "other", order: 8, tmdb: { sort_by: "popularity.desc", with_genres: "16,12" } },
-    { id: "jikan.recommendations", title: "La comunidad lo recomienda", fetch: fetchJikanRecommendations, kind: "other", order: 12, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" } },
-    { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 7, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "150" } },
-    { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "top", order: 14, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
+    { id: "jikan.top_airing", title: "Las que están arrasando", fetch: fetchJikanTopAiring, kind: "current", order: 6, tmdb: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5" } },
+    { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "other", order: 7, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
   ];
 
   // Fetch AniList entries in parallel, Jikan entries serially (rate-limit).
@@ -758,92 +755,14 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
       name: entry.title,
       subtitle: "Actualizado con TMDB",
       items: deduped,
+      order: entry.order,
     } satisfies CatalogRowData);
   }
   return rows;
 }
 
 function buildBothModeRows(baseRows: CatalogRowData[], animeRows: CatalogRowData[]): CatalogRowData[] {
-  const seed = todayKey();
-  const rng = (max: number, salt: string) => Math.abs(Number(hashValue(`${seed}|${salt}`))) % max;
-
-  const airingAnime = animeRows.filter(r => r.catalogId === "mal.airing_anime" || r.catalogId === "jikan.top_airing" || r.catalogId === "jikan.upcoming");
-  const topAnime = animeRows.filter(r => r.catalogId === "mal.top_anime" || r.catalogId === "mal.most_favorites_anime" || r.catalogId === "jikan.top_favorites" || r.catalogId === "jikan.most_popular");
-  const otherAnime = animeRows.filter(r => !airingAnime.includes(r) && !topAnime.includes(r));
-
-  const trendingBase = baseRows.filter(r => r.catalogId === "tmdb.trending_movie" || r.catalogId === "tmdb.trending_series");
-  const topBase = baseRows.filter(r => r.catalogId === "tmdb.top_movie" || r.catalogId === "tmdb.top_series");
-  const otherBase = baseRows.filter(r => !trendingBase.includes(r) && !topBase.includes(r));
-
-  const selectedAnime: CatalogRowData[] = [];
-  const selectedBase: CatalogRowData[] = [];
-
-  if (airingAnime.length) selectedAnime.push(airingAnime[rng(airingAnime.length, "anime-airing")]);
-  if (topAnime.length) selectedAnime.push(topAnime[rng(topAnime.length, "anime-top")]);
-
-  if (trendingBase.length) selectedBase.push(trendingBase[rng(trendingBase.length, "base-trending")]);
-  if (topBase.length) selectedBase.push(topBase[rng(topBase.length, "base-top")]);
-
-  const fillAnimePool = [...otherAnime];
-  while (selectedAnime.length < 10 && fillAnimePool.length) {
-    const idx = rng(fillAnimePool.length, `anime-fill-${selectedAnime.length}`);
-    selectedAnime.push(fillAnimePool[idx]);
-    fillAnimePool.splice(idx, 1);
-  }
-
-  const fillBasePool = [...otherBase];
-  while (selectedBase.length < 10 && fillBasePool.length) {
-    const idx = rng(fillBasePool.length, `base-fill-${selectedBase.length}`);
-    selectedBase.push(fillBasePool[idx]);
-    fillBasePool.splice(idx, 1);
-  }
-
-  return buildInterleavedWithTopSlotRules(selectedAnime, selectedBase);
-}
-
-function buildInterleavedWithTopSlotRules(animeRows: CatalogRowData[], baseRows: CatalogRowData[]): CatalogRowData[] {
-  const topAnimeIds = new Set(["mal.top_anime", "mal.most_favorites_anime", "jikan.top_favorites", "jikan.most_popular"]);
-  const topBaseIds = new Set(["tmdb.top_movie", "tmdb.top_series"]);
-
-  const result: CatalogRowData[] = [];
-  let iA = 0;
-  let iB = 0;
-  let lastWasTop = false;
-
-  function pickFrom(source: CatalogRowData[], idxRef: { i: number }): CatalogRowData | null {
-    while (idxRef.i < source.length) {
-      const row = source[idxRef.i];
-      idxRef.i++;
-      const isTop = (source === animeRows ? topAnimeIds : topBaseIds).has(row.catalogId);
-      if (isTop && lastWasTop) continue;
-      return row;
-    }
-    return null;
-  }
-
-  while (result.length < 20 && (iA < animeRows.length || iB < baseRows.length)) {
-    const turn = result.length % 2 === 0 ? "anime" : "base";
-    const idxRef = turn === "anime" ? { i: iA } : { i: iB };
-    const source = turn === "anime" ? animeRows : baseRows;
-    const row = pickFrom(source, idxRef);
-    if (turn === "anime") iA = idxRef.i;
-    else iB = idxRef.i;
-    if (!row) {
-      // Try the other side to fill the slot.
-      const altIdxRef = turn === "anime" ? { i: iB } : { i: iA };
-      const altSource = turn === "anime" ? baseRows : animeRows;
-      const altRow = pickFrom(altSource, altIdxRef);
-      if (turn === "anime") iB = altIdxRef.i;
-      else iA = altIdxRef.i;
-      if (!altRow) break;
-      result.push(altRow);
-      lastWasTop = (altSource === animeRows ? topAnimeIds : topBaseIds).has(altRow.catalogId);
-      continue;
-    }
-    result.push(row);
-    lastWasTop = (source === animeRows ? topAnimeIds : topBaseIds).has(row.catalogId);
-  }
-  return result.slice(0, 20);
+  return [...baseRows, ...animeRows];
 }
 
 async function fetchStarterTmdbResults(request: TmdbHomeRailRequest) {
@@ -928,14 +847,33 @@ function companyParams(companyIds: string[]) {
 
 export async function fetchHomeHero() {
   try {
-    const [airingSeries, nowPlaying] = await Promise.all([
-      tmdbFetch("/tv/on_the_air", { params: { language: "es-ES", page: "1" } }),
-      tmdbFetch("/movie/now_playing", { params: { language: "es-ES", page: "1", region: "US" } }),
+    const [airingAnime, topAnime] = await Promise.all([
+      tmdbFetch("/discover/tv", {
+        params: {
+          language: "es-ES",
+          page: "1",
+          with_genres: "16",
+          with_original_language: "ja",
+          sort_by: "popularity.desc",
+          "air_date.gte": isoDate(-90),
+          "air_date.lte": isoDate(90),
+        },
+      }),
+      tmdbFetch("/discover/tv", {
+        params: {
+          language: "es-ES",
+          page: "1",
+          with_genres: "16",
+          with_original_language: "ja",
+          sort_by: "vote_average.desc",
+          "vote_count.gte": "200",
+        },
+      }),
     ]);
 
     const rawHeroItems = [
-      ...((nowPlaying as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "movie" as const, group: "En emisión - Películas" })),
-      ...((airingSeries as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "series" as const, group: "En emisión - Series" })),
+      ...((airingAnime as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "anime" as const, group: "En emisión" })),
+      ...((topAnime as any)?.results ?? []).slice(0, HERO_GROUP_FETCH_LIMIT).map((item: any) => ({ item, type: "anime" as const, group: "Los reyes del anime" })),
     ];
 
     const HERO_BATCH = 4;
@@ -950,10 +888,10 @@ export async function fetchHomeHero() {
       }
     }
 
-    const movieItems = heroItems.filter(item => item.heroGroup === "En emisión - Películas");
-    const seriesItems = heroItems.filter(item => item.heroGroup === "En emisión - Series");
+    const airingItems = heroItems.filter(item => item.heroGroup === "En emisión");
+    const topItems = heroItems.filter(item => item.heroGroup === "Los reyes del anime");
 
-    return enrichHeroRatings(interleaveGroups([movieItems, seriesItems]));
+    return enrichHeroRatings(interleaveGroups([airingItems, topItems]));
   } catch {
     return [];
   }
@@ -988,7 +926,7 @@ function cachedHero(signature: string) {
   if (!home || home.heroSignature !== signature || !isFreshHomeCache(home.heroUpdatedAt)) return undefined;
   return home.heroItems.map(item => ({
     ...item,
-    background: upgradeTmdbImage(item.background, "w1280"),
+    background: upgradeTmdbImage(item.background, "original"),
   }));
 }
 

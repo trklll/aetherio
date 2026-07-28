@@ -455,6 +455,7 @@ export default function PlayerPage() {
     if (mpvFileLoaded) {
       mpvFileLoadedAtRef.current = Date.now();
       startupKickCountRef.current = 0;
+      window.performance?.mark?.("player:file_loaded");
     } else {
       mpvFileLoadedAtRef.current = 0;
       seekBufferingRef.current = false;
@@ -598,6 +599,7 @@ export default function PlayerPage() {
       startupGateActiveRef.current = false;
       startupGatePausedRef.current = false;
       setPlaybackStarted(true);
+      window.performance?.mark?.("player:first_frame");
       setMpvStatus(prev => (
         prev?.startsWith("MPV no pudo cargar esta fuente") || prev?.startsWith("El torrent no entrego datos")
           ? null
@@ -717,7 +719,7 @@ export default function PlayerPage() {
         const languageKey = normalizeSubtitleLanguageKey(track.lang ?? track.title ?? "");
         return {
           value: `track:${track.parsedId}`,
-          label: track.title && track.lang ? `${track.lang} - ${track.title}` : track.title ?? track.lang ?? `Subtitulo ${track.parsedId}`,
+          label: track.title && track.lang ? `${track.lang} - ${track.title}` : track.title ?? track.lang ?? `Subtítulo ${track.parsedId}`,
           languageKey,
           languageLabel: formatSubtitleLanguageLabel(languageKey, String(track.lang ?? "")),
           sourceLabel: "Embebido",
@@ -1663,7 +1665,7 @@ export default function PlayerPage() {
     };
   }, [controlsActive]);
 
-const mediaTitle = selectedMediaName || resumeEntry?.name || query?.id || "Reproduccion";
+const mediaTitle = selectedMediaName || resumeEntry?.name || query?.id || "Reproducción";
 const { activeSegment: activeSkipSegment } = useSkipIntro(query, mediaTitle, currentTime, {
   enabled: playbackPreferences.skipSegmentsEnabled,
   animeSkipEnabled: playbackPreferences.animeSkipEnabled,
@@ -1895,18 +1897,6 @@ useEffect(() => {
   }
   if (resumeSeekSettledRef.current) return;
 
-  if (!resumeSeekStartedAtRef.current) {
-    resumeSeekStartedAtRef.current = Date.now();
-    resumeLog("resume timer armed");
-  }
-
-  const elapsed = Date.now() - resumeSeekStartedAtRef.current;
-  if (elapsed > 22000) {
-    resumeSeekSettledRef.current = true;
-    resumeLog("resume timeout settled", { elapsedMs: elapsed });
-    return;
-  }
-
   const target = duration > 0 ? Math.min(resumeTime, Math.max(0, duration - 90)) : resumeTime;
   if (target < 12) {
     resumeSeekSettledRef.current = true;
@@ -1919,50 +1909,23 @@ useEffect(() => {
     resumeLog("resume already satisfied", { target });
     return;
   }
-  if (resumeSeekAppliedRef.current !== seekKey) {
-    resumeSeekAppliedRef.current = seekKey;
-    resumeSeekAttemptsRef.current = 0;
-    resumeLog("resume seek key initialized", { seekKey, target });
-  }
-  if (resumeSeekAttemptsRef.current >= 8) {
-    resumeSeekSettledRef.current = true;
-    resumeLog("resume exhausted before scheduling", { target });
-    return;
-  }
 
-  const runSeekAttempt = () => {
-    if (currentTimeRef.current >= target - 2) {
-      resumeSeekSettledRef.current = true;
-      resumeLog("resume settled after seek", { target });
-      return;
-    }
-    if (Date.now() - resumeSeekStartedAtRef.current > 22000) {
-      resumeSeekSettledRef.current = true;
-      resumeLog("resume timeout inside attempt", { target });
-      return;
-    }
-    resumeSeekAttemptsRef.current += 1;
-    resumeLog("resume seek attempt", {
-      target,
-      attempt: resumeSeekAttemptsRef.current,
-      mpvReadyForCommands,
-      mpvFileLoaded,
-    });
-    void sendMpvCommand(["seek", target, "absolute", "exact"]);
-    if (resumeSeekAttemptsRef.current >= 8) {
-      resumeSeekSettledRef.current = true;
-      resumeLog("resume attempts exhausted", { target });
-      return;
-    }
-    resumeSeekTimerRef.current = window.setTimeout(runSeekAttempt, 900);
-    resumeLog("resume retry scheduled", { target, delayMs: 900 });
-  };
+  resumeSeekStartedAtRef.current = Date.now();
+  resumeSeekAttemptsRef.current = 1;
+  window.performance?.mark?.("player:resume_seek");
+  resumeLog("resume single seek", { target, seekKey });
+  void sendMpvCommand(["seek", target, "absolute"]);
+  resumeSeekSettledRef.current = true;
 
-  if (resumeSeekTimerRef.current) {
-    window.clearTimeout(resumeSeekTimerRef.current);
-    resumeSeekTimerRef.current = null;
-  }
-  runSeekAttempt();
+  const verify = window.setTimeout(() => {
+    if (currentTimeRef.current < target - 5 && resumeSeekAttemptsRef.current < 2) {
+      resumeSeekAttemptsRef.current = 2;
+      resumeLog("resume reapply seek", { target });
+      void sendMpvCommand(["seek", target, "absolute"]);
+    }
+  }, 2000);
+
+  return () => window.clearTimeout(verify);
 }, [duration, isTrailerStream, mpvFileLoaded, mpvReadyForCommands, query, stream]);
 
 useEffect(() => {
@@ -2442,12 +2405,12 @@ function normalizeSubtitleLanguageKey(value: string) {
 
 function formatSubtitleLanguageLabel(languageKey: string, fallback = "") {
   const key = normalizeSubtitleLanguageKey(languageKey);
-  if (key === "es") return "Espanol";
+  if (key === "es") return "Español";
   if (key === "en") return "English";
   if (key === "ru") return "Russian";
   if (key === "it") return "Italiano";
-  if (key === "pt") return "Portugues";
-  if (key === "fr") return "Francais";
+  if (key === "pt") return "Portugués";
+  if (key === "fr") return "Francés";
   if (key === "de") return "Deutsch";
   if (key === "ja") return "Japanese";
   if (key === "ko") return "Korean";

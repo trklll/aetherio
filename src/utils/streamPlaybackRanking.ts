@@ -3,6 +3,17 @@ import { getDirectPlaybackUrl, hasP2pPlayback, isPlayableMediaStream } from "./p
 import { streamSpanishPriority } from "./streamLanguagePriority";
 import { getReportedSeeders, torrentHealthScore } from "./torrentHealth";
 
+interface StreamPlaybackRankingOptions {
+  preferAnimeAv1?: boolean;
+}
+
+const ANIME_SOURCE_ORDER = [
+  "animeav1",
+  "nyaasi",
+  "seadex",
+  "animetosho",
+] as const;
+
 function hasTorrentSignals(stream: MediaStream): boolean {
   return hasP2pPlayback(stream);
 }
@@ -32,14 +43,44 @@ function playbackScore(stream: MediaStream): number {
   return score;
 }
 
-export function sortStreamsForPlayback(streams: MediaStream[]): MediaStream[] {
+function normalizeSourceToken(value: unknown): string {
+  return typeof value === "string"
+    ? value.toLowerCase().replace(/[^a-z0-9]/g, "")
+    : "";
+}
+
+export function animeSourcePriority(sourceName: string): number {
+  const token = normalizeSourceToken(sourceName);
+  const index = ANIME_SOURCE_ORDER.findIndex(source => token.includes(source));
+  return index === -1 ? ANIME_SOURCE_ORDER.length : index;
+}
+
+function streamAnimeSourcePriority(stream: MediaStream): number {
+  const sourceText = [
+    stream.addonId,
+    stream.addonName,
+    stream.name,
+    stream.title,
+    stream.description,
+    stream.behaviorHints?.filename,
+  ].filter(Boolean).join(" ");
+  return animeSourcePriority(sourceText);
+}
+
+export function sortStreamsForPlayback(
+  streams: MediaStream[],
+  options: StreamPlaybackRankingOptions = {},
+): MediaStream[] {
   return streams
     .map((stream, index) => ({ stream, index }))
     .sort((left, right) => {
       const availabilityPriority = Number(isKnownDeadTorrent(left.stream)) - Number(isKnownDeadTorrent(right.stream));
+      const animeSourceOrder = options.preferAnimeAv1
+        ? streamAnimeSourcePriority(left.stream) - streamAnimeSourcePriority(right.stream)
+        : 0;
       const languagePriority = streamSpanishPriority(right.stream) - streamSpanishPriority(left.stream);
       const healthPriority = playbackScore(right.stream) - playbackScore(left.stream);
-      return availabilityPriority || languagePriority || healthPriority || left.index - right.index;
+      return availabilityPriority || animeSourceOrder || languagePriority || healthPriority || left.index - right.index;
     })
     .map(item => item.stream);
 }

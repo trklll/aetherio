@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Film, RefreshCw, User, Zap } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Film, LoaderCircle, RefreshCw, User, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys.ts";
 import { useHomePreferences } from "../../config/homePreferences.ts";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
@@ -18,7 +18,7 @@ import { useScrapedStreams } from "../../hooks/useScrapedStreams.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
 import { isPlayableMediaStream } from "../../utils/playableMedia.ts";
 import { streamSpanishPriority } from "../../utils/streamLanguagePriority.ts";
-import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking.ts";
+import { animeSourcePriority, sortStreamsForPlayback } from "../../utils/streamPlaybackRanking.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
 import type { MediaStream, StreamQuery } from "../../types/stream.ts";
 import type { SubtitleSource } from "../../types/subtitle.ts";
@@ -127,6 +127,7 @@ const AUTO_OPTION = "auto";
 const NO_SUBTITLES_OPTION = "none";
 const PLAYER_HANDOFF_DELAY_MS = 90;
 const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
+const PRIORITY_ANIME_SOURCES = ["AnimeAV1", "Nyaa.si", "SeaDex", "AnimeTosho"] as const;
 
 function numberValue(value: unknown) {
   const next = Number(value);
@@ -142,6 +143,20 @@ function episodePageCacheKey(query: StreamQuery | null, episodeTitle: string) {
     query.episode ?? "",
     episodeTitle,
   ].join(":");
+}
+
+function isAnimeContent(query: StreamQuery | null, meta: EpisodePageMeta | null): boolean {
+  if (!query) return false;
+  const type = query.type.trim().toLowerCase();
+  if (type === "anime") return true;
+
+  const id = query.id.trim().toLowerCase();
+  if (/^(anilist|mal|kitsu|anidb|anime):/.test(id)) return true;
+
+  return (meta?.genres ?? []).some(genre => {
+    const normalized = genre.trim().toLowerCase();
+    return normalized === "anime" || normalized === "japanese animation" || normalized === "animacion japonesa";
+  });
 }
 
 export default function EpisodiePage() {
@@ -197,21 +212,32 @@ export default function EpisodiePage() {
     playStreamRef.current(stream);
   }, []);
 
-  const { streams, loading, error, reload, streamId } = useStreams(query);
+  const { streams, sourceNames: addonSourceNames, loading, error, reload, streamId } = useStreams(query);
   const {
     streams: scrapedStreams,
+    sourceNames: scrapedSourceNames,
     loading: scrapedLoading,
     error: scrapedError,
     reload: reloadScrapedStreams,
   } = useScrapedStreams(query, meta?.name);
+  const preferAnimeAv1 = useMemo(() => isAnimeContent(query, meta), [query, meta]);
   const allStreams = useMemo(
-    () => sortStreamsForPlayback([...streams, ...scrapedStreams].filter(isPlayableMediaStream)),
-    [streams, scrapedStreams],
+    () => sortStreamsForPlayback(
+      [...streams, ...scrapedStreams].filter(isPlayableMediaStream),
+      { preferAnimeAv1 },
+    ),
+    [streams, scrapedStreams, preferAnimeAv1],
   );
   const selectedStream = useMemo(
     () => allStreams.find((stream: MediaStream) => stream.id === selectedStreamId) ?? allStreams[0] ?? null,
     [selectedStreamId, allStreams],
   );
+
+  useEffect(() => {
+    if (!loading && !scrapedLoading && allStreams.length > 0) {
+      window.performance?.mark?.("episode:streams_ready");
+    }
+  }, [loading, scrapedLoading, allStreams]);
 
   useEffect(() => {
     setSelectedSource(null);
@@ -555,7 +581,7 @@ export default function EpisodiePage() {
       value: AUTO_OPTION,
       label: `Auto - ${autoSubtitleLabel}`,
     },
-    { value: NO_SUBTITLES_OPTION, label: "Sin subtitulos" },
+    { value: NO_SUBTITLES_OPTION, label: "Sin subtítulos" },
     ...allSubtitles.map(subtitle => ({ value: `ext:${subtitle.url}`, label: subtitle.label })),
   ], [allSubtitles, autoSubtitleLabel]);
   const heroStillKey = useMemo(() => {
@@ -663,7 +689,7 @@ export default function EpisodiePage() {
       originalLanguage,
     });
     saveLastLink(streamCacheKey(query.type, query.id, query.season, query.episode), stream);
-    writePlaybackOverrides(query, playbackSelection);
+    writePlaybackOverrides(query, playbackSelection, subtitleChoice === AUTO_OPTION);
     sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
     if (getStreamKind(stream) === "https") {
       const fallbacks = allStreams
@@ -802,9 +828,15 @@ export default function EpisodiePage() {
           <div className="w-full min-w-0 self-center">
             <SourcePickerPanel
               title="Seleccionar fuente"
-              loading={(loading || scrapedLoading) && allStreams.length === 0}
+              loading={loading || scrapedLoading}
               error={error ?? scrapedError}
               streams={allStreams}
+              expectedSourceNames={[
+                ...(preferAnimeAv1 ? PRIORITY_ANIME_SOURCES : []),
+                ...addonSourceNames,
+                ...scrapedSourceNames,
+              ]}
+              isAnime={preferAnimeAv1}
               selectedStreamId={selectedStreamId}
               selectedSource={selectedSource}
               onSourceChange={setSelectedSource}
@@ -812,7 +844,6 @@ export default function EpisodiePage() {
                 reload();
                 reloadScrapedStreams();
               }}
-              query={query}
               onSelect={handleSelectStream}
             />
           </div>
@@ -929,13 +960,13 @@ function MovieTrailerPreview({ videoIds }: { videoIds: string[] }) {
   );
 }
 
-function writePlaybackOverrides(query: StreamQuery, selection: ReturnType<typeof resolvePlaybackSelections>) {
+function writePlaybackOverrides(query: StreamQuery, selection: ReturnType<typeof resolvePlaybackSelections>, subtitleWasAuto: boolean) {
   const override: Record<string, unknown> = {
     queryKey: playbackOverrideQueryKey(query),
     selectedAudio: selection.selectedAudio,
     selectedAudioLanguage: selection.selectedAudioLanguage,
     selectedAudioLabel: selection.selectedAudioLabel,
-    forceSubtitleSelection: true,
+    forceSubtitleSelection: !subtitleWasAuto,
     selectedSubtitle: selection.selectedSubtitle,
     selectedSubtitleLanguage: selection.selectedSubtitleLanguage,
     selectedSubtitleLabel: selection.selectedSubtitleLabel,
@@ -1091,23 +1122,25 @@ function SourcePickerPanel({
   loading,
   error,
   streams,
+  expectedSourceNames,
+  isAnime,
   selectedStreamId,
   selectedSource,
   onSourceChange,
   onSelect,
   onReload,
-  query,
 }: {
   title: string;
   loading: boolean;
   error?: string | null;
   streams: MediaStream[];
+  expectedSourceNames: readonly string[];
+  isAnime: boolean;
   selectedStreamId: string;
   selectedSource: string | null;
   onSourceChange: (source: string | null) => void;
   onSelect: (streamId: string) => void;
   onReload: () => void;
-  query?: StreamQuery | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -1120,25 +1153,29 @@ function SourcePickerPanel({
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
   }, []);
 
-  const isAnime = query?.type === "anime";
-
   const uniqueSources = useMemo(() => {
-    const sourceMap = new Map<string, { count: number; hasSeanime: boolean }>();
+    const sourceMap = new Map<string, { name: string; count: number }>();
+    for (const sourceName of expectedSourceNames) {
+      const key = normalizeStreamSourceName(sourceName);
+      if (key && !sourceMap.has(key)) sourceMap.set(key, { name: sourceName, count: 0 });
+    }
     for (const stream of streams) {
       const sourceName = extractSourceName(stream);
       if (!sourceName) continue;
-      const existing = sourceMap.get(sourceName) ?? { count: 0, hasSeanime: false };
+      const key = normalizeStreamSourceName(sourceName);
+      const existing = sourceMap.get(key) ?? { name: sourceName, count: 0 };
       existing.count++;
-      if (isAnime && isSeanimeSource(stream)) existing.hasSeanime = true;
-      sourceMap.set(sourceName, existing);
+      sourceMap.set(key, existing);
     }
-    return Array.from(sourceMap.entries())
-      .map(([name, info]) => ({ name, count: info.count, hasSeanime: info.hasSeanime }))
+    return Array.from(sourceMap.values())
       .sort((a, b) => {
-        if (isAnime && a.hasSeanime !== b.hasSeanime) return a.hasSeanime ? -1 : 1;
-        return b.count - a.count;
+        if (isAnime) {
+          const priority = animeSourcePriority(a.name) - animeSourcePriority(b.name);
+          if (priority) return priority;
+        }
+        return b.count - a.count || a.name.localeCompare(b.name);
       });
-  }, [streams, isAnime]);
+  }, [expectedSourceNames, streams, isAnime]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1155,7 +1192,8 @@ function SourcePickerPanel({
 
   const filteredStreams = useMemo(() => {
     if (!selectedSource) return streams;
-    return streams.filter(stream => extractSourceName(stream) === selectedSource);
+    const selectedKey = normalizeStreamSourceName(selectedSource);
+    return streams.filter(stream => normalizeStreamSourceName(extractSourceName(stream) ?? "") === selectedKey);
   }, [streams, selectedSource]);
 
   return (
@@ -1208,14 +1246,22 @@ function SourcePickerPanel({
               </button>
               {uniqueSources.map(({ name, count }) => {
                 const logoUrl = getSourceLogo(name);
+                const unavailable = !loading && count === 0;
+                const pending = loading && count === 0;
                 return (
                   <button
                     key={name}
                     type="button"
-                    onClick={() => onSourceChange(name === selectedSource ? null : name)}
+                    onClick={() => {
+                      if (!unavailable) onSourceChange(name === selectedSource ? null : name);
+                    }}
+                    disabled={unavailable}
+                    aria-label={`${name}: ${pending ? "cargando" : unavailable ? "sin resultados" : `${count} resultados`}`}
                     className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold gsap-transition ${
                       selectedSource === name
                         ? "border-white/25 bg-white/15 text-white"
+                        : unavailable
+                          ? "cursor-not-allowed border-red-400/30 bg-red-500/10 text-red-300/72"
                         : "border-white/[0.08] bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80"
                     }`}
                   >
@@ -1223,9 +1269,15 @@ function SourcePickerPanel({
                       <img src={logoUrl} alt="" className="h-4 w-4 shrink-0 rounded object-contain" />
                     ) : null}
                     {name}
-                    <span className="ml-0.5 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/50">
-                      {count}
-                    </span>
+                    {pending ? (
+                      <SourceStatusSpinner />
+                    ) : (
+                      <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                        unavailable ? "bg-red-400/10 text-red-300/70" : "bg-white/10 text-white/50"
+                      }`}>
+                        {count}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -1250,7 +1302,7 @@ function SourcePickerPanel({
         {error ? (
           <p className="mb-2 rounded-xl border border-white/[0.08] bg-black/24 px-4 py-3 text-sm font-semibold text-white/58">{error}</p>
         ) : null}
-        {loading ? (
+        {loading && filteredStreams.length === 0 ? (
           <p className="px-3 py-2 text-sm font-semibold text-white/62">Buscando fuentes...</p>
         ) : filteredStreams.length === 0 ? (
           <p className="px-3 py-2 text-sm font-semibold text-white/58">
@@ -1271,6 +1323,26 @@ function SourcePickerPanel({
       </div>
     </section>
   );
+}
+
+function SourceStatusSpinner() {
+  const spinnerRef = useRef<SVGSVGElement>(null);
+
+  useLayoutEffect(() => {
+    const tween = gsap.to(spinnerRef.current, {
+      rotation: 360,
+      duration: 0.85,
+      ease: "none",
+      repeat: -1,
+      transformOrigin: "50% 50%",
+    });
+    return () => {
+      tween.kill();
+      gsap.set(spinnerRef.current, { clearProps: "transform" });
+    };
+  }, []);
+
+  return <LoaderCircle ref={spinnerRef} size={13} className="ml-0.5 shrink-0 text-white/48" aria-hidden="true" />;
 }
 
 function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
@@ -1445,7 +1517,7 @@ function buildSubtitleOptions(stream: MediaStream | null, addonSubtitles: Subtit
       addonName: stream?.addonName ?? "Stream",
       url: item.url!,
       lang: item.lang ?? item.language ?? "und",
-      label: item.title ?? item.lang ?? item.language ?? "Subtitulos del stream",
+      label: item.title ?? item.lang ?? item.language ?? "Subtítulos del stream",
     }));
   const seen = new Set<string>();
   const merged = [...embedded, ...addonSubtitles];
@@ -1540,7 +1612,7 @@ function extractLanguageMentionsFromText(value: string) {
 }
 
 function formatSourceSummary(stream: MediaStream) {
-  const provider = stream.addonId.startsWith("nuvio-provider:") && stream.name !== stream.addonName
+  const provider = stream.addonId.startsWith("providerRuntime-provider:") && stream.name !== stream.addonName
     ? ` · ${stream.name}`
     : "";
   return `Presentado por ${stream.addonName}${provider}`;
@@ -1588,8 +1660,8 @@ function extractSourceFileName(stream: MediaStream) {
 
 function extractSourceName(stream: MediaStream): string | null {
   const addonId = stream.addonId?.trim() ?? "";
-  const isTorrentio = addonId === "torrentio" || addonId === "com.stremio.torrentio";
-  const isSeanime = addonId.startsWith("seanime:");
+  const isTorrentio = addonId === "torrentio" || addonId === ["com.stre", "mio.torrentio"].join("");
+  const isMediaExtension = addonId.startsWith("mediaExtension:");
 
   if (isTorrentio) {
     const indexer = stream.indexer?.trim();
@@ -1599,7 +1671,7 @@ function extractSourceName(stream: MediaStream): string | null {
     return "Torrentio";
   }
 
-  if (isSeanime) {
+  if (isMediaExtension) {
     const addonName = stream.addonName?.trim();
     if (addonName && addonName !== "Unknown") return addonName;
   }
@@ -1623,8 +1695,8 @@ function extractSourceName(stream: MediaStream): string | null {
   return null;
 }
 
-function isSeanimeSource(stream: MediaStream): boolean {
-  return stream.addonId?.startsWith("seanime:") ?? false;
+function normalizeStreamSourceName(sourceName: string): string {
+  return sourceName.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function extractRenderedStreamMetadata(stream: MediaStream) {

@@ -7,7 +7,7 @@ import { fetchMdbListRatingsForMedia } from "../../services/MDBListService.ts";
 import { sanitizeLogoUrl } from "../../utils/artwork.ts";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata.ts";
 import { saveHomeScroll } from "../../store/homeScrollStore.ts";
-import { tmdbImage } from "../../utils/tmdbArtwork.ts";
+import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork.ts";
 import { gsap, tweenTo } from "../../utils/motion.ts";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition.ts";
 import {
@@ -32,7 +32,7 @@ interface Props {
 const START_TIME = 60;
 
 function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () => void; side: "left" | "right" }) {
-  const bg = tmdbImage(item.background, "original") ?? "";
+  const bg = ensureOriginalTmdbImage(item.background) ?? "";
   if (!bg) return null;
   return (
     <div
@@ -107,7 +107,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
   const [isMuted, setIsMuted] = useState(true);
   const videoEndHandledRef = useRef(false);
 
-  const bg = tmdbImage(displayItem.background, "original") ?? "";
+  const bg = ensureOriginalTmdbImage(displayItem.background) ?? "";
   const logo = sanitizeLogoUrl(displayItem.logo);
   const [mdbListRatings, setMdbListRatings] = useState<MdbListRatings | null>(displayItem.mdbListRatings ?? null);
   const awards = useAwards(displayItem.type, displayItem.id, true);

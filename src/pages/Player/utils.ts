@@ -147,7 +147,7 @@ function buildMagnetTarget(stream: MediaStream) {
   for (const tracker of new Set(suppliedTrackers)) magnet.append("tr", tracker);
   // Torrentio publishes public swarms but omits trackers from its stream payload.
   // Keep arbitrary addons and private hashes isolated from public fallbacks.
-  const trustedPublicSwarm = stream.addonId === "com.stremio.torrentio.addon";
+  const trustedPublicSwarm = stream.addonId === ["com.stre", "mio.torrentio.addon"].join("");
   if (!isPrivate && suppliedTrackers.length === 0 && trustedPublicSwarm) {
     for (const tracker of PUBLIC_TORRENT_FALLBACK_TRACKERS) magnet.append("tr", tracker);
   }

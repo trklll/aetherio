@@ -143,7 +143,7 @@ function dedupeByMalId<T extends MediaItem>(items: T[]): T[] {
   return result;
 }
 
-const LIMIT = "10";
+const LIMIT = "25";
 
 export async function fetchJikanSeasonNow(): Promise<MediaItem[]> {
   const result = await jikanFetch<JikanListResponse<JikanAnime>>("/seasons/now", { sfw: "true", limit: LIMIT });
@@ -429,6 +429,17 @@ export async function resolveMalToTmdb(items: MediaItem[]): Promise<MediaItem[]>
     }
     return acc;
   }, []);
+}
+
+export interface JikanGenre {
+  mal_id: number;
+  name: string;
+  count: number;
+}
+
+export async function fetchJikanGenres(): Promise<JikanGenre[]> {
+  const result = await jikanFetch<{ data: JikanGenre[] }>("/genres/anime");
+  return result?.data ?? [];
 }
 
 function sleep(ms: number): Promise<void> {

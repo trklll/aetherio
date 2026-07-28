@@ -7,7 +7,7 @@ import { Maximize, Minus, X } from "lucide-react";
 import { toggleWindowFullscreen, minimizeWindow, closeWindow } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
-import { gsap, tweenTo } from "../../utils/motion";
+import { gsap, tweenTo, prefersReducedMotion } from "../../utils/motion";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -137,6 +137,33 @@ export default function AppShell({ children }: { children: ReactNode }) {
     window.addEventListener("aetherio-player-transparency", handlePlayerTransparency);
     return () => window.removeEventListener("aetherio-player-transparency", handlePlayerTransparency);
   }, [isPlayer]);
+
+  useEffect(() => {
+    const shell = scrollRef.current;
+    if (!shell) return;
+    let prevW = window.innerWidth;
+    let prevH = window.innerHeight;
+    let animating = false;
+    function onResize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if (w === prevW && h === prevH) return;
+      const dw = Math.abs(w - prevW);
+      const dh = Math.abs(h - prevH);
+      prevW = w;
+      prevH = h;
+      if (animating) return;
+      if (dw < 40 && dh < 40) return;
+      animating = true;
+      if (prefersReducedMotion()) { animating = false; return; }
+      gsap.killTweensOf(shell);
+      gsap.timeline()
+        .to(shell, { scale: 0.985, duration: 0.12, ease: "power2.in" })
+        .to(shell, { scale: 1, duration: 0.18, ease: "power2.out", onComplete: () => { animating = false; } });
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

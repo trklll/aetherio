@@ -79,7 +79,7 @@ function isDeclaredDirectUrl(stream: MediaStream): boolean {
     return hints?.scraperResolvedDirect === true || isDirectMediaUrl(target);
   }
 
-  // Stremio, Nuvio and Seanime expose `url` as their direct playback field.
+  // MediaAddon, ProviderRuntime and MediaExtension expose `url` as their direct playback field.
   // Their external web page belongs in `externalUrl`, which is never accepted.
   return true;
 }

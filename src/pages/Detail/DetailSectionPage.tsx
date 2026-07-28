@@ -148,7 +148,7 @@ export default function DetailSectionPage() {
 
   return (
     <PageContainer>
-      <div style={{ minHeight: "100vh", background: "#1f1f1f", padding: "34px var(--app-safe-x) 64px" }}>
+      <div style={{ minHeight: "100vh", background: "#1f1f1f", padding: "22px var(--app-safe-x) 42px" }}>
         <header style={{ marginBottom: 22 }}>
           <h1 style={{ fontSize: 21, fontWeight: 800, color: "#fff", lineHeight: 1.1 }}>{title}</h1>
           <p style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>

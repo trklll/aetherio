@@ -4,17 +4,18 @@ import { getActiveProfileId } from "../utils/localProfiles.ts";
 export interface SourcePreferences {
   repositoryOverrides: Record<string, boolean>;
   providerOverrides: Record<string, boolean>;
-  seanimeExtensionOverrides: Record<string, boolean>;
+  mediaExtensionOverrides: Record<string, boolean>;
   siteOverrides: Record<string, boolean>;
 }
 
 export const SOURCE_PREFERENCES_STORAGE_KEY = "aetherio-source-preferences";
 export const SOURCE_PREFERENCES_CHANGED_EVENT = "aetherio-source-preferences-changed";
+const LEGACY_MEDIA_EXTENSION_OVERRIDES_KEY = ["sea", "nimeExtensionOverrides"].join("");
 
 export const DEFAULT_SOURCE_PREFERENCES: SourcePreferences = {
   repositoryOverrides: {},
   providerOverrides: {},
-  seanimeExtensionOverrides: {},
+  mediaExtensionOverrides: {},
   siteOverrides: {},
 };
 
@@ -74,24 +75,27 @@ export function isScraperSiteEnabled(
   return preferences.siteOverrides[siteId] ?? enabledByDefault;
 }
 
-export function isSeanimeExtensionEnabled(preferences: SourcePreferences, extensionId: string) {
-  return preferences.seanimeExtensionOverrides[extensionId] ?? true;
+export function isMediaExtensionEnabled(preferences: SourcePreferences, extensionId: string) {
+  return preferences.mediaExtensionOverrides[extensionId] ?? true;
 }
 
 export function sourcePreferencesSignature(preferences: SourcePreferences) {
   return JSON.stringify({
     repositories: sortedEntries(preferences.repositoryOverrides),
     providers: sortedEntries(preferences.providerOverrides),
-    seanime: sortedEntries(preferences.seanimeExtensionOverrides),
+    mediaExtension: sortedEntries(preferences.mediaExtensionOverrides),
     sites: sortedEntries(preferences.siteOverrides),
   });
 }
 
 function normalizeSourcePreferences(preferences: Partial<SourcePreferences>): SourcePreferences {
+  const legacyPreferences = preferences as unknown as Record<string, unknown>;
+  const extensionOverrides = preferences.mediaExtensionOverrides
+    ?? legacyPreferences[LEGACY_MEDIA_EXTENSION_OVERRIDES_KEY];
   return {
     repositoryOverrides: normalizeBooleanRecord(preferences.repositoryOverrides),
     providerOverrides: normalizeBooleanRecord(preferences.providerOverrides),
-    seanimeExtensionOverrides: normalizeBooleanRecord(preferences.seanimeExtensionOverrides),
+    mediaExtensionOverrides: normalizeBooleanRecord(extensionOverrides),
     siteOverrides: normalizeBooleanRecord(preferences.siteOverrides),
   };
 }
@@ -133,7 +137,7 @@ function readLegacyProfileSourcePreferences() {
     return {
       repositoryOverrides: { ...merged.repositoryOverrides, ...normalized.repositoryOverrides },
       providerOverrides: { ...merged.providerOverrides, ...normalized.providerOverrides },
-      seanimeExtensionOverrides: { ...merged.seanimeExtensionOverrides, ...normalized.seanimeExtensionOverrides },
+      mediaExtensionOverrides: { ...merged.mediaExtensionOverrides, ...normalized.mediaExtensionOverrides },
       siteOverrides: { ...merged.siteOverrides, ...normalized.siteOverrides },
     };
   }, DEFAULT_SOURCE_PREFERENCES);

@@ -13,12 +13,12 @@ await build({
       import axios from "axios";
       import * as cheerio from "cheerio";
       import CryptoJS from "crypto-js";
-      self.__NUVIO_PROVIDER_DEPS__ = { axios, cheerio, CryptoJS };
+      self.__PROVIDER_RUNTIME_DEPS__ = { axios, cheerio, CryptoJS };
     `,
     resolveDir: root,
-    sourcefile: "nuvio-provider-deps-entry.js",
+    sourcefile: "provider-runtime-deps-entry.js",
   },
-  outfile: resolve(outputDirectory, "nuvio-provider-deps.js"),
+  outfile: resolve(outputDirectory, "provider-runtime-deps.js"),
   bundle: true,
   format: "iife",
   platform: "browser",
@@ -36,12 +36,12 @@ await build({
   stdin: {
     contents: `
       import ts from "typescript";
-      self.__NUVIO_PROVIDER_DEPS__ = { ...(self.__NUVIO_PROVIDER_DEPS__ || {}), ts };
+      self.__PROVIDER_RUNTIME_DEPS__ = { ...(self.__PROVIDER_RUNTIME_DEPS__ || {}), ts };
     `,
     resolveDir: root,
-    sourcefile: "seanime-typescript-deps-entry.js",
+    sourcefile: "extension-typescript-deps-entry.js",
   },
-  outfile: resolve(outputDirectory, "seanime-typescript-deps.js"),
+  outfile: resolve(outputDirectory, "extension-typescript-deps.js"),
   bundle: true,
   format: "iife",
   platform: "browser",
