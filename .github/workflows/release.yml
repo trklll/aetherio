@@ -125,16 +125,24 @@ jobs:
             throw "La web no usa la ruta de descarga directa."
           }
 
-          $download = Invoke-WebRequest `
-            -Uri "https://aetherio.aetherio.workers.dev/download/windows?version=$version" `
-            -Method Head `
-            -MaximumRedirection 0 `
-            -SkipHttpErrorCheck
-          if ($download.StatusCode -ne 302) {
+          $downloadProbe = & curl.exe `
+            --silent `
+            --show-error `
+            --head `
+            --output NUL `
+            --write-out "%{http_code}`n%{redirect_url}" `
+            "https://aetherio.aetherio.workers.dev/download/windows?version=$version"
+          if ($LASTEXITCODE -ne 0) {
+            throw "No se pudo consultar la descarga web."
+          }
+          $probeLines = @($downloadProbe -split "\r?\n")
+          $downloadStatus = $probeLines[0].Trim()
+          $downloadLocation = $probeLines[1].Trim()
+          if ($downloadStatus -ne "302") {
             throw "La descarga web no respondio con una redireccion directa."
           }
           $expectedAsset = "https://github.com/${{ github.repository }}/releases/download/$tagName/"
-          if (-not $download.Headers.Location.StartsWith($expectedAsset) -or
-              -not $download.Headers.Location.EndsWith("_x64-setup.exe")) {
+          if (-not $downloadLocation.StartsWith($expectedAsset) -or
+              -not $downloadLocation.EndsWith("_x64-setup.exe")) {
             throw "La descarga web no apunta al instalador del release."
           }
