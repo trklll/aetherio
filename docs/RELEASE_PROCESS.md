@@ -50,6 +50,28 @@ Comprobación segura:
 gh secret list --repo trklll/aetherio
 ```
 
+## Secretos requeridos en Cloudflare
+
+El Worker conserva, entre otros, los secretos OAuth, el token de publicación y
+`PASSWORD_PEPPER`. Este último protege las pruebas de contraseña almacenadas en
+D1 y no puede regenerarse: hacerlo impediría iniciar sesión a las cuentas
+convencionales existentes.
+
+Comprobar únicamente los nombres, nunca sus valores:
+
+```powershell
+Set-Location website
+npx wrangler secret list
+```
+
+La lista debe incluir:
+
+- `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET`;
+- `ANILIST_CLIENT_ID` y `ANILIST_CLIENT_SECRET`;
+- `OAUTH_TOKEN_ENCRYPTION_KEY`;
+- `PASSWORD_PEPPER`;
+- `RELEASE_PUBLISH_TOKEN`.
+
 ## Flujo normal
 
 ### 1. Sincronizar el repositorio

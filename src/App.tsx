@@ -78,8 +78,12 @@ export default function App() {
         if (!disposed) setAuthRestored(true);
       });
     const refresh = () => {
-      setAccount(getStoredAccount());
-      setLocalMode(isLocalModeEnabled());
+      const nextAccount = getStoredAccount();
+      const nextLocalMode = isLocalModeEnabled();
+      setAccount(nextAccount);
+      setLocalMode(nextLocalMode);
+      setStartupStatus(nextAccount || nextLocalMode ? "Preparando tu perfil" : "Listo para comenzar");
+      setStartupReady(false);
     };
     window.addEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
     return () => {

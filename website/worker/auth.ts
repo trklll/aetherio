@@ -1,6 +1,8 @@
 import { handleOAuthRequest, type OAuthEnv } from "./oauth";
 
-export interface AuthEnv extends OAuthEnv {}
+export interface AuthEnv extends OAuthEnv {
+  PASSWORD_PEPPER?: string;
+}
 
 interface UserRow {
   id: string;
@@ -34,6 +36,9 @@ export async function handleAuthRequest(request: Request, env: AuthEnv, pathname
     if (pathname === "/api/auth/register" && request.method === "POST") {
       return register(request, env);
     }
+    if (pathname === "/api/auth/password-parameters" && request.method === "POST") {
+      return passwordParameters(request, env);
+    }
     if (pathname === "/api/auth/login" && request.method === "POST") {
       return login(request, env);
     }
@@ -63,8 +68,7 @@ async function register(request: Request, env: AuthEnv) {
 
   const now = unixNow();
   const userId = crypto.randomUUID();
-  const salt = randomBase64(16);
-  const passwordHash = await derivePassword(body.password, salt, PASSWORD_ITERATIONS);
+  const passwordHash = await protectPasswordProof(env, body.passwordProof);
 
   await env.USERS_DB.prepare(
     `INSERT INTO users (
@@ -77,8 +81,8 @@ async function register(request: Request, env: AuthEnv) {
       body.email,
       body.displayName,
       passwordHash,
-      salt,
-      PASSWORD_ITERATIONS,
+      body.passwordSalt,
+      body.passwordIterations,
       now,
       now,
     )
@@ -116,7 +120,7 @@ async function login(request: Request, env: AuthEnv) {
     .first<UserRow>();
 
   const valid = user?.password_hash && user.password_salt && user.password_iterations
-    ? await verifyPassword(body.password, user.password_salt, user.password_iterations, user.password_hash)
+    ? await verifyPasswordProof(env, body.passwordProof, user.password_hash)
     : false;
 
   if (!user || !valid) {
@@ -128,18 +132,6 @@ async function login(request: Request, env: AuthEnv) {
     return authJson({ error: "Correo o contraseña incorrectos." }, 401);
   }
 
-  if ((user.password_iterations ?? 0) < PASSWORD_ITERATIONS) {
-    const salt = randomBase64(16);
-    const passwordHash = await derivePassword(body.password, salt, PASSWORD_ITERATIONS);
-    await env.USERS_DB.prepare(
-      `UPDATE users
-       SET password_hash = ?, password_salt = ?, password_iterations = ?, updated_at = ?
-       WHERE id = ?`,
-    )
-      .bind(passwordHash, salt, PASSWORD_ITERATIONS, unixNow(), user.id)
-      .run();
-  }
-
   await env.USERS_DB.batch([
     env.USERS_DB.prepare("DELETE FROM login_attempts WHERE identifier = ?").bind(identifier),
     env.USERS_DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(unixNow()),
@@ -147,6 +139,29 @@ async function login(request: Request, env: AuthEnv) {
 
   const token = await createSession(env, user.id, request);
   return authJson({ token, user: publicUser(user) });
+}
+
+async function passwordParameters(request: Request, env: AuthEnv) {
+  const email = await readEmail(request);
+  if (email instanceof Response) return email;
+
+  const user = await env.USERS_DB.prepare(
+    "SELECT password_salt, password_iterations FROM users WHERE email = ?",
+  )
+    .bind(email)
+    .first<{ password_salt: string | null; password_iterations: number | null }>();
+
+  if (user?.password_salt && user.password_iterations === PASSWORD_ITERATIONS) {
+    return authJson({
+      passwordSalt: user.password_salt,
+      passwordIterations: user.password_iterations,
+    });
+  }
+
+  return authJson({
+    passwordSalt: await fakePasswordSalt(env, email),
+    passwordIterations: PASSWORD_ITERATIONS,
+  });
 }
 
 async function currentUser(request: Request, env: AuthEnv) {
@@ -222,20 +237,39 @@ async function readCredentials(request: Request, includeName: boolean) {
 
   const record = raw as Record<string, unknown>;
   const email = typeof record.email === "string" ? record.email.trim().toLowerCase() : "";
-  const password = typeof record.password === "string" ? record.password : "";
+  const passwordProof = typeof record.passwordProof === "string" ? record.passwordProof.trim() : "";
+  const passwordSalt = typeof record.passwordSalt === "string" ? record.passwordSalt.trim() : "";
+  const passwordIterations = Number(record.passwordIterations);
   const displayName = typeof record.displayName === "string" ? record.displayName.trim() : "";
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
     return authJson({ error: "Escribe un correo válido." }, 400);
   }
-  if (password.length < 10 || password.length > 128) {
-    return authJson({ error: "La contraseña debe tener entre 10 y 128 caracteres." }, 400);
+  if (!isBase64Bytes(passwordProof, 32)) {
+    return authJson({ error: "La prueba de contraseña no es válida." }, 400);
+  }
+  if (includeName && (!isBase64Bytes(passwordSalt, 16) || passwordIterations !== PASSWORD_ITERATIONS)) {
+    return authJson({ error: "Los parámetros de seguridad de la contraseña no son válidos." }, 400);
   }
   if (includeName && (displayName.length < 2 || displayName.length > 50)) {
     return authJson({ error: "El nombre debe tener entre 2 y 50 caracteres." }, 400);
   }
 
-  return { email, password, displayName };
+  return { email, passwordProof, passwordSalt, passwordIterations, displayName };
+}
+
+async function readEmail(request: Request) {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return authJson({ error: "El cuerpo de la solicitud no es válido." }, 400);
+  }
+  const email = raw && typeof raw === "object" && typeof (raw as Record<string, unknown>).email === "string"
+    ? String((raw as Record<string, unknown>).email).trim().toLowerCase()
+    : "";
+  if (!isEmail(email)) return authJson({ error: "Escribe un correo válido." }, 400);
+  return email;
 }
 
 function bearerToken(request: Request) {
@@ -253,29 +287,14 @@ function publicUser(user: UserRow) {
   };
 }
 
-async function derivePassword(password: string, saltBase64: string, iterations: number) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: fromBase64(saltBase64),
-      iterations,
-    },
-    key,
-    256,
-  );
-  return bytesToBase64(new Uint8Array(bits));
+async function protectPasswordProof(env: AuthEnv, proof: string) {
+  const key = await passwordPepperKey(env);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(proof));
+  return bytesToBase64(new Uint8Array(signature));
 }
 
-async function verifyPassword(password: string, salt: string, iterations: number, expected: string) {
-  const actual = fromBase64(await derivePassword(password, salt, iterations));
+async function verifyPasswordProof(env: AuthEnv, proof: string, expected: string) {
+  const actual = fromBase64(await protectPasswordProof(env, proof));
   const expectedBytes = fromBase64(expected);
   if (actual.length !== expectedBytes.length) return false;
   let difference = 0;
@@ -283,6 +302,37 @@ async function verifyPassword(password: string, salt: string, iterations: number
     difference |= actual[index] ^ expectedBytes[index];
   }
   return difference === 0;
+}
+
+async function fakePasswordSalt(env: AuthEnv, email: string) {
+  const key = await passwordPepperKey(env);
+  const signature = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, encoder.encode(`missing:${email}`)),
+  );
+  return bytesToBase64(signature.slice(0, 16));
+}
+
+async function passwordPepperKey(env: AuthEnv) {
+  if (!env.PASSWORD_PEPPER?.trim()) throw new Error("Password pepper is missing.");
+  return crypto.subtle.importKey(
+    "raw",
+    encoder.encode(env.PASSWORD_PEPPER.trim()),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+}
+
+function isBase64Bytes(value: string, expectedLength: number) {
+  try {
+    return fromBase64(value).length === expectedLength;
+  } catch {
+    return false;
+  }
+}
+
+function isEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
 }
 
 async function loginIdentifier(request: Request, email: string) {

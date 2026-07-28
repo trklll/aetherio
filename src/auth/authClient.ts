@@ -24,6 +24,7 @@ const USER_KEY = "aetherio-account-user-v1";
 const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
 const ANILIST_TOKEN_KEY = "aetherio-anilist-access-token-v1";
 const ANILIST_TOKEN_EXPIRES_KEY = "aetherio-anilist-token-expires-v1";
+const PASSWORD_ITERATIONS = 600_000;
 
 export const AETHERIO_AUTH_CHANGED_EVENT = "aetherio-auth-changed";
 export type OAuthProvider = "google" | "anilist";
@@ -33,18 +34,38 @@ export async function registerAccount(input: {
   email: string;
   password: string;
 }) {
+  const passwordSalt = randomBase64(16);
+  const passwordProof = await derivePasswordProof(input.password, passwordSalt, PASSWORD_ITERATIONS);
   const response = await authRequest<AuthResponse>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      displayName: input.displayName,
+      email: input.email,
+      passwordProof,
+      passwordSalt,
+      passwordIterations: PASSWORD_ITERATIONS,
+    }),
   });
   await persistAuth(response);
   return response.user;
 }
 
 export async function loginAccount(email: string, password: string) {
+  const parameters = await authRequest<{ passwordSalt: string; passwordIterations: number }>(
+    "/api/auth/password-parameters",
+    {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    },
+  );
+  const passwordProof = await derivePasswordProof(
+    password,
+    parameters.passwordSalt,
+    parameters.passwordIterations,
+  );
   const response = await authRequest<AuthResponse>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, passwordProof }),
   });
   await persistAuth(response);
   return response.user;
@@ -235,6 +256,56 @@ async function clearStoredAuth() {
   ]);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(ANILIST_TOKEN_EXPIRES_KEY);
+}
+
+async function derivePasswordProof(password: string, saltBase64: string, iterations: number) {
+  if (
+    password.length < 10
+    || password.length > 128
+    || !Number.isSafeInteger(iterations)
+    || iterations !== PASSWORD_ITERATIONS
+  ) {
+    throw new Error("Los parámetros de seguridad de la contraseña no son válidos.");
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt: base64ToBytes(saltBase64),
+      iterations,
+    },
+    key,
+    256,
+  );
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+function randomBase64(length: number) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64(bytes);
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string) {
+  try {
+    const binary = atob(value);
+    return Uint8Array.from(binary, character => character.charCodeAt(0));
+  } catch {
+    throw new Error("Los parámetros de seguridad de la contraseña no son válidos.");
+  }
 }
 
 async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
