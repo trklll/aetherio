@@ -1,214 +1,253 @@
-# Proceso de release — Aetherio (Tauri 2 + GitHub updater)
+# Proceso de release de Aetherio
 
-Guía paso a paso para compilar un `.exe` firmado, generar `latest.json` sin BOM y publicar el release en GitHub de modo que el updater interno de la app lo detecte y lo verifique.
+Esta es la fuente de verdad para publicar una versión estable de Aetherio para
+Windows. Está escrita para personas y agentes que trabajen en este repositorio.
 
-> **Reglas críticas**
-> - `latest.json` debe escribirse **sin UTF-8 BOM**. Un BOM rompe el parser del updater en Tauri 2 (error "decoding response body").
-> - La clave de firma **privada** NUNCA se incluye en el repo ni en el `latest.json`. Solo sale la firma pública (ya embebida en `tauri.conf.json`).
-> - No publiques un release hasta que el usuario lo confirme explícitamente.
+El updater actual es interno:
 
----
+- La aplicación consulta el endpoint de Cloudflare configurado en
+  `src-tauri/tauri.conf.json`.
+- Cloudflare D1 conserva la versión, URL, tamaño, SHA-256 y firmas.
+- GitHub Releases almacena gratuitamente el instalador y sus firmas.
+- No se genera ni se publica `latest.json`.
+- La publicación completa la realiza `.github/workflows/release.yml`.
 
-## Requisitos previos (una sola vez por máquina)
+## Reglas obligatorias
 
-1. **Node + npm** instalados.
-2. **Rust toolchain** (`cargo`, `rustc`).
-3. **Tauri CLI** accesible vía `npm run tauri` (ya en `package.json`).
-4. **GitHub CLI** (`gh`) autenticado con permisos `repo` en `trklll/aetherio`.
-5. **Clave de firma privada** en:
-   ```
-   C:\Users\Administrator\.aetherio\tauri-signing-private.key
-   ```
-   - Password: un único espacio `" "` (sin las comillas).
-   - Si no exists, regenera con `tauri signer generate` y vuelca la **pública** en `tauri.conf.json` > `plugins.updater.pubkey`. La privada queda solo en disco local.
+1. Publicar solamente desde `main`.
+2. No crear el tag hasta que las validaciones locales terminen correctamente.
+3. No publicar con cambios sin revisar o archivos locales accidentales.
+4. Usar exactamente la misma versión SemVer en:
+   - `package.json`
+   - `package-lock.json`
+   - `src-tauri/Cargo.toml`
+   - el paquete `aetherio` de `src-tauri/Cargo.lock`
+   - `src-tauri/tauri.conf.json`
+5. El tag siempre es `v<versión>` y debe apuntar al commit que contiene esa
+   misma versión.
+6. Nunca leer, imprimir, copiar, regenerar ni subir claves privadas.
+7. Nunca reemplazar una clave del updater: rompería la actualización de
+   instalaciones existentes.
+8. No usar `scripts/publish-release.ps1` para producción. Es un flujo heredado
+   de la época de `latest.json`.
 
-6. El endpoint del updater ya configurado en `src-tauri/tauri.conf.json`:
-   ```
-   "endpoints": ["https://github.com/trklll/aetherio/releases/latest/download/latest.json"]
-   ```
-   - Esa URL sirve el `latest.json` del release marcado como **latest** (el último tag de versión creado).
+## Secretos requeridos en GitHub Actions
 
----
+Solo hay que comprobar que estos nombres existan en la configuración del
+repositorio. Sus valores no deben mostrarse:
 
-## Pasos del release
+- `TAURI_SIGNING_PRIVATE_KEY`: firma usada por las instalaciones actuales.
+- `TAURI_SIGNING_PRIVATE_KEY_LEGACY`: firma compatible con instalaciones
+  anteriores.
+- `AETHERIO_RELEASE_TOKEN`: autoriza el registro del release en el Worker.
 
-### 1. Subir versión en los 3 archivos
-
-La versión debe coincidir en `package.json`, `src-tauri/tauri.conf.json` y `src-tauri/Cargo.toml`. Por ejemplo para `0.3.22`:
-
-- `package.json` → `"version": "0.3.22"`
-- `src-tauri/tauri.conf.json` → `"version": "0.3.22"`
-- `src-tauri/Cargo.toml` → `version = "0.3.22"`
-
-**NO uses** `Set-Content -NoNewline` para reemplazar (colapsa los saltos de línea del TOML/JSON y rompe el parseo). Usa el tool de edición de archivos o `Set-Content` **sin** `-NoNewline` (preserva `\r\n`).
-
-### 2. Verificar typecheck
-
-```powershell
-npx tsc --noEmit --pretty
-```
-Debe salir sin output. Si hay errores, arréglalos antes de seguir.
-
-### 3. Compilar con firma
+Comprobación segura:
 
 ```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY          = Get-Content -Raw "C:\Users\Administrator\.aetherio\tauri-signing-private.key"
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = " "
-npm run tauri build
+gh secret list --repo trklll/aetherio
 ```
 
-Salida esperada (carpetas):
-- `src-tauri\target\release\aetherio.exe` (binario, no se sube)
-- `src-tauri\target\release\bundle\nsis\aetherio_0.3.22_x64-setup.exe` ← instalador
-- `src-tauri\target\release\bundle\nsis\aetherio_0.3.22_x64-setup.exe.sig` ← firma base64
-- `src-tauri\target\release\bundle\msi\aetherio_0.3.22_x64_en-US.msi` (opcional)
-- `src-tauri\target\release\bundle\msi\aetherio_0.3.22_x64_en-US.msi.sig`
+## Flujo normal
 
-> Si solo haces cambios TS/JSX, no recompila Rust (tarda 3 min). Pero si hay cambios Rust o version bump de `Cargo.toml`, hay que recompilar.
-
-### 4. Commit + push
+### 1. Sincronizar el repositorio
 
 ```powershell
-git add -A
-git commit -m "v0.3.22: <resumen breve de cambios>"
+git switch main
+git fetch origin --prune
+git status --short --branch
+```
+
+Si `main` remoto contiene commits que no están localmente, integrar esos
+cambios antes de continuar. No usar `reset --hard` ni descartar trabajo ajeno.
+
+### 2. Revisar lo que entrará al release
+
+```powershell
+git status --short
+git diff --stat
+git log --oneline origin/main..HEAD
+```
+
+Excluir capturas, archivos temporales, builds, cachés, claves, `.env`, skills
+locales y cualquier otro archivo que no forme parte de Aetherio.
+
+### 3. Elegir y aplicar la versión
+
+Para una versión como `0.4.5`, actualizar los cinco lugares indicados en las
+reglas. Después confirmar:
+
+```powershell
+node -e "const p=require('./package.json'); const l=require('./package-lock.json'); if(p.version!==l.version||p.version!==l.packages[''].version) process.exit(1); console.log(p.version)"
+cargo metadata --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1
+```
+
+No modificar números de versión de dependencias que casualmente coincidan en
+`Cargo.lock`; solo la entrada del paquete `aetherio`.
+
+### 4. Validar el proyecto
+
+Ejecutar en este orden:
+
+```powershell
+npm run providers:build
+npm run build
+cargo check --manifest-path src-tauri/Cargo.toml
+git diff --check
+```
+
+Además, verificar que el runtime de MPV usado por CI siga disponible:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-mpv.ps1 -VerifyOnly
+```
+
+Si el script no admite `-VerifyOnly`, revisar el pin y sus URLs sin modificar
+el runtime instalado. No iniciar un release con una URL de MPV rota.
+
+### 5. Crear el commit de release
+
+Agregar únicamente los archivos revisados:
+
+```powershell
+git add <archivos-revisados>
+git status --short
+git diff --cached --stat
+git diff --cached --check
+git commit -m "release: prepare Aetherio 0.4.5"
+```
+
+El commit debe incluir la guía actualizada, el cambio de versión y todos los
+cambios funcionales destinados al release.
+
+### 6. Subir `main`
+
+```powershell
 git push origin main
-git tag v0.3.22
-git push origin v0.3.22
 ```
 
-### 5. Crear release en GitHub
+Confirmar que el push terminó antes de crear el tag.
+
+### 7. Crear y subir el tag
 
 ```powershell
-gh release create v0.3.22 `
-  --title "v0.3.22" `
-  --notes "v0.3.22: <descripción>"
+git tag -a v0.4.5 -m "Aetherio v0.4.5"
+git push origin v0.4.5
 ```
-> Sin `--verify-tag` si ya creaste el tag localmente y lo subiste (acelerado). Con `--verify-tag` solo funcionaría si el tag ya llega a GitHub.
 
-### 6. Subir binarios (`.exe` + `.sig`)
+El tag dispara automáticamente `.github/workflows/release.yml`.
+
+### 8. Supervisar GitHub Actions
 
 ```powershell
-gh release upload v0.3.22 `
-  "src-tauri\target\release\bundle\nsis\aetherio_0.3.22_x64-setup.exe" `
-  "src-tauri\target\release\bundle\nsis\aetherio_0.3.22_x64-setup.exe.sig" `
-  "src-tauri\target\release\bundle\msi\aetherio_0.3.22_x64_en-US.msi" `
-  "src-tauri\target\release\bundle\msi\aetherio_0.3.22_x64_en-US.msi.sig"
+gh run list --repo trklll/aetherio --workflow release.yml --limit 5
+gh run watch <run-id> --repo trklll/aetherio --exit-status
 ```
 
-### 7. Generar `latest.json` SIN BOM
+El workflow debe completar estas etapas:
 
-El archivo `.sig` ya es base64 de una sola línea. Toma su contenido y arma el JSON así:
+1. Instalar dependencias y el runtime MPV.
+2. Verificar la línea de la clave actual.
+3. Compilar el instalador NSIS/MSI y publicar GitHub Release.
+4. Generar la firma actual y la firma heredada.
+5. Subir la firma heredada como asset.
+6. Registrar versión, URL, tamaño, SHA-256 y ambas firmas en Cloudflare.
+
+Si falla, no mover ni recrear el tag. Corregir el problema en un nuevo commit y
+volver a ejecutar el workflow sobre el mismo tag solamente si el commit del tag
+no necesita cambiar. Si cambia el código del release, eliminar y recrear el tag
+requiere confirmar primero que no hubo una publicación utilizable.
+
+### 9. Verificar el release publicado
 
 ```powershell
-$sig      = (Get-Content -Raw "src-tauri\target\release\bundle\nsis\aetherio_0.3.22_x64-setup.exe.sig").Trim()
-$pubDate  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-$url      = "https://github.com/trklll/aetherio/releases/download/v0.3.22/aetherio_0.3.22_x64-setup.exe"
-
-$latestJson = @{
-  version  = "0.3.22"
-  notes    = "v0.3.22: <descripción>"
-  pub_date = $pubDate
-  platforms = @{
-    "windows-x86_64" = @{
-      signature = $sig
-      url       = $url
-    }
-  }
-} | ConvertTo-Json -Depth 10 -Compress
-
-# ESCRIBIR SIN BOM — vital
-[System.IO.File]::WriteAllText(
-  "src-tauri\target\release\bundle\nsis\latest.json",
-  $latestJson,
-  (New-Object System.Text.UTF8Encoding $false)   # <-- $false = no BOM
-)
+gh release view v0.4.5 --repo trklll/aetherio
+gh release view v0.4.5 --repo trklll/aetherio --json assets,url,isDraft,isPrerelease
 ```
 
-### 8. Verificar que no tiene BOM
+Debe existir al menos:
+
+- instalador `*_x64-setup.exe`;
+- firma actual `*.exe.sig`;
+- firma heredada `*.legacy.sig`;
+- MSI y su firma, si el bundle lo produjo.
+
+No debe existir `latest.json`.
+
+### 10. Verificar el updater interno
+
+Consultar como una instalación anterior:
 
 ```powershell
-$bytes = [System.IO.File]::ReadAllBytes("src-tauri\target\release\bundle\nsis\latest.json")
-if ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-  Write-Output "BOM FOUND (BAD)"
-} else {
-  Write-Output "No BOM (GOOD)"
-}
-Get-Content -Raw "src-tauri\target\release\bundle\nsis\latest.json"
+$response = Invoke-WebRequest `
+  -Uri "https://aetherio.aetherio.workers.dev/api/update/windows/x86_64/0.4.4" `
+  -UseBasicParsing
+$response.StatusCode
+$response.Content
 ```
 
-### 9. Subir `latest.json` al release
+La respuesta debe anunciar `0.4.5`, contener una URL HTTPS al instalador y una
+firma no vacía. La URL del instalador debe responder correctamente:
 
 ```powershell
-gh release upload v0.3.22 "src-tauri\target\release\bundle\nsis\latest.json" --clobber
+$payload = $response.Content | ConvertFrom-Json
+(Invoke-WebRequest -Uri $payload.url -Method Head -UseBasicParsing).StatusCode
 ```
 
-### 10. Verificar endpoint público
+Finalmente, probar desde una instalación anterior:
 
-```powershell
-(Invoke-WebRequest -Uri "https://github.com/trklll/aetherio/releases/latest/download/latest.json" -Method Head -UseBasicParsing).StatusCode
-# 200 = OK
-```
+1. abrir Aetherio;
+2. esperar la detección de la actualización;
+3. descargar;
+4. instalar;
+5. reiniciar;
+6. confirmar que la versión instalada es la nueva.
 
-El release queda como "latest" automáticamente (el tag más nuevo). El updater de cualquier instalación de Aetherio existente tirará de esa URL, descargará el `.exe`, verificará la firma con la **pubkey** embebida en `tauri.conf.json`, y ofrecerá la actualización.
+## Reintentos y fallos
 
----
+### La firma fue creada con otra clave
 
-## Estructura del `latest.json`
+No regenerar claves. Confirmar que el workflow tenga ambos secretos de firma y
+que la etapa `Verify updater key lineage` termine correctamente. El Worker
+elige la firma compatible según la versión instalada.
 
-```json
-{
-  "version": "0.3.22",
-  "notes": "v0.3.22: ...",
-  "pub_date": "2026-07-25T10:30:00.000Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "<contenido crudo del .sig, base64 de una línea>",
-      "url": "https://github.com/trklll/aetherio/releases/download/v0.3.22/aetherio_0.3.22_x64-setup.exe"
-    }
-  }
-}
-```
+### El Worker rechaza el release
 
-> El campo `signature` recibe **el contenido completo del archivo `.sig`** (es ya base64). No hay que decodificarlo ni transformarlo.
+Revisar la etapa `Publish release to Aetherio updater`. Las causas habituales
+son:
 
----
+- `AETHERIO_RELEASE_TOKEN` ausente o incorrecto;
+- firma vacía o inválida;
+- SHA-256 o tamaño incorrectos;
+- versión no SemVer;
+- URL que no usa HTTPS.
 
-## Seguridad: por qué esto es seguro (confirmar al usuario si pregunta)
+### GitHub Release existe, pero la app no detecta la actualización
 
-1. La **clave privada** nunca se incluye en ningún artefacto público. Solo la pública va embebida en `tauri.conf.json`.
-2. La firma del `.exe` es criptográfica (minisign). El updater la valida antes de instalar — aunque alguien manipulara el `latest.json` o intercambiara el `.exe` por uno malicioso, la firma no coincidiriría y Tauri rechazaría la actualización silenciosamente.
-3. Las GitHub releases son HTTPS e inmutables por tag.
-4. El `latest.json` en el repo público es el estándar oficial de Tauri para auto-update — no expone nada sensible.
+Comprobar:
 
----
+- que el workflow terminó también la etapa de Cloudflare;
+- que la versión solicitada al endpoint sea menor;
+- que el endpoint configurado en `tauri.conf.json` sea el interno;
+- que la respuesta corresponda a la arquitectura solicitada;
+- que el release en D1 esté marcado como publicado.
 
-## Atajos / troubleshooting
+### El build falla instalando MPV
 
-- **`Set-Content -NoNewline` rompió `Cargo.toml`/`tauri.conf.json`** (todo en una línea, falla `cargo`/`tauri build`):
-  ```powershell
-  git checkout -- src-tauri\Cargo.toml src-tauri\tauri.conf.json
-  ```
-  y re-aplica el cambio de versión con un editor real (Edit tool, no `Set-Content -NoNewline`).
+Verificar el pin de `scripts/install-mpv.ps1` y que todos sus assets respondan
+HTTP 200. No cambiar el pin a una versión inventada.
 
-- **`A public key has been found, but no private key`** → faltan las env vars `TAURI_SIGNING_PRIVATE_KEY` y `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Exportalas antes de `npm run tauri build`.
+## Checklist final
 
-- **El updater no detecta la nueva versión** → revisa que:
-  - La versión en `latest.json` sea mayor que la instalada (comparación semver, no string).
-  - El tag del release sea el último (GitHub marca "latest" automáticamente por tag más reciente).
-  - La URL del `.exe` en `latest.json` apunte al asset correcto (descarga directa, no API).
-  - No haya BOM (ver paso 8).
-
-- **`latest.json` con caracteres `Ã` en lugar de `ó`/`ñ`** → se generó con encoding incorrecto. Vuelve a generarlo con `[System.IO.File]::WriteAllText` y `UTF8Encoding($false)`.
-
----
-
-## Plantilla de commit
-```
-v0.3.<N>: <resumen corto separado por comas>
-```
-Ejemplos reales del repo:
-- `v0.3.13: installer async launch, window controls, catalog fixes, volume boost 200%, contextmenu block, trailer fallback`
-- `v0.3.21: anime characters (Jikan) en Detail, card->detail FLIP overlay, scroll restoration, hover animations, window controls auto-hide, rounded arrows, marcar como visto, streaming logo enrichment`
-
-## Plantilla de notas del release
-Texto libre, típicamente igual que el mensaje de commit. Evita emojis a menos que el usuario los pida.
+- [ ] `main` revisado y sincronizado.
+- [ ] Versión idéntica en los cinco lugares.
+- [ ] `npm run providers:build`.
+- [ ] `npm run build`.
+- [ ] `cargo check`.
+- [ ] `git diff --check`.
+- [ ] Commit de release subido a `main`.
+- [ ] Tag anotado `v<versión>` sobre el commit correcto.
+- [ ] GitHub Actions completado.
+- [ ] Assets y ambas firmas presentes.
+- [ ] Registro interno de Cloudflare completado.
+- [ ] Endpoint probado desde una versión anterior.
+- [ ] Actualización real probada desde la aplicación.
