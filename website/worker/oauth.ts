@@ -2,14 +2,12 @@ export interface OAuthEnv {
   USERS_DB: D1Database;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
-  DISCORD_CLIENT_ID?: string;
-  DISCORD_CLIENT_SECRET?: string;
-  MAL_CLIENT_ID?: string;
-  MAL_CLIENT_SECRET?: string;
+  ANILIST_CLIENT_ID?: string;
+  ANILIST_CLIENT_SECRET?: string;
   OAUTH_TOKEN_ENCRYPTION_KEY?: string;
 }
 
-type OAuthProvider = "google" | "discord" | "mal";
+type OAuthProvider = "google" | "anilist";
 
 interface OAuthStateRow {
   provider: OAuthProvider;
@@ -29,7 +27,6 @@ interface OAuthProfile {
 
 interface OAuthTokens {
   accessToken: string;
-  refreshToken?: string;
   expiresAt?: number;
 }
 
@@ -54,17 +51,16 @@ export async function handleOAuthRequest(
   if (pathname === "/api/auth/providers" && request.method === "GET") {
     return oauthJson({
       google: providerConfigured(env, "google"),
-      discord: providerConfigured(env, "discord"),
-      mal: providerConfigured(env, "mal"),
+      anilist: providerConfigured(env, "anilist"),
     });
   }
 
-  const startMatch = /^\/api\/auth\/oauth\/(google|discord|mal)\/start$/.exec(pathname);
+  const startMatch = /^\/api\/auth\/oauth\/(google|anilist)\/start$/.exec(pathname);
   if (startMatch && request.method === "GET") {
     return startOAuth(request, env, startMatch[1] as OAuthProvider);
   }
 
-  const callbackMatch = /^\/api\/auth\/oauth\/(google|discord|mal)\/callback$/.exec(pathname);
+  const callbackMatch = /^\/api\/auth\/oauth\/(google|anilist)\/callback$/.exec(pathname);
   if (callbackMatch && request.method === "GET") {
     return finishOAuth(request, env, callbackMatch[1] as OAuthProvider);
   }
@@ -72,21 +68,21 @@ export async function handleOAuthRequest(
   if (pathname === "/api/auth/oauth/exchange" && request.method === "POST") {
     return exchangeAppCode(request, env);
   }
-  if (pathname === "/api/integrations/mal/connect" && request.method === "POST") {
+  if (pathname === "/api/integrations/anilist/connect" && request.method === "POST") {
     const userId = await authenticatedUserId(request, env);
     if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
-    const redirect = await startOAuth(request, env, "mal", userId);
+    const redirect = await startOAuth(request, env, "anilist", userId);
     if (redirect.status !== 302) return redirect;
     const authorizationUrl = redirect.headers.get("Location");
-    if (!authorizationUrl) return oauthJson({ error: "No se pudo iniciar la conexión con MyAnimeList." }, 500);
+    if (!authorizationUrl) return oauthJson({ error: "No se pudo iniciar la conexión con AniList." }, 500);
     return oauthJson({ authorizationUrl });
   }
-  if (pathname === "/api/integrations/mal/anime" && request.method === "GET") {
-    return getMalAnimeList(request, env);
+  if (pathname === "/api/integrations/anilist/anime" && request.method === "GET") {
+    return getAniListAnimeList(request, env);
   }
-  const malUpdateMatch = /^\/api\/integrations\/mal\/anime\/(\d+)$/.exec(pathname);
-  if (malUpdateMatch && request.method === "PUT") {
-    return updateMalAnime(request, env, Number(malUpdateMatch[1]));
+  const aniListUpdateMatch = /^\/api\/integrations\/anilist\/anime\/(\d+)$/.exec(pathname);
+  if (aniListUpdateMatch && request.method === "PUT") {
+    return updateAniListAnime(request, env, Number(aniListUpdateMatch[1]));
   }
 
   return null;
@@ -115,7 +111,7 @@ async function startOAuth(
 
   const now = unixNow();
   const state = randomToken(32);
-  const pkceVerifier = provider === "mal" ? randomToken(72) : null;
+  const pkceVerifier = null;
   await env.USERS_DB.batch([
     env.USERS_DB.prepare("DELETE FROM oauth_states WHERE expires_at <= ?").bind(now),
     env.USERS_DB.prepare(
@@ -140,12 +136,7 @@ async function startOAuth(
   authorizationUrl.searchParams.set("response_type", "code");
   if (config.scope) authorizationUrl.searchParams.set("scope", config.scope);
   authorizationUrl.searchParams.set("state", state);
-  if (provider === "mal") {
-    authorizationUrl.searchParams.set("code_challenge", pkceVerifier!);
-    authorizationUrl.searchParams.set("code_challenge_method", "plain");
-  } else {
-    authorizationUrl.searchParams.set("prompt", provider === "google" ? "select_account" : "consent");
-  }
+  if (provider === "google") authorizationUrl.searchParams.set("prompt", "select_account");
   return Response.redirect(authorizationUrl.toString(), 302);
 }
 
@@ -255,53 +246,51 @@ async function fetchOAuthProfile(
   env: OAuthEnv,
   provider: OAuthProvider,
   code: string,
-  pkceVerifier: string | null,
+  _pkceVerifier: string | null,
 ): Promise<{ profile: OAuthProfile; tokens: OAuthTokens | null }> {
   const config = providerConfig(env, provider);
   if (!config) throw new Error("OAuth provider is not configured.");
 
   const callbackUrl = callbackFor(new URL(request.url).origin, provider);
-  const tokenBody = new URLSearchParams({
+  const tokenInput = {
     client_id: config.clientId,
     client_secret: config.clientSecret,
     grant_type: "authorization_code",
     code,
     redirect_uri: callbackUrl,
-  });
-  if (provider === "mal") {
-    if (!pkceVerifier) throw new Error("MAL PKCE verifier is missing.");
-    tokenBody.set("code_verifier", pkceVerifier);
-  }
+  };
   const tokenResponse = await fetch(config.tokenUrl, {
     method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": provider === "anilist"
+        ? "application/json"
+        : "application/x-www-form-urlencoded",
       Accept: "application/json",
     },
-    body: tokenBody,
+    body: provider === "anilist"
+      ? JSON.stringify(tokenInput)
+      : new URLSearchParams(tokenInput),
   });
   if (!tokenResponse.ok) {
     throw new Error(`${provider} token exchange failed with ${tokenResponse.status}.`);
   }
   const token = await tokenResponse.json<{
     access_token?: string;
-    refresh_token?: string;
     expires_in?: number;
   }>();
   if (!token.access_token) throw new Error(`${provider} did not return an access token.`);
 
-  const profileResponse = await fetch(config.profileUrl, {
-    headers: {
-      Authorization: `Bearer ${token.access_token}`,
-      Accept: "application/json",
-      "User-Agent": "Aetherio-Auth",
-    },
-  });
-  if (!profileResponse.ok) {
-    throw new Error(`${provider} profile request failed with ${profileResponse.status}.`);
-  }
-
   if (provider === "google") {
+    const profileResponse = await fetch(config.profileUrl, {
+      headers: {
+        Authorization: `Bearer ${token.access_token}`,
+        Accept: "application/json",
+        "User-Agent": "Aetherio-Auth",
+      },
+    });
+    if (!profileResponse.ok) {
+      throw new Error(`google profile request failed with ${profileResponse.status}.`);
+    }
     const profile = await profileResponse.json<{
       sub?: string;
       email?: string;
@@ -319,44 +308,23 @@ async function fetchOAuthProfile(
     };
   }
 
-  if (provider === "mal") {
-    const profile = await profileResponse.json<{
-      id?: number;
-      name?: string;
-    }>();
-    const id = typeof profile.id === "number" ? String(profile.id) : "";
-    const username = profile.name?.trim() || `mal-${id}`;
-    return {
-      profile: {
-        id,
-        email: `${username.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}-${id}@mal.aetherio.local`,
-        displayName: username,
-        emailVerified: true,
-        username,
-      },
-      tokens: {
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-        expiresAt: unixNow() + Math.max(60, token.expires_in ?? 3600),
-      },
-    };
-  }
-
-  const profile = await profileResponse.json<{
-    id?: string;
-    email?: string;
-    verified?: boolean;
-    global_name?: string | null;
-    username?: string;
-  }>();
+  const viewer = await aniListGraphql<{
+    Viewer?: { id?: number; name?: string };
+  }>(token.access_token, "query { Viewer { id name } }");
+  const id = typeof viewer.Viewer?.id === "number" ? String(viewer.Viewer.id) : "";
+  const username = viewer.Viewer?.name?.trim() || `anilist-${id}`;
   return {
     profile: {
-      id: profile.id ?? "",
-      email: profile.email?.trim().toLowerCase() ?? "",
-      displayName: profile.global_name?.trim() || profile.username?.trim() || "Aetherio",
-      emailVerified: profile.verified === true,
+      id,
+      email: `${username.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}-${id}@anilist.aetherio.local`,
+      displayName: username,
+      emailVerified: true,
+      username,
     },
-    tokens: null,
+    tokens: {
+      accessToken: token.access_token,
+      expiresAt: unixNow() + Math.max(60, token.expires_in ?? 365 * 24 * 60 * 60),
+    },
   };
 }
 
@@ -381,8 +349,8 @@ async function findOrCreateOAuthUser(
     if (linkUserId && linked.id !== linkUserId) {
       throw new Error(`${provider} account is already linked to another Aetherio user.`);
     }
-    if (provider === "mal" && tokens) {
-      await saveMalTokens(env, linked.id, profile, tokens);
+    if (provider === "anilist" && tokens) {
+      await saveAniListTokens(env, linked.id, profile, tokens);
     }
     return linked;
   }
@@ -424,10 +392,10 @@ async function findOrCreateOAuthUser(
       ),
     );
   }
-  if (linkUserId && provider === "mal") {
+  if (linkUserId && provider === "anilist") {
     statements.push(
       env.USERS_DB.prepare(
-        "DELETE FROM oauth_accounts WHERE provider = 'mal' AND user_id = ?",
+        "DELETE FROM oauth_accounts WHERE provider = 'anilist' AND user_id = ?",
       ).bind(linkUserId),
     );
   }
@@ -444,9 +412,9 @@ async function findOrCreateOAuthUser(
       user.id,
       profile.email,
       profile.username ?? null,
-      provider === "mal" && tokens ? await encryptSecret(env, tokens.accessToken) : null,
-      provider === "mal" && tokens?.refreshToken ? await encryptSecret(env, tokens.refreshToken) : null,
-      provider === "mal" ? tokens?.expiresAt ?? null : null,
+      provider === "anilist" && tokens ? await encryptSecret(env, tokens.accessToken) : null,
+      null,
+      provider === "anilist" ? tokens?.expiresAt ?? null : null,
       now,
       now,
     ),
@@ -476,109 +444,135 @@ async function createSession(env: OAuthEnv, userId: string, request: Request) {
   return token;
 }
 
-async function getMalAnimeList(request: Request, env: OAuthEnv) {
+async function getAniListAnimeList(request: Request, env: OAuthEnv) {
   const userId = await authenticatedUserId(request, env);
   if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
-  const accessToken = await getMalAccessToken(env, userId);
-  if (!accessToken) return oauthJson({ error: "Conecta MyAnimeList para sincronizar tu biblioteca." }, 404);
+  const account = await getAniListAccount(env, userId);
+  if (!account) return oauthJson({ error: "Conecta AniList para sincronizar tu biblioteca." }, 404);
 
-  const entries: unknown[] = [];
-  let nextUrl: string | null = "https://api.myanimelist.net/v2/users/@me/animelist"
-    + "?limit=1000&fields=list_status,num_episodes,main_picture,alternative_titles,start_date";
-
-  for (let page = 0; nextUrl && page < 20; page += 1) {
-    const parsed: URL = new URL(nextUrl);
-    if (parsed.protocol !== "https:" || parsed.hostname !== "api.myanimelist.net") {
-      throw new Error("MAL returned an unsafe paging URL.");
-    }
-    const response: Response = await fetch(parsed.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        "User-Agent": "Aetherio/0.4",
-      },
-    });
-    if (!response.ok) throw new Error(`MAL anime list failed with ${response.status}.`);
-    const payload = await response.json() as {
-      data?: Array<{
-        node?: {
-          id?: number;
-          title?: string;
-          num_episodes?: number;
-          main_picture?: { medium?: string; large?: string };
-          alternative_titles?: { en?: string; ja?: string };
-          start_date?: string;
-        };
-        list_status?: {
+  const result = await aniListGraphql<{
+    MediaListCollection?: {
+      lists?: Array<{
+        entries?: Array<{
+          mediaId?: number;
           status?: string;
           score?: number;
-          num_episodes_watched?: number;
-          updated_at?: string;
-        };
+          progress?: number;
+          updatedAt?: number;
+          media?: {
+            id?: number;
+            title?: { userPreferred?: string; romaji?: string; english?: string };
+            episodes?: number;
+            coverImage?: { extraLarge?: string; large?: string };
+            startDate?: { year?: number };
+          };
+        }>;
       }>;
-      paging?: { next?: string };
     };
-    for (const item of payload.data ?? []) {
-      if (!item.node?.id || !item.node.title || !item.list_status?.status) continue;
-      entries.push({
-        malId: item.node.id,
-        title: item.node.alternative_titles?.en || item.node.title,
-        originalTitle: item.node.title,
-        status: item.list_status.status,
-        score: item.list_status.score ?? 0,
-        watchedEpisodes: item.list_status.num_episodes_watched ?? 0,
-        totalEpisodes: item.node.num_episodes ?? 0,
-        poster: item.node.main_picture?.large ?? item.node.main_picture?.medium,
-        year: item.node.start_date ? Number(item.node.start_date.slice(0, 4)) || undefined : undefined,
-        updatedAt: item.list_status.updated_at ?? null,
-      });
-    }
-    nextUrl = payload.paging?.next ?? null;
-  }
+  }>(
+    account.accessToken,
+    `query AetherioAnimeList($userId: Int!) {
+      MediaListCollection(userId: $userId, type: ANIME) {
+        lists {
+          entries {
+            mediaId
+            status
+            score(format: POINT_10)
+            progress
+            updatedAt
+            media {
+              id
+              title { userPreferred romaji english }
+              episodes
+              coverImage { extraLarge large }
+              startDate { year }
+            }
+          }
+        }
+      }
+    }`,
+    { userId: Number(account.providerUserId) },
+  );
+
+  const entries = (result.MediaListCollection?.lists ?? []).flatMap(list =>
+    (list.entries ?? []).flatMap(entry => {
+      const media = entry.media;
+      const aniListId = media?.id ?? entry.mediaId;
+      const status = fromAniListStatus(entry.status);
+      const title = media?.title?.userPreferred || media?.title?.english || media?.title?.romaji;
+      if (!aniListId || !status || !title) return [];
+      return [{
+        aniListId,
+        title,
+        originalTitle: media?.title?.romaji || title,
+        status,
+        score: entry.score ?? 0,
+        watchedEpisodes: entry.progress ?? 0,
+        totalEpisodes: media?.episodes ?? 0,
+        poster: media?.coverImage?.extraLarge ?? media?.coverImage?.large,
+        year: media?.startDate?.year,
+        updatedAt: entry.updatedAt ? new Date(entry.updatedAt * 1000).toISOString() : null,
+      }];
+    }),
+  );
 
   return oauthJson({ entries, syncedAt: Date.now() });
 }
 
-async function updateMalAnime(request: Request, env: OAuthEnv, malId: number) {
+async function updateAniListAnime(request: Request, env: OAuthEnv, aniListId: number) {
   const userId = await authenticatedUserId(request, env);
   if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
-  const accessToken = await getMalAccessToken(env, userId);
-  if (!accessToken) return oauthJson({ error: "MyAnimeList no está conectado." }, 404);
+  const account = await getAniListAccount(env, userId);
+  if (!account) return oauthJson({ error: "AniList no está conectado." }, 404);
 
   let input: { status?: unknown; watchedEpisodes?: unknown; score?: unknown };
   try {
     input = await request.json<typeof input>();
   } catch {
-    return oauthJson({ error: "Actualización MAL inválida." }, 400);
+    return oauthJson({ error: "Actualización de AniList inválida." }, 400);
   }
-  const allowedStatuses = new Set(["watching", "completed", "on_hold", "dropped", "plan_to_watch"]);
-  const status = typeof input.status === "string" && allowedStatuses.has(input.status) ? input.status : null;
+  const status = typeof input.status === "string" ? toAniListStatus(input.status) : null;
   const watchedEpisodes = Number.isInteger(input.watchedEpisodes) && Number(input.watchedEpisodes) >= 0
     ? Number(input.watchedEpisodes)
     : null;
-  const score = Number.isInteger(input.score) && Number(input.score) >= 0 && Number(input.score) <= 10
-    ? Number(input.score)
+  const score = typeof input.score === "number" && Number.isFinite(input.score)
+    && input.score >= 0 && input.score <= 10
+    ? input.score
     : null;
   if (!status && watchedEpisodes === null && score === null) {
-    return oauthJson({ error: "No hay cambios válidos para MyAnimeList." }, 400);
+    return oauthJson({ error: "No hay cambios válidos para AniList." }, 400);
   }
 
-  const body = new URLSearchParams();
-  if (status) body.set("status", status);
-  if (watchedEpisodes !== null) body.set("num_watched_episodes", String(watchedEpisodes));
-  if (score !== null) body.set("score", String(score));
-  const response = await fetch(`https://api.myanimelist.net/v2/anime/${malId}/my_list_status`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "User-Agent": "Aetherio/0.4",
+  const result = await aniListGraphql<{
+    SaveMediaListEntry?: { id?: number; status?: string; progress?: number; score?: number };
+  }>(
+    account.accessToken,
+    `mutation AetherioUpdateAnime(
+      $mediaId: Int!,
+      $status: MediaListStatus,
+      $progress: Int,
+      $score: Float
+    ) {
+      SaveMediaListEntry(
+        mediaId: $mediaId,
+        status: $status,
+        progress: $progress,
+        score: $score
+      ) {
+        id
+        status
+        progress
+        score(format: POINT_10)
+      }
+    }`,
+    {
+      mediaId: aniListId,
+      status,
+      progress: watchedEpisodes,
+      score,
     },
-    body,
-  });
-  if (!response.ok) throw new Error(`MAL list update failed with ${response.status}.`);
-  return oauthJson(await response.json());
+  );
+  return oauthJson(result.SaveMediaListEntry ?? {});
 }
 
 async function authenticatedUserId(request: Request, env: OAuthEnv) {
@@ -593,63 +587,27 @@ async function authenticatedUserId(request: Request, env: OAuthEnv) {
   return session?.user_id ?? null;
 }
 
-async function getMalAccessToken(env: OAuthEnv, userId: string) {
+async function getAniListAccount(env: OAuthEnv, userId: string) {
   const account = await env.USERS_DB.prepare(
-    `SELECT access_token_ciphertext, refresh_token_ciphertext, token_expires_at
-     FROM oauth_accounts WHERE provider = 'mal' AND user_id = ?
+    `SELECT provider_user_id, access_token_ciphertext, token_expires_at
+     FROM oauth_accounts WHERE provider = 'anilist' AND user_id = ?
      ORDER BY updated_at DESC LIMIT 1`,
   )
     .bind(userId)
     .first<{
+      provider_user_id: string;
       access_token_ciphertext: string | null;
-      refresh_token_ciphertext: string | null;
       token_expires_at: number | null;
     }>();
   if (!account?.access_token_ciphertext) return null;
-  if ((account.token_expires_at ?? 0) > unixNow() + 60) {
-    return decryptSecret(env, account.access_token_ciphertext);
-  }
-  if (!account.refresh_token_ciphertext) return null;
-
-  const config = providerConfig(env, "mal");
-  if (!config) return null;
-  const refreshToken = await decryptSecret(env, account.refresh_token_ciphertext);
-  const response = await fetch(config.tokenUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body: new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
-  if (!response.ok) throw new Error(`MAL token refresh failed with ${response.status}.`);
-  const token = await response.json<{
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  }>();
-  if (!token.access_token) throw new Error("MAL did not refresh the access token.");
-  await env.USERS_DB.prepare(
-    `UPDATE oauth_accounts SET access_token_ciphertext = ?, refresh_token_ciphertext = ?,
-      token_expires_at = ?, updated_at = ? WHERE provider = 'mal' AND user_id = ?`,
-  )
-    .bind(
-      await encryptSecret(env, token.access_token),
-      await encryptSecret(env, token.refresh_token || refreshToken),
-      unixNow() + Math.max(60, token.expires_in ?? 3600),
-      unixNow(),
-      userId,
-    )
-    .run();
-  return token.access_token;
+  if ((account.token_expires_at ?? 0) <= unixNow() + 60) return null;
+  return {
+    providerUserId: account.provider_user_id,
+    accessToken: await decryptSecret(env, account.access_token_ciphertext),
+  };
 }
 
-async function saveMalTokens(
+async function saveAniListTokens(
   env: OAuthEnv,
   userId: string,
   profile: OAuthProfile,
@@ -658,17 +616,65 @@ async function saveMalTokens(
   await env.USERS_DB.prepare(
     `UPDATE oauth_accounts SET provider_username = ?, access_token_ciphertext = ?,
       refresh_token_ciphertext = ?, token_expires_at = ?, updated_at = ?
-     WHERE provider = 'mal' AND user_id = ?`,
+     WHERE provider = 'anilist' AND user_id = ?`,
   )
     .bind(
       profile.username ?? null,
       await encryptSecret(env, tokens.accessToken),
-      tokens.refreshToken ? await encryptSecret(env, tokens.refreshToken) : null,
+      null,
       tokens.expiresAt ?? null,
       unixNow(),
       userId,
     )
     .run();
+}
+
+async function aniListGraphql<T>(
+  accessToken: string,
+  query: string,
+  variables: Record<string, unknown> = {},
+) {
+  const response = await fetch("https://graphql.anilist.co", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": "Aetherio/0.4",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const payload = await response.json<{
+    data?: T;
+    errors?: Array<{ message?: string }>;
+  }>();
+  if (!response.ok || payload.errors?.length || !payload.data) {
+    throw new Error(payload.errors?.[0]?.message || `AniList GraphQL failed with ${response.status}.`);
+  }
+  return payload.data;
+}
+
+function fromAniListStatus(status?: string) {
+  const statuses: Record<string, string> = {
+    CURRENT: "watching",
+    REPEATING: "watching",
+    COMPLETED: "completed",
+    PAUSED: "on_hold",
+    DROPPED: "dropped",
+    PLANNING: "plan_to_watch",
+  };
+  return status ? statuses[status] ?? null : null;
+}
+
+function toAniListStatus(status: string) {
+  const statuses: Record<string, string> = {
+    watching: "CURRENT",
+    completed: "COMPLETED",
+    on_hold: "PAUSED",
+    dropped: "DROPPED",
+    plan_to_watch: "PLANNING",
+  };
+  return statuses[status] ?? null;
 }
 
 async function encryptSecret(env: OAuthEnv, value: string) {
@@ -723,24 +729,13 @@ function providerConfig(env: OAuthEnv, provider: OAuthProvider) {
       scope: "openid email profile",
     };
   }
-  if (provider === "discord") {
-    if (!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET) return null;
-    return {
-      clientId: env.DISCORD_CLIENT_ID,
-      clientSecret: env.DISCORD_CLIENT_SECRET,
-      authorizationUrl: "https://discord.com/oauth2/authorize",
-      tokenUrl: "https://discord.com/api/v10/oauth2/token",
-      profileUrl: "https://discord.com/api/v10/users/@me",
-      scope: "identify email",
-    };
-  }
-  if (!env.MAL_CLIENT_ID || !env.MAL_CLIENT_SECRET || !env.OAUTH_TOKEN_ENCRYPTION_KEY) return null;
+  if (!env.ANILIST_CLIENT_ID || !env.ANILIST_CLIENT_SECRET || !env.OAUTH_TOKEN_ENCRYPTION_KEY) return null;
   return {
-    clientId: env.MAL_CLIENT_ID,
-    clientSecret: env.MAL_CLIENT_SECRET,
-    authorizationUrl: "https://myanimelist.net/v1/oauth2/authorize",
-    tokenUrl: "https://myanimelist.net/v1/oauth2/token",
-    profileUrl: "https://api.myanimelist.net/v2/users/@me",
+    clientId: env.ANILIST_CLIENT_ID,
+    clientSecret: env.ANILIST_CLIENT_SECRET,
+    authorizationUrl: "https://anilist.co/api/v2/oauth/authorize",
+    tokenUrl: "https://anilist.co/api/v2/oauth/token",
+    profileUrl: "https://graphql.anilist.co",
     scope: "",
   };
 }
@@ -755,8 +750,7 @@ function callbackFor(origin: string, provider: OAuthProvider) {
 
 function providerLabel(provider: OAuthProvider) {
   if (provider === "google") return "Google";
-  if (provider === "discord") return "Discord";
-  return "MyAnimeList";
+  return "AniList";
 }
 
 function redirectToApp(returnTo: string, values: Record<string, string>) {

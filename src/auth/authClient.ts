@@ -19,7 +19,7 @@ const USER_KEY = "aetherio-account-user-v1";
 const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
 
 export const AETHERIO_AUTH_CHANGED_EVENT = "aetherio-auth-changed";
-export type OAuthProvider = "google" | "discord" | "mal";
+export type OAuthProvider = "google" | "anilist";
 
 export async function registerAccount(input: {
   displayName: string;
@@ -87,9 +87,9 @@ export async function startSocialLogin(provider: OAuthProvider) {
   await openExternalUrl(startUrl.toString());
 }
 
-export async function connectMyAnimeListAccount() {
+export async function connectAniListAccount() {
   const response = await authenticatedRequest<{ authorizationUrl: string }>(
-    "/api/integrations/mal/connect",
+    "/api/integrations/anilist/connect",
     { method: "POST" },
   );
   await openExternalUrl(response.authorizationUrl);

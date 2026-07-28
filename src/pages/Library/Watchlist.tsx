@@ -13,13 +13,13 @@ import {
 import CatalogRow from "../Home/CatalogRow";
 import ContinueWatchingRow from "../Home/ContinueWatchingRow";
 import {
-  MAL_LIBRARY_CHANGED_EVENT,
-  readMalLibrary,
-  syncMyAnimeListLibrary,
-  type MalLibraryEntry,
-  type MalAnimeStatus,
-} from "../../integrations/myAnimeList";
-import { connectMyAnimeListAccount } from "../../auth/authClient";
+  ANILIST_LIBRARY_CHANGED_EVENT,
+  readAniListLibrary,
+  syncAniListLibrary,
+  type AniListLibraryEntry,
+  type AniListAnimeStatus,
+} from "../../integrations/aniList";
+import { connectAniListAccount } from "../../auth/authClient";
 
 type LibraryTab = "library" | "discover";
 
@@ -29,26 +29,26 @@ export default function LibraryPage() {
   const { rows, loading } = useHomeCatalogs(addons);
   const [tab, setTab] = useState<LibraryTab>("library");
   const [version, setVersion] = useState(0);
-  const [malSyncing, setMalSyncing] = useState(false);
-  const [malError, setMalError] = useState("");
+  const [aniListSyncing, setAniListSyncing] = useState(false);
+  const [aniListError, setAniListError] = useState("");
 
   useEffect(() => {
     const refresh = () => setVersion(value => value + 1);
     window.addEventListener(CONTINUE_WATCHING_EVENT, refresh as EventListener);
-    window.addEventListener(MAL_LIBRARY_CHANGED_EVENT, refresh as EventListener);
+    window.addEventListener(ANILIST_LIBRARY_CHANGED_EVENT, refresh as EventListener);
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
     return () => {
       window.removeEventListener(CONTINUE_WATCHING_EVENT, refresh as EventListener);
-      window.removeEventListener(MAL_LIBRARY_CHANGED_EVENT, refresh as EventListener);
+      window.removeEventListener(ANILIST_LIBRARY_CHANGED_EVENT, refresh as EventListener);
       window.removeEventListener("storage", refresh);
       window.removeEventListener("focus", refresh);
     };
   }, []);
 
   const libraryRows = useMemo(() => buildLibraryRows(readPlaybackStateEntries()), [version]);
-  const malEntries = useMemo(() => readMalLibrary(), [version]);
-  const malRows = useMemo(() => buildMalLibraryRows(malEntries), [malEntries]);
+  const aniListEntries = useMemo(() => readAniListLibrary(), [version]);
+  const aniListRows = useMemo(() => buildAniListLibraryRows(aniListEntries), [aniListEntries]);
   const discoverRows = useMemo(
     () => applyHomeCatalogPreferences(rows, homePreferences),
     [homePreferences, rows],
@@ -73,33 +73,33 @@ export default function LibraryPage() {
 
       {tab === "library" ? (
         <div className="flex flex-col gap-9">
-          <MalSyncBanner
-            count={malEntries.length}
-            syncing={malSyncing}
-            error={malError}
+          <AniListSyncBanner
+            count={aniListEntries.length}
+            syncing={aniListSyncing}
+            error={aniListError}
             onConnect={async () => {
-              setMalError("");
+              setAniListError("");
               try {
-                await connectMyAnimeListAccount();
+                await connectAniListAccount();
               } catch (error) {
-                setMalError(error instanceof Error ? error.message : "No se pudo conectar MyAnimeList.");
+                setAniListError(error instanceof Error ? error.message : "No se pudo conectar AniList.");
               }
             }}
             onSync={async () => {
-              setMalSyncing(true);
-              setMalError("");
+              setAniListSyncing(true);
+              setAniListError("");
               try {
-                await syncMyAnimeListLibrary();
+                await syncAniListLibrary();
               } catch (error) {
-                setMalError(error instanceof Error ? error.message : "No se pudo sincronizar MyAnimeList.");
+                setAniListError(error instanceof Error ? error.message : "No se pudo sincronizar AniList.");
               } finally {
-                setMalSyncing(false);
+                setAniListSyncing(false);
               }
             }}
           />
           <LibrarySummary entriesVersion={version} />
           <ContinueWatchingRow />
-          {malRows.map(row => (
+          {aniListRows.map(row => (
             <CatalogRow key={`${row.type}-${row.catalogId}`} row={row} posterLayout={homePreferences.posterLayout} />
           ))}
           {libraryRows.length ? (
@@ -127,7 +127,7 @@ export default function LibraryPage() {
   );
 }
 
-function MalSyncBanner({
+function AniListSyncBanner({
   count,
   syncing,
   error,
@@ -143,11 +143,11 @@ function MalSyncBanner({
   return (
     <div className="liquid-glass flex flex-wrap items-center justify-between gap-4 rounded-2xl px-5 py-4">
       <div>
-        <p className="text-sm font-black text-white">MyAnimeList</p>
+        <p className="text-sm font-black text-white">AniList</p>
         <p className="mt-1 text-xs font-semibold text-white/48">
           {error || (count
             ? `${count} animes sincronizados. El progreso se actualiza al completar episodios.`
-            : "Conecta MyAnimeList al iniciar sesión para importar y mantener tu lista.")}
+            : "Conecta AniList al iniciar sesión para importar y mantener tu lista.")}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -247,13 +247,13 @@ function buildLibraryRows(entries: ContinueWatchingEntry[]): CatalogRowData[] {
   ].filter((row): row is CatalogRowData => row !== null);
 }
 
-function buildMalLibraryRows(entries: MalLibraryEntry[]): CatalogRowData[] {
-  const groups: Array<{ status: MalAnimeStatus; name: string }> = [
-    { status: "watching", name: "Viendo en MyAnimeList" },
-    { status: "plan_to_watch", name: "Planeados en MyAnimeList" },
-    { status: "completed", name: "Completados en MyAnimeList" },
-    { status: "on_hold", name: "En pausa en MyAnimeList" },
-    { status: "dropped", name: "Abandonados en MyAnimeList" },
+function buildAniListLibraryRows(entries: AniListLibraryEntry[]): CatalogRowData[] {
+  const groups: Array<{ status: AniListAnimeStatus; name: string }> = [
+    { status: "watching", name: "Viendo en AniList" },
+    { status: "plan_to_watch", name: "Planeados en AniList" },
+    { status: "completed", name: "Completados en AniList" },
+    { status: "on_hold", name: "En pausa en AniList" },
+    { status: "dropped", name: "Abandonados en AniList" },
   ];
   return groups.flatMap(({ status, name }) => {
     const items: MediaItem[] = entries
@@ -265,7 +265,7 @@ function buildMalLibraryRows(entries: MalLibraryEntry[]): CatalogRowData[] {
         poster: entry.poster,
         year: entry.year,
       }));
-    return items.length ? [buildRow(`mal-${status}`, "series", name, items)] : [];
+    return items.length ? [buildRow(`anilist-${status}`, "series", name, items)] : [];
   });
 }
 

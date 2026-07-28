@@ -20,9 +20,9 @@ import {
   type AetherioUser,
 } from "./auth/authClient.ts";
 import {
-  initializeMyAnimeListProgressSync,
-  syncMyAnimeListLibrary,
-} from "./integrations/myAnimeList.ts";
+  initializeAniListProgressSync,
+  syncAniListLibrary,
+} from "./integrations/aniList.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();
@@ -79,8 +79,8 @@ export default function App() {
 
   useEffect(() => {
     if (!account) return;
-    void syncMyAnimeListLibrary().catch(() => undefined);
-    return initializeMyAnimeListProgressSync();
+    void syncAniListLibrary().catch(() => undefined);
+    return initializeAniListProgressSync();
   }, [account]);
 
   useEffect(() => {
