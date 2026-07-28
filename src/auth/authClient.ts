@@ -17,6 +17,8 @@ const API_BASE = import.meta.env.VITE_AETHERIO_API_URL?.replace(/\/$/, "")
 const TOKEN_KEY = "aetherio-account-token-v1";
 const USER_KEY = "aetherio-account-user-v1";
 const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
+const ANILIST_TOKEN_KEY = "aetherio-anilist-access-token-v1";
+const ANILIST_TOKEN_EXPIRES_KEY = "aetherio-anilist-token-expires-v1";
 
 export const AETHERIO_AUTH_CHANGED_EVENT = "aetherio-auth-changed";
 export type OAuthProvider = "google" | "anilist";
@@ -84,15 +86,12 @@ export async function getOAuthProviders() {
 export async function startSocialLogin(provider: OAuthProvider) {
   const startUrl = new URL(`${API_BASE}/api/auth/oauth/${provider}/start`);
   startUrl.searchParams.set("return_to", "aetherio://auth/callback");
+  startUrl.searchParams.set("request_id", crypto.randomUUID());
   await openExternalUrl(startUrl.toString());
 }
 
 export async function connectAniListAccount() {
-  const response = await authenticatedRequest<{ authorizationUrl: string }>(
-    "/api/integrations/anilist/connect",
-    { method: "POST" },
-  );
-  await openExternalUrl(response.authorizationUrl);
+  await startSocialLogin("anilist");
 }
 
 export function isOAuthCallbackUrl(rawUrl: string) {
@@ -108,6 +107,40 @@ export function isOAuthCallbackUrl(rawUrl: string) {
 
 export async function completeOAuthAuthorization(rawUrl: string) {
   const url = new URL(rawUrl);
+  const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+  const aniListToken = fragment.get("access_token")?.trim();
+  if (aniListToken) {
+    const viewerResponse = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${aniListToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ query: "query { Viewer { id name } }" }),
+    });
+    const viewerPayload = await viewerResponse.json() as {
+      data?: { Viewer?: { id?: number; name?: string } };
+      errors?: Array<{ message?: string }>;
+    };
+    const viewer = viewerPayload.data?.Viewer;
+    if (!viewerResponse.ok || viewerPayload.errors?.length || !viewer?.id || !viewer.name) {
+      throw new Error(viewerPayload.errors?.[0]?.message || "AniList no devolvió una identidad válida.");
+    }
+    const existingToken = getAccountToken();
+    const response = await authRequest<AuthResponse>("/api/auth/oauth/anilist/session", {
+      method: "POST",
+      headers: existingToken ? { Authorization: `Bearer ${existingToken}` } : undefined,
+      body: JSON.stringify({ accessToken: aniListToken, viewer }),
+    });
+    localStorage.setItem(ANILIST_TOKEN_KEY, aniListToken);
+    const expiresIn = Number(fragment.get("expires_in"));
+    const expiresAt = Date.now() + (Number.isFinite(expiresIn) ? expiresIn : 365 * 24 * 60 * 60) * 1000;
+    localStorage.setItem(ANILIST_TOKEN_EXPIRES_KEY, String(expiresAt));
+    persistAuth(response);
+    return response.user;
+  }
+
   const providerError = url.searchParams.get("error");
   if (providerError) {
     const messages: Record<string, string> = {
@@ -159,6 +192,13 @@ export function getAccountToken() {
   return localStorage.getItem(TOKEN_KEY)?.trim() || null;
 }
 
+export function getAniListAccessToken() {
+  const token = localStorage.getItem(ANILIST_TOKEN_KEY)?.trim();
+  const expiresAt = Number(localStorage.getItem(ANILIST_TOKEN_EXPIRES_KEY));
+  if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+  return token;
+}
+
 export async function authenticatedRequest<T>(path: string, init: RequestInit = {}) {
   const token = getAccountToken();
   if (!token) throw new Error("Inicia sesión en Aetherio para sincronizar tu cuenta.");
@@ -183,6 +223,8 @@ function persistAuth(response: AuthResponse) {
 function clearStoredAuth() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(ANILIST_TOKEN_KEY);
+  localStorage.removeItem(ANILIST_TOKEN_EXPIRES_KEY);
 }
 
 async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

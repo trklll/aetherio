@@ -1,6 +1,8 @@
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowRight, Eye, EyeOff, Globe2, HardDrive, ListVideo, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, HardDrive, LockKeyhole, Mail, UserRound } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
+import aniListLogo from "../assets/logoauth/anilist_logo_icon_247617.png";
+import googleLogo from "../assets/logoauth/Google__G__logo.svg.png";
 import { gsap } from "../utils/motion";
 import {
   continueLocally,
@@ -171,11 +173,16 @@ export default function AuthPage({
 
         <div className="auth-social auth-reveal">
           <button type="button" onClick={() => void startSocial("google")} disabled={socialBusy !== null}>
-            <Globe2 size={18} />
+            <img className="auth-provider-logo" src={googleLogo} alt="" aria-hidden="true" />
             <span>{socialBusy === "google" ? "Abriendo Google…" : "Continuar con Google"}</span>
           </button>
           <button type="button" onClick={() => void startSocial("anilist")} disabled={socialBusy !== null}>
-            <ListVideo size={18} />
+            <img
+              className="auth-provider-logo auth-provider-logo--anilist"
+              src={aniListLogo}
+              alt=""
+              aria-hidden="true"
+            />
             <span>{socialBusy === "anilist" ? "Abriendo AniList…" : "Continuar con AniList"}</span>
           </button>
         </div>

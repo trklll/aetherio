@@ -60,7 +60,7 @@ export async function handleOAuthRequest(
     return startOAuth(request, env, startMatch[1] as OAuthProvider);
   }
 
-  const callbackMatch = /^\/api\/auth\/oauth\/(google|anilist)\/callback$/.exec(pathname);
+  const callbackMatch = /^\/api\/auth\/oauth\/(google)\/callback$/.exec(pathname);
   if (callbackMatch && request.method === "GET") {
     return finishOAuth(request, env, callbackMatch[1] as OAuthProvider);
   }
@@ -68,14 +68,8 @@ export async function handleOAuthRequest(
   if (pathname === "/api/auth/oauth/exchange" && request.method === "POST") {
     return exchangeAppCode(request, env);
   }
-  if (pathname === "/api/integrations/anilist/connect" && request.method === "POST") {
-    const userId = await authenticatedUserId(request, env);
-    if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
-    const redirect = await startOAuth(request, env, "anilist", userId);
-    if (redirect.status !== 302) return redirect;
-    const authorizationUrl = redirect.headers.get("Location");
-    if (!authorizationUrl) return oauthJson({ error: "No se pudo iniciar la conexión con AniList." }, 500);
-    return oauthJson({ authorizationUrl });
+  if (pathname === "/api/auth/oauth/anilist/session" && request.method === "POST") {
+    return createAniListSession(request, env);
   }
   if (pathname === "/api/integrations/anilist/anime" && request.method === "GET") {
     return getAniListAnimeList(request, env);
@@ -109,6 +103,13 @@ async function startOAuth(
     return oauthJson({ error: "Destino OAuth no permitido." }, 400);
   }
 
+  if (provider === "anilist") {
+    const authorizationUrl = new URL(config.authorizationUrl);
+    authorizationUrl.searchParams.set("client_id", config.clientId);
+    authorizationUrl.searchParams.set("response_type", "token");
+    return oauthRedirect(authorizationUrl.toString());
+  }
+
   const now = unixNow();
   const state = randomToken(32);
   const pkceVerifier = null;
@@ -137,7 +138,71 @@ async function startOAuth(
   if (config.scope) authorizationUrl.searchParams.set("scope", config.scope);
   authorizationUrl.searchParams.set("state", state);
   if (provider === "google") authorizationUrl.searchParams.set("prompt", "select_account");
-  return Response.redirect(authorizationUrl.toString(), 302);
+  return oauthRedirect(authorizationUrl.toString());
+}
+
+function oauthRedirect(location: string) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: location,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+async function createAniListSession(request: Request, env: OAuthEnv) {
+  let input: {
+    accessToken?: unknown;
+    viewer?: { id?: unknown; name?: unknown };
+  };
+  try {
+    input = await request.json<typeof input>();
+  } catch {
+    return oauthJson({ error: "Credencial de AniList inválida." }, 400);
+  }
+
+  const accessToken = typeof input.accessToken === "string" ? input.accessToken.trim() : "";
+  const viewerId = Number(input.viewer?.id);
+  const viewerName = typeof input.viewer?.name === "string" ? input.viewer.name.trim() : "";
+  if (accessToken.length < 100 || !Number.isInteger(viewerId) || viewerId <= 0 || !viewerName) {
+    return oauthJson({ error: "AniList no devolvió una identidad válida." }, 400);
+  }
+
+  const claims = decodeJwtPayload(accessToken);
+  if (!claims || typeof claims.exp !== "number" || claims.exp <= unixNow()) {
+    return oauthJson({ error: "La autorización de AniList expiró o no es válida." }, 401);
+  }
+  if (claims.sub != null && Number(claims.sub) !== viewerId) {
+    return oauthJson({ error: "La identidad de AniList no coincide con la autorización." }, 401);
+  }
+
+  const fingerprint = await sha256(accessToken);
+  const linkedUserId = await authenticatedUserId(request, env);
+  const profile: OAuthProfile = {
+    id: `token:${fingerprint}`,
+    email: `anilist-${fingerprint.slice(0, 24)}@anilist.aetherio.local`,
+    displayName: viewerName,
+    emailVerified: true,
+    username: viewerName,
+  };
+  const user = await findOrCreateOAuthUser(
+    env,
+    "anilist",
+    profile,
+    null,
+    linkedUserId,
+  );
+  const token = await createSession(env, user.id, request);
+  return oauthJson({
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.display_name,
+      createdAt: user.created_at,
+    },
+  });
 }
 
 async function finishOAuth(request: Request, env: OAuthEnv, provider: OAuthProvider) {
@@ -254,7 +319,7 @@ async function fetchOAuthProfile(
   const callbackUrl = callbackFor(new URL(request.url).origin, provider);
   const tokenInput = {
     client_id: config.clientId,
-    client_secret: config.clientSecret,
+    client_secret: config.clientSecret ?? "",
     grant_type: "authorization_code",
     code,
     redirect_uri: callbackUrl,
@@ -266,13 +331,17 @@ async function fetchOAuthProfile(
         ? "application/json"
         : "application/x-www-form-urlencoded",
       Accept: "application/json",
+      "User-Agent": "Aetherio/0.4",
     },
     body: provider === "anilist"
       ? JSON.stringify(tokenInput)
       : new URLSearchParams(tokenInput),
   });
   if (!tokenResponse.ok) {
-    throw new Error(`${provider} token exchange failed with ${tokenResponse.status}.`);
+    const detail = (await tokenResponse.text()).replace(/\s+/g, " ").slice(0, 240);
+    throw new Error(
+      `${provider} token exchange failed with ${tokenResponse.status}${detail ? `: ${detail}` : "."}`,
+    );
   }
   const token = await tokenResponse.json<{
     access_token?: string;
@@ -717,6 +786,19 @@ function base64UrlToBytes(value: string) {
   return Uint8Array.from(atob(padded), character => character.charCodeAt(0));
 }
 
+function decodeJwtPayload(token: string) {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    return JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))) as {
+      exp?: number;
+      sub?: string | number;
+    };
+  } catch {
+    return null;
+  }
+}
+
 function providerConfig(env: OAuthEnv, provider: OAuthProvider) {
   if (provider === "google") {
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return null;
@@ -729,7 +811,7 @@ function providerConfig(env: OAuthEnv, provider: OAuthProvider) {
       scope: "openid email profile",
     };
   }
-  if (!env.ANILIST_CLIENT_ID || !env.ANILIST_CLIENT_SECRET || !env.OAUTH_TOKEN_ENCRYPTION_KEY) return null;
+  if (!env.ANILIST_CLIENT_ID) return null;
   return {
     clientId: env.ANILIST_CLIENT_ID,
     clientSecret: env.ANILIST_CLIENT_SECRET,
