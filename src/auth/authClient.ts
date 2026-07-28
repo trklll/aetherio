@@ -1,4 +1,9 @@
 import { openExternalUrl } from "../runtime/platform";
+import {
+  deleteSecureCredential,
+  readSecureCredential,
+  writeSecureCredential,
+} from "./secureCredentialStore";
 
 export interface AetherioUser {
   id: string;
@@ -32,7 +37,7 @@ export async function registerAccount(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
-  persistAuth(response);
+  await persistAuth(response);
   return response.user;
 }
 
@@ -41,12 +46,12 @@ export async function loginAccount(email: string, password: string) {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  persistAuth(response);
+  await persistAuth(response);
   return response.user;
 }
 
 export async function restoreAccountSession(): Promise<AetherioUser | null> {
-  const token = getAccountToken();
+  const token = await getAccountToken();
   if (!token) return null;
 
   try {
@@ -57,7 +62,7 @@ export async function restoreAccountSession(): Promise<AetherioUser | null> {
     return response.user;
   } catch (error) {
     if (error instanceof AuthRequestError && error.status === 401) {
-      clearStoredAuth();
+      await clearStoredAuth();
       return null;
     }
     return getStoredAccount();
@@ -65,8 +70,8 @@ export async function restoreAccountSession(): Promise<AetherioUser | null> {
 }
 
 export async function logoutAccount() {
-  const token = getAccountToken();
-  clearStoredAuth();
+  const token = await getAccountToken();
+  await clearStoredAuth();
   window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT));
   if (!token) return;
   try {
@@ -127,17 +132,17 @@ export async function completeOAuthAuthorization(rawUrl: string) {
     if (!viewerResponse.ok || viewerPayload.errors?.length || !viewer?.id || !viewer.name) {
       throw new Error(viewerPayload.errors?.[0]?.message || "AniList no devolvió una identidad válida.");
     }
-    const existingToken = getAccountToken();
+    const existingToken = await getAccountToken();
     const response = await authRequest<AuthResponse>("/api/auth/oauth/anilist/session", {
       method: "POST",
       headers: existingToken ? { Authorization: `Bearer ${existingToken}` } : undefined,
       body: JSON.stringify({ accessToken: aniListToken, viewer }),
     });
-    localStorage.setItem(ANILIST_TOKEN_KEY, aniListToken);
+    await writeSecureCredential("anilist-access-token", ANILIST_TOKEN_KEY, aniListToken);
     const expiresIn = Number(fragment.get("expires_in"));
     const expiresAt = Date.now() + (Number.isFinite(expiresIn) ? expiresIn : 365 * 24 * 60 * 60) * 1000;
     localStorage.setItem(ANILIST_TOKEN_EXPIRES_KEY, String(expiresAt));
-    persistAuth(response);
+    await persistAuth(response);
     return response.user;
   }
 
@@ -157,13 +162,13 @@ export async function completeOAuthAuthorization(rawUrl: string) {
     method: "POST",
     body: JSON.stringify({ code }),
   });
-  persistAuth(response);
+  await persistAuth(response);
   return response.user;
 }
 
-export function continueLocally() {
+export async function continueLocally() {
   localStorage.setItem(LOCAL_MODE_KEY, "1");
-  clearStoredAuth();
+  await clearStoredAuth();
   window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT));
 }
 
@@ -188,19 +193,22 @@ export function getStoredAccount(): AetherioUser | null {
   }
 }
 
-export function getAccountToken() {
-  return localStorage.getItem(TOKEN_KEY)?.trim() || null;
+export async function getAccountToken() {
+  return readSecureCredential("account-session", TOKEN_KEY);
 }
 
-export function getAniListAccessToken() {
-  const token = localStorage.getItem(ANILIST_TOKEN_KEY)?.trim();
+export async function getAniListAccessToken() {
+  const token = await readSecureCredential("anilist-access-token", ANILIST_TOKEN_KEY);
   const expiresAt = Number(localStorage.getItem(ANILIST_TOKEN_EXPIRES_KEY));
-  if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+  if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    if (token) await deleteSecureCredential("anilist-access-token", ANILIST_TOKEN_KEY);
+    return null;
+  }
   return token;
 }
 
 export async function authenticatedRequest<T>(path: string, init: RequestInit = {}) {
-  const token = getAccountToken();
+  const token = await getAccountToken();
   if (!token) throw new Error("Inicia sesión en Aetherio para sincronizar tu cuenta.");
   return authRequest<T>(path, {
     ...init,
@@ -211,19 +219,21 @@ export async function authenticatedRequest<T>(path: string, init: RequestInit = 
   });
 }
 
-function persistAuth(response: AuthResponse) {
+async function persistAuth(response: AuthResponse) {
   localStorage.removeItem(LOCAL_MODE_KEY);
-  localStorage.setItem(TOKEN_KEY, response.token);
+  await writeSecureCredential("account-session", TOKEN_KEY, response.token);
   localStorage.setItem(USER_KEY, JSON.stringify(response.user));
   window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT, {
     detail: response.user,
   }));
 }
 
-function clearStoredAuth() {
-  localStorage.removeItem(TOKEN_KEY);
+async function clearStoredAuth() {
+  await Promise.all([
+    deleteSecureCredential("account-session", TOKEN_KEY),
+    deleteSecureCredential("anilist-access-token", ANILIST_TOKEN_KEY),
+  ]);
   localStorage.removeItem(USER_KEY);
-  localStorage.removeItem(ANILIST_TOKEN_KEY);
   localStorage.removeItem(ANILIST_TOKEN_EXPIRES_KEY);
 }
 

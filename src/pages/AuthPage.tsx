@@ -130,8 +130,8 @@ export default function AuthPage({
     }
   }
 
-  function enterLocalMode() {
-    continueLocally();
+  async function enterLocalMode() {
+    await continueLocally();
     onContinueLocal();
   }
 

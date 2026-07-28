@@ -60,6 +60,7 @@ import {
   getLocalProfiles,
   LOCAL_PROFILES_CHANGED_EVENT,
   readImageFileAsDataUrl,
+  removeLocalProfilePin,
   setActiveProfile,
   updateLocalProfile,
   verifyPin,
@@ -105,7 +106,7 @@ export default function SettingsPage() {
   const [profiles, setProfiles] = useState<LocalProfile[]>(() => getLocalProfiles());
   const [activeProfile, setActiveProfileState] = useState<LocalProfile | null>(() => getActiveProfile());
   const [profileName, setProfileName] = useState(() => getActiveProfile()?.name ?? "");
-  const [profilePin, setProfilePin] = useState(() => getActiveProfile()?.pin ?? "");
+  const [profilePin, setProfilePin] = useState("");
   const [profileAvatar, setProfileAvatar] = useState<string | undefined>(() => getActiveProfile()?.avatarDataUrl);
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfilePin, setNewProfilePin] = useState("");
@@ -134,7 +135,7 @@ export default function SettingsPage() {
       setProfiles(getLocalProfiles());
       setActiveProfileState(nextActive);
       setProfileName(nextActive?.name ?? "");
-      setProfilePin(nextActive?.pin ?? "");
+      setProfilePin("");
       setProfileAvatar(nextActive?.avatarDataUrl);
     };
     window.addEventListener(LOCAL_PROFILES_CHANGED_EVENT, refresh);
@@ -244,7 +245,17 @@ export default function SettingsPage() {
     setProfileError("");
     setSaved(true);
     if (updated) setActiveProfileState(updated);
+    setProfilePin("");
     setProfiles(getLocalProfiles());
+  }
+
+  function removeProfilePin() {
+    if (!activeProfile || !removeLocalProfilePin(activeProfile.id)) return;
+    setProfilePin("");
+    setActiveProfileState(getActiveProfile());
+    setProfiles(getLocalProfiles());
+    setProfileError("");
+    setSaved(true);
   }
 
   async function createProfile() {
@@ -282,7 +293,7 @@ export default function SettingsPage() {
       }
       setActiveProfileState(getActiveProfile());
       setProfileName(remaining[0]?.name ?? "");
-      setProfilePin(remaining[0]?.pin ?? "");
+      setProfilePin("");
       setProfileAvatar(remaining[0]?.avatarDataUrl);
       setSaved(false);
       setProfileError("");
@@ -352,6 +363,7 @@ export default function SettingsPage() {
               onChooseProfileImage={event => chooseProfileImage(event, "active")}
               onChooseNewProfileImage={event => chooseProfileImage(event, "new")}
               onSaveProfile={saveProfile}
+              onRemoveProfilePin={removeProfilePin}
               onCreateProfile={createProfile}
               onStartProfileQuickStart={() => navigate("/quick-start/profile")}
               onSwitchProfile={switchProfile}
@@ -420,6 +432,7 @@ function AccountPanel({
   onChooseProfileImage,
   onChooseNewProfileImage,
   onSaveProfile,
+  onRemoveProfilePin,
   onCreateProfile,
   onStartProfileQuickStart,
   onSwitchProfile,
@@ -450,6 +463,7 @@ function AccountPanel({
   onChooseProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
   onChooseNewProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
   onSaveProfile: () => void;
+  onRemoveProfilePin: () => void;
   onCreateProfile: () => void;
   onStartProfileQuickStart: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
@@ -558,6 +572,7 @@ function AccountPanel({
           onProfilePinChange={onProfilePinChange}
           onChooseProfileImage={onChooseProfileImage}
           onSaveProfile={onSaveProfile}
+          onRemoveProfilePin={onRemoveProfilePin}
           onSwitchProfile={onSwitchProfile}
           onDeleteProfile={onDeleteProfile}
         />
@@ -805,6 +820,7 @@ function ManageProfiles({
   onProfilePinChange,
   onChooseProfileImage,
   onSaveProfile,
+  onRemoveProfilePin,
   onSwitchProfile,
   onDeleteProfile,
 }: {
@@ -819,11 +835,12 @@ function ManageProfiles({
   onProfilePinChange: (value: string) => void;
   onChooseProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
   onSaveProfile: () => void;
+  onRemoveProfilePin: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
   onDeleteProfile: (profile: LocalProfile) => void;
 }) {
   const activePreview = activeProfile
-    ? { ...activeProfile, name: profileName, pin: profilePin, avatarDataUrl: profileAvatar }
+    ? { ...activeProfile, name: profileName, avatarDataUrl: profileAvatar }
     : null;
 
   const [confirmDelete, setConfirmDelete] = useState<LocalProfile | null>(null);
@@ -874,6 +891,15 @@ function ManageProfiles({
               <TextField label="PIN opcional" value={profilePin} placeholder="Sin PIN" password numeric onChange={onProfilePinChange} />
               <div className="flex items-center gap-3">
                 <ActionButton onClick={onSaveProfile} icon={<Save size={15} />}>Guardar perfil</ActionButton>
+                {activePreview.pin ? (
+                  <button
+                    type="button"
+                    onClick={onRemoveProfilePin}
+                    className="rounded-full border border-white/12 px-4 py-2 text-xs font-black text-white/58 gsap-transition hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-200"
+                  >
+                    Quitar PIN
+                  </button>
+                ) : null}
                 {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
               </div>
             </div>

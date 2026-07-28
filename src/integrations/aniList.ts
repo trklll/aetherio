@@ -48,7 +48,7 @@ export function readAniListLibrary(): AniListLibraryEntry[] {
 }
 
 export async function syncAniListLibrary() {
-  const token = requireAniListToken();
+  const token = await requireAniListToken();
   const viewer = await aniListGraphql<{
     Viewer?: { id?: number };
   }>(token, "query { Viewer { id } }");
@@ -135,7 +135,7 @@ export async function updateAniListProgress(
   if (input.watchedEpisodes != null) variables.progress = input.watchedEpisodes;
   if (input.score != null) variables.score = input.score;
   return aniListGraphql(
-    requireAniListToken(),
+    await requireAniListToken(),
     `mutation AetherioUpdateAnime(
       $mediaId: Int!,
       $status: MediaListStatus,
@@ -161,8 +161,8 @@ export async function updateAniListProgress(
 export function initializeAniListProgressSync() {
   if (initialized) return () => undefined;
   initialized = true;
-  const schedule = () => {
-    if (!getAccountToken()) return;
+  const schedule = async () => {
+    if (!await getAccountToken()) return;
     if (progressSyncTimer !== null) window.clearTimeout(progressSyncTimer);
     progressSyncTimer = window.setTimeout(() => {
       progressSyncTimer = null;
@@ -234,8 +234,8 @@ function readProgressSyncState() {
   }
 }
 
-function requireAniListToken() {
-  const token = getAniListAccessToken();
+async function requireAniListToken() {
+  const token = await getAniListAccessToken();
   if (!token) throw new Error("Conecta AniList para sincronizar tu biblioteca.");
   return token;
 }

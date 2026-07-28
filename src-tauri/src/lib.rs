@@ -1,5 +1,6 @@
 mod p2p;
 mod scraper;
+mod secure_credentials;
 
 use std::{
     collections::HashMap,
@@ -4622,6 +4623,9 @@ pub fn run() {
             trakt_oauth_revoke,
             trakt_api_get,
             get_builtin_tmdb_key,
+            secure_credentials::secure_credential_set,
+            secure_credentials::secure_credential_get,
+            secure_credentials::secure_credential_delete,
             scraper::scrape_streams,
             scraper::get_scraper_sites,
             scraper::provider_http::provider_http_request

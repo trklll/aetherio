@@ -6,9 +6,9 @@ interface UserRow {
   id: string;
   email: string;
   display_name: string;
-  password_hash: string;
-  password_salt: string;
-  password_iterations: number;
+  password_hash: string | null;
+  password_salt: string | null;
+  password_iterations: number | null;
   created_at: number;
 }
 
@@ -16,7 +16,7 @@ interface SessionUserRow extends UserRow {
   expires_at: number;
 }
 
-const PASSWORD_ITERATIONS = 100_000;
+const PASSWORD_ITERATIONS = 600_000;
 const SESSION_DAYS = 30;
 const MAX_LOGIN_ATTEMPTS = 8;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
@@ -115,7 +115,7 @@ async function login(request: Request, env: AuthEnv) {
     .bind(body.email)
     .first<UserRow>();
 
-  const valid = user
+  const valid = user?.password_hash && user.password_salt && user.password_iterations
     ? await verifyPassword(body.password, user.password_salt, user.password_iterations, user.password_hash)
     : false;
 
@@ -126,6 +126,18 @@ async function login(request: Request, env: AuthEnv) {
       .bind(identifier, unixNow())
       .run();
     return authJson({ error: "Correo o contraseña incorrectos." }, 401);
+  }
+
+  if ((user.password_iterations ?? 0) < PASSWORD_ITERATIONS) {
+    const salt = randomBase64(16);
+    const passwordHash = await derivePassword(body.password, salt, PASSWORD_ITERATIONS);
+    await env.USERS_DB.prepare(
+      `UPDATE users
+       SET password_hash = ?, password_salt = ?, password_iterations = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+      .bind(passwordHash, salt, PASSWORD_ITERATIONS, unixNow(), user.id)
+      .run();
   }
 
   await env.USERS_DB.batch([
