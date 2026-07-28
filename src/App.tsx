@@ -1,15 +1,21 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAddonStore } from "./store/addonStore.ts";
 import AppShell from "./components/layout/AppShell.tsx";
-import { getActiveProfile, getLocalProfiles, hasActiveLocalProfile } from "./utils/localProfiles.ts";
-import { prefetchHomeData } from "./hooks/useCatalogs.ts";
+import {
+  createLocalProfile,
+  getLocalProfiles,
+  hasActiveLocalProfile,
+  setActiveProfile,
+} from "./utils/localProfiles.ts";
+import { prefetchHomeData, warmHomeStartup } from "./hooks/useCatalogs.ts";
 import { useFullscreen } from "./hooks/useFullscreen.ts";
+import { getHomePreferences } from "./config/homePreferences.ts";
 import { completeTraktAuthorization, TRAKT_AUTH_CHANGED_EVENT, type TraktAuthEventDetail } from "./trakt";
 import { getCurrentDeepLinks, listenOpenUrls } from "./runtime/platform.ts";
-import { hasCompletedQuickStart } from "./config/quickStart.ts";
 import AuthPage from "./pages/AuthPage.tsx";
+import StartupExperience from "./components/startup/StartupExperience.tsx";
 import {
   AETHERIO_AUTH_CHANGED_EVENT,
   completeOAuthAuthorization,
@@ -46,14 +52,15 @@ export default function App() {
   const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
+  const [profileRevision, setProfileRevision] = useState(0);
   const hasProfile = hasActiveLocalProfile();
-  const activeProfile = getActiveProfile();
   const isCreatingProfile = location.pathname === "/quick-start/profile";
-  const [quickStartCompleted, setQuickStartCompleted] = useState(() => hasCompletedQuickStart());
   const [account, setAccount] = useState<AetherioUser | null | undefined>(() => getStoredAccount() ?? undefined);
+  const [authRestored, setAuthRestored] = useState(false);
   const [localMode, setLocalMode] = useState(() => isLocalModeEnabled());
   const [authError, setAuthError] = useState("");
-  const profiles = getLocalProfiles();
+  const [startupReady, setStartupReady] = useState(false);
+  const [startupStatus, setStartupStatus] = useState("Restaurando tu sesión");
   const addons = useAddonStore(s => s.addons);
   const enabledAddons = useMemo(() => addons.filter(addon => addon.enabled), [addons]);
 
@@ -61,11 +68,13 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
-    void restoreAccountSession().then(user => {
-      if (!disposed) {
-        setAccount(current => current && !user ? current : user);
-      }
-    });
+    void restoreAccountSession()
+      .then(user => {
+        if (!disposed) setAccount(current => current && !user ? current : user);
+      })
+      .finally(() => {
+        if (!disposed) setAuthRestored(true);
+      });
     const refresh = () => {
       setAccount(getStoredAccount());
       setLocalMode(isLocalModeEnabled());
@@ -76,6 +85,54 @@ export default function App() {
       window.removeEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (!authRestored || startupReady) return;
+    if (!account && !localMode) {
+      setStartupStatus("Listo para comenzar");
+      setStartupReady(true);
+      return;
+    }
+
+    let disposed = false;
+    const prepare = async () => {
+      setStartupStatus("Preparando tu perfil");
+      let currentProfiles = getLocalProfiles();
+      if (currentProfiles.length === 0) {
+        await createLocalProfile(
+          { name: account?.displayName?.trim() || "Usuario" },
+          { makeActive: true, adoptCurrentData: true },
+        );
+        currentProfiles = getLocalProfiles();
+        if (!disposed) setProfileRevision(value => value + 1);
+      } else if (!hasActiveLocalProfile()) {
+        setActiveProfile(currentProfiles[0].id);
+        if (!disposed) setProfileRevision(value => value + 1);
+      }
+
+      setStartupStatus("Cargando tu biblioteca");
+      await Promise.race([
+        warmHomeStartup(queryClient, enabledAddons, getHomePreferences().contentOrientation, () => {
+          if (!disposed) setStartupStatus("Preparando imágenes");
+        }),
+        new Promise<void>(resolve => window.setTimeout(resolve, 6_500)),
+      ]);
+      if (!disposed) {
+        setStartupStatus("Todo listo");
+        setStartupReady(true);
+      }
+    };
+
+    void prepare().catch(() => {
+      if (!disposed) {
+        setStartupStatus("Abriendo Aetherio");
+        setStartupReady(true);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [account, authRestored, enabledAddons, localMode, profileRevision, queryClient, startupReady]);
 
   useEffect(() => {
     if (!account) return;
@@ -151,12 +208,18 @@ export default function App() {
     };
   }, [navigate]);
 
-  if (account === undefined) {
-    return <RouteFallback />;
+  const withStartup = (content: ReactNode) => (
+    <StartupExperience ready={startupReady} status={startupStatus}>
+      {content}
+    </StartupExperience>
+  );
+
+  if (account === undefined && !authRestored) {
+    return withStartup(<RouteFallback />);
   }
 
   if (!account && !localMode) {
-    return (
+    return withStartup(
       <AuthPage
         initialError={authError}
         onAuthenticated={user => {
@@ -169,60 +232,65 @@ export default function App() {
           setLocalMode(true);
           setAuthError("");
         }}
-      />
+      />,
     );
   }
 
-  if (isCreatingProfile || profiles.length === 0 || (!hasProfile && !quickStartCompleted)) {
-    return (
+  if (isCreatingProfile) {
+    return withStartup(
       <Suspense fallback={<RouteFallback />}>
         <QuickStart
           installedAddons={addons.length}
-          activeProfile={isCreatingProfile ? null : activeProfile}
-          useFreshDefaults={isCreatingProfile}
+          activeProfile={null}
+          useFreshDefaults
+          profileOnly
           onComplete={destination => {
-            setQuickStartCompleted(true);
+            setProfileRevision(value => value + 1);
             navigate(destination, { replace: true });
           }}
         />
-      </Suspense>
+      </Suspense>,
     );
   }
 
-  if (!hasProfile || location.pathname === "/profiles") {
-    return (
+  if (!hasProfile) {
+    return withStartup(<RouteFallback />);
+  }
+
+  if (location.pathname === "/profiles") {
+    return withStartup(
       <Suspense fallback={<RouteFallback />}>
         <ProfileSelection />
-      </Suspense>
+      </Suspense>,
     );
   }
 
-  const defaultRoute = addons.length === 0 ? "/addons" : "/home";
+  const defaultRoute = "/home";
 
-  return (
+  return withStartup(
     <AppShell>
-      <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
-      <div key={location.key} className="min-h-full aetherio-page-enter">
-        <Suspense fallback={<RouteFallback />}>
-          <Routes location={location}>
-            <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
-            <Route path="/home"              element={<HomePage />} />
-            <Route path="/library"           element={<LibraryPage />} />
-            <Route path="/addons"            element={<AddonsPage />} />
-            <Route path="/settings"          element={<SettingsPage />} />
-            <Route path="/catalog"           element={<CatalogPage />} />
-            <Route path="/detail/:type/:id"  element={<DetailPage />} />
-            <Route path="/detail/:type/:id/:section" element={<DetailSectionPage />} />
-            <Route path="/episode"           element={<EpisodiePage />} />
-            <Route path="/streams"           element={<EpisodiePage />} />
-            <Route path="/player"            element={<PlayerPage />} />
-            <Route path="/person/:id"        element={<PersonPage />} />
-            <Route path="/entity/:kind/:id"   element={<EntityPage />} />
-            <Route path="/search"            element={<SearchPage />} />
-          </Routes>
-        </Suspense>
-      </div>
-    </AppShell>
+        <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
+        <div key={location.key} className="min-h-full aetherio-page-enter">
+          <Suspense fallback={<RouteFallback />}>
+            <Routes location={location}>
+              <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
+              <Route path="/home"              element={<HomePage />} />
+              <Route path="/library"           element={<LibraryPage />} />
+              <Route path="/addons"            element={<AddonsPage />} />
+              <Route path="/settings"          element={<SettingsPage />} />
+              <Route path="/catalog"           element={<CatalogPage />} />
+              <Route path="/detail/:type/:id"  element={<DetailPage />} />
+              <Route path="/detail/:type/:id/:section" element={<DetailSectionPage />} />
+              <Route path="/episode"           element={<EpisodiePage />} />
+              <Route path="/streams"           element={<EpisodiePage />} />
+              <Route path="/player"            element={<PlayerPage />} />
+              <Route path="/person/:id"        element={<PersonPage />} />
+              <Route path="/entity/:kind/:id"   element={<EntityPage />} />
+              <Route path="/search"            element={<SearchPage />} />
+            </Routes>
+          </Suspense>
+        </div>
+      </AppShell>,
   );
 }
 

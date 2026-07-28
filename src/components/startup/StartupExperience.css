@@ -1,0 +1,151 @@
+.startup-app-content {
+  min-height: 100vh;
+}
+
+.startup-experience {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.045), transparent 34%),
+    #151515;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+}
+
+.startup-experience::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 100% 4px;
+  opacity: 0.28;
+}
+
+.native-startup-window {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.055), transparent 35%),
+    #0b0b0c;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+  user-select: none;
+}
+
+.native-startup-window::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 100% 4px;
+  opacity: 0.24;
+}
+
+.startup-panel {
+  position: relative;
+  display: flex;
+  width: min(420px, calc(100vw - 52px));
+  aspect-ratio: 1.24;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.05), transparent 34%),
+    #0b0b0c;
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.54), 0 2px 12px rgba(0, 0, 0, 0.44);
+}
+
+.startup-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.startup-logo {
+  width: 82px;
+  height: 82px;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.5));
+}
+
+.startup-copy {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.startup-copy strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 760;
+  letter-spacing: -0.035em;
+}
+
+.startup-copy p {
+  min-height: 18px;
+  margin: 7px 0 0;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-weight: 590;
+  letter-spacing: 0.01em;
+}
+
+.startup-loader {
+  position: absolute;
+  bottom: 31px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(255, 255, 255, 0.34);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.native-startup-window .startup-loader {
+  bottom: 36px;
+}
+
+.startup-spinner {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+}
+
+@media (max-width: 560px) {
+  .startup-panel {
+    width: min(350px, calc(100vw - 36px));
+    border-radius: 19px;
+  }
+
+  .startup-logo {
+    width: 70px;
+    height: 70px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-panel,
+  .startup-logo,
+  .startup-copy > *,
+  .startup-spinner {
+    transform: none !important;
+  }
+}

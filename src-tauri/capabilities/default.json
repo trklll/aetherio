@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": [
-    "main"
+    "main",
+    "splash"
   ],
   "permissions": [
     "core:default",
@@ -15,6 +16,8 @@
     "core:window:allow-unmaximize",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "core:event:default",
     "opener:default",
     "deep-link:default"

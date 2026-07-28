@@ -1006,17 +1006,62 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
     queryClient.setQueryData(homeCatalogKeys.hero(currentHeroSignature), hero, { updatedAt: home?.heroUpdatedAt });
   }
 
-  void queryClient.prefetchQuery({
+  const rowsPromise = queryClient.prefetchQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
     queryFn: () => fetchHomeRows(addons, contentOrientation),
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
   });
-  void queryClient.prefetchQuery({
+  const heroPromise = queryClient.prefetchQuery({
     queryKey: homeCatalogKeys.hero(currentHeroSignature),
     queryFn: fetchHomeHero,
     staleTime: HOME_HERO_STALE_TIME,
     gcTime: HOME_GC_TIME,
+  });
+  return Promise.allSettled([rowsPromise, heroPromise]);
+}
+
+export async function warmHomeStartup(
+  queryClient: QueryClient,
+  addons: InstalledAddon[],
+  contentOrientation: ContentOrientation = "both",
+  onImages?: () => void,
+) {
+  await prefetchHomeData(queryClient, addons, contentOrientation);
+
+  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
+  const rows = queryClient.getQueryData<CatalogRowData[]>(homeCatalogKeys.rows(rowsSignature)) ?? [];
+  const heroSource = queryClient.getQueryData<MediaItem[]>(homeCatalogKeys.hero(heroSignature())) ?? [];
+  const heroItems = mergeHeroItems(heroSource, rows);
+
+  onImages?.();
+  const urls = new Set<string>();
+  for (const item of heroItems.slice(0, 4)) {
+    if (item.background) urls.add(item.background);
+    if (item.logo) urls.add(item.logo);
+  }
+  for (const row of rows.slice(0, 5)) {
+    for (const item of row.items.slice(0, 8)) {
+      if (item.poster) urls.add(item.poster);
+    }
+  }
+
+  await Promise.allSettled(Array.from(urls).slice(0, 36).map(preloadStartupImage));
+  preloadHomeImages(rows, heroItems);
+}
+
+function preloadStartupImage(url: string) {
+  return new Promise<void>(resolve => {
+    const image = new Image();
+    const timeout = window.setTimeout(resolve, 4_000);
+    const finish = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    image.onload = finish;
+    image.onerror = finish;
+    image.decoding = "async";
+    image.src = url;
   });
 }
 

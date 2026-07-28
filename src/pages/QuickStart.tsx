@@ -52,10 +52,11 @@ interface QuickStartProps {
   installedAddons: number;
   activeProfile: LocalProfile | null;
   useFreshDefaults?: boolean;
+  profileOnly?: boolean;
   onComplete: (destination: "/home" | "/addons") => void;
 }
 
-export default function QuickStart({ installedAddons, activeProfile, useFreshDefaults = false, onComplete }: QuickStartProps) {
+export default function QuickStart({ installedAddons, activeProfile, useFreshDefaults = false, profileOnly = false, onComplete }: QuickStartProps) {
   const [includeProfileStep] = useState(() => activeProfile === null);
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<LocalProfile | null>(activeProfile);
@@ -69,7 +70,9 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
   const [homePreferences, setHomePreferences] = useState<HomePreferences>(() => useFreshDefaults
     ? { ...DEFAULT_HOME_PREFERENCES, catalogOrder: [], hiddenCatalogKeys: [] }
     : getHomePreferences());
-  const steps: QuickStartStep[] = includeProfileStep
+  const steps: QuickStartStep[] = profileOnly
+    ? ["profile"]
+    : includeProfileStep
     ? ["profile", "welcome", "content", "playback", "apis", "addons"]
     : ["welcome", "content", "playback", "apis", "addons"];
   const currentStep = steps[step];
@@ -94,6 +97,11 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
         { makeActive: true, adoptCurrentData: isFirstProfile },
       );
       setProfile(created);
+      if (profileOnly) {
+        completeQuickStart();
+        onComplete("/home");
+        return;
+      }
       setStep(1);
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : "No se pudo crear el perfil.");
@@ -209,7 +217,7 @@ export default function QuickStart({ installedAddons, activeProfile, useFreshDef
             Atrás
           </button>
 
-          {step < steps.length - 1 ? (
+          {step < steps.length - 1 || currentStep === "profile" ? (
             <button
               type="button"
               onClick={() => void continueToNextStep()}
