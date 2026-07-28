@@ -8,7 +8,6 @@ import "./StartupExperience.css";
 
 export default function NativeSplashWindow() {
   const rootRef = useRef<HTMLElement>(null);
-  const statusRef = useRef<HTMLParagraphElement>(null);
   const closingRef = useRef(false);
   const [status, setStatus] = useState("Iniciando Aetherio");
 
@@ -25,12 +24,6 @@ export default function NativeSplashWindow() {
     }, root);
     return () => context.revert();
   }, []);
-
-  useEffect(() => {
-    const element = statusRef.current;
-    if (!element || closingRef.current) return;
-    gsap.fromTo(element, { autoAlpha: 0, y: 4 }, { autoAlpha: 1, y: 0, duration: 0.28, ease: "power2.out" });
-  }, [status]);
 
   useEffect(() => {
     let disposed = false;
@@ -77,18 +70,16 @@ export default function NativeSplashWindow() {
       data-testid="aetherio-native-splash"
       role="status"
       aria-live="polite"
-      aria-label="Aetherio está cargando"
+      aria-label={status}
     >
       <div className="startup-brand" data-tauri-drag-region>
         <img className="startup-logo" src={aetherioLogo} alt="" draggable={false} />
         <div className="startup-copy" data-tauri-drag-region>
           <strong>Aetherio</strong>
-          <p ref={statusRef} key={status}>{status}</p>
         </div>
       </div>
       <div className="startup-loader" aria-hidden="true" data-tauri-drag-region>
         <span className="startup-spinner" />
-        <span>Preparando tu espacio</span>
       </div>
     </main>
   );

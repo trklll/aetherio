@@ -99,6 +99,14 @@ export const useCacheStore = create<CacheStore>()(
   )
 );
 
+export async function rehydrateHomeCacheForActiveProfile() {
+  useCacheStore.persist.setOptions({
+    name: getScopedStorageKey("aetherio-home-cache-v1"),
+  });
+  useCacheStore.setState({ home: null });
+  await useCacheStore.persist.rehydrate();
+}
+
 export function isFreshHomeCache(updatedAt: number) {
   return updatedAt > 0 && Date.now() - updatedAt < HOME_CACHE_MAX_AGE;
 }

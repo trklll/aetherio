@@ -173,3 +173,13 @@ export const useAddonStore = create<AddonStore>((set, get) => ({
   setInstallError: error => set({ installError: error }),
   getEnabledAddons: () => get().addons.filter(addon => addon.enabled),
 }));
+
+export function reloadAddonsForActiveProfile() {
+  const addons = loadAddonScopes();
+  useAddonStore.setState({
+    addons,
+    isInstalling: false,
+    installError: null,
+  });
+  return addons;
+}

@@ -135,6 +135,14 @@
   transform: scale(1.12);
 }
 
+.profile-card:disabled {
+  cursor: wait;
+}
+
+.profile-card:disabled:not(.profile-card-selecting) {
+  opacity: 0.45;
+}
+
 .profile-card-avatar {
   position: relative;
   display: flex;

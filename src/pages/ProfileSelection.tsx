@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Lock, Check } from "lucide-react";
+import { Plus, Lock, Check, LoaderCircle } from "lucide-react";
 import ProfileAvatar from "../components/profile/ProfileAvatar.tsx";
+import { gsap } from "../utils/motion.ts";
 import {
   getLocalProfiles,
   getActiveProfileId,
@@ -23,11 +24,16 @@ const PASTEL_COLORS = [
   "#a7f3d0",
 ];
 
-export default function ProfileSelection() {
+interface ProfileSelectionProps {
+  onProfileSelected?: (profile: LocalProfile) => Promise<void>;
+}
+
+export default function ProfileSelection({ onProfileSelected }: ProfileSelectionProps) {
   const navigate = useNavigate();
   const profiles = useMemo(() => getLocalProfiles(), []);
   const [pinModal, setPinModal] = useState<{ profile: LocalProfile; pin: string; error: string } | null>(null);
   const [adding, setAdding] = useState(false);
+  const [selectingId, setSelectingId] = useState<string | null>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
 
   const hasActive = !!getActiveProfileId();
@@ -71,17 +77,36 @@ export default function ProfileSelection() {
     if (pinModal) pinInputRef.current?.focus();
   }, [pinModal]);
 
+  useEffect(() => {
+    if (!selectingId) return;
+    const tween = gsap.to(".profile-selection-spinner", {
+      rotate: 360,
+      duration: 0.9,
+      repeat: -1,
+      ease: "none",
+    });
+    return () => {
+      tween.kill();
+    };
+  }, [selectingId]);
+
   function selectProfile(profile: LocalProfile) {
     if (profile.pin) {
       setPinModal({ profile, pin: "", error: "" });
       return;
     }
-    enterProfile(profile);
+    void enterProfile(profile);
   }
 
-  function enterProfile(profile: LocalProfile) {
+  async function enterProfile(profile: LocalProfile) {
+    if (selectingId) return;
+    setSelectingId(profile.id);
     setActiveProfile(profile.id);
-    navigate("/home", { replace: true });
+    try {
+      await onProfileSelected?.(profile);
+    } finally {
+      navigate("/home", { replace: true });
+    }
   }
 
   async function submitPin() {
@@ -93,7 +118,7 @@ export default function ProfileSelection() {
     }
     const profile = pinModal.profile;
     setPinModal(null);
-    enterProfile(profile);
+    await enterProfile(profile);
   }
 
   function addProfile() {
@@ -126,7 +151,7 @@ export default function ProfileSelection() {
 
       <main className="profile-selection-content">
         <h1 className="profile-selection-title">
-          ¿Quién está viendo ahora?
+          ¿Quién está viendo?
         </h1>
 
         <div className="profile-selection-row">
@@ -134,11 +159,12 @@ export default function ProfileSelection() {
             <button
               key={profile.id}
               onClick={() => selectProfile(profile)}
+              disabled={selectingId !== null}
               onMouseEnter={() => setHoveredId(profile.id)}
               onMouseLeave={() => setHoveredId(null)}
               onFocus={() => setHoveredId(profile.id)}
               onBlur={() => setHoveredId(null)}
-              className="profile-card"
+              className={`profile-card ${selectingId === profile.id ? "profile-card-selecting" : ""}`}
             >
               <div
                 className="profile-card-avatar"
@@ -152,13 +178,15 @@ export default function ProfileSelection() {
                   <span>{getProfileInitial(profile)}</span>
                 )}
               </div>
-              <span className="profile-card-name">{profile.name}</span>
+              <span className="profile-card-name">
+                {selectingId === profile.id ? <LoaderCircle className="profile-selection-spinner" size={20} /> : profile.name}
+              </span>
             </button>
           ))}
 
           <button
             onClick={addProfile}
-            disabled={adding}
+            disabled={adding || selectingId !== null}
             className="profile-card profile-card-add"
           >
             <div className="profile-card-avatar">

@@ -1,7 +1,8 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAddonStore } from "./store/addonStore.ts";
+import { reloadAddonsForActiveProfile, useAddonStore } from "./store/addonStore.ts";
+import { rehydrateHomeCacheForActiveProfile } from "./store/cacheStore.ts";
 import AppShell from "./components/layout/AppShell.tsx";
 import {
   createLocalProfile,
@@ -111,13 +112,13 @@ export default function App() {
       }
 
       setStartupStatus("Cargando tu biblioteca");
-      await Promise.race([
-        warmHomeStartup(queryClient, enabledAddons, getHomePreferences().contentOrientation, () => {
-          if (!disposed) setStartupStatus("Preparando imágenes");
-        }),
-        new Promise<void>(resolve => window.setTimeout(resolve, 6_500)),
-      ]);
+      await warmHomeStartup(queryClient, enabledAddons, getHomePreferences().contentOrientation, () => {
+        if (!disposed) setStartupStatus("Preparando imágenes");
+      });
       if (!disposed) {
+        if (currentProfiles.length > 1) {
+          navigate("/profiles", { replace: true });
+        }
         setStartupStatus("Todo listo");
         setStartupReady(true);
       }
@@ -132,7 +133,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [account, authRestored, enabledAddons, localMode, profileRevision, queryClient, startupReady]);
+  }, [account, authRestored, enabledAddons, localMode, navigate, profileRevision, queryClient, startupReady]);
 
   useEffect(() => {
     if (!account) return;
@@ -260,7 +261,19 @@ export default function App() {
   if (location.pathname === "/profiles") {
     return withStartup(
       <Suspense fallback={<RouteFallback />}>
-        <ProfileSelection />
+        <ProfileSelection
+          onProfileSelected={async () => {
+            setProfileRevision(value => value + 1);
+            const nextEnabledAddons = reloadAddonsForActiveProfile().filter(addon => addon.enabled);
+            await rehydrateHomeCacheForActiveProfile();
+            queryClient.removeQueries({ queryKey: ["home"] });
+            await warmHomeStartup(
+              queryClient,
+              nextEnabledAddons,
+              getHomePreferences().contentOrientation,
+            );
+          }}
+        />
       </Suspense>,
     );
   }

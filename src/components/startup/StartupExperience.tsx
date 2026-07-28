@@ -84,7 +84,6 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
   const [visible, setVisible] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const statusRef = useRef<HTMLParagraphElement>(null);
   const startedAtRef = useRef(Date.now());
 
   useLayoutEffect(() => {
@@ -101,12 +100,6 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
     }, root);
     return () => context.revert();
   }, []);
-
-  useEffect(() => {
-    const element = statusRef.current;
-    if (!element || !visible) return;
-    gsap.fromTo(element, { autoAlpha: 0, y: 4 }, { autoAlpha: 1, y: 0, duration: 0.28, ease: "power2.out" });
-  }, [status, visible]);
 
   useEffect(() => {
     if (!ready || !visible) return;
@@ -147,17 +140,15 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
       </div>
       {visible ? (
         <div ref={rootRef} className="startup-experience" data-testid="aetherio-startup">
-          <section className="startup-panel" role="status" aria-live="polite" aria-label="Aetherio está cargando">
+          <section className="startup-panel" role="status" aria-live="polite" aria-label={status}>
             <div className="startup-brand">
               <img className="startup-logo" src={aetherioLogo} alt="" />
               <div className="startup-copy">
                 <strong>Aetherio</strong>
-                <p ref={statusRef} key={status}>{status}</p>
               </div>
             </div>
             <div className="startup-loader" aria-hidden="true">
               <span className="startup-spinner" />
-              <span>Preparando tu espacio</span>
             </div>
           </section>
         </div>

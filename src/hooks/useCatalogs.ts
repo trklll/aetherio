@@ -1036,29 +1036,41 @@ export async function warmHomeStartup(
 
   onImages?.();
   const urls = new Set<string>();
-  for (const item of heroItems.slice(0, 4)) {
+  for (const item of heroItems) {
     if (item.background) urls.add(item.background);
     if (item.logo) urls.add(item.logo);
+    if (item.poster) urls.add(item.poster);
   }
-  for (const row of rows.slice(0, 5)) {
-    for (const item of row.items.slice(0, 8)) {
+  for (const row of rows) {
+    for (const item of row.items) {
       if (item.poster) urls.add(item.poster);
+      if (item.background) urls.add(item.background);
+      if (item.logo) urls.add(item.logo);
     }
   }
 
-  await Promise.allSettled(Array.from(urls).slice(0, 36).map(preloadStartupImage));
+  await Promise.allSettled(Array.from(urls).map(preloadStartupImage));
   preloadHomeImages(rows, heroItems);
 }
 
 function preloadStartupImage(url: string) {
   return new Promise<void>(resolve => {
     const image = new Image();
-    const timeout = window.setTimeout(resolve, 4_000);
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(timeout);
       resolve();
     };
-    image.onload = finish;
+    const timeout = window.setTimeout(finish, 8_000);
+    image.onload = () => {
+      if (typeof image.decode !== "function") {
+        finish();
+        return;
+      }
+      void image.decode().catch(() => undefined).finally(finish);
+    };
     image.onerror = finish;
     image.decoding = "async";
     image.src = url;
