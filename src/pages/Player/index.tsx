@@ -45,6 +45,7 @@ import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
 import { useMpvStatus } from "./useMpvStatus";
 import { useSkipIntro } from "./useSkipIntro";
+import { useDiscordPresence } from "../../hooks/useDiscordPresence";
 import {
   AUTO_NEXT_SOURCE_KEY,
   SELECTED_ENGINE_KEY,
@@ -178,6 +179,7 @@ export default function PlayerPage() {
   const [selectedMediaName, setSelectedMediaName] = useState("");
   const [selectedMediaBackground, setSelectedMediaBackground] = useState("");
   const [selectedMediaLogo, setSelectedMediaLogo] = useState("");
+  const [selectedMediaPoster, setSelectedMediaPoster] = useState("");
   const [selectedResumeTime, setSelectedResumeTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [manualPaused, setManualPaused] = useState(false);
@@ -240,6 +242,26 @@ export default function PlayerPage() {
   );
   const hasMpvError = !isLeavingPlayer && !androidPlayback && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
   const nativeSurfaceVisible = !androidPlayback && !isIframeStream && Boolean(stream && playbackStarted && !hasMpvError);
+
+  const currentEpisode = query?.season && query?.episode
+    ? episodeOptions.find(ep => ep.episode === query.episode) ?? null
+    : null;
+
+  useDiscordPresence({
+    enabled: playbackPreferences.enableDiscordRichPresence && !androidPlayback,
+    hasStream: Boolean(stream),
+    playbackStarted,
+    playing: playing && !manualPaused,
+    manualPaused,
+    currentTime,
+    duration,
+    query,
+    stream: safeStream,
+    mediaName: selectedMediaName,
+    episodeName: currentEpisode?.name,
+    posterUrl: selectedMediaPoster || undefined,
+    isTrailer: isTrailerStream,
+  });
 
   useEffect(() => {
     leavingPlayerRef.current = isLeavingPlayer;
@@ -335,11 +357,13 @@ export default function PlayerPage() {
           setSelectedMediaName(typeof parsedMeta.name === "string" ? parsedMeta.name : "");
           setSelectedMediaBackground(typeof background === "string" ? background : "");
           setSelectedMediaLogo(sanitizeLogoUrl(parsedMeta.logo) ?? "");
+          setSelectedMediaPoster(typeof parsedMeta.poster === "string" && parsedMeta.poster ? parsedMeta.poster : (typeof background === "string" ? background : ""));
           setSelectedResumeTime(Number.isFinite(parsedMeta.resumeTime) ? Math.max(0, Number(parsedMeta.resumeTime)) : 0);
         } catch {
           setSelectedMediaName("");
           setSelectedMediaBackground("");
           setSelectedMediaLogo("");
+          setSelectedMediaPoster("");
           setSelectedResumeTime(0);
         }
       }
@@ -1672,7 +1696,6 @@ const { activeSegment: activeSkipSegment } = useSkipIntro(query, mediaTitle, cur
 });
 const playbackTarget = getPlaybackTarget(stream);
 const currentEpisodeIndex = episodeOptions.findIndex(episode => episode.episode === query?.episode);
-const currentEpisode = currentEpisodeIndex >= 0 ? episodeOptions[currentEpisodeIndex] : null;
 const canGoPrevEpisode = currentEpisodeIndex > 0;
 const canGoNextEpisode = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodeOptions.length - 1;
 const isMovie = query?.type === "movie";

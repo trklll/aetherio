@@ -30,6 +30,11 @@ import {
   initializeAniListProgressSync,
   syncAniListLibrary,
 } from "./integrations/aniList.ts";
+import { startDiscordRichPresence, stopDiscordRichPresence } from "./integrations/discordPresence.ts";
+import {
+  getPlaybackPreferences,
+  PLAYBACK_PREFERENCES_CHANGED_EVENT,
+} from "./config/playbackPreferences.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();
@@ -145,6 +150,23 @@ export default function App() {
     void syncAniListLibrary().catch(() => undefined);
     return initializeAniListProgressSync();
   }, [account]);
+
+  useEffect(() => {
+    const check = () => {
+      if (getPlaybackPreferences().enableDiscordRichPresence) {
+        void startDiscordRichPresence();
+      } else {
+        void stopDiscordRichPresence();
+      }
+    };
+    check();
+    window.addEventListener(PLAYBACK_PREFERENCES_CHANGED_EVENT, check);
+    window.addEventListener("storage", check);
+    return () => {
+      window.removeEventListener(PLAYBACK_PREFERENCES_CHANGED_EVENT, check);
+      window.removeEventListener("storage", check);
+    };
+  }, []);
 
   useEffect(() => {
     if (!hasProfile || !enabledAddons.length) return;

@@ -1,6 +1,6 @@
 [package]
 name = "aetherio"
-version = "0.4.5"
+version = "0.4.6"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -50,6 +50,7 @@ tokio-stream = "0.1"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 librqbit = { version = "8.1.1", default-features = false, features = ["http-api", "default-tls", "tracing-subscriber-utils"] }
 tauri-plugin-updater = "2"
+discord-rich-presence = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", features = ["windows-native"] }

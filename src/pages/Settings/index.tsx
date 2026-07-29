@@ -77,7 +77,7 @@ import {
 import { getStoredAccount, leaveLocalMode, logoutAccount } from "../../auth/authClient";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "omdb" | "trakt" | "mdblist";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "omdb" | "trakt" | "mdblist" | "discord";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 
 const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
@@ -85,7 +85,7 @@ const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: "design", label: "DiseÃ±o", icon: <Palette size={17} /> },
   { id: "addons", label: "Complementos", icon: <Puzzle size={17} /> },
   { id: "sources", label: "Fuentes", icon: <RadioTower size={17} /> },
-  { id: "playback", label: "Reproducción", icon: <PlayCircle size={17} /> },
+  { id: "playback", label: "Reproducciï¿½n", icon: <PlayCircle size={17} /> },
   { id: "about", label: "Acerca de", icon: <Info size={17} /> },
 ];
 
@@ -372,6 +372,8 @@ export default function SettingsPage() {
               onNavigateToProfiles={() => navigate("/profiles")}
               onMdbListChange={updateMdbList}
               onSaveIntegrations={saveIntegrations}
+              playback={playback}
+              onPlaybackChange={updatePlayback}
             />
           ) : null}
 
@@ -441,6 +443,8 @@ function AccountPanel({
   onMdbListChange,
   onSaveIntegrations,
   onNavigateToProfiles,
+  playback,
+  onPlaybackChange,
 }: {
   view: AccountView;
   profiles: LocalProfile[];
@@ -472,6 +476,8 @@ function AccountPanel({
   onNavigateToProfiles: () => void;
   onMdbListChange: (patch: Partial<MdbListSettings>) => void;
   onSaveIntegrations: () => void;
+  playback: PlaybackPreferences;
+  onPlaybackChange: <Value extends PlaybackPreferences[keyof PlaybackPreferences]>(name: keyof PlaybackPreferences, value: Value) => void;
 }) {
   const account = getStoredAccount();
   const [traktAuth, setTraktAuth] = useState(() => getTraktAuthSnapshot());
@@ -606,7 +612,25 @@ function AccountPanel({
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
           <NavRow title="OMDb" description=" clave opcional de OMDb API para mostrar badges de premios en el detalle cuando Wikidata no tiene datos." onClick={() => onViewChange("omdb")} />
           <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
+          <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estas viendo en Aetherio." onClick={() => onViewChange("discord")} />
         </PillBlock>
+      </PanelScaffold>
+    );
+  }
+
+  if (view === "discord") {
+    return (
+      <PanelScaffold title="Discord Rich Presence" onBack={() => onViewChange("integrations")}>
+        <PillBlock>
+          <ToggleRow
+            title="Mostrar que estoy viendo en Discord"
+            description="Aetherio conecta con Discord localmente y muestra la pelicula o serie que se esta reproduciendo. No se envia informacion a ningÃºn servidor."
+            checked={playback.enableDiscordRichPresence}
+            onChange={checked => onPlaybackChange("enableDiscordRichPresence", checked)}
+          />
+        </PillBlock>
+        <p className="text-xs text-white/36">La presencia se actualiza solo mientras reproducokes contenido en el reproductor de escritorio.</p>
+        {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
       </PanelScaffold>
     );
   }
@@ -1224,12 +1248,12 @@ function PlaybackPanel({
   saved: boolean;
 }) {
   return (
-    <PanelScaffold title="Reproducción">
+    <PanelScaffold title="Reproducciï¿½n">
       <div className="grid gap-5">
         <PillBlock title="REPRODUCTOR">
           <ToggleRow
-            title="Mostrar superposición de carga"
-            description="Mostrar la superposición de carga inicial mientras empieza a reproducirse un stream."
+            title="Mostrar superposiciï¿½n de carga"
+            description="Mostrar la superposiciï¿½n de carga inicial mientras empieza a reproducirse un stream."
             checked={playback.showLoadingOverlay}
             onChange={checked => onPlaybackChange("showLoadingOverlay", checked)}
           />

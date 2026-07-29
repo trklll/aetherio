@@ -1,3 +1,4 @@
+mod discord_rpc;
 mod p2p;
 mod scraper;
 mod secure_credentials;
@@ -4598,6 +4599,7 @@ pub fn run() {
         .manage(P2pState::default())
         .manage(youtube_state)
         .manage(scraper::provider_http::ProviderHttpState::default())
+        .manage(discord_rpc::DiscordRpcState::new())
         .invoke_handler(tauri::generate_handler![
             playback_capabilities,
             youtube_search,
@@ -4628,7 +4630,11 @@ pub fn run() {
             secure_credentials::secure_credential_delete,
             scraper::scrape_streams,
             scraper::get_scraper_sites,
-            scraper::provider_http::provider_http_request
+            scraper::provider_http::provider_http_request,
+            discord_rpc::discord_rpc_start,
+            discord_rpc::discord_rpc_stop,
+            discord_rpc::discord_rpc_set_activity,
+            discord_rpc::discord_rpc_clear
         ])
         .on_window_event(|window, event| {
             let state = window.state::<MpvState>();

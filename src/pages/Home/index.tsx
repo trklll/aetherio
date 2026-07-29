@@ -171,11 +171,16 @@ export default function HomePage() {
             const saved = getHomeScroll();
             return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} />;
           })}
-        {!typeFilter && homePreferences.contentOrientation !== "movies-series" && <GenreShowcase />}
-        {animeRows.map((row, i) => {
+        {animeRows.slice(0, 2).map((row, i) => {
             const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
             const saved = getHomeScroll();
             return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} />;
+          })}
+        {!typeFilter && homePreferences.contentOrientation !== "movies-series" && <GenreShowcase />}
+        {animeRows.slice(2).map((row, i) => {
+            const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
+            const saved = getHomeScroll();
+            return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i + 2}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} />;
           })}
         {!baseRows.length && !animeRows.length && (
           <Empty typeFilter={typeFilter} />

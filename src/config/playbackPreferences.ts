@@ -28,6 +28,8 @@ export interface PlaybackPreferences {
   nextEpisodeThresholdPercent: number;
   preferredSubtitleLanguage: string;
   addonSubtitleLoadMode: AddonSubtitleLoadMode;
+  /** When true, the desktop runtime advertises what is being watched to Discord. */
+  enableDiscordRichPresence: boolean;
 }
 
 interface CachedLastLink {
@@ -59,6 +61,7 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   nextEpisodeThresholdPercent: 99,
   preferredSubtitleLanguage: "spa",
   addonSubtitleLoadMode: "preferred",
+  enableDiscordRichPresence: true,
 };
 
 export const LANGUAGE_OPTIONS = [
@@ -218,6 +221,7 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
     nextEpisodeThresholdPercent: clampNumber(preferences.nextEpisodeThresholdPercent, 50, 100, DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdPercent),
     preferredSubtitleLanguage: normalizeLanguage(preferences.preferredSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.preferredSubtitleLanguage),
     addonSubtitleLoadMode: preferences.addonSubtitleLoadMode === "all" ? "all" : "preferred",
+    enableDiscordRichPresence: typeof preferences.enableDiscordRichPresence === "boolean" ? preferences.enableDiscordRichPresence : DEFAULT_PLAYBACK_PREFERENCES.enableDiscordRichPresence,
   };
 }
 
