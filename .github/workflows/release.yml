@@ -110,14 +110,14 @@ jobs:
           } | ConvertTo-Json -Compress
 
           Invoke-RestMethod `
-            -Uri "https://aetherio.aetherio.workers.dev/api/internal/releases" `
+            -Uri "https://trkll.aetherio.workers.dev/api/internal/releases" `
             -Method Post `
             -Headers @{ Authorization = "Bearer $env:AETHERIO_RELEASE_TOKEN" } `
             -ContentType "application/json" `
             -Body $payload
 
           $websiteRelease = Invoke-RestMethod `
-            -Uri "https://aetherio.aetherio.workers.dev/api/release?version=$version"
+            -Uri "https://trkll.aetherio.workers.dev/api/release?version=$version"
           if ($websiteRelease.version -ne $version) {
             throw "La web no anuncia la version $version."
           }
@@ -131,7 +131,7 @@ jobs:
             --head `
             --output NUL `
             --write-out "%{http_code}`n%{redirect_url}" `
-            "https://aetherio.aetherio.workers.dev/download/windows?version=$version"
+            "https://trkll.aetherio.workers.dev/download/windows?version=$version"
           if ($LASTEXITCODE -ne 0) {
             throw "No se pudo consultar la descarga web."
           }
