@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Search, X } from "lucide-react";
 import clsx from "clsx";
@@ -10,7 +10,8 @@ import {
   type LocalProfile,
 } from "../../utils/localProfiles";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { searchMedia, type UnifiedSearchResult } from "../../utils/searchProviders";
+import { useMediaSearch } from "../../hooks/useMediaSearch";
+import type { UnifiedSearchResult } from "../../utils/searchProviders";
 
 const NAV_ITEMS = [
   { label: "Inicio", to: "/home", type: null },
@@ -23,12 +24,18 @@ export default function TopNav() {
   const addons = useAddonStore(state => state.addons);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<UnifiedSearchResult[]>([]);
   const [showSugg, setShowSugg] = useState(false);
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
   const inputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { response: suggestionResponse } = useMediaSearch({
+    query,
+    mode: "suggestions",
+    addons,
+    limit: 6,
+    enabled: searching,
+  });
+  const suggestions = suggestionResponse.query === query.trim() ? suggestionResponse.results : [];
   const [scrolled, setScrolled] = useState(false);
   const [hovering, setHovering] = useState(false);
   const collapsed = scrolled && !hovering && !searching;
@@ -73,30 +80,12 @@ export default function TopNav() {
   function closeSearch() {
     setSearching(false);
     setQuery("");
-    setSuggestions([]);
     setShowSugg(false);
   }
 
-  const fetchSuggestions = useCallback(async (q: string) => {
-    if (q.trim().length < 2) {
-      setSuggestions([]);
-      setShowSugg(false);
-      return;
-    }
-    try {
-      const filtered = await searchMedia(q, addons, 6);
-      setSuggestions(filtered);
-      setShowSugg(filtered.length > 0);
-    } catch {
-      setSuggestions([]);
-      setShowSugg(false);
-    }
-  }, [addons]);
-
   function handleInput(val: string) {
     setQuery(val);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchSuggestions(val), 200);
+    setShowSugg(val.trim().length >= 2);
   }
 
   function handleSearch(q = query) {
@@ -110,6 +99,14 @@ export default function TopNav() {
     closeSearch();
     navigate(`/detail/${encodeURIComponent(s.type)}/${encodeURIComponent(s.id)}`);
   }
+
+  useEffect(() => {
+    if (!searching || suggestions.length === 0) {
+      if (searching && query.trim().length < 2) setShowSugg(false);
+      return;
+    }
+    setShowSugg(true);
+  }, [query, searching, suggestions.length]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

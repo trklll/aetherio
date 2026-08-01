@@ -17,7 +17,7 @@ import {
   type YouTubeClipCandidate,
 } from "../../services/youtubeClips.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
-import { useAwards, featuredText } from "../../hooks/useAwards.ts";
+import { useAwards, awardCategoryLabel, featuredText } from "../../hooks/useAwards.ts";
 import { AwardLogo } from "../../components/awards/AwardLogo";
 
 interface Props {
@@ -482,7 +482,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                           textShadow: "0 2px 10px rgba(0,0,0,0.7)",
                         }}
                       >
-                        {awards.featured.categoryEs}
+                        {awardCategoryLabel(awards.featured)}
                       </div>
                     )}
                   </div>

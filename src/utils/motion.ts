@@ -284,7 +284,6 @@ const motionSelector = [
   ".gsap-transition",
   ".aetherio-detail-fade",
   ".detail-episode-card",
-  ".detail-episode-card__image",
   ".detail-episode-card__media",
   ".detail-episode-card__menu",
   ".person-portrait",
@@ -297,7 +296,6 @@ const motionSelector = [
 const hoverSelector = [
   ".gsap-transition",
   ".detail-episode-card",
-  ".detail-episode-card__image",
   ".detail-episode-card__media",
   ".detail-episode-card__menu",
   ".person-portrait",

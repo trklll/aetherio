@@ -33,6 +33,11 @@ export interface AwardRecord {
   workYear?: number;
   sourceUrl: string;
   sourceTier: SourceTier;
+  /** Identidad de la obra asociada, disponible cuando existe un enlace resuelto. */
+  mediaType?: MediaType;
+  tmdbId?: number;
+  imdbId?: string;
+  anilistId?: number;
 }
 
 export interface CeremonyMeta {
@@ -115,6 +120,26 @@ export interface AwardMediaResponse {
   coverage: Record<AwardCeremony, CoverageSummary>;
   /** Cobertura de las ceremonias con ediciones en los años de la obra. */
   relevantCoverage?: Record<string, CoverageSummary>;
+  generatedAt: string;
+}
+
+/** Premios recibidos por una persona, filtrados desde el array de destinatarios. */
+export interface AwardPersonResponse {
+  personName: string;
+  identity: {
+    id: string | null;
+    canonicalName: string | null;
+    tmdbId: number | null;
+    imdbId: string | null;
+    wikidataId: string | null;
+    anilistStaffId: number | null;
+  };
+  resolution: {
+    status: "resolved" | "pending" | "ambiguous" | "unresolved";
+    reason: string | null;
+  };
+  records: AwardRecord[];
+  summary: { winners: number; nominees: number; ceremonies: number };
   generatedAt: string;
 }
 

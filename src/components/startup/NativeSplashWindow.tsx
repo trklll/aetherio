@@ -74,9 +74,6 @@ export default function NativeSplashWindow() {
     >
       <div className="startup-brand" data-tauri-drag-region>
         <img className="startup-logo" src={aetherioLogo} alt="" draggable={false} />
-        <div className="startup-copy" data-tauri-drag-region>
-          <strong>Aetherio</strong>
-        </div>
       </div>
       <div className="startup-loader" aria-hidden="true" data-tauri-drag-region>
         <span className="startup-spinner" />

@@ -55,6 +55,10 @@ export function useHomePreferences() {
 
   useEffect(() => {
     const refresh = () => setPreferences(getHomePreferences());
+    // React Activity pauses effects for cached routes while they are hidden.
+    // Read storage again when Home becomes visible so preferences changed in
+    // Settings are applied without requiring a full page reload.
+    refresh();
     window.addEventListener(HOME_PREFERENCES_CHANGED_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => {
@@ -103,17 +107,19 @@ export function matchesContentOrientation(type: string, orientation: ContentOrie
 
 export function applyHomeCatalogPreferences(rows: CatalogRowData[], preferences: HomePreferences) {
   const hidden = new Set(preferences.hiddenCatalogKeys);
-  const filtered = rows
-    .filter(row => !hidden.has(catalogPreferenceKey(row)))
-    .filter(row => matchesContentOrientation(row.type, preferences.contentOrientation));
+  const filtered = rows.filter(row => !hidden.has(catalogPreferenceKey(row)));
+  const ordered = sortHomeCatalogRows(filtered, preferences);
+  const explicitOrder = new Set(preferences.catalogOrder);
 
-  if (preferences.contentOrientation === "both") return filtered;
-
-  return sortHomeCatalogRows(filtered, preferences)
-    .sort((a, b) => (
-      contentOrientationPriority(a.type, preferences.contentOrientation)
-      - contentOrientationPriority(b.type, preferences.contentOrientation)
-    ));
+  // A saved order is an explicit user decision. New catalogs that do not yet
+  // appear in that order use the selected orientation as their default slot.
+  return ordered.sort((a, b) => {
+    const aExplicit = explicitOrder.has(catalogPreferenceKey(a));
+    const bExplicit = explicitOrder.has(catalogPreferenceKey(b));
+    if (aExplicit || bExplicit) return 0;
+    return contentOrientationPriority(a.type, preferences.contentOrientation)
+      - contentOrientationPriority(b.type, preferences.contentOrientation);
+  });
 }
 
 function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePreferences {

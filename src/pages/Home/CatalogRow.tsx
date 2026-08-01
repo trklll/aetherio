@@ -73,9 +73,11 @@ interface CatalogRowProps {
   onScrollOriginChange?: (atOrigin: boolean) => void;
   restoreScrollLeft?: number;
   disableHeaderNavigation?: boolean;
+  titleOverride?: string;
+  persistHomeScroll?: boolean;
 }
 
-function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false }: CatalogRowProps) {
+function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true }: CatalogRowProps) {
   const navigate = useNavigate();
   const rafRef = useRef<number | null>(null);
   const measureTimerRef = useRef<number | null>(null);
@@ -88,7 +90,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
   const [watchedVersion, setWatchedVersion] = useState(0);
-  const title = useMemo(() => homeRailTitle(row.name, row.type), [row.name, row.type]);
+  const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type), [row.name, row.type, titleOverride]);
   const ranked = useMemo(() => isTrendingRow(row), [row]);
   const maxCards = ranked ? 10 : 20;
   const rowItems = useMemo(() => row.items.slice(0, maxCards), [row.items, maxCards]);
@@ -298,6 +300,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
               <div
                 key={`${item.id}-${row.catalogId}-${idx}`}
                 onClickCapture={() => {
+                  if (!persistHomeScroll) return;
                   const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
                   saveHomeScroll({
                     vertical: shell?.scrollTop ?? 0,
@@ -564,15 +567,19 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
           tweenTo(e.currentTarget, { y: -4, zIndex: 5 });
           const poster = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-ranked-poster]");
           const artwork = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-card-artwork]");
+          const number = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-rank-number]");
           gsap.set(poster, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
           tweenTo(artwork, { scale: 1.04 });
+          tweenTo(number, { x: -3 });
         }}
         onMouseLeave={e => {
           tweenTo(e.currentTarget, { y: 0, zIndex: 1 });
           const poster = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-ranked-poster]");
           const artwork = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-card-artwork]");
+          const number = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-rank-number]");
           gsap.set(poster, { boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)" });
           tweenTo(artwork, { scale: 1 });
+          tweenTo(number, { x: 0 });
         }}
       >
         <div
@@ -584,10 +591,12 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             bottom: 0,
             width: rankedPosterLeft,
             textAlign: "right",
-            fontFamily: "'Inter', sans-serif",
+            fontFamily: "inherit",
             fontSize: 176,
             lineHeight: 0.86,
             fontWeight: 800,
+            fontVariantNumeric: "tabular-nums",
+            fontFeatureSettings: "'tnum' 1",
             letterSpacing: -5,
             color: "rgba(10,12,16,0.92)",
             WebkitTextStroke: "2px rgba(255,255,255,0.30)",

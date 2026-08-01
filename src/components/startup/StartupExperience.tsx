@@ -143,9 +143,6 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
           <section className="startup-panel" role="status" aria-live="polite" aria-label={status}>
             <div className="startup-brand">
               <img className="startup-logo" src={aetherioLogo} alt="" />
-              <div className="startup-copy">
-                <strong>Aetherio</strong>
-              </div>
             </div>
             <div className="startup-loader" aria-hidden="true">
               <span className="startup-spinner" />

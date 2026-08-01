@@ -235,20 +235,21 @@ function genreIdsForType(intent: SemanticSearchIntent, type: SemanticMediaType) 
   return Array.from(new Set([...animation, ...standard, ...animeSubgenres]));
 }
 
-async function safeTmdbFetch(path: string, params: Record<string, string>) {
+async function safeTmdbFetch(path: string, params: Record<string, string>, signal?: AbortSignal) {
   try {
-    return await tmdbFetch<any>(path, { params });
-  } catch {
+    return await tmdbFetch<any>(path, { params, signal });
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 }
 
-async function resolveKeywordIds(intent: SemanticSearchIntent) {
+async function resolveKeywordIds(intent: SemanticSearchIntent, signal?: AbortSignal) {
   const keywordQueries = ANIME_SUBGENRES
     .filter(rule => intent.animeSubgenres.includes(rule.key))
     .flatMap(rule => rule.keywords);
   const ids = await Promise.all(Array.from(new Set(keywordQueries)).map(async keyword => {
-    const json = await safeTmdbFetch("/search/keyword", { query: keyword, page: "1" });
+    const json = await safeTmdbFetch("/search/keyword", { query: keyword, page: "1" }, signal);
     const results = Array.isArray(json?.results) ? json.results : [];
     const exact = results.find((item: any) => normalizeIntentText(item?.name ?? "") === normalizeIntentText(keyword));
     const candidate = exact ?? results[0];
@@ -257,20 +258,20 @@ async function resolveKeywordIds(intent: SemanticSearchIntent) {
   return ids.filter(Boolean);
 }
 
-async function resolvePersonId(person?: SemanticSearchIntent["person"]) {
+async function resolvePersonId(person?: SemanticSearchIntent["person"], signal?: AbortSignal) {
   if (!person) return undefined;
   const json = await safeTmdbFetch("/search/person", {
     query: person.name,
     language: "es-ES",
     page: "1",
     include_adult: "false",
-  });
+  }, signal);
   return Number(json?.results?.[0]?.id) || undefined;
 }
 
-async function resolveCompanyId(company?: string) {
+async function resolveCompanyId(company?: string, signal?: AbortSignal) {
   if (!company) return undefined;
-  const json = await safeTmdbFetch("/search/company", { query: company, page: "1" });
+  const json = await safeTmdbFetch("/search/company", { query: company, page: "1" }, signal);
   const results = Array.isArray(json?.results) ? json.results : [];
   const exact = results.find((item: any) => normalizeIntentText(item?.name ?? "") === normalizeIntentText(company));
   return Number((exact ?? results[0])?.id) || undefined;
@@ -293,7 +294,7 @@ function semanticResult(item: any, type: SemanticMediaType, intent: SemanticSear
     background: item.backdrop_path ? `${TMDB_IMAGE}/original${item.backdrop_path}` : undefined,
     description: item.overview,
     year,
-    source: "tmdb",
+    source: "semantic",
     sourceName: "TMDB",
     mediaLabel: type === "movie" ? "Pelicula" : "Serie",
     popularity: Number(item.popularity) || 0,
@@ -308,6 +309,7 @@ async function discoverType(
   keywordIds: number[],
   personId?: number,
   companyId?: number,
+  signal?: AbortSignal,
 ) {
   const endpoint = type === "movie" ? "/discover/movie" : "/discover/tv";
   const params: Record<string, string> = {
@@ -329,27 +331,27 @@ async function discoverType(
   if (personId && intent.person) params[intent.person.role === "crew" ? "with_crew" : "with_cast"] = String(personId);
   if (companyId) params.with_companies = String(companyId);
 
-  let json = await safeTmdbFetch(endpoint, params);
+  let json = await safeTmdbFetch(endpoint, params, signal);
   let results = Array.isArray(json?.results) ? json.results : [];
   if (!results.length && params.with_keywords) {
     const { with_keywords: _keywords, ...fallbackParams } = params;
-    json = await safeTmdbFetch(endpoint, fallbackParams);
+    json = await safeTmdbFetch(endpoint, fallbackParams, signal);
     results = Array.isArray(json?.results) ? json.results : [];
   }
   return results.slice(0, 24).map((item: any) => semanticResult(item, type, intent));
 }
 
-export async function searchTmdbSemantically(query: string): Promise<UnifiedSearchResult[]> {
+export async function searchTmdbSemantically(query: string, signal?: AbortSignal): Promise<UnifiedSearchResult[]> {
   const intent = parseSemanticSearchIntent(query);
   if (!intent.active) return [];
 
   const [keywordIds, personId, companyId] = await Promise.all([
-    resolveKeywordIds(intent),
-    resolvePersonId(intent.person),
-    resolveCompanyId(intent.company),
+    resolveKeywordIds(intent, signal),
+    resolvePersonId(intent.person, signal),
+    resolveCompanyId(intent.company, signal),
   ]);
   const groups = await Promise.all(
-    intent.mediaTypes.map(type => discoverType(type, intent, keywordIds, personId, companyId)),
+    intent.mediaTypes.map(type => discoverType(type, intent, keywordIds, personId, companyId, signal)),
   );
   return groups.flat();
 }

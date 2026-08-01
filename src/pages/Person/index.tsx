@@ -4,6 +4,15 @@ import { useNavigate, useParams } from "react-router-dom";
 import { X } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
 import { fetchAniListCharacterPhotos } from "../../services/animeResolve";
+import {
+  awardCategoryLabel,
+  ceremonyName,
+  STATUS_LABELS,
+  usePersonAwards,
+  type AwardRecord,
+  type PersonAwardsData,
+} from "../../hooks/useAwards";
+import { AwardLogo } from "../../components/awards/AwardLogo";
 import "./person.css";
 import { gsap, scrollByGsap } from "../../utils/motion";
 
@@ -42,6 +51,7 @@ interface PersonDetail {
   deathday: string;
   placeOfBirth: string;
   alsoKnownAs: string[];
+  externalIds: { imdbId: string | null; wikidataId: string | null };
   knownFor: PersonCredit[];
   credits: PersonCredit[];
 }
@@ -54,6 +64,13 @@ export default function PersonPage() {
   const [biographyOpen, setBiographyOpen] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
   const loadedPersonKeyRef = useRef<string | null>(null);
+  const personAwards = usePersonAwards(
+    person?.id ?? null,
+    person?.name ?? "",
+    person?.alsoKnownAs ?? [],
+    Boolean(person),
+    person?.externalIds,
+  );
 
   useEffect(() => {
     if (loadedPersonKeyRef.current === id && person) return;
@@ -86,7 +103,7 @@ export default function PersonPage() {
           const yearDifference = (Number(b.year) || 0) - (Number(a.year) || 0);
           return yearDifference || b.popularity - a.popularity;
         });
-        const knownForBase = deduped
+        const knownForBase = dedupeCreditsByMedia(deduped)
           .filter(credit => credit.backdropUrl || credit.posterUrl)
           .sort((a, b) => knownForScore(b) - knownForScore(a))
           .slice(0, 12);
@@ -101,6 +118,10 @@ export default function PersonPage() {
           deathday: data.deathday ?? "",
           placeOfBirth: data.place_of_birth ?? "",
           alsoKnownAs: Array.isArray(data.also_known_as) ? data.also_known_as : [],
+          externalIds: {
+            imdbId: typeof data.external_ids?.imdb_id === "string" ? data.external_ids.imdb_id : null,
+            wikidataId: typeof data.external_ids?.wikidata_id === "string" ? data.external_ids.wikidata_id : null,
+          },
           knownFor: knownForBase,
           credits: deduped,
         };
@@ -234,6 +255,7 @@ export default function PersonPage() {
           </section>
         ) : null}
 
+        <PersonAwardsSection awards={personAwards} onOpen={record => openAwardRecord(navigate, record)} />
         <CreditsSection credits={person.credits} onOpen={credit => openCredit(navigate, credit)} />
       </main>
 
@@ -377,47 +399,168 @@ function HorizontalRail({ className, label, resetKey, children }: { className: s
   );
 }
 
+type CreditFilter = "all" | CreditType;
+
 function CreditsSection({ credits, onOpen }: { credits: PersonCredit[]; onOpen: (credit: PersonCredit) => void }) {
+  const [filter, setFilter] = useState<CreditFilter>("all");
+  const filteredCredits = useMemo(
+    () => filter === "all" ? credits : credits.filter(credit => credit.type === filter),
+    [credits, filter],
+  );
   const groups = useMemo(() => {
     const map = new Map<string, PersonCredit[]>();
-    credits.forEach(credit => {
+    filteredCredits.forEach(credit => {
       const year = credit.year || "Sin fecha";
       map.set(year, [...(map.get(year) ?? []), credit]);
     });
-    return [...map.entries()];
-  }, [credits]);
+    return [...map.entries()].sort(([a], [b]) => {
+      if (a === "Sin fecha") return 1;
+      if (b === "Sin fecha") return -1;
+      return Number(b) - Number(a);
+    });
+  }, [filteredCredits]);
+  const counts = useMemo(() => ({
+    all: credits.length,
+    movie: credits.filter(credit => credit.type === "movie").length,
+    series: credits.filter(credit => credit.type === "series").length,
+  }), [credits]);
+  const filters: Array<{ id: CreditFilter; label: string }> = [
+    { id: "all", label: "Todos" },
+    { id: "movie", label: "Películas" },
+    { id: "series", label: "Series" },
+  ];
 
   return (
-    <section className="person-section person-credits-section">
-      <h2>Créditos</h2>
-      {!groups.length ? <p className="person-no-credits">No hay créditos disponibles.</p> : null}
-      {groups.map(([year, items]) => (
-        <div className="person-credit-year" key={year}>
-          <h3>{year}</h3>
-          <div className="person-credit-list">
-            {items.map((credit, index) => (
-              <CreditCard key={`${credit.type}:${credit.id}:${credit.role}:${index}`} credit={credit} onClick={() => onOpen(credit)} />
-            ))}
-          </div>
+    <section className="person-section person-credits-section" aria-labelledby="person-credits-title">
+      <div className="person-credits-header">
+        <div className="person-credits-heading">
+          <h2 id="person-credits-title">Créditos</h2>
         </div>
-      ))}
+        <div className="person-credit-filters" role="tablist" aria-label="Filtrar créditos">
+          {filters.map(item => (
+            <button
+              key={item.id}
+              className={`person-credit-filter${filter === item.id ? " is-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={filter === item.id}
+              onClick={() => setFilter(item.id)}
+            >
+              {item.label}<span>{counts[item.id]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!groups.length ? (
+        <p className="person-no-credits">
+          {credits.length ? "No hay créditos para este filtro." : "No hay créditos disponibles."}
+        </p>
+      ) : null}
+      <div className="person-credit-timeline">
+        {groups.map(([year, items]) => (
+          <article className="person-credit-year" key={year}>
+            <div className="person-credit-year-marker" aria-hidden="true">
+              <span className="person-credit-year-dot" />
+              <h3>{year}</h3>
+              <span className="person-credit-year-count">{items.length} {items.length === 1 ? "obra" : "obras"}</span>
+            </div>
+            <div className="person-credit-row">
+              <span className="person-credit-row-line" aria-hidden="true" />
+              <HorizontalRail className="person-credit-rail" label={`Créditos ${year}`} resetKey={`${year}:${filter}`}>
+                {items.map(credit => (
+                  <CreditCard
+                    key={creditKey(credit)}
+                    credit={credit}
+                    onClick={() => onOpen(credit)}
+                  />
+                ))}
+              </HorizontalRail>
+            </div>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }
 
-function CreditCard({ credit, onClick }: { credit: PersonCredit; onClick: () => void }) {
-  const episodeSuffix = credit.type === "series" && credit.episodeCount > 0 ? ` - ${credit.episodeCount} eps` : "";
+interface PersonAwardGroup {
+  ceremony: AwardRecord["ceremony"];
+  edition: number | null;
+  awardYear: number;
+  records: AwardRecord[];
+}
+
+function groupPersonAwards(records: AwardRecord[]): PersonAwardGroup[] {
+  const groups: PersonAwardGroup[] = [];
+  for (const record of records) {
+    const last = groups[groups.length - 1];
+    if (last && last.ceremony === record.ceremony && last.edition === record.edition && last.awardYear === record.awardYear) {
+      last.records.push(record);
+      continue;
+    }
+    groups.push({ ceremony: record.ceremony, edition: record.edition, awardYear: record.awardYear, records: [record] });
+  }
+  return groups;
+}
+
+function PersonAwardsSection({ awards, onOpen }: { awards: PersonAwardsData; onOpen: (record: AwardRecord) => void }) {
+  if (awards.records.length === 0) return null;
+
   return (
-    <button className="person-credit-card" type="button" onClick={onClick}>
-      <span className="person-credit-poster">
-        {credit.posterUrl ? <img src={credit.posterUrl} alt={credit.title} loading="lazy" decoding="async" /> : credit.title.slice(0, 1)}
+    <section className="person-section person-awards-section" aria-label="Premios">
+      <h2>Premios</h2>
+      <div className="person-awards-groups">
+        {groupPersonAwards(awards.records).map(group => (
+          <div className="person-award-group" key={`${group.ceremony}:${group.edition ?? ""}:${group.awardYear}`}>
+            <div className="person-award-group-heading">
+              <AwardLogo ceremony={group.ceremony} height={28} maxWidth={76} tone="light" />
+              <strong>{ceremonyName(group.ceremony)}</strong>
+              <span>{group.awardYear}</span>
+            </div>
+            <div className="person-award-list">
+              {group.records.map(record => (
+                <button className="person-award-card" type="button" key={record.id} onClick={() => onOpen(record)}>
+                  <span className={`person-award-status person-award-status-${record.status}`}>
+                    {STATUS_LABELS[record.status]}
+                  </span>
+                  <div className="person-award-copy">
+                    <strong>{awardCategoryLabel(record)}</strong>
+                    <span>{record.workTitle}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CreditCard({
+  credit,
+  onClick,
+}: {
+  credit: PersonCredit;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="person-credit-poster-card"
+      type="button"
+      onClick={onClick}
+      aria-label={`${credit.title}, ${credit.year || "Sin fecha"}, ${translateType(credit.type)}${credit.role ? `, ${credit.role}` : ""}`}
+    >
+      <span className="person-credit-poster-frame">
+        {credit.posterUrl ? (
+          <img src={credit.posterUrl} alt="" loading="lazy" decoding="async" />
+        ) : (
+          <span className="person-credit-poster-fallback">{initials(credit.title)}</span>
+        )}
+        <span className="person-credit-card-scrim" />
       </span>
-      <span className="person-credit-copy">
-        <strong>{credit.title}</strong>
-        <span>{translateDepartment(credit.department)} - {translateType(credit.type)}{episodeSuffix}</span>
-        <span>Puntuación {formatScore(credit.voteAverage)} &nbsp;&nbsp; {credit.voteCount} votos</span>
-        {credit.role ? <b>{credit.role}</b> : null}
-      </span>
+      <span className="person-credit-poster-title">{credit.title}</span>
     </button>
   );
 }
@@ -507,9 +650,43 @@ async function fetchCreditLogo(credit: PersonCredit) {
 }
 
 function dedupeCredits(credits: PersonCredit[]) {
+  const merged = new Map<string, PersonCredit>();
+  for (const credit of credits) {
+    const key = creditKey(credit);
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, credit);
+      continue;
+    }
+    merged.set(key, {
+      ...current,
+      role: mergeCreditLabels(current.role, credit.role),
+      department: mergeCreditLabels(current.department, credit.department),
+      posterUrl: current.posterUrl || credit.posterUrl,
+      backdropUrl: current.backdropUrl || credit.backdropUrl,
+      logoUrl: current.logoUrl || credit.logoUrl,
+      year: current.year || credit.year,
+      voteAverage: Math.max(current.voteAverage, credit.voteAverage),
+      voteCount: Math.max(current.voteCount, credit.voteCount),
+      episodeCount: Math.max(current.episodeCount, credit.episodeCount),
+      popularity: Math.max(current.popularity, credit.popularity),
+    });
+  }
+  return [...merged.values()];
+}
+
+function creditKey(credit: Pick<PersonCredit, "type" | "id">) {
+  return `${credit.type}:${credit.id}`;
+}
+
+function mergeCreditLabels(first: string, second: string) {
+  return unique([first, second].flatMap(value => value.split(" · ").map(item => item.trim())).filter(Boolean)).join(" · ");
+}
+
+function dedupeCreditsByMedia(credits: PersonCredit[]) {
   const seen = new Set<string>();
   return credits.filter(credit => {
-    const key = `${credit.type}:${credit.id}:${credit.role}`;
+    const key = `${credit.type}:${credit.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -532,6 +709,74 @@ function openCredit(navigate: ReturnType<typeof useNavigate>, credit: PersonCred
   navigate(`/detail/${credit.type}/tmdb:${credit.id}`);
 }
 
+function openAwardRecord(navigate: ReturnType<typeof useNavigate>, record: AwardRecord) {
+  const type = record.mediaType === "tv" ? "series" : record.mediaType ?? "movie";
+  const externalId = record.tmdbId != null
+    ? `tmdb:${record.tmdbId}`
+    : record.imdbId
+      ? `imdb:${record.imdbId}`
+      : record.anilistId != null
+        ? `anilist:${record.anilistId}`
+        : null;
+  if (externalId) {
+    navigate(`/detail/${type}/${encodeURIComponent(externalId)}`);
+    return;
+  }
+  // Ediciones antiguas pueden no tener todavía el enlace materializado en la
+  // respuesta del Worker. Resolvemos el título contra TMDB y seguimos al
+  // detalle; nunca enviamos al usuario a la página de búsqueda.
+  void resolveAwardWork(record).then(match => {
+    if (!match) return;
+    const resolvedType = record.mediaType === "anime"
+      ? "anime"
+      : record.mediaType === "tv" || match.media_type === "tv"
+        ? "series"
+        : "movie";
+    navigate(`/detail/${resolvedType}/tmdb:${match.id}`);
+  }).catch(() => {
+    // Una coincidencia no verificable se mantiene sin navegación para evitar
+    // abrir una película equivocada.
+  });
+}
+
+async function resolveAwardWork(record: AwardRecord): Promise<{ id: number; media_type: "movie" | "tv" } | null> {
+  const title = record.workTitle.trim();
+  if (!title) return null;
+  const payload = await tmdbFetch<any>("/search/multi", {
+    params: { query: title, language: "es-ES", page: "1", include_adult: "false" },
+  });
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  const allowed = results.filter((item: any) => {
+    if (!Number.isFinite(Number(item?.id))) return false;
+    if (item?.media_type !== "movie" && item?.media_type !== "tv") return false;
+    if (record.mediaType === "movie") return item.media_type === "movie";
+    if (record.mediaType === "tv") return item.media_type === "tv";
+    return true;
+  });
+  if (!allowed.length) return null;
+  const wantedTitle = normalizeAwardWorkTitle(title);
+  const exact = allowed.filter((item: any) => normalizeAwardWorkTitle(item?.title ?? item?.name ?? "") === wantedTitle);
+  const candidates = exact.length ? exact : allowed;
+  const targetYear = record.workYear ?? record.awardYear;
+  candidates.sort((a: any, b: any) => {
+    const yearA = Number(String(a?.release_date ?? a?.first_air_date ?? "").slice(0, 4)) || 0;
+    const yearB = Number(String(b?.release_date ?? b?.first_air_date ?? "").slice(0, 4)) || 0;
+    return Math.abs(yearA - targetYear) - Math.abs(yearB - targetYear)
+      || (Number(b?.popularity) || 0) - (Number(a?.popularity) || 0);
+  });
+  const match = candidates[0];
+  return match ? { id: Number(match.id), media_type: match.media_type } : null;
+}
+
+function normalizeAwardWorkTitle(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function translateDepartment(value: string) {
   const normalized = value.toLowerCase();
   if (normalized === "acting" || normalized === "actuacion" || normalized === "actuación") return "Actuación";
@@ -543,10 +788,6 @@ function translateDepartment(value: string) {
 
 function translateType(value: CreditType) {
   return value === "movie" ? "Película" : "Serie";
-}
-
-function formatScore(value: number) {
-  return value > 0 ? value.toFixed(1) : "0.0";
 }
 
 function formatLifeDate(birthday: string, deathday: string) {

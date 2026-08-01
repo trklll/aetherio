@@ -5,7 +5,6 @@ import { getScopedStorageKey } from "../utils/localProfiles.ts";
 export type SourceSelectionMode = "manual" | "first";
 export type AddonSubtitleLoadMode = "preferred" | "all";
 export type HardwareDecodingMode = "auto" | "enabled" | "disabled";
-export type NextEpisodeThresholdMode = "percentage";
 export const ORIGINAL_LANGUAGE_VALUE = "original";
 
 export interface PlaybackPreferences {
@@ -22,10 +21,8 @@ export interface PlaybackPreferences {
   audioPassthrough: boolean;
   skipSegmentsEnabled: boolean;
   animeSkipEnabled: boolean;
-  introDbSubmissionEnabled: boolean;
   autoPlayNextEpisode: boolean;
   preferBingeGroup: boolean;
-  nextEpisodeThresholdMode: NextEpisodeThresholdMode;
   nextEpisodeThresholdPercent: number;
   preferredSubtitleLanguage: string;
   addonSubtitleLoadMode: AddonSubtitleLoadMode;
@@ -56,10 +53,8 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   audioPassthrough: false,
   skipSegmentsEnabled: true,
   animeSkipEnabled: false,
-  introDbSubmissionEnabled: false,
   autoPlayNextEpisode: true,
   preferBingeGroup: true,
-  nextEpisodeThresholdMode: "percentage",
   nextEpisodeThresholdPercent: 99,
   preferredSubtitleLanguage: "spa",
   addonSubtitleLoadMode: "preferred",
@@ -125,7 +120,23 @@ export function getPlaybackPreferences(): PlaybackPreferences {
 
 export function savePlaybackPreferences(preferences: PlaybackPreferences) {
   const normalized = normalizePlaybackPreferences(preferences);
-  localStorage.setItem(getPlaybackPreferencesStorageKey(), JSON.stringify(normalized));
+  // Keep removed controls in storage for backwards compatibility. They are
+  // intentionally not part of the runtime contract anymore, but rewriting
+  // another playback preference must not destroy a user's old data.
+  const storageKey = getPlaybackPreferencesStorageKey();
+  let legacy: Record<string, unknown> = {};
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const previous = JSON.parse(raw) as Record<string, unknown>;
+      for (const key of ["introDbSubmissionEnabled", "nextEpisodeThresholdMode"]) {
+        if (Object.prototype.hasOwnProperty.call(previous, key)) legacy[key] = previous[key];
+      }
+    }
+  } catch {
+    legacy = {};
+  }
+  localStorage.setItem(storageKey, JSON.stringify({ ...normalized, ...legacy }));
   window.dispatchEvent(new CustomEvent(PLAYBACK_PREFERENCES_CHANGED_EVENT, { detail: normalized }));
 }
 
@@ -219,10 +230,8 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
       : DEFAULT_PLAYBACK_PREFERENCES.audioPassthrough,
     skipSegmentsEnabled: typeof preferences.skipSegmentsEnabled === "boolean" ? preferences.skipSegmentsEnabled : DEFAULT_PLAYBACK_PREFERENCES.skipSegmentsEnabled,
     animeSkipEnabled: typeof preferences.animeSkipEnabled === "boolean" ? preferences.animeSkipEnabled : DEFAULT_PLAYBACK_PREFERENCES.animeSkipEnabled,
-    introDbSubmissionEnabled: typeof preferences.introDbSubmissionEnabled === "boolean" ? preferences.introDbSubmissionEnabled : DEFAULT_PLAYBACK_PREFERENCES.introDbSubmissionEnabled,
     autoPlayNextEpisode: typeof preferences.autoPlayNextEpisode === "boolean" ? preferences.autoPlayNextEpisode : DEFAULT_PLAYBACK_PREFERENCES.autoPlayNextEpisode,
     preferBingeGroup: typeof preferences.preferBingeGroup === "boolean" ? preferences.preferBingeGroup : DEFAULT_PLAYBACK_PREFERENCES.preferBingeGroup,
-    nextEpisodeThresholdMode: "percentage",
     nextEpisodeThresholdPercent: clampNumber(preferences.nextEpisodeThresholdPercent, 50, 100, DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdPercent),
     preferredSubtitleLanguage: normalizeLanguage(preferences.preferredSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.preferredSubtitleLanguage),
     addonSubtitleLoadMode: preferences.addonSubtitleLoadMode === "all" ? "all" : "preferred",

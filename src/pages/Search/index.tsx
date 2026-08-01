@@ -3,8 +3,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
+import { useMediaSearch } from "../../hooks/useMediaSearch";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { searchMedia, type UnifiedSearchResult } from "../../utils/searchProviders";
+import type { UnifiedSearchResult } from "../../utils/searchProviders";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 
 const POSTER_CARD = { width: 180, height: 271 };
@@ -18,14 +19,16 @@ export default function SearchPage() {
   const navigate = useNavigate();
   const addons = useAddonStore(state => state.addons);
   const { gradient } = useProfileGradient();
-  const [results, setResults] = useState<UnifiedSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
   const normalizedQuery = useMemo(() => (params.get("q") ?? "").trim(), [params]);
-  const searchKey = useMemo(
-    () => `${normalizedQuery}|${addons.map(addon => `${addon.id}:${addon.enabled}`).join(",")}`,
-    [addons, normalizedQuery],
-  );
-  const loadedSearchKeyRef = useRef<string | null>(null);
+  const literal = params.get("literal") === "1";
+  const { results, loading, correction, response } = useMediaSearch({
+    query: normalizedQuery,
+    mode: "full",
+    addons,
+    limit: 80,
+    allowCorrection: !literal,
+  });
+  const headingQuery = correction && !literal ? correction.correctedQuery : normalizedQuery;
 
   useEffect(() => {
     if (gradient) {
@@ -35,38 +38,6 @@ export default function SearchPage() {
       document.documentElement.style.removeProperty("--aetherio-page-bg");
     };
   }, [gradient]);
-
-  useEffect(() => {
-    if (loadedSearchKeyRef.current === searchKey) return;
-    let cancelled = false;
-
-    async function load() {
-      if (!normalizedQuery) {
-        setResults([]);
-        setLoading(false);
-        loadedSearchKeyRef.current = searchKey;
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const nextResults = await searchMedia(normalizedQuery, addons, 80);
-        if (!cancelled) {
-          setResults(nextResults);
-          loadedSearchKeyRef.current = searchKey;
-        }
-      } catch {
-        if (!cancelled) setResults([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [addons, normalizedQuery, searchKey]);
 
   function openResult(item: UnifiedSearchResult) {
     writeDetailMediaMeta(item);
@@ -79,11 +50,23 @@ export default function SearchPage() {
     <main className="min-h-screen pb-14 text-white">
       <header style={{ padding: "42px 48px 28px" }}>
         <h1 style={{ fontSize: 28, lineHeight: 1.12, fontWeight: 750, letterSpacing: -0.6 }}>
-          {normalizedQuery ? `Resultados para “${normalizedQuery}”` : "Encuentra algo para ver"}
+          {headingQuery ? `Resultados para “${headingQuery}”` : "Encuentra algo para ver"}
         </h1>
+        {correction && !literal ? (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginTop: 12, color: "rgba(255,255,255,0.64)", fontSize: 14 }}>
+            <span>Mostrando resultados para <strong style={{ color: "#fff" }}>“{correction.correctedQuery}”</strong>.</span>
+            <button
+              type="button"
+              onClick={() => navigate(`/search?q=${encodeURIComponent(normalizedQuery)}&literal=1`)}
+              style={{ border: "none", background: "rgba(255,255,255,0.1)", color: "#fff", borderRadius: 999, padding: "6px 10px", cursor: "pointer" }}
+            >
+              Buscar literalmente
+            </button>
+          </div>
+        ) : null}
       </header>
 
-      {loading ? (
+      {loading && !results.length ? (
         <SearchSkeleton />
       ) : results.length ? (
         <SearchResultsSections results={results} onOpen={openResult} />
@@ -91,7 +74,10 @@ export default function SearchPage() {
         <div style={{ padding: "10px 48px" }}>
           <p style={{ maxWidth: 520, fontSize: 15, lineHeight: 1.5, color: "rgba(255,255,255,0.5)" }}>
             {normalizedQuery
-              ? "No encontramos resultados en TMDB ni en tus fuentes instaladas."
+              ? Object.values(response.providerStatus).filter(status => status.state !== "idle").length > 0
+                && Object.values(response.providerStatus).filter(status => status.state !== "idle").every(status => status.state === "error")
+                ? "No pudimos consultar las fuentes de búsqueda. Inténtalo de nuevo."
+                : "No encontramos resultados en TMDB ni en tus fuentes instaladas."
               : "Usa la búsqueda de la barra superior para encontrar películas, series y anime."}
           </p>
         </div>

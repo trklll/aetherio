@@ -37,6 +37,8 @@ const ROW_SHADOW_BOTTOM_GUTTER = 42;
 export default function ContinueWatchingRow() {
   const navigate = useNavigate();
   const artworkRequestsRef = useRef<Set<string>>(new Set());
+  const artworkRetryAttemptsRef = useRef<Map<string, number>>(new Map());
+  const artworkRetryTimersRef = useRef<Map<string, number>>(new Map());
   const rafRef = useRef<number | null>(null);
   const showLeftRef = useRef(false);
   const showRightRef = useRef(false);
@@ -71,6 +73,42 @@ export default function ContinueWatchingRow() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      for (const timer of artworkRetryTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      artworkRetryTimersRef.current.clear();
+    };
+  }, []);
+
+  function clearArtworkRetry(key: string) {
+    const timer = artworkRetryTimersRef.current.get(key);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      artworkRetryTimersRef.current.delete(key);
+    }
+    artworkRetryAttemptsRef.current.delete(key);
+    artworkRequestsRef.current.delete(key);
+  }
+
+  function scheduleArtworkRetry(key: string) {
+    if (artworkRetryTimersRef.current.has(key)) return;
+    const attempt = (artworkRetryAttemptsRef.current.get(key) ?? 0) + 1;
+    artworkRetryAttemptsRef.current.set(key, attempt);
+    if (attempt > 3) {
+      artworkRequestsRef.current.delete(key);
+      return;
+    }
+    const delay = attempt === 1 ? 1500 : attempt === 2 ? 5000 : 15000;
+    const timer = window.setTimeout(() => {
+      artworkRetryTimersRef.current.delete(key);
+      artworkRequestsRef.current.delete(key);
+      setItems(getContinueWatchingRows());
+    }, delay);
+    artworkRetryTimersRef.current.set(key, timer);
+  }
+
   const missingArtworkKey = useMemo(
     () => items.filter(needsArtworkEnrichment).slice(0, 8).map(entry => entry.key).join("|"),
     [items],
@@ -87,33 +125,62 @@ export default function ContinueWatchingRow() {
         if (cancelled) return;
         if (artworkRequestsRef.current.has(entry.key)) continue;
         artworkRequestsRef.current.add(entry.key);
-        const shouldFetchEpisodeStill = entry.type !== "movie" && Boolean(entry.season && entry.episode);
         const cached = readDetailMediaMeta(entry.type, entry.id);
         if (cached?.background || cached?.poster || cached?.logo) {
           updateContinueWatchingEntryArtwork(entry.key, {
             name: cached.name,
             logo: entry.logo ?? cached.logo,
-            background: shouldFetchEpisodeStill ? undefined : cached.background,
+            background: cached.background,
             poster: cached.poster,
           });
-          if (!shouldFetchEpisodeStill) {
+          const cachedCandidate: ContinueWatchingEntry = {
+            ...entry,
+            name: cached.name ?? entry.name,
+            logo: cached.logo ?? entry.logo,
+            background: cached.background ?? entry.background,
+            poster: cached.poster ?? entry.poster,
+          };
+          if (!needsArtworkEnrichment(cachedCandidate)) {
+            clearArtworkRetry(entry.key);
             continue;
           }
         }
 
+        let resolvedWithArtwork = false;
         try {
           const artwork = await fetchContinueWatchingArtwork(entry);
-          if (!cancelled && artwork) {
-            updateContinueWatchingEntryArtwork(entry.key, artwork);
-            artworkRequestsRef.current.delete(entry.key);
+          if (artwork) {
+            const updated = updateContinueWatchingEntryArtwork(entry.key, artwork);
+            if (hasCardArtwork(updated ?? artwork)) {
+              resolvedWithArtwork = true;
+              const resolvedEntry = updated ?? entry;
+              if (needsArtworkEnrichment(resolvedEntry)) {
+                const timer = artworkRetryTimersRef.current.get(entry.key);
+                if (timer !== undefined) {
+                  window.clearTimeout(timer);
+                  artworkRetryTimersRef.current.delete(entry.key);
+                }
+                artworkRetryAttemptsRef.current.delete(entry.key);
+              } else {
+                clearArtworkRetry(entry.key);
+              }
+            } else if (!cancelled) {
+              scheduleArtworkRetry(entry.key);
+            }
+          } else if (!cancelled) {
+            scheduleArtworkRetry(entry.key);
           }
         } catch (error) {
           console.warn("[AETHERIO:CONTINUE:ARTWORK] enrichment failed", {
             key: entry.key,
             error: String(error),
           });
-          // Guard persistente entre renders: si TMDB falla (rate-limit/red),
-          // no liberamos el slot para evitar reintentos en cada re-render de `items`.
+          if (!cancelled) scheduleArtworkRetry(entry.key);
+        } finally {
+          if (cancelled && !resolvedWithArtwork) {
+            artworkRequestsRef.current.delete(entry.key);
+            scheduleArtworkRetry(entry.key);
+          }
         }
       }
     }
@@ -125,7 +192,7 @@ export default function ContinueWatchingRow() {
   }, [missingArtworkKey, items]);
 
   useEffect(() => {
-    const pending = items.filter(entry => entry.type !== "movie" && (entry.entryKind === "next" || entry.entryKind === "new"));
+    const pending = items.filter(entry => entry.type !== "movie" && (entry.entryKind === "next" || entry.entryKind === "new" || entry.entryKind === "new-season"));
     if (!pending.length) return;
     let cancelled = false;
 
@@ -399,12 +466,14 @@ async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
   const episodeDetails = entry.type !== "movie" && entry.season && entry.episode
     ? await fetchTmdbEpisodeDetails(tmdbId, entry.season, entry.episode)
     : null;
+  const seriesBackground = tmdbImage(episodeDetails?.still_path, "original")
+    ?? tmdbImage(details?.backdrop_path, "original");
 
   return {
     name: details?.title ?? details?.name ?? entry.name,
     background: entry.type === "movie"
       ? tmdbImage(details?.backdrop_path, "original")
-      : tmdbImage(episodeDetails?.still_path, "original"),
+      : seriesBackground,
     episodeStill: entry.type !== "movie" ? tmdbImage(episodeDetails?.still_path, "original") : undefined,
     poster: tmdbImage(details?.poster_path, "original"),
     logo: entry.logo ?? sanitizeLogoUrl(tmdbImage(logoPath, "original")),
@@ -414,9 +483,13 @@ async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
 
 function needsArtworkEnrichment(entry: ContinueWatchingEntry) {
   if (entry.type !== "movie" && entry.season && entry.episode) {
-    return !entry.episodeStill || !entry.logo || !entry.episodeName || entry.source === "trakt";
+    return !entry.episodeStill || !entry.background || !entry.poster || !entry.logo || !entry.episodeName;
   }
   return !entry.background || !entry.poster || !entry.logo;
+}
+
+function hasCardArtwork(value: Partial<ContinueWatchingEntry> | null | undefined) {
+  return Boolean(value?.episodeStill || value?.background || value?.poster);
 }
 
 async function fetchTmdbEpisodeDetails(tmdbId: number, season: number, episode: number) {
@@ -561,6 +634,7 @@ function titleSearchVariants(title: string) {
     .trim();
   const variants = [
     clean,
+    clean.replace(/\s+y\s+/gi, " and "),
     clean.replace(/\s*-\s*/g, " "),
     clean.replace(/:\s*/g, " "),
     clean.replace(/\s*-\s*The Movie\s*:\s*/i, ": "),
@@ -708,13 +782,14 @@ const badgeBaseStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 125,
   height: 29,
   boxSizing: "border-box",
   padding: "0 10px",
   borderRadius: 8,
   backdropFilter: "blur(5px) saturate(150%)",
   WebkitBackdropFilter: "blur(10px) saturate(150%)",
+  width: "max-content",
+  maxWidth: "calc(100% - 28px)",
   fontSize: 12,
   fontWeight: 400,
   fontFamily: "Inter, system-ui, sans-serif",
@@ -738,17 +813,21 @@ const ContinueCard = memo(function ContinueCard({
   onCommitRemove: () => void;
 }) {
   const baseArtwork = getContinueCardArtwork(entry);
-  const [, setArtworkVersion] = useState(0);
-  const artwork = {
-    ...baseArtwork,
-    image: readHomeCardArtwork("background", entry.type, entry.id, baseArtwork.image) ?? "",
-  };
-  const logo = artwork.showLogo ? sanitizeLogoUrl(entry.logo) : undefined;
-  const badgeLabel = entry.entryKind === "new"
-    ? "Nuevo episodio"
-    : entry.entryKind === "next"
-      ? "Siguiente episodio"
-      : "";
+  const [failedArtworkUrls, setFailedArtworkUrls] = useState<Set<string>>(() => new Set());
+  const customArtwork = readHomeCardArtwork("background", entry.type, entry.id, "");
+  const artworkCandidates = Array.from(new Set(
+    [customArtwork, ...baseArtwork.candidates].filter((url): url is string => Boolean(url)),
+  ));
+  const image = artworkCandidates.find(url => !failedArtworkUrls.has(url)) ?? "";
+  const artwork = { image };
+  const logo = artwork.image ? sanitizeLogoUrl(entry.logo) : undefined;
+  const badgeLabel = entry.entryKind === "new-season"
+    ? "Nueva temporada"
+    : entry.entryKind === "new"
+      ? "Nuevo episodio"
+      : entry.entryKind === "next"
+        ? "Siguiente episodio"
+        : "";
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -769,7 +848,7 @@ const ContinueCard = memo(function ContinueCard({
     const refresh = (event: Event) => {
       const detail = (event as CustomEvent<{ type?: string; id?: string }>).detail;
       if (detail?.type === entry.type && detail.id === entry.id) {
-        setArtworkVersion(version => version + 1);
+        setFailedArtworkUrls(new Set());
       }
     };
     window.addEventListener(HOME_CARD_ARTWORK_CHANGED_EVENT, refresh);
@@ -834,21 +913,30 @@ const ContinueCard = memo(function ContinueCard({
          if (img) tweenTo(img, { scale: 1 });
        }}
     >
-      {artwork.image && <img src={artwork.image} alt={entry.name} loading="lazy" decoding="async" style={artworkImgStyle} />}
-       {badgeLabel && (
+      {artwork.image && <img
+        src={artwork.image}
+        alt={entry.name}
+        loading="lazy"
+        decoding="async"
+        style={artworkImgStyle}
+        onError={event => {
+          const failedUrl = event.currentTarget.currentSrc || event.currentTarget.src;
+          setFailedArtworkUrls(current => {
+            if (current.has(failedUrl)) return current;
+            const next = new Set(current);
+            next.add(failedUrl);
+            return next;
+          });
+        }}
+      />}
+      {badgeLabel && (
         <div
           style={{
             ...badgeBaseStyle,
-            background: entry.entryKind === "new"
-              ? "linear-gradient(180deg, rgba(255,255,255,0.92), rgba(236,239,244,0.76))"
-              : "rgba(35,35,37,0.72)",
-            border: entry.entryKind === "new"
-              ? "1px solid rgba(255,255,255,0.82)"
-              : "1px solid rgba(255,255,255,0.23)",
-            boxShadow: entry.entryKind === "new"
-              ? "0 10px 22px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.96)"
-              : "0 5px 16px rgba(0,0,0,0.22)",
-            color: entry.entryKind === "new" ? "rgba(18,18,18,0.96)" : "rgba(255,255,255,0.94)",
+            background: "rgba(72,76,84,0.86)",
+            border: "1px solid rgba(255,255,255,0.26)",
+            boxShadow: "0 5px 16px rgba(0,0,0,0.24)",
+            color: "rgba(255,255,255,0.94)",
           }}
         >
           {badgeLabel}
@@ -869,7 +957,7 @@ const ContinueCard = memo(function ContinueCard({
             <div style={{ ...progressBarFillStyle, width: `${progressPercent(entry)}%` }} />
           </div>
           <div style={episodeLabelStyle}>
-            {episodeLabel.includes(" - ") ? episodeLabel.split(" - ")[0] : episodeLabel}{entry.entryKind === "next" || entry.entryKind === "new" ? "" : `, ${formatResumeTime(entry.currentTime)}`}
+            {episodeLabel.includes(" - ") ? episodeLabel.split(" - ")[0] : episodeLabel}{entry.entryKind === "next" || entry.entryKind === "new" || entry.entryKind === "new-season" ? "" : `, ${formatResumeTime(entry.currentTime)}`}
           </div>
         </div>
       </div>
@@ -917,20 +1005,9 @@ const ContinueCard = memo(function ContinueCard({
 });
 
 function getContinueCardArtwork(entry: ContinueWatchingEntry) {
-  if (entry.type !== "movie") {
-    return {
-      image: entry.episodeStill ?? "",
-      showLogo: Boolean(entry.episodeStill),
-    };
-  }
-  if (entry.background) {
-    return {
-      image: entry.background,
-      showLogo: true,
-    };
-  }
   return {
-    image: entry.poster ?? "",
-    showLogo: false,
+    candidates: entry.type !== "movie"
+      ? [entry.episodeStill, entry.background, entry.poster]
+      : [entry.background, entry.poster],
   };
 }

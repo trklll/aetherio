@@ -34,6 +34,26 @@ const DICTIONARY: Record<string, string> = {
   "Best Supporting Actress in a Television Series": "Mejor Actriz de Reparto en TV",
   "Best Performance in Stand-Up Comedy on Television": "Mejor Actuación de Stand-Up en TV",
   "Cinematic and Box Office Achievement": "Logro Cinematográfico y de Taquilla",
+  // Variantes nuevas del catálogo oficial (2025+), que sustituyen
+  // "Actor/Actress" por "Female/Male Actor".
+  "Best Performance by a Female Actor in a Motion Picture – Drama": "Mejor Actuación de una Actriz en una Película Dramática",
+  "Best Performance by a Male Actor in a Motion Picture – Drama": "Mejor Actuación de un Actor en una Película Dramática",
+  "Best Performance by a Female Actor in a Motion Picture – Musical or Comedy": "Mejor Actuación de una Actriz en una Película de Comedia o Musical",
+  "Best Performance by a Male Actor in a Motion Picture – Musical or Comedy": "Mejor Actuación de un Actor en una Película de Comedia o Musical",
+  "Best Performance by an Actress in a Motion Picture – Drama": "Mejor Actuación de una Actriz en una Película Dramática",
+  "Best Performance by an Actor in a Motion Picture – Drama": "Mejor Actuación de un Actor en una Película Dramática",
+  "Best Performance by an Actress in a Motion Picture – Musical or Comedy": "Mejor Actuación de una Actriz en una Película de Comedia o Musical",
+  "Best Performance by an Actor in a Motion Picture – Musical or Comedy": "Mejor Actuación de un Actor en una Película de Comedia o Musical",
+  "Best Performance by a Female Actor in a Television Series – Drama": "Mejor Actuación de una Actriz en una Serie de Televisión Dramática",
+  "Best Performance by a Male Actor in a Television Series – Drama": "Mejor Actuación de un Actor en una Serie de Televisión Dramática",
+  "Best Performance by a Female Actor in a Television Series – Musical or Comedy": "Mejor Actuación de una Actriz en una Serie de Televisión de Comedia o Musical",
+  "Best Performance by a Male Actor in a Television Series – Musical or Comedy": "Mejor Actuación de un Actor en una Serie de Televisión de Comedia o Musical",
+  "Best Performance by a Female Actor in a Supporting Role in Any Motion Picture": "Mejor Actuación de una Actriz de Reparto en una Película",
+  "Best Performance by a Male Actor in a Supporting Role in Any Motion Picture": "Mejor Actuación de un Actor de Reparto en una Película",
+  "Best Performance by an Actress in a Supporting Role in any Motion Picture": "Mejor Actuación de una Actriz de Reparto en una Película",
+  "Best Performance by an Actor in a Supporting Role in any Motion Picture": "Mejor Actuación de un Actor de Reparto en una Película",
+  "Best Director - Motion Picture": "Mejor Dirección - Película",
+  "Best Screenplay - Motion Picture": "Mejor Guion - Película",
 };
 
 export const goldenGlobesParser: CeremonyParser = {

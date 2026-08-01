@@ -8,6 +8,7 @@ import type {
   AwardEmptyReason,
   AwardMediaResponse,
   AwardRecord,
+  AwardPersonResponse,
   AwardStatus,
   AwardSubject,
   CoverageResponse,
@@ -20,6 +21,7 @@ import { runImport, weeklyTargets, importCapturedHtml, type ImportEnv } from "./
 import { sha256Checksum } from "./fetch";
 import { coverageByCeremony, loadManifestRows, syncManifest, type ManifestRow } from "./manifest";
 import { resolveIdentitiesBatch } from "./resolve";
+import { resolvePeopleBatch, syncRecipientRows } from "./people";
 
 export interface AwardsApiEnv extends ImportEnv {
   AWARDS_DB: D1Database;
@@ -43,6 +45,10 @@ interface RecordRow {
   section: string | null;
   source_url: string;
   source_tier: "official" | "secondary";
+  media_type?: MediaType | null;
+  tmdb_id?: number | null;
+  imdb_id?: string | null;
+  anilist_id?: number | null;
 }
 
 function recordFromRow(row: RecordRow): AwardRecord {
@@ -60,6 +66,10 @@ function recordFromRow(row: RecordRow): AwardRecord {
     workYear: row.work_year ?? undefined,
     sourceUrl: row.source_url,
     sourceTier: row.source_tier,
+    ...(row.media_type ? { mediaType: row.media_type } : {}),
+    ...(row.tmdb_id != null ? { tmdbId: row.tmdb_id } : {}),
+    ...(row.imdb_id ? { imdbId: row.imdb_id } : {}),
+    ...(row.anilist_id != null ? { anilistId: row.anilist_id } : {}),
   };
 }
 
@@ -118,7 +128,12 @@ async function withEtag(request: Request, body: unknown, cacheControl: string): 
   if (matchesEtag) {
     return new Response(null, {
       status: 304,
-      headers: { ETag: etag, "Cache-Control": cacheControl },
+      headers: {
+        ETag: etag,
+        "Cache-Control": cacheControl,
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Cache-Control, ETag",
+      },
     });
   }
   return jsonResponse(body, 200, { ETag: etag, "Cache-Control": cacheControl });
@@ -206,6 +221,9 @@ export async function handleAwardsRequest(
   if (url.pathname === "/api/awards/media" && request.method === "GET") {
     return mediaEndpoint(request, env, url);
   }
+  if (url.pathname === "/api/awards/person" && request.method === "GET") {
+    return personEndpoint(request, env, url);
+  }
   if (url.pathname === "/api/awards/coverage" && request.method === "GET") {
     return coverageEndpoint(request, env);
   }
@@ -218,7 +236,13 @@ export async function handleAwardsRequest(
   if (url.pathname === "/api/internal/awards/resolve" && request.method === "POST") {
     return resolveEndpoint(request, env);
   }
-  if (url.pathname === "/api/internal/awards/import" && request.method === "OPTIONS") {
+  if (url.pathname === "/api/internal/awards/people/sync" && request.method === "POST") {
+    return peopleSyncEndpoint(request, env);
+  }
+  if (url.pathname === "/api/internal/awards/people/resolve" && request.method === "POST") {
+    return peopleResolveEndpoint(request, env);
+  }
+  if (url.pathname.startsWith("/api/internal/awards/") && request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type" } });
   }
   return null;
@@ -288,8 +312,19 @@ async function mediaEndpoint(request: Request, env: AwardsApiEnv, url: URL): Pro
   // película con una ficha de serie/anime (por ejemplo Dandadan vs. una
   // película histórica que comparte el mismo número).
   const identityWhere = clauses.join(" OR ");
-  const where = mediaType ? `(${identityWhere}) AND media_type = ?` : identityWhere;
-  if (mediaType) binds.push(mediaType);
+  // Algunos animes llegan desde TMDB como `tv`, pero su enlace canónico se
+  // resuelve como `anime` (y se identifica además por AniList). Aceptamos
+  // ambos tipos solo cuando hay AniList para no reabrir colisiones TMDB
+  // película/TV como la de Dandadan.
+  const mediaTypes = mediaType === "tv" && anilistId !== null
+    ? ["tv", "anime"]
+    : mediaType
+      ? [mediaType]
+      : [];
+  const where = mediaTypes.length > 0
+    ? `(${identityWhere}) AND media_type IN (${mediaTypes.map(() => "?").join(",")})`
+    : identityWhere;
+  binds.push(...mediaTypes);
 
   let links;
   try {
@@ -384,6 +419,116 @@ async function mediaEndpoint(request: Request, env: AwardsApiEnv, url: URL): Pro
     ? "public, max-age=0, must-revalidate"
     : "no-store";
   return withEtag(request, response, cacheControl);
+}
+
+/**
+ * Devuelve las categorías en las que una persona aparece como destinataria.
+ * Los parsers guardan los nombres en recipients como JSON; JSON1 está
+ * disponible en D1 y evita cargar todo el histórico en el Worker.
+ */
+async function personEndpoint(request: Request, env: AwardsApiEnv, url: URL): Promise<Response> {
+  const personName = url.searchParams.get("name")?.trim() ?? "";
+  const tmdbId = parseOptionalInt(url.searchParams.get("tmdbId"));
+  const anilistStaffId = parseOptionalInt(url.searchParams.get("anilistStaffId"));
+  const imdbId = url.searchParams.get("imdbId")?.trim() || null;
+  const wikidataId = url.searchParams.get("wikidataId")?.trim() || null;
+  if (tmdbId === null && anilistStaffId === null && !imdbId && !wikidataId) {
+    return errorResponse(400, "Se requiere un identificador estable de la persona.");
+  }
+  try {
+    const clauses: string[] = [];
+    const binds: Array<string | number> = [];
+    if (tmdbId !== null) { clauses.push("tmdb_id = ?"); binds.push(tmdbId); }
+    if (anilistStaffId !== null) { clauses.push("anilist_staff_id = ?"); binds.push(anilistStaffId); }
+    if (imdbId) { clauses.push("imdb_id = ?"); binds.push(imdbId); }
+    if (wikidataId) { clauses.push("wikidata_id = ?"); binds.push(wikidataId); }
+    const people = await env.AWARDS_DB.prepare(
+      `SELECT id, canonical_name, tmdb_id, imdb_id, wikidata_id, anilist_staff_id, resolution_status, resolution_reason
+       FROM award_people WHERE ${clauses.join(" OR ")} LIMIT 5`,
+    ).bind(...binds).all<{ id: string; canonical_name: string; tmdb_id: number | null; imdb_id: string | null; wikidata_id: string | null; anilist_staff_id: number | null; resolution_status: string; resolution_reason: string | null }>();
+    const peopleRows = people.results ?? [];
+    const identity = peopleRows[0] ?? null;
+    const resolutionStatus = peopleRows.length > 1 ? "ambiguous" : identity?.resolution_status ?? "unresolved";
+    let records: AwardRecord[] = [];
+    if (identity && resolutionStatus === "resolved") {
+      const result = await env.AWARDS_DB.prepare(
+        `SELECT DISTINCT r.id, r.ceremony, r.edition, r.award_year, r.category_es, r.category_original,
+                r.status, r.subject, r.recipients, r.work_title, r.work_year, r.section,
+                r.source_url, r.source_tier,
+                l.media_type, l.tmdb_id, l.imdb_id, l.anilist_id
+         FROM award_record_people rp
+         JOIN award_records r ON r.id = rp.record_id
+         LEFT JOIN award_media_links l ON l.work_key = r.work_key
+         WHERE rp.person_id = ? AND rp.resolution_status = 'resolved'`,
+      ).bind(identity.id).all<RecordRow>();
+      records = (result.results ?? []).map(recordFromRow).sort((a, b) => {
+        const statusRank: Record<AwardStatus, number> = { winner: 0, nominee: 1, official_selection: 2 };
+        const ceremonyDiff = a.ceremony.localeCompare(b.ceremony);
+        if (ceremonyDiff !== 0) return ceremonyDiff;
+        if (b.awardYear !== a.awardYear) return b.awardYear - a.awardYear;
+        if ((b.edition ?? 0) !== (a.edition ?? 0)) return (b.edition ?? 0) - (a.edition ?? 0);
+        return statusRank[a.status] - statusRank[b.status];
+      });
+    }
+    const response: AwardPersonResponse = {
+      personName: identity?.canonical_name ?? personName,
+      identity: {
+        id: identity?.id ?? null,
+        canonicalName: identity?.canonical_name ?? null,
+        tmdbId: identity?.tmdb_id ?? tmdbId,
+        imdbId: identity?.imdb_id ?? imdbId,
+        wikidataId: identity?.wikidata_id ?? wikidataId,
+        anilistStaffId: identity?.anilist_staff_id ?? anilistStaffId,
+      },
+      resolution: {
+        status: resolutionStatus as AwardPersonResponse["resolution"]["status"],
+        reason: identity?.resolution_reason ?? (resolutionStatus === "unresolved" ? "identity_not_resolved" : null),
+      },
+      records,
+      summary: {
+        winners: records.filter(record => record.status === "winner").length,
+        nominees: records.filter(record => record.status === "nominee").length,
+        ceremonies: new Set(records.map(record => record.ceremony)).size,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+    return withEtag(request, response, records.length > 0 ? "public, max-age=300, must-revalidate" : "no-store");
+  } catch (error) {
+    return errorResponse(502, `No se pudieron consultar los premios de la persona: ${describeError(error)}`);
+  }
+}
+
+function normalizePersonName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[†‡*]+/g, "")
+    .replace(/\s*\([^)]*\)\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+async function peopleSyncEndpoint(request: Request, env: AwardsApiEnv): Promise<Response> {
+  const unauthorized = await authorizeInternal(request, env);
+  if (unauthorized) return unauthorized;
+  let body: { limit?: unknown } = {};
+  try { body = await request.json(); } catch { /* defaults */ }
+  const rawLimit = typeof body.limit === "number" ? body.limit : 5000;
+  const limit = Number.isInteger(rawLimit) ? Math.min(10000, Math.max(1, rawLimit)) : 5000;
+  try { return jsonResponse({ ok: true, ...(await syncRecipientRows(env, limit)) }); }
+  catch (error) { return errorResponse(500, `No se pudieron sincronizar destinatarios: ${describeError(error)}`); }
+}
+
+async function peopleResolveEndpoint(request: Request, env: AwardsApiEnv): Promise<Response> {
+  const unauthorized = await authorizeInternal(request, env);
+  if (unauthorized) return unauthorized;
+  let body: { limit?: unknown; force?: unknown } = {};
+  try { body = await request.json(); } catch { /* defaults */ }
+  const rawLimit = typeof body.limit === "number" ? body.limit : 40;
+  const limit = Number.isInteger(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 40;
+  try { return jsonResponse(await resolvePeopleBatch(env, limit, body.force === true)); }
+  catch (error) { return errorResponse(500, `No se pudieron resolver personas: ${describeError(error)}`); }
 }
 
 async function coverageEndpoint(request: Request, env: AwardsApiEnv): Promise<Response> {
@@ -490,10 +635,12 @@ async function importEndpoint(request: Request, env: AwardsApiEnv): Promise<Resp
         errors,
         results,
       };
+      try { await resolvePeopleBatch(env, 40); } catch { /* La importación no se invalida por un resolver externo. */ }
       const status = outcome === "success" ? 200 : 207;
       return jsonResponse(result, status, { "Cache-Control": "no-store" });
     }
     const result: ImportRunResult = await runImport(env, scope, targets);
+    try { await resolvePeopleBatch(env, 40); } catch { /* Se reintentará desde el endpoint interno/programado. */ }
     const status = result.outcome === "success" ? 200 : result.outcome === "partial" ? 207 : 500;
     return jsonResponse(result, status, { "Cache-Control": "no-store" });
   } catch (error) {

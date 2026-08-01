@@ -2,6 +2,8 @@ import type { MediaItem } from "../types/ui.ts";
 import { tmdbFetch } from "../config/apiKeys.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
+const anilistIdByMalCache = new Map<number, number>();
+const anilistIdByMalPromises = new Map<number, Promise<number | null>>();
 
 interface AniListMedia {
   id: number;
@@ -75,12 +77,24 @@ async function anilistQuery<T>(query: string, variables: Record<string, unknown>
 /** Resuelve el identificador AniList de una obra que solo trae ID de MyAnimeList. */
 export async function fetchAnilistIdByMalId(malId: number): Promise<number | null> {
   if (!Number.isInteger(malId) || malId <= 0) return null;
-  const result = await anilistQuery<{ data?: { Media?: { id?: number | null } | null } }>(
-    `query ($idMal: Int) { Media(idMal: $idMal, type: ANIME) { id } }`,
-    { idMal: malId },
-  );
-  const id = result?.data?.Media?.id;
-  return typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null;
+  const cached = anilistIdByMalCache.get(malId);
+  if (cached) return cached;
+  const pending = anilistIdByMalPromises.get(malId);
+  if (pending) return pending;
+  const request = (async () => {
+    const result = await anilistQuery<{ data?: { Media?: { id?: number | null } | null } }>(
+      `query ($idMal: Int) { Media(idMal: $idMal, type: ANIME) { id } }`,
+      { idMal: malId },
+    );
+    const id = result?.data?.Media?.id;
+    if (typeof id === "number" && Number.isInteger(id) && id > 0) {
+      anilistIdByMalCache.set(malId, id);
+      return id;
+    }
+    return null;
+  })().finally(() => anilistIdByMalPromises.delete(malId));
+  anilistIdByMalPromises.set(malId, request);
+  return request;
 }
 
 const MEDIA_FIELDS = `

@@ -6,6 +6,14 @@ export interface StreamSubtitle {
   title?: string;
 }
 
+export interface StreamTechnicalMetadata {
+  resolutionHeight?: number;
+  videoCodec?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+  dynamicRange?: string;
+}
+
 export interface MediaStream {
   id: string;
   addonId: string;
@@ -32,6 +40,7 @@ export interface MediaStream {
     notWebReady?: boolean;
     [key: string]: unknown;
   };
+  technicalMetadata?: StreamTechnicalMetadata;
   subtitles?: StreamSubtitle[];
 }
 

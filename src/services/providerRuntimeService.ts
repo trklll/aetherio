@@ -1,6 +1,7 @@
 import { tmdbFetch } from "../config/apiKeys.ts";
 import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
+import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetadata.ts";
 
 interface ProviderManifestSource {
   key: string;
@@ -125,6 +126,15 @@ interface RawProviderStream {
   name?: unknown;
   title?: unknown;
   quality?: unknown;
+  resolution?: unknown;
+  height?: unknown;
+  videoCodec?: unknown;
+  audioCodec?: unknown;
+  codec?: unknown;
+  codecs?: unknown;
+  audioChannels?: unknown;
+  channels?: unknown;
+  dynamicRange?: unknown;
   headers?: unknown;
   subtitles?: unknown;
   subtitle?: unknown;
@@ -678,6 +688,7 @@ function normalizeStreams(
       duration: positiveNumber(raw.duration ?? hints.duration),
       languages: languages.length ? languages : undefined,
       subtitles: subtitles.length ? subtitles : undefined,
+      technicalMetadata: normalizeStreamTechnicalMetadata(raw, hints),
       behaviorHints: {
         ...hints,
         filename: rawTitle ?? providerName,

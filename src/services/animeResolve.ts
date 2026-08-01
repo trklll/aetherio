@@ -9,44 +9,56 @@ const ANILIST_TIMEOUT_MS = 6000;
 
 const malIdCache = new Map<string, number>();
 const resolveAttempts = new Set<string>();
+// StrictMode y las rutas cacheadas pueden pedir la misma identidad en
+// paralelo. Compartir la promesa evita que la segunda petición vea el intento
+// en curso como un fallo y termine guardando el detalle sin MAL/AniList.
+const identityPromises = new Map<string, Promise<number | undefined>>();
 
 async function armImdbToMal(imdbId: string): Promise<number | undefined> {
   const clean = imdbId.split(":")[0];
   const key = `arm:imdb:${clean}`;
   if (malIdCache.has(key)) return malIdCache.get(key);
-  if (resolveAttempts.has(key)) return undefined;
-  resolveAttempts.add(key);
-  try {
-    const res = await fetch(`${ARM_IMDB}${encodeURIComponent(clean)}${ARM_INCLUDE}`);
-    if (!res.ok) return undefined;
-    const arm = await res.json();
-    const malId = Array.isArray(arm) ? arm[0]?.myanimelist : arm?.myanimelist;
-    if (typeof malId === "number" && Number.isFinite(malId) && malId > 0) {
-      malIdCache.set(key, malId);
-      return malId;
+  const pending = identityPromises.get(key);
+  if (pending) return pending;
+  const request = (async () => {
+    try {
+      const res = await fetch(`${ARM_IMDB}${encodeURIComponent(clean)}${ARM_INCLUDE}`);
+      if (!res.ok) return undefined;
+      const arm = await res.json();
+      const malId = Array.isArray(arm) ? arm[0]?.myanimelist : arm?.myanimelist;
+      if (typeof malId === "number" && Number.isFinite(malId) && malId > 0) {
+        malIdCache.set(key, malId);
+        return malId;
+      }
+    } catch {
     }
-  } catch {
-  }
-  return undefined;
+    return undefined;
+  })().finally(() => identityPromises.delete(key));
+  identityPromises.set(key, request);
+  return request;
 }
 
 async function armTmdbToMal(tmdbId: number): Promise<number | undefined> {
   const key = `arm:tmdb:${tmdbId}`;
   if (malIdCache.has(key)) return malIdCache.get(key);
-  if (resolveAttempts.has(key)) return undefined;
-  resolveAttempts.add(key);
-  try {
-    const res = await fetch(`${ARM_TMDB}${tmdbId}${ARM_INCLUDE}`);
-    if (!res.ok) return undefined;
-    const arm = await res.json();
-    const malId = Array.isArray(arm) ? arm[0]?.myanimelist : arm?.myanimelist;
-    if (typeof malId === "number" && Number.isFinite(malId) && malId > 0) {
-      malIdCache.set(key, malId);
-      return malId;
+  const pending = identityPromises.get(key);
+  if (pending) return pending;
+  const request = (async () => {
+    try {
+      const res = await fetch(`${ARM_TMDB}${tmdbId}${ARM_INCLUDE}`);
+      if (!res.ok) return undefined;
+      const arm = await res.json();
+      const malId = Array.isArray(arm) ? arm[0]?.myanimelist : arm?.myanimelist;
+      if (typeof malId === "number" && Number.isFinite(malId) && malId > 0) {
+        malIdCache.set(key, malId);
+        return malId;
+      }
+    } catch {
     }
-  } catch {
-  }
-  return undefined;
+    return undefined;
+  })().finally(() => identityPromises.delete(key));
+  identityPromises.set(key, request);
+  return request;
 }
 
 function normalizeTitle(s: string): string {
@@ -65,37 +77,41 @@ async function anilistToMal(title: string, year?: number): Promise<number | unde
   const norm = normalizeTitle(title);
   const key = `anilist:${norm}:${year ?? 0}`;
   if (malIdCache.has(key)) return malIdCache.get(key);
-  if (resolveAttempts.has(key)) return undefined;
-  resolveAttempts.add(key);
-  const query = JSON.stringify({
-    query: `query($search: String!, $year: Int){ Page(perPage: 5){ media(type: ANIME, search: $search, sort: SEARCH_MATCH, seasonYear: $year){ idMal title{ romaji english } } } }`,
-    variables: { search: title, year: year ?? null },
-  });
-  try {
-    const res = await fetch(ANILIST_GRAPHQL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: query,
-      signal: AbortSignal.timeout(ANILIST_TIMEOUT_MS),
+  const pending = identityPromises.get(key);
+  if (pending) return pending;
+  const request = (async () => {
+    const query = JSON.stringify({
+      query: `query($search: String!, $year: Int){ Page(perPage: 5){ media(type: ANIME, search: $search, sort: SEARCH_MATCH, seasonYear: $year){ idMal title{ romaji english } } } }`,
+      variables: { search: title, year: year ?? null },
     });
-    if (!res.ok) return undefined;
-    const json = await res.json();
-    const media = json?.data?.Page?.media ?? [];
-    for (const item of media) {
-      if (typeof item.idMal === "number" && item.idMal > 0) {
-        if (titlesMatch(title, item.title?.english) || titlesMatch(title, item.title?.romaji)) {
-          malIdCache.set(key, item.idMal);
-          return item.idMal;
+    try {
+      const res = await fetch(ANILIST_GRAPHQL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: query,
+        signal: AbortSignal.timeout(ANILIST_TIMEOUT_MS),
+      });
+      if (!res.ok) return undefined;
+      const json = await res.json();
+      const media = json?.data?.Page?.media ?? [];
+      for (const item of media) {
+        if (typeof item.idMal === "number" && item.idMal > 0) {
+          if (titlesMatch(title, item.title?.english) || titlesMatch(title, item.title?.romaji)) {
+            malIdCache.set(key, item.idMal);
+            return item.idMal;
+          }
         }
       }
+      if (media.length && typeof media[0].idMal === "number" && media[0].idMal > 0) {
+        malIdCache.set(key, media[0].idMal);
+        return media[0].idMal;
+      }
+    } catch {
     }
-    if (media.length && typeof media[0].idMal === "number" && media[0].idMal > 0) {
-      malIdCache.set(key, media[0].idMal);
-      return media[0].idMal;
-    }
-  } catch {
-  }
-  return undefined;
+    return undefined;
+  })().finally(() => identityPromises.delete(key));
+  identityPromises.set(key, request);
+  return request;
 }
 
 const tmdbPersonCache = new Map<string, number>();

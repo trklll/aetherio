@@ -1,5 +1,5 @@
 import formatterManifest from "../assets/stream-tags/manifest.json";
-import type { MediaStream } from "../types/stream.ts";
+import type { MediaStream, StreamTechnicalMetadata } from "../types/stream.ts";
 
 export type StreamFormatCategory = "source" | "video" | "audio" | "channels";
 
@@ -58,25 +58,6 @@ const FORMATTER_ASSET_META: Record<string, FormatterAssetMeta> = {
   "audio-7.1.png": { id: "channels-7.1", label: "7.1 canales", category: "channels", order: 300 },
   "audio-6.1.png": { id: "channels-6.1", label: "6.1 canales", category: "channels", order: 301 },
   "audio-5.1.png": { id: "channels-5.1", label: "5.1 canales", category: "channels", order: 302 },
-  "codec-h264.png": { id: "codec-h264", label: "H.264", category: "video", order: 130 },
-  "codec-h265.png": { id: "codec-h265", label: "H.265", category: "video", order: 131 },
-  "codec-hevc.png": { id: "codec-hevc", label: "HEVC", category: "video", order: 132 },
-  "codec-av1.png": { id: "codec-av1", label: "AV1", category: "video", order: 133 },
-  "codec-avc.png": { id: "codec-avc", label: "AVC", category: "video", order: 134 },
-  "codec-aac.png": { id: "codec-aac", label: "AAC", category: "audio", order: 240 },
-  "codec-flac.png": { id: "codec-flac", label: "FLAC", category: "audio", order: 241 },
-  "codec-opus.png": { id: "codec-opus", label: "Opus", category: "audio", order: 242 },
-  "codec-vorbis.png": { id: "codec-vorbis", label: "Vorbis", category: "audio", order: 243 },
-  "codec-mp3.png": { id: "codec-mp3", label: "MP3", category: "audio", order: 244 },
-  "resolution-480p.png": { id: "resolution-480p", label: "480p", category: "video", order: 103 },
-  "resolution-360p.png": { id: "resolution-360p", label: "360p", category: "video", order: 104 },
-  "resolution-576p.png": { id: "resolution-576p", label: "576p", category: "video", order: 105 },
-  "fhd.png": { id: "fhd", label: "FHD", category: "video", order: 106 },
-  "uhd.png": { id: "uhd", label: "UHD", category: "video", order: 107 },
-  "video-mpeg4.png": { id: "codec-mpeg4", label: "MPEG-4", category: "video", order: 135 },
-  "video-vp9.png": { id: "codec-vp9", label: "VP9", category: "video", order: 136 },
-  "audio-2.0.png": { id: "channels-2.0", label: "2.0 canales", category: "channels", order: 303 },
-  "audio-mono.png": { id: "channels-mono", label: "Mono", category: "channels", order: 304 },
 };
 
 function slugify(text: string): string {
@@ -84,18 +65,6 @@ function slugify(text: string): string {
 }
 
 const formatterTextMeta: Record<string, FormatterAssetMeta> = {
-  "h.264": { id: "codec-h264", label: "H.264", category: "video", order: 130 },
-  "h.265": { id: "codec-h265", label: "H.265", category: "video", order: 131 },
-  "hevc": { id: "codec-hevc", label: "HEVC", category: "video", order: 132 },
-  "av1": { id: "codec-av1", label: "AV1", category: "video", order: 133 },
-  "avc": { id: "codec-avc", label: "AVC", category: "video", order: 134 },
-  "aac": { id: "codec-aac", label: "AAC", category: "audio", order: 240 },
-  "flac": { id: "codec-flac", label: "FLAC", category: "audio", order: 241 },
-  "opus": { id: "codec-opus", label: "Opus", category: "audio", order: 242 },
-  "vorbis": { id: "codec-vorbis", label: "Vorbis", category: "audio", order: 243 },
-  "mp3": { id: "codec-mp3", label: "MP3", category: "audio", order: 244 },
-  "mpeg-4": { id: "codec-mpeg4", label: "MPEG-4", category: "video", order: 135 },
-  "vp9": { id: "codec-vp9", label: "VP9", category: "video", order: 136 },
   "dts": { id: "dts", label: "DTS", category: "audio", order: 223 },
   "dolby digital": { id: "dolby-digital", label: "Dolby Digital", category: "audio", order: 231 },
   "dolby digital +": { id: "dolby-digital-plus", label: "Dolby Digital Plus", category: "audio", order: 230 },
@@ -112,6 +81,7 @@ const formatterTextMeta: Record<string, FormatterAssetMeta> = {
 };
 
 const compiledFormatters = formatterManifest.entries.flatMap(entry => {
+  if ((entry as { status?: string }).status === "generated") return [];
   if (!entry.file) {
     if (!entry.name) return [];
     const textMeta = formatterTextMeta[entry.name.toLowerCase()] ?? { id: slugify(entry.name), label: entry.name, category: "source" as StreamFormatCategory, order: 500 };
@@ -132,7 +102,52 @@ const compiledFormatters = formatterManifest.entries.flatMap(entry => {
   }
 });
 
-export function getStreamFormatBadges(stream: MediaStream): StreamFormatBadge[] {
+function metadataBadges(metadata?: StreamTechnicalMetadata): StreamFormatBadge[] {
+  if (!metadata) return [];
+  const result: StreamFormatBadge[] = [];
+  const add = (id: string) => {
+    const badge = [...FORMATTER_ASSET_META_ENTRIES].find(entry => entry.id === id);
+    if (!badge) return;
+    const imageUrl = badge.fileName ? formatterAssetUrls[`../assets/stream-tags/${badge.fileName}`] ?? "" : "";
+    result.push({ ...badge, imageUrl });
+  };
+  const height = metadata.resolutionHeight;
+  if (height && height >= 2160) add("resolution-2160p");
+  else if (height && height >= 1080) add("resolution-1080p");
+  else if (height && height >= 720) add("resolution-720p");
+
+  const audioCodec = metadata.audioCodec?.toLowerCase() ?? "";
+  if (/\batmos\b|joc/.test(audioCodec)) add("atmos");
+  if (/\b(?:e-?ac-?3|ec-3|ddp|dolby digital plus)\b/.test(audioCodec)) add("dolby-digital-plus");
+  else if (/\b(?:ac-?3|ac3|dd|dolby digital)\b/.test(audioCodec)) add("dolby-digital");
+  else if (/\btrue[ ._-]?hd\b/.test(audioCodec)) add("truehd");
+  else if (/\bdts[ ._-]?x\b/.test(audioCodec)) add("dts-x");
+  else if (/\bdts[ ._-]?hd[ ._-]?ma\b/.test(audioCodec)) add("dts-hd-ma");
+  else if (/\bdts[ ._-]?hd\b/.test(audioCodec)) add("dts-hd");
+  else if (/\bdts\b/.test(audioCodec)) add("dts");
+
+  const dynamicRange = metadata.dynamicRange?.toLowerCase() ?? "";
+  if (/dolby[ ._-]?vision|dovi|dv/.test(dynamicRange)) add("dolby-vision");
+  else if (/hdr10[ ._-]?(?:plus|\+)|hdr10p/.test(dynamicRange)) add("hdr10-plus");
+  else if (/hdr10/.test(dynamicRange)) add("hdr10");
+  else if (/\bhdr\b|hlg/.test(dynamicRange)) add("hdr");
+  else if (/\bsdr\b/.test(dynamicRange)) add("sdr");
+
+  if (metadata.audioChannels === 8) add("channels-7.1");
+  else if (metadata.audioChannels === 7) add("channels-6.1");
+  else if (metadata.audioChannels === 6) add("channels-5.1");
+  return result;
+}
+
+type FormatterAssetEntry = FormatterAssetMeta & { fileName?: string };
+const FORMATTER_ASSET_META_ENTRIES: FormatterAssetEntry[] = Object.entries(FORMATTER_ASSET_META)
+  .map(([fileName, meta]) => ({ ...meta, fileName }));
+
+function dedupeEquivalentBadges(badges: StreamFormatBadge[]) {
+  return [...badges].sort((left, right) => left.order - right.order);
+}
+
+export function getStreamFormatBadges(stream: MediaStream, additionalMetadata?: StreamTechnicalMetadata): StreamFormatBadge[] {
   const text = [
     stream.name,
     stream.title,
@@ -140,14 +155,15 @@ export function getStreamFormatBadges(stream: MediaStream): StreamFormatBadge[] 
     stream.behaviorHints?.filename,
     ...(stream.sources ?? []),
   ].filter(Boolean).join(" ");
-  if (!text.trim()) return [];
-
   const matches = new Map<string, StreamFormatBadge>();
   for (const formatter of compiledFormatters) {
     if (!formatter.regex.test(text) || matches.has(formatter.badge.id)) continue;
     matches.set(formatter.badge.id, formatter.badge);
   }
-  return [...matches.values()].sort((left, right) => left.order - right.order);
+  for (const badge of metadataBadges({ ...stream.technicalMetadata, ...additionalMetadata })) {
+    if (!matches.has(badge.id)) matches.set(badge.id, badge);
+  }
+  return dedupeEquivalentBadges([...matches.values()]);
 }
 
 function compileFormatterPattern(pattern: string) {

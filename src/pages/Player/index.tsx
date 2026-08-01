@@ -1168,12 +1168,13 @@ export default function PlayerPage() {
     if (currentIndex === -1) return;
     const nextEpisode = episodeOptions[currentIndex + (direction === "next" ? 1 : -1)];
     if (!nextEpisode) return;
-    if (direction === "next" && stream) {
+    if (direction === "next" && stream && playbackPreferences.preferBingeGroup) {
       sessionStorage.setItem(AUTO_NEXT_SOURCE_KEY, JSON.stringify({
         addonId: stream.addonId,
         addonName: stream.addonName,
         name: stream.name,
         title: stream.title,
+        bingeGroup: stream.behaviorHints?.bingeGroup,
       }));
     } else {
       sessionStorage.removeItem(AUTO_NEXT_SOURCE_KEY);
@@ -1236,7 +1237,7 @@ export default function PlayerPage() {
       return false;
     }
     holdSpeedRestoreRef.current = Number(selectedSpeed) || 1;
-    void sendMpvCommand(["set_property", "speed", 2]);
+    void sendMpvCommand(["set_property", "speed", playbackPreferences.holdToAccelerateSpeed]);
     return true;
   }
 
@@ -1939,14 +1940,15 @@ function saveCurrentProgressNow(reason: string) {
   const behaviorPoster = typeof stream.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
   const continueBackground = isMovie
     ? selectedMediaBackground || behaviorBackground || behaviorPoster || undefined
-    : currentEpisode?.still || undefined;
+    : currentEpisode?.still || selectedMediaBackground || behaviorBackground || behaviorPoster || undefined;
+  const continuePoster = selectedMediaPoster || behaviorPoster || undefined;
   const savedEntry = saveContinueWatchingProgress({
     query,
     stream,
     name: mediaTitle,
     logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
     background: continueBackground,
-    poster: behaviorPoster || undefined,
+    poster: continuePoster,
     episodeStill: !isMovie ? currentEpisode?.still : undefined,
     episodeName: currentEpisode?.name,
     currentTime: current,
@@ -2026,14 +2028,15 @@ useEffect(() => {
   const behaviorPoster = typeof stream.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
   const continueBackground = isMovie
     ? selectedMediaBackground || behaviorBackground || behaviorPoster || undefined
-    : currentEpisode?.still || undefined;
+    : currentEpisode?.still || selectedMediaBackground || behaviorBackground || behaviorPoster || undefined;
+  const continuePoster = selectedMediaPoster || behaviorPoster || undefined;
   const savedEntry = saveContinueWatchingProgress({
     query,
     stream,
     name: mediaTitle,
     logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
     background: continueBackground,
-    poster: behaviorPoster || undefined,
+    poster: continuePoster,
     episodeStill: !isMovie ? currentEpisode?.still : undefined,
     episodeName: currentEpisode?.name,
     currentTime,
@@ -2060,6 +2063,7 @@ useEffect(() => {
   query,
   selectedMediaBackground,
   selectedMediaLogo,
+  selectedMediaPoster,
   seriesLogoUrl,
   stream,
 ]);

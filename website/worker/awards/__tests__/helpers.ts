@@ -9,7 +9,7 @@ export class SqliteD1 {
 
   constructor() {
     this.db = new DatabaseSync(":memory:");
-    for (const name of ["0008_awards.sql", "0009_awards_history.sql", "0010_work_key_year.sql"]) {
+    for (const name of ["0008_awards.sql", "0009_awards_history.sql", "0010_work_key_year.sql", "0011_award_people.sql"]) {
       const migrationUrl = new URL(`../../../migrations/${name}`, import.meta.url);
       this.db.exec(readFileSync(migrationUrl, "utf8"));
     }

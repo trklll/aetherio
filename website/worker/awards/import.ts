@@ -17,6 +17,7 @@ import { ensureMediaLinks, type ResolveEnv } from "./resolve";
 import { parseEditionOrThrow } from "./parser";
 import { syncManifest } from "./manifest";
 import { wikipediaPageUrl, wikipediaParser } from "./parsers/wikipedia";
+import { normalizePersonName } from "./people";
 
 export interface ImportEnv extends ResolveEnv {
   AWARDS_DB: D1Database;
@@ -308,6 +309,11 @@ export async function importEditionFromHtml(
     await env.AWARDS_DB.prepare(
       `DELETE FROM award_records_staging WHERE ceremony = ? AND edition = ?`,
     ).bind(ceremony, edition).run();
+    await env.AWARDS_DB.prepare(
+      `DELETE FROM award_record_people_staging WHERE batch_id IN (
+         SELECT id FROM award_import_batches WHERE ceremony = ? AND edition = ?
+       )`,
+    ).bind(ceremony, edition).run();
     // D1.batch reduce cientos de subrequests a unos pocos por edición. Se
     // mantiene un tamaño conservador para respetar el límite de sentencias.
     for (let start = 0; start < records.length; start += 50) {
@@ -342,6 +348,22 @@ export async function importEditionFromHtml(
       });
       await env.AWARDS_DB.batch(statements);
     }
+    const peopleStaging: D1PreparedStatement[] = [];
+    records.forEach((record, index) => {
+      const recordId = `${ceremony}-${edition}-${hashKey(importKeys[index])}`;
+      record.recipients.forEach((recipient, recipientIndex) => {
+        const name = recipient.trim();
+        if (!name) return;
+        peopleStaging.push(env.AWARDS_DB.prepare(
+          `INSERT INTO award_record_people_staging
+           (batch_id, record_id, recipient_index, recipient_name, recipient_norm)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).bind(batch.id, recordId, recipientIndex, name, normalizePersonName(name)));
+      });
+    });
+    for (let start = 0; start < peopleStaging.length; start += 80) {
+      await env.AWARDS_DB.batch(peopleStaging.slice(start, start + 80));
+    }
     await recordBatch(env, batch, "staged");
 
     const previousKeys = await existingImportKeys(env, ceremony, edition);
@@ -369,6 +391,37 @@ export async function importEditionFromHtml(
                  source_url, source_tier, import_key, created_at, created_at
           FROM award_records_staging WHERE batch_id = ?`,
         ).bind(batch.id),
+        env.AWARDS_DB.prepare(
+          `INSERT INTO award_record_people (
+             id, record_id, recipient_index, recipient_name, recipient_norm,
+             person_id, resolution_status, resolution_reason, updated_at
+           )
+           SELECT lower(hex(randomblob(16))), s.record_id, s.recipient_index, s.recipient_name, s.recipient_norm,
+                  old.person_id,
+                  CASE WHEN old.recipient_norm = s.recipient_norm THEN old.resolution_status ELSE 'pending' END,
+                  CASE WHEN old.recipient_norm = s.recipient_norm THEN old.resolution_reason ELSE NULL END,
+                  ?
+           FROM award_record_people_staging s
+           LEFT JOIN award_record_people old
+             ON old.record_id = s.record_id AND old.recipient_index = s.recipient_index
+           WHERE s.batch_id = ?
+           ON CONFLICT(record_id, recipient_index) DO UPDATE SET
+             recipient_name = excluded.recipient_name,
+             recipient_norm = excluded.recipient_norm,
+             person_id = CASE WHEN award_record_people.recipient_norm = excluded.recipient_norm
+                              THEN COALESCE(award_record_people.person_id, excluded.person_id)
+                              ELSE NULL END,
+             resolution_status = CASE WHEN award_record_people.recipient_norm = excluded.recipient_norm
+                                      THEN award_record_people.resolution_status ELSE 'pending' END,
+             resolution_reason = CASE WHEN award_record_people.recipient_norm = excluded.recipient_norm
+                                      THEN award_record_people.resolution_reason ELSE NULL END,
+             updated_at = excluded.updated_at`,
+        ).bind(now, batch.id),
+        env.AWARDS_DB.prepare(
+          `DELETE FROM award_record_people
+           WHERE record_id IN (SELECT id FROM award_records WHERE ceremony = ? AND edition = ?)
+             AND record_id NOT IN (SELECT record_id FROM award_record_people_staging WHERE batch_id = ?)`,
+        ).bind(ceremony, edition, batch.id),
         env.AWARDS_DB.prepare(
           `INSERT INTO award_editions (
             ceremony, edition, award_year, coverage, status, source_url, fetched_at, checksum, record_count, updated_at

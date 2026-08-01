@@ -205,4 +205,59 @@ describe("mediaEndpoint", () => {
     expect(payload.resolution.status).toBe("unresolved");
     expect(payload.reason).toBe("identity_unresolved");
   });
+
+  it("mantiene los enlaces de anime cuando el cliente llega como TV con AniList", async () => {
+    const env = makeEnv();
+    env.AWARDS_DB.exec(`
+      INSERT INTO award_media_links
+        (id, work_key, work_title, work_year, media_type, tmdb_id, anilist_id, resolve_status, matched_title, matched_year, created_at, updated_at)
+      VALUES ('link-jjk', 'jujutsu kaisen [2020]', 'Jujutsu Kaisen', 2020, 'anime', 95479, 113415, 'resolved', 'Jujutsu Kaisen', 2020, '2026-01-01', '2026-01-01');
+      INSERT INTO award_records
+        (id, ceremony, edition, award_year, category_es, category_original, status, subject, recipients, work_title, work_year, work_key, section, source_url, source_tier, import_key, created_at, updated_at)
+      VALUES ('record-jjk', 'crunchyroll', 4, 2021, 'Mejor anime', 'Anime of the Year', 'winner', 'work', '[]', 'Jujutsu Kaisen', 2020, 'jujutsu kaisen [2020]', NULL, 'https://example.test/crunchyroll', 'official', 'import-jjk', '2026-01-01', '2026-01-01');
+    `);
+
+    const response = await handleAwardsRequest(
+      new Request("https://test/api/awards/media?tmdbId=95479&anilistId=113415&type=tv"),
+      env,
+      new URL("https://test/api/awards/media?tmdbId=95479&anilistId=113415&type=tv"),
+    );
+    const payload = await response?.json() as { records: AwardRecord[]; resolution: { status: string } };
+    expect(response?.status).toBe(200);
+    expect(payload.records).toHaveLength(1);
+    expect(payload.records[0]?.ceremony).toBe("crunchyroll");
+    expect(payload.resolution.status).toBe("resolved");
+  });
+});
+
+describe("personEndpoint", () => {
+  it("devuelve premios donde el actor aparece en recipients y no obras homónimas", async () => {
+    const env = makeEnv();
+    env.AWARDS_DB.exec(`
+      INSERT INTO award_media_links
+        (id, work_key, work_title, work_year, media_type, tmdb_id, resolve_status, created_at, updated_at)
+      VALUES ('link-goodfellas', 'goodfellas [1990]', 'Goodfellas', 1990, 'movie', 769, 'resolved', '2026-01-01', '2026-01-01');
+      INSERT INTO award_records
+        (id, ceremony, edition, award_year, category_es, category_original, status, subject, recipients, work_title, work_year, work_key, section, source_url, source_tier, import_key, created_at, updated_at)
+      VALUES
+        ('actor-award', 'oscar', 63, 1991, 'Mejor Actor de Reparto', 'Best Actor in a Supporting Role', 'winner', 'person', '["Joe Pesci"]', 'Goodfellas', 1990, 'goodfellas [1990]', NULL, 'https://example.test/oscar', 'secondary', 'import-actor-award', '2026-01-01', '2026-01-01'),
+        ('other-award', 'oscar', 63, 1991, 'Mejor Película', 'Best Picture', 'winner', 'work', '[]', 'Goodfellas', 1990, 'goodfellas [1990]', NULL, 'https://example.test/oscar', 'secondary', 'import-other-award', '2026-01-01', '2026-01-01');
+      INSERT INTO award_people
+        (id, canonical_name, canonical_name_norm, tmdb_id, resolution_status, created_at, updated_at)
+      VALUES ('person:tmdb:500', 'Joe Pesci', 'joe pesci', 500, 'resolved', '2026-01-01', '2026-01-01');
+      INSERT INTO award_record_people
+        (id, record_id, recipient_index, recipient_name, recipient_norm, person_id, resolution_status, updated_at)
+      VALUES ('relation-actor', 'actor-award', 0, 'Joe Pesci', 'joe pesci', 'person:tmdb:500', 'resolved', '2026-01-01');
+    `);
+
+    const response = await handleAwardsRequest(
+      new Request("https://test/api/awards/person?tmdbId=500&name=Joe%20Pesci"),
+      env,
+      new URL("https://test/api/awards/person?tmdbId=500&name=Joe%20Pesci"),
+    );
+    const payload = await response?.json() as { records: AwardRecord[] };
+    expect(response?.status).toBe(200);
+    expect(payload.records).toHaveLength(1);
+    expect(payload.records[0]).toMatchObject({ workTitle: "Goodfellas", status: "winner", mediaType: "movie", tmdbId: 769 });
+  });
 });

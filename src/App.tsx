@@ -409,7 +409,14 @@ function CachedPageRoutes({
         const active = cacheCurrentPage && cacheKey === currentKey;
         return (
           <Activity key={cacheKey} mode={active ? "visible" : "hidden"} name={`page:${cacheKey}`}>
-            <div className="min-h-full aetherio-page-enter">
+            <div
+              className="min-h-full aetherio-page-enter"
+              // Activity conserva el DOM de las rutas ocultas. Si la animación
+              // de entrada se interrumpe al navegar, su opacity/transform
+              // inline también se conserva y la página vuelve oscurecida.
+              // La ruta activa siempre debe recuperar su estado visual base.
+              style={active ? { opacity: 1, transform: "none" } : undefined}
+            >
               <PageRoutes location={cachedLocation} defaultRoute={defaultRoute} />
             </div>
           </Activity>

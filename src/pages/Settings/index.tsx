@@ -13,7 +13,6 @@ import {
   LogOut,
   Palette,
   PlayCircle,
-  Plus,
   Puzzle,
   RadioTower,
   RefreshCw,
@@ -55,7 +54,6 @@ import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData } from "../../types/ui";
 import {
-  createLocalProfile,
   deleteLocalProfile,
   getActiveProfile,
   getLocalProfiles,
@@ -76,17 +74,34 @@ import {
   type TraktAuthEventDetail,
 } from "../../trakt";
 import { getStoredAccount, leaveLocalMode, logoutAccount } from "../../auth/authClient";
+import { openExternalUrl } from "../../runtime/platform";
+import packageJson from "../../../package.json";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "create-profiles" | "integrations" | "tmdb" | "introdb" | "anime-skip" | "omdb" | "trakt" | "mdblist" | "discord";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "trakt" | "mdblist" | "discord";
 type DesignView = "overview" | "home-screen" | "detail-screen";
+type SavedSections = {
+  profile: boolean;
+  integrations: boolean;
+  mdblist: boolean;
+  playback: boolean;
+  design: boolean;
+};
+
+const EMPTY_SAVED_SECTIONS: SavedSections = {
+  profile: false,
+  integrations: false,
+  mdblist: false,
+  playback: false,
+  design: false,
+};
 
 const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: "account", label: "Cuenta", icon: <UserRound size={17} /> },
   { id: "design", label: "Diseño", icon: <Palette size={17} /> },
   { id: "addons", label: "Complementos", icon: <Puzzle size={17} /> },
   { id: "sources", label: "Fuentes", icon: <RadioTower size={17} /> },
-  { id: "playback", label: "Reproducci�n", icon: <PlayCircle size={17} /> },
+  { id: "playback", label: "Reproducción", icon: <PlayCircle size={17} /> },
   { id: "about", label: "Acerca de", icon: <Info size={17} /> },
 ];
 
@@ -104,15 +119,12 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => getInitialTab(location.search));
   const [accountView, setAccountView] = useState<AccountView>(() => getInitialAccountView(location.search));
   const [designView, setDesignView] = useState<DesignView>("overview");
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<SavedSections>(EMPTY_SAVED_SECTIONS);
   const [profiles, setProfiles] = useState<LocalProfile[]>(() => getLocalProfiles());
   const [activeProfile, setActiveProfileState] = useState<LocalProfile | null>(() => getActiveProfile());
   const [profileName, setProfileName] = useState(() => getActiveProfile()?.name ?? "");
   const [profilePin, setProfilePin] = useState("");
   const [profileAvatar, setProfileAvatar] = useState<string | undefined>(() => getActiveProfile()?.avatarDataUrl);
-  const [newProfileName, setNewProfileName] = useState("");
-  const [newProfilePin, setNewProfilePin] = useState("");
-  const [newProfileAvatar, setNewProfileAvatar] = useState<string | undefined>();
   const [profileError, setProfileError] = useState("");
 
   useEffect(() => {
@@ -168,7 +180,7 @@ export default function SettingsPage() {
   );
 
   function selectTab(tab: SettingsTab) {
-    setSaved(false);
+    setSaved(EMPTY_SAVED_SECTIONS);
     setActiveTab(tab);
     setAccountView("overview");
     setDesignView("overview");
@@ -176,17 +188,17 @@ export default function SettingsPage() {
   }
 
   function updateKey(name: keyof ApiKeys, value: string) {
-    setSaved(false);
+    setSaved(current => ({ ...current, integrations: false }));
     setKeys(current => ({ ...current, [name]: value }));
   }
 
   function saveIntegrations() {
     saveApiKeys(keys);
-    setSaved(true);
+    setSaved(current => ({ ...current, integrations: true }));
   }
 
   function updatePlayback<Value extends PlaybackPreferences[keyof PlaybackPreferences]>(name: keyof PlaybackPreferences, value: Value) {
-    setSaved(true);
+    setSaved(current => ({ ...current, playback: true }));
     setPlayback(current => {
       const next = { ...current, [name]: value };
       savePlaybackPreferences(next);
@@ -194,18 +206,28 @@ export default function SettingsPage() {
     });
   }
 
-  function updateMdbList(patch: Partial<MdbListSettings>) {
-    setSaved(true);
+  function updateMdbList(patch: Partial<MdbListSettings>, persist = true) {
     setMdbList(current => {
       const next = { ...current, ...patch };
-      saveMdbListSettings(next);
+      if (persist) {
+        const persisted = patch.apiKey === undefined
+          ? { ...next, apiKey: getMdbListSettings().apiKey }
+          : next;
+        saveMdbListSettings(persisted);
+      }
       return next;
     });
+    setSaved(current => ({ ...current, mdblist: persist }));
+  }
+
+  function saveMdbListApiKey() {
+    saveMdbListSettings(mdbList);
+    setSaved(current => ({ ...current, mdblist: true }));
   }
 
   function updateHomePreferences(patch: Partial<HomePreferences>) {
     const next = { ...localHomePreferences, ...patch };
-    setSaved(true);
+    setSaved(current => ({ ...current, design: true }));
     setLocalHomePreferences(next);
     saveHomePreferences(next);
   }
@@ -229,15 +251,14 @@ export default function SettingsPage() {
     updateHomePreferences({ hiddenCatalogKeys: Array.from(hidden) });
   }
 
-  async function chooseProfileImage(event: ChangeEvent<HTMLInputElement>, target: "active" | "new") {
+  async function chooseProfileImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
       const dataUrl = await readImageFileAsDataUrl(file);
-      if (target === "active") setProfileAvatar(dataUrl);
-      else setNewProfileAvatar(dataUrl);
+      setProfileAvatar(dataUrl);
       setProfileError("");
-      setSaved(false);
+      setSaved(current => ({ ...current, profile: false }));
     } catch (err) {
       setProfileError(err instanceof Error ? err.message : "No se pudo leer la imagen.");
     }
@@ -255,7 +276,7 @@ export default function SettingsPage() {
       avatarDataUrl: profileAvatar,
     });
     setProfileError("");
-    setSaved(true);
+    setSaved(current => ({ ...current, profile: true }));
     if (updated) setActiveProfileState(updated);
     setProfilePin("");
     setProfiles(getLocalProfiles());
@@ -267,19 +288,7 @@ export default function SettingsPage() {
     setActiveProfileState(getActiveProfile());
     setProfiles(getLocalProfiles());
     setProfileError("");
-    setSaved(true);
-  }
-
-  async function createProfile() {
-    if (!newProfileName.trim()) {
-      setProfileError("Escribe un nombre para crear la cuenta.");
-      return;
-    }
-    await createLocalProfile(
-      { name: newProfileName, pin: newProfilePin, avatarDataUrl: newProfileAvatar },
-      { makeActive: true }
-    );
-    window.location.reload();
+    setSaved(current => ({ ...current, profile: true }));
   }
 
   async function switchProfile(profile: LocalProfile) {
@@ -307,7 +316,7 @@ export default function SettingsPage() {
       setProfileName(remaining[0]?.name ?? "");
       setProfilePin("");
       setProfileAvatar(remaining[0]?.avatarDataUrl);
-      setSaved(false);
+      setSaved(current => ({ ...current, profile: false }));
       setProfileError("");
     }
     setProfiles(remaining);
@@ -354,35 +363,29 @@ export default function SettingsPage() {
               profileName={profileName}
               profilePin={profilePin}
               profileAvatar={profileAvatar}
-              newProfileName={newProfileName}
-              newProfilePin={newProfilePin}
-              newProfileAvatar={newProfileAvatar}
               profileError={profileError}
               saved={saved}
               keys={keys}
               mdbList={mdbList}
               onViewChange={setAccountView}
               onProfileNameChange={value => {
-                setSaved(false);
+                setSaved(current => ({ ...current, profile: false }));
                 setProfileName(value);
               }}
               onProfilePinChange={value => {
-                setSaved(false);
+                setSaved(current => ({ ...current, profile: false }));
                 setProfilePin(value.replace(/\D/g, "").slice(0, 8));
               }}
-              onNewProfileNameChange={setNewProfileName}
-              onNewProfilePinChange={value => setNewProfilePin(value.replace(/\D/g, "").slice(0, 8))}
-              onChooseProfileImage={event => chooseProfileImage(event, "active")}
-              onChooseNewProfileImage={event => chooseProfileImage(event, "new")}
+              onChooseProfileImage={chooseProfileImage}
               onSaveProfile={saveProfile}
               onRemoveProfilePin={removeProfilePin}
-              onCreateProfile={createProfile}
               onStartProfileQuickStart={() => navigate("/quick-start/profile")}
               onSwitchProfile={switchProfile}
               onDeleteProfile={deleteProfile}
               onKeyChange={updateKey}
               onNavigateToProfiles={() => navigate("/profiles")}
               onMdbListChange={updateMdbList}
+              onSaveMdbListApiKey={saveMdbListApiKey}
               onSaveIntegrations={saveIntegrations}
               playback={playback}
               onPlaybackChange={updatePlayback}
@@ -414,7 +417,7 @@ export default function SettingsPage() {
           {activeTab === "sources" ? <SourcesPanel /> : null}
 
           {activeTab === "playback" ? (
-            <PlaybackPanel playback={playback} onPlaybackChange={updatePlayback} saved={saved} />
+            <PlaybackPanel playback={playback} onPlaybackChange={updatePlayback} saved={saved.playback} />
           ) : null}
 
           {activeTab === "about" ? <AboutPanel /> : null}
@@ -431,9 +434,6 @@ function AccountPanel({
   profileName,
   profilePin,
   profileAvatar,
-  newProfileName,
-  newProfilePin,
-  newProfileAvatar,
   profileError,
   saved,
   keys,
@@ -441,18 +441,15 @@ function AccountPanel({
   onViewChange,
   onProfileNameChange,
   onProfilePinChange,
-  onNewProfileNameChange,
-  onNewProfilePinChange,
   onChooseProfileImage,
-  onChooseNewProfileImage,
   onSaveProfile,
   onRemoveProfilePin,
-  onCreateProfile,
   onStartProfileQuickStart,
   onSwitchProfile,
   onDeleteProfile,
   onKeyChange,
   onMdbListChange,
+  onSaveMdbListApiKey,
   onSaveIntegrations,
   onNavigateToProfiles,
   playback,
@@ -464,29 +461,23 @@ function AccountPanel({
   profileName: string;
   profilePin: string;
   profileAvatar?: string;
-  newProfileName: string;
-  newProfilePin: string;
-  newProfileAvatar?: string;
   profileError: string;
-  saved: boolean;
+  saved: SavedSections;
   keys: ApiKeys;
   mdbList: MdbListSettings;
   onViewChange: (view: AccountView) => void;
   onProfileNameChange: (value: string) => void;
   onProfilePinChange: (value: string) => void;
-  onNewProfileNameChange: (value: string) => void;
-  onNewProfilePinChange: (value: string) => void;
   onChooseProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
-  onChooseNewProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
   onSaveProfile: () => void;
   onRemoveProfilePin: () => void;
-  onCreateProfile: () => void;
   onStartProfileQuickStart: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
   onDeleteProfile: (profile: LocalProfile) => void;
   onKeyChange: (name: keyof ApiKeys, value: string) => void;
   onNavigateToProfiles: () => void;
-  onMdbListChange: (patch: Partial<MdbListSettings>) => void;
+  onMdbListChange: (patch: Partial<MdbListSettings>, persist?: boolean) => void;
+  onSaveMdbListApiKey: () => void;
   onSaveIntegrations: () => void;
   playback: PlaybackPreferences;
   onPlaybackChange: <Value extends PlaybackPreferences[keyof PlaybackPreferences]>(name: keyof PlaybackPreferences, value: Value) => void;
@@ -528,10 +519,10 @@ function AccountPanel({
     try {
       await startTraktAuthorization();
       setTraktAuth(getTraktAuthSnapshot());
-      setTraktStatus("Autoriza Aetherio en Trakt. Volveras automaticamente a la app.");
+      setTraktStatus("Autoriza Aetherio en Trakt. Volverás automáticamente a la app.");
       setTraktBusy(false);
     } catch (error) {
-      setTraktError(describeUnknownError(error, "No se pudo iniciar la conexion con Trakt."));
+      setTraktError(describeUnknownError(error, "No se pudo iniciar la conexión con Trakt."));
       setTraktBusy(false);
     }
   }
@@ -584,7 +575,7 @@ function AccountPanel({
           profileName={profileName}
           profilePin={profilePin}
           profileAvatar={profileAvatar}
-          saved={saved}
+          saved={saved.profile}
           profileError={profileError}
           onProfileNameChange={onProfileNameChange}
           onProfilePinChange={onProfilePinChange}
@@ -598,33 +589,14 @@ function AccountPanel({
     );
   }
 
-  if (view === "create-profiles") {
-    return (
-      <PanelScaffold title="Crear perfiles" onBack={() => onViewChange("profiles")}>
-        <CreateProfile
-          newProfileName={newProfileName}
-          newProfilePin={newProfilePin}
-          newProfileAvatar={newProfileAvatar}
-          profileError={profileError}
-          onNewProfileNameChange={onNewProfileNameChange}
-          onNewProfilePinChange={onNewProfilePinChange}
-          onChooseNewProfileImage={onChooseNewProfileImage}
-          onCreateProfile={onCreateProfile}
-        />
-      </PanelScaffold>
-    );
-  }
-
   if (view === "integrations") {
     return (
       <PanelScaffold title="Integraciones" onBack={() => onViewChange("overview")}>
         <PillBlock>
           <NavRow title="MDBList" description="Configura ratings externos para la pantalla de detalle." onClick={() => onViewChange("mdblist")} />
-          <NavRow title="IntroDB" description="Busca segmentos de intro y resumen para mostrar botones de salto cuando existan." onClick={() => onViewChange("introdb")} />
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
-          <NavRow title="OMDb" description=" clave opcional de OMDb API para mostrar badges de premios en el detalle cuando Wikidata no tiene datos." onClick={() => onViewChange("omdb")} />
           <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
-          <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estas viendo en Aetherio." onClick={() => onViewChange("discord")} />
+          <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estás viendo en Aetherio." onClick={() => onViewChange("discord")} />
         </PillBlock>
       </PanelScaffold>
     );
@@ -636,13 +608,13 @@ function AccountPanel({
         <PillBlock>
           <ToggleRow
             title="Mostrar que estoy viendo en Discord"
-            description="Aetherio conecta con Discord localmente y muestra la pelicula o serie que se esta reproduciendo. No se envia informacion a ningún servidor."
+            description="Aetherio conecta con Discord localmente y muestra la película o serie que se está reproduciendo. No se envía información a ningún servidor."
             checked={playback.enableDiscordRichPresence}
             onChange={checked => onPlaybackChange("enableDiscordRichPresence", checked)}
           />
         </PillBlock>
-        <p className="text-xs text-white/36">La presencia se actualiza solo mientras reproducokes contenido en el reproductor de escritorio.</p>
-        {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
+        <p className="text-xs text-white/36">La presencia se actualiza solo mientras reproduces contenido en el reproductor de escritorio.</p>
+        {saved.playback ? <span className="text-sm text-white/54">Guardado.</span> : null}
       </PanelScaffold>
     );
   }
@@ -656,9 +628,9 @@ function AccountPanel({
               title={traktAuth.connected ? `Conectado${traktAuth.username ? ` como ${traktAuth.username}` : ""}` : "Cuenta Trakt"}
               description={
                 traktAuth.connected
-                  ? "Scrobbling y sincronizacion activos para este perfil."
+                  ? "Scrobbling y sincronización activos para este perfil."
                   : traktAuth.authorizationPending
-                    ? "Termina la autorizacion en Trakt o vuelve a abrir la pagina de conexion."
+                    ? "Termina la autorización en Trakt o vuelve a abrir la página de conexión."
                     : "Conecta tu cuenta Trakt para sincronizar progreso, historial y scrobbling."
               }
             >
@@ -686,24 +658,16 @@ function AccountPanel({
     return (
       <MdbListPanel
         settings={mdbList}
-        saved={saved}
+        saved={saved.mdblist}
         onBack={() => onViewChange("integrations")}
         onChange={onMdbListChange}
+        onSaveApiKey={onSaveMdbListApiKey}
       />
     );
   }
 
-  if (view === "introdb" || view === "anime-skip" || view === "omdb") {
+  if (view === "anime-skip") {
     const details = {
-      introdb: {
-        title: "IntroDB",
-        description: "IntroDB permite resolver segmentos de intro y resumen cuando hay coincidencias por episodio.",
-        key: "introDbApiKey" as const,
-        label: "IntroDB API Key",
-        docsUrl: "https://www.introdb.app/",
-        docsLabel: "Sitio oficial",
-        placeholder: "Opcional para enviar timestamps; la lectura no requiere clave",
-      },
       "anime-skip": {
         title: "Anime skip",
         description: "Anime Skip puede detectar intros en anime usando el Client ID del servicio.",
@@ -713,15 +677,6 @@ function AccountPanel({
         docsLabel: "Obtener Client ID",
         placeholder: "X-Client-ID de anime-skip.com",
       },
-      omdb: {
-        title: "OMDb",
-        description: "OMDb API provee el campo de premios cuando Wikidata no lo tiene. Solo necesario para badges de premios.",
-        key: "omdbApiKey" as const,
-        label: "OMDb API Key",
-        docsUrl: "https://www.omdbapi.com/apikey.aspx",
-        docsLabel: "Obtener API Key (gratis, 1000 req/día)",
-        placeholder: "Clave gratuita de omdbapi.com",
-      },
     }[view];
 
     return (
@@ -730,7 +685,13 @@ function AccountPanel({
           <PillRow
             title={details.label}
             titleAction={(
-              <a href={details.docsUrl} target="_blank" rel="noreferrer" className="text-xs font-bold text-white/62 underline underline-offset-2 gsap-transition hover:text-white">
+              <a
+                href={details.docsUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={event => { event.preventDefault(); void openExternalUrl(details.docsUrl); }}
+                className="text-xs font-bold text-white/62 underline underline-offset-2 gsap-transition hover:text-white"
+              >
                 {details.docsLabel}
               </a>
             )}
@@ -746,8 +707,8 @@ function AccountPanel({
           </PillRow>
         </PillBlock>
         <div className="mt-5 flex items-center gap-3">
-          <ActionButton onClick={onSaveIntegrations} icon={<Save size={15} />}>Guardar integracion</ActionButton>
-          {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
+          <ActionButton onClick={onSaveIntegrations} icon={<Save size={15} />}>Guardar integración</ActionButton>
+          {saved.integrations ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
       </PanelScaffold>
     );
@@ -776,7 +737,7 @@ function AccountPanel({
           </PillRow>
         )}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
-        <NavRow title="Integraciones" description="Configurar TMDB, MDBList, IntroDB, Anime Skip y Trakt." onClick={() => onViewChange("integrations")} />
+        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt y Discord." onClick={() => onViewChange("integrations")} />
       </PillBlock>
     </PanelScaffold>
   );
@@ -787,16 +748,18 @@ function MdbListPanel({
   saved,
   onBack,
   onChange,
+  onSaveApiKey,
 }: {
   settings: MdbListSettings;
   saved: boolean;
   onBack: () => void;
-  onChange: (patch: Partial<MdbListSettings>) => void;
+  onChange: (patch: Partial<MdbListSettings>, persist?: boolean) => void;
+  onSaveApiKey: () => void;
 }) {
   return (
     <PanelScaffold title="MDBList" onBack={onBack}>
       <div className="grid gap-5">
-        <PillBlock title="CONEXION">
+          <PillBlock title="CONEXIÓN">
           <ToggleRow
             title="Activar MDBList Ratings"
             description="Obtiene puntuaciones externas para el hero de la pantalla de detalle."
@@ -806,7 +769,13 @@ function MdbListPanel({
           <PillRow
             title="API Key"
             titleAction={(
-              <a href="https://mdblist.com/preferences/" target="_blank" rel="noreferrer" className="text-xs font-bold text-white/62 underline underline-offset-2 gsap-transition hover:text-white">
+              <a
+                href="https://mdblist.com/preferences/"
+                target="_blank"
+                rel="noreferrer"
+                onClick={event => { event.preventDefault(); void openExternalUrl("https://mdblist.com/preferences/"); }}
+                className="text-xs font-bold text-white/62 underline underline-offset-2 gsap-transition hover:text-white"
+              >
                 Obtener API
               </a>
             )}
@@ -815,7 +784,7 @@ function MdbListPanel({
             <input
               type="password"
               value={settings.apiKey}
-              onChange={event => onChange({ apiKey: event.target.value })}
+              onChange={event => onChange({ apiKey: event.target.value }, false)}
               placeholder="Tu API key de MDBList"
               className="w-full rounded-full border border-white/18 bg-white px-4 py-2.5 text-sm text-black outline-none gsap-transition placeholder:text-black/45 focus:border-white/34"
             />
@@ -835,7 +804,7 @@ function MdbListPanel({
         </PillBlock>
 
         <div className="flex items-center gap-3">
-          <ActionButton onClick={() => onChange({})} icon={<Save size={15} />}>Guardar MDBList</ActionButton>
+          <ActionButton onClick={onSaveApiKey} icon={<Save size={15} />}>Guardar API key</ActionButton>
           {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
 
@@ -1045,58 +1014,6 @@ function ManageProfiles({
   );
 }
 
-function CreateProfile({
-  newProfileName,
-  newProfilePin,
-  newProfileAvatar,
-  profileError,
-  onNewProfileNameChange,
-  onNewProfilePinChange,
-  onChooseNewProfileImage,
-  onCreateProfile,
-}: {
-  newProfileName: string;
-  newProfilePin: string;
-  newProfileAvatar?: string;
-  profileError: string;
-  onNewProfileNameChange: (value: string) => void;
-  onNewProfilePinChange: (value: string) => void;
-  onChooseNewProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
-  onCreateProfile: () => void;
-}) {
-  const newPreview: LocalProfile = {
-    id: "new-profile-preview",
-    name: newProfileName || "Nuevo",
-    pin: newProfilePin || undefined,
-    avatarDataUrl: newProfileAvatar,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-
-  return (
-    <div className="grid gap-5">
-      <PillBlock>
-        <div className="grid gap-5 p-5 md:grid-cols-[auto,1fr]">
-          <div className="flex flex-col items-center gap-3">
-            <ProfileAvatar profile={newPreview} className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full" />
-            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 py-2 text-xs font-bold text-white/72 gsap-transition hover:bg-white/14 hover:text-white">
-              <ImagePlus size={14} />
-              Foto
-              <input type="file" accept="image/*" onChange={onChooseNewProfileImage} className="hidden" />
-            </label>
-          </div>
-          <div className="grid gap-4">
-            <TextField label="Nombre" value={newProfileName} placeholder="Nombre de la cuenta" onChange={onNewProfileNameChange} />
-            <TextField label="PIN opcional" value={newProfilePin} placeholder="Sin PIN" password numeric onChange={onNewProfilePinChange} />
-            <ActionButton onClick={onCreateProfile} icon={<Plus size={15} />}>Crear y entrar</ActionButton>
-          </div>
-        </div>
-      </PillBlock>
-      {profileError ? <p className="text-sm font-semibold text-red-300">{profileError}</p> : null}
-    </div>
-  );
-}
-
 function DesignPanel({
   view,
   preferences,
@@ -1260,18 +1177,18 @@ function PlaybackPanel({
   saved: boolean;
 }) {
   return (
-    <PanelScaffold title="Reproducci�n">
+    <PanelScaffold title="Reproducción">
       <div className="grid gap-5">
         <PillBlock title="REPRODUCTOR">
           <ToggleRow
-            title="Mostrar superposici�n de carga"
-            description="Mostrar la superposici�n de carga inicial mientras empieza a reproducirse un stream."
+            title="Mostrar superposición de carga"
+            description="Mostrar la superposición de carga inicial mientras empieza a reproducirse un stream."
             checked={playback.showLoadingOverlay}
             onChange={checked => onPlaybackChange("showLoadingOverlay", checked)}
           />
           <ToggleRow
-            title="Mantener Espacio para 2x"
-            description="Un toque corto reproduce o pausa. Al mantener la barra espaciadora, el vídeo acelera temporalmente a 2x."
+            title="Mantener Espacio para acelerar"
+            description="Un toque corto reproduce o pausa. Al mantener la barra espaciadora, el vídeo acelera según la velocidad elegida."
             checked={playback.holdToAccelerate}
             onChange={checked => onPlaybackChange("holdToAccelerate", checked)}
           />
@@ -1289,7 +1206,7 @@ function PlaybackPanel({
           />
         </PillBlock>
 
-        <PillBlock title="SUBTITULOS Y AUDIO">
+        <PillBlock title="SUBTÍTULOS Y AUDIO">
           <SelectRow title="Idioma de audio preferido" value={playback.firstAudioLanguage} options={LANGUAGE_OPTIONS} onChange={value => onPlaybackChange("firstAudioLanguage", value)} />
           <SelectRow title="Idioma de audio secundario" value={playback.secondAudioLanguage} options={LANGUAGE_OPTIONS} onChange={value => onPlaybackChange("secondAudioLanguage", value)} />
           <SelectRow title="Idioma de subtítulos preferido" value={playback.preferredSubtitleLanguage} options={LANGUAGE_OPTIONS} onChange={value => onPlaybackChange("preferredSubtitleLanguage", value)} />
@@ -1298,16 +1215,16 @@ function PlaybackPanel({
 
         <PillBlock title="SELECCION DE STREAM">
           <ToggleRow
-            title="Reutilizar ultimo enlace"
-            description="Reproducir automaticamente tu ultimo stream funcional para esta misma pelicula/episodio cuando la cache siga siendo valida."
+            title="Reutilizar último enlace"
+            description="Reproducir automáticamente tu último stream funcional para esta misma película/episodio cuando la caché siga siendo válida."
             checked={playback.reuseLastLink}
             onChange={checked => onPlaybackChange("reuseLastLink", checked)}
           />
         </PillBlock>
 
-        <PillBlock title="REPRODUCCION AUTOMATICA DE STREAMS">
+        <PillBlock title="REPRODUCCIÓN AUTOMÁTICA DE STREAMS">
           <SelectRow
-            title="Modo de seleccion de stream"
+            title="Modo de selección de stream"
             value={playback.sourceSelectionMode}
             options={[
               { value: "manual", label: "Manual" },
@@ -1342,41 +1259,34 @@ function PlaybackPanel({
         <PillBlock title="SALTAR SEGMENTOS">
           <ToggleRow
             title="Saltar intro/outro/resumen"
-            description="Mostrar boton de salto durante segmentos detectados de intro, outro y resumen."
+            description="Mostrar botón de salto durante segmentos detectados de intro, outro y resumen."
             checked={playback.skipSegmentsEnabled}
             onChange={checked => onPlaybackChange("skipSegmentsEnabled", checked)}
           />
           <ToggleRow
             title="Anime Skip"
-            description="Buscar tambien marcas de salto en AnimeSkip (requiere ID de cliente)."
+            description="Buscar también marcas de salto en AnimeSkip (requiere ID de cliente)."
             checked={playback.animeSkipEnabled}
             onChange={checked => onPlaybackChange("animeSkipEnabled", checked)}
-          />
-          <ToggleRow
-            title="Enable Intro Submission"
-            description="Show a button to submit intro/outro timestamps to the community database."
-            checked={playback.introDbSubmissionEnabled}
-            onChange={checked => onPlaybackChange("introDbSubmissionEnabled", checked)}
           />
         </PillBlock>
 
         <PillBlock title="SIGUIENTE EPISODIO">
           <ToggleRow
-            title="Reproduccion automatica del siguiente episodio"
-            description="Buscar y reproducir automaticamente el siguiente episodio cuando se alcance el umbral."
+            title="Reproducción automática del siguiente episodio"
+            description="Buscar y reproducir automáticamente el siguiente episodio cuando se alcance el umbral."
             checked={playback.autoPlayNextEpisode}
             onChange={checked => onPlaybackChange("autoPlayNextEpisode", checked)}
           />
           <ToggleRow
             title="Preferir grupo binge"
-            description="Al reproducir automaticamente, preferir un stream del mismo grupo binge que el actual."
+            description="Al reproducir automáticamente, preferir un stream del mismo grupo binge que el actual."
             checked={playback.preferBingeGroup}
             onChange={checked => onPlaybackChange("preferBingeGroup", checked)}
           />
-          <SelectRow title="Modo de umbral" value={playback.nextEpisodeThresholdMode} options={[{ value: "percentage", label: "Porcentaje" }]} onChange={() => onPlaybackChange("nextEpisodeThresholdMode", "percentage")} />
           <RangeRow
             title="Porcentaje de umbral"
-            description="Mostrar la tarjeta del siguiente episodio cuando la reproducción alcance este porcentaje."
+            description="Pasar automáticamente al siguiente episodio cuando la reproducción alcance este porcentaje."
             value={playback.nextEpisodeThresholdPercent}
             min={50}
             max={100}
@@ -1392,7 +1302,7 @@ function PlaybackPanel({
 }
 
 function AboutPanel() {
-  const [appVersion, setAppVersion] = useState("0.3.0");
+  const [appVersion, setAppVersion] = useState(packageJson.version ?? "desconocida");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 

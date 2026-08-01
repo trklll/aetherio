@@ -506,7 +506,7 @@ function ApiStep({
     const all = getLocalProfiles();
     return all.filter(p => {
       const k = getApiKeysForProfile(p.id);
-      return k.introDbApiKey || k.animeSkipClientId;
+      return k.animeSkipClientId;
     });
   }, []);
 
@@ -547,13 +547,6 @@ function ApiStep({
     important?: boolean;
   }> = [
     {
-      key: "introDbApiKey",
-      title: "IntroDB API Key",
-      description: "Opcional. Permite colaborar enviando segmentos de intro y resumen.",
-      placeholder: "Opcional",
-      url: "https://www.introdb.app/",
-    },
-    {
       key: "animeSkipClientId",
       title: "Anime Skip Client ID",
       description: "Opcional. Ayuda a detectar intros y endings en anime.",
@@ -568,7 +561,7 @@ function ApiStep({
         icon={<KeyRound size={22} />}
         eyebrow="Integraciones"
         title="Conecta los servicios importantes."
-        description="IntroDB y Anime Skip son opcionales. Las integraciones están disponibles para enriquecer tu experiencia de reproducción."
+        description="Anime Skip es opcional y ayuda a detectar intros y endings en anime."
       />
 
       <div className="grid gap-3">

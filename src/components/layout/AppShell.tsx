@@ -132,9 +132,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const shell = scrollRef.current;
-    if (!shell || androidRuntime || isPlayer) return;
+    if (!shell || androidRuntime || isPlayer || isEpisodePage) return;
     return installInertialScroll(shell);
-  }, [androidRuntime, isPlayer, navigationScrollKey]);
+  }, [androidRuntime, isEpisodePage, isPlayer, navigationScrollKey]);
 
   useEffect(() => {
     if (!isPlayer) {
@@ -321,7 +321,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         height: "100vh",
         width: "100vw",
         overflow: "hidden",
-        background: `${isPlayer && playerTransparent ? "transparent" : isPlayer ? "#000" : "transparent"}`,
+        background: `${isPlayer && playerTransparent ? "transparent" : isPlayer ? "#000" : isPersonPage ? "#2b2b2d" : "transparent"}`,
         color: "#fff",
       }}
     >
@@ -391,8 +391,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
         style={{
           height: "100%",
           width: "100%",
-          overflowY: "auto",
+          overflowY: isEpisodePage ? "hidden" : "auto",
           overflowX: "hidden",
+          overscrollBehavior: isEpisodePage ? "none" : undefined,
           paddingTop: hideNav ? 0 : "var(--app-shell-nav-height)",
         }}
       >

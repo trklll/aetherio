@@ -3,6 +3,7 @@ import { invokeCommand, openExternalUrl } from "../runtime/platform.ts";
 import {
   buildContinueWatchingKey,
   buildMediaKey,
+  classifyContinueWatchingEntryKind,
   mergeContinueWatchingEntries,
   progressPercent,
   readPlaybackStateEntries,
@@ -884,7 +885,7 @@ async function buildNewEpisodeEntriesFromWatchedShows(
       remoteProgressPercent: 0,
       updatedAt: Math.max(parseTraktDate(item.last_watched_at), parseTmdbDate(details?.air_date)),
       completed: false,
-      entryKind: nextEpisode.isNew ? "new" : "next",
+      entryKind: nextEpisode.entryKind,
       source: "trakt",
     });
   }
@@ -949,7 +950,12 @@ async function fetchNextAiredEpisode(
         season: seasonNumber,
         episode: episode.episode,
         details: episode.details,
-        isNew: airAt > watched.latest.watchedAt,
+        entryKind: classifyContinueWatchingEntryKind({
+          nextSeason: seasonNumber,
+          watchedSeason: watched.latest.season,
+          releaseAt: airAt,
+          watchedAt: watched.latest.watchedAt,
+        }),
       };
     }
   }

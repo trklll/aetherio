@@ -538,16 +538,6 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     });
   }
 
-  if (contentOrientation === "movies-series") {
-    const allEnriched = await enrichAllItemsWithLogos(baseRows.flatMap(row => row.items));
-    let offset = 0;
-    return baseRows.map(row => {
-      const items = allEnriched.slice(offset, offset + row.items.length);
-      offset += row.items.length;
-      return { ...row, items };
-    });
-  }
-
   const animeRows = await fetchAnimeRows();
   const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
   const filteredAnimeRows = (animeRows.length
@@ -590,8 +580,9 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
   }
 
-  const shuffledBase = [...baseRows].sort(() => Math.random() - 0.5).slice(0, 5);
-  const combined = validAnimeRows.length ? [...validAnimeRows, ...shuffledBase] : baseRows;
+  const combined = contentOrientation === "movies-series"
+    ? [...baseRows, ...validAnimeRows]
+    : validAnimeRows.length ? [...validAnimeRows, ...baseRows] : baseRows;
 
   const allEnriched = await enrichAllItemsWithLogos(combined.flatMap(row => row.items));
   let offset = 0;

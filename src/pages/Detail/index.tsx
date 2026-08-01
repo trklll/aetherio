@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { BookmarkMinus, BookmarkPlus, Image as ImageIcon, MoreHorizontal, Play, X, ChevronRight, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
+import { BookmarkMinus, BookmarkPlus, Image as ImageIcon, MoreHorizontal, Play, X, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
 import addImageIcon from "../../assets/add-image-svgrepo-com.svg";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
@@ -44,13 +44,21 @@ import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../service
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
 import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
-import { useAwardsByTmdbId, featuredText } from "../../hooks/useAwards";
+import { useAwardsByTmdbId, awardCategoryLabel, featuredText } from "../../hooks/useAwards";
 import { AwardLogo } from "../../components/awards/AwardLogo";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 const IMG      = "https://image.tmdb.org/t/p";
 const DEBUG_LOGO = false;
 const DETAIL_LOGO_KEY = "aetherio-detail-logo";
 const DETAIL_HERO_HEIGHT = "calc(78vh + var(--app-shell-nav-height) - 150px)";
+const DETAIL_VERTICAL_CARD_GAP = 22;
+const DETAIL_EPISODE_CARD_GAP = 22;
+const DETAIL_ROW_SHADOW_TOP_GUTTER = 25;
+const DETAIL_ROW_SHADOW_BOTTOM_GUTTER = 50;
+const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 38, bottom: 72 };
+// The media area is 196px tall; anchor arrows to its visual center instead of
+// the full card height, which also includes title and metadata below it.
+const DETAIL_MEDIA_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + 196 / 2;
 
 function preloadImage(url?: string | null) {
   if (!url) return Promise.resolve();
@@ -111,6 +119,42 @@ interface DetailData {
   logoOptions?:LogoOption[];
   mdbListRatings?:MdbListRatings;
   voteAverage?:number;
+}
+
+async function hydrateAnimeIdentity(detail: DetailData): Promise<DetailData> {
+  if (detail.type !== "anime" || detail.ids?.anilist) return detail;
+  const malId = await resolveMalId({
+    malId: detail.ids?.mal,
+    imdbId: detail.ids?.imdb,
+    tmdbId: detail.ids?.tmdb,
+    title: detail.name,
+    year: detail.year,
+  });
+  if (!malId) return detail;
+  const anilistId = await fetchAnilistIdByMalId(malId);
+  return {
+    ...detail,
+    ids: {
+      ...detail.ids,
+      mal: malId,
+      ...(anilistId ? { anilist: anilistId } : {}),
+    },
+  };
+}
+
+function dedupeCastMembers(cast?: CastMember[]) {
+  const seen = new Set<string>();
+  return (cast ?? []).filter(member => {
+    const key = String(member.id).trim() || normalizeTitle(member.name);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeDetailData(detail: DetailData): DetailData {
+  const cast = dedupeCastMembers(detail.cast);
+  return cast.length === (detail.cast?.length ?? 0) ? detail : { ...detail, cast };
 }
 
 function numberValue(value: unknown) {
@@ -588,6 +632,17 @@ function getSearchReturnPath(params: URLSearchParams) {
   return query ? `/search?q=${encodeURIComponent(query)}` : "/search";
 }
 
+function isActiveDetailPath(pathname: string, type?: string, id?: string) {
+  if (!type || !id) return false;
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length !== 3 || segments[0] !== "detail" || segments[1] !== type) return false;
+  try {
+    return decodeURIComponent(segments[2]) === id;
+  } catch {
+    return false;
+  }
+}
+
 function findDisplayEpisodeForEntry(data: DetailData, entry: ContinueWatchingEntry, episodeByKey?: Map<string, Episode>) {
   if (typeof entry.season !== "number" || !entry.episode || !data.seasons?.length) return null;
   const exactKey = `${entry.season}:${entry.episode}`;
@@ -696,8 +751,9 @@ export default function DetailPage() {
   const location = useLocation();
   const routeCacheKey = detailPageCacheKey(type, id);
   const initialCachedDetail = readPageDataCache<DetailData>("detail", routeCacheKey);
-  const [data, setData]         = useState<DetailData|null>(() => initialCachedDetail);
-  const [loading, setLoading]   = useState(() => !initialCachedDetail);
+  const normalizedInitialDetail = initialCachedDetail ? normalizeDetailData(initialCachedDetail) : null;
+  const [data, setData]         = useState<DetailData|null>(() => normalizedInitialDetail);
+  const [loading, setLoading]   = useState(() => !normalizedInitialDetail);
   const [season, setSeason]     = useState(1);
   const [showMore, setShowMore] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
@@ -717,6 +773,7 @@ export default function DetailPage() {
   const awardBadgeRef = useRef<HTMLDivElement>(null);
   const detailContentRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
+  const loadGenerationRef = useRef(0);
   const backdropImageRef = useRef<HTMLImageElement>(null);
   const backdropBlurAmountRef = useRef(0);
   const metadataVignetteRef = useRef<HTMLDivElement>(null);
@@ -727,25 +784,16 @@ export default function DetailPage() {
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const mdbListSettings = useMdbListSettings();
   const tmdbIdForAwards = data?.ids?.tmdb ?? (id?.startsWith("tmdb:") ? Number(id.replace("tmdb:", "")) : null);
+  const awardsType = data?.type ?? type ?? "";
   const awards = useAwardsByTmdbId(
-    type ?? "",
+    awardsType,
     typeof tmdbIdForAwards === "number" ? tmdbIdForAwards : null,
-    Boolean(type && (tmdbIdForAwards !== null || data?.ids?.imdb || data?.ids?.anilist)),
+    Boolean(data && type && (tmdbIdForAwards !== null || data?.ids?.imdb || data?.ids?.anilist)),
     data?.ids?.imdb ?? null,
     data?.ids?.anilist ?? null,
     data?.name ?? null,
     data?.year ?? null,
   );
-  const fullMdbListSettings = ({
-    ...mdbListSettings,
-    showTrakt: true,
-    showImdb: true,
-    showTmdb: true,
-    showLetterboxd: true,
-    showTomatoes: true,
-    showMetacritic: true,
-  });
-
   function logoLog(event: string, extra?: Record<string, unknown>) {
     if (!DEBUG_LOGO) return;
     console.info("[AETHERIO:DETAIL:LOGO]", {
@@ -760,13 +808,23 @@ export default function DetailPage() {
   }
 
   useEffect(() => {
-    if (type && id) load(type, id);
+    const requestId = ++loadGenerationRef.current;
+    if (type && id) void load(type, id, requestId);
+    return () => {
+      if (loadGenerationRef.current === requestId) loadGenerationRef.current += 1;
+    };
   }, [
     type,
     id,
     allowTmdbArtworkFallback,
     mdbListSettings.enabled,
     mdbListSettings.apiKey,
+    mdbListSettings.showTrakt,
+    mdbListSettings.showImdb,
+    mdbListSettings.showTmdb,
+    mdbListSettings.showLetterboxd,
+    mdbListSettings.showTomatoes,
+    mdbListSettings.showMetacritic,
   ]);
 
   useEffect(() => {
@@ -821,12 +879,20 @@ export default function DetailPage() {
   }, [loading, data?.id]);
 
   useLayoutEffect(() => {
+    if (!isActiveDetailPath(location.pathname, type, id)) return;
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    gsap.killTweensOf([
+      backdropImageRef.current,
+      metadataVignetteRef.current,
+      darkOverlayRef.current,
+    ]);
     backdropBlurAmountRef.current = 0;
     metadataVignetteOpacityRef.current = 1;
-    gsap.set(backdropImageRef.current, { filter: "blur(0px)", scale: 1 });
+    darkOverlayOpacityRef.current = 0;
+    gsap.set(backdropImageRef.current, { opacity: 1, filter: "blur(0px)", scale: 1 });
     gsap.set(metadataVignetteRef.current, { opacity: 1 });
-  }, [type, id]);
+    gsap.set(darkOverlayRef.current, { opacity: 0 });
+  }, [type, id, location.key, location.pathname]);
 
   useLayoutEffect(() => {
     backdropBlurAmountRef.current = -1;
@@ -854,6 +920,7 @@ export default function DetailPage() {
     );
     return () => {
       timeline.kill();
+      gsap.set(backdropImageRef.current, { opacity: 1, filter: "blur(0px)", scale: 1 });
       gsap.set(items, { clearProps: "opacity,transform" });
     };
   }, [loading, data?.id]);
@@ -929,11 +996,16 @@ export default function DetailPage() {
     return () => window.removeEventListener(CONTINUE_WATCHING_EVENT, onUpdated as EventListener);
   }, []);
 
-  async function load(t:string, mediaId:string) {
+  async function load(t:string, mediaId:string, requestId = loadGenerationRef.current) {
+    const isCurrent = () => requestId === loadGenerationRef.current;
+    if (!isCurrent()) return;
     const cacheKey = detailPageCacheKey(t, mediaId);
     const cachedDetail = readPageDataCache<DetailData>("detail", cacheKey);
     if (cachedDetail) {
-      setData(cachedDetail);
+      const hydrated = normalizeDetailData(await hydrateAnimeIdentity(cachedDetail));
+      if (!isCurrent()) return;
+      if (hydrated !== cachedDetail) writePageDataCache("detail", cacheKey, hydrated);
+      setData(hydrated);
       setLoading(false);
       return;
     }
@@ -969,12 +1041,8 @@ export default function DetailPage() {
       ]),
     };
     const finish = async (next: DetailData) => {
-      if (next.type === "anime" && !next.ids?.anilist && typeof next.ids?.mal === "number") {
-        const anilistId = await fetchAnilistIdByMalId(next.ids.mal).catch(() => null);
-        if (anilistId) {
-          next = { ...next, ids: { ...next.ids, anilist: anilistId } };
-        }
-      }
+      next = normalizeDetailData(await hydrateAnimeIdentity(next));
+      if (!isCurrent()) return;
       logoLog("detail data ready", { resolvedLogo: next.logo ?? null });
       if (next.logo) setCachedLogo(writeCachedLogo(getDetailLogoKey(t, mediaId), next.logo) ?? null);
       else setCachedLogo(null);
@@ -999,12 +1067,12 @@ export default function DetailPage() {
       setLoading(false);
     };
     const finishWithRatings = async (next: DetailData) => {
-      if (!fullMdbListSettings.enabled || !fullMdbListSettings.apiKey.trim()) {
+      if (!mdbListSettings.enabled || !mdbListSettings.apiKey.trim()) {
         await finish(next);
         return;
       }
       const ratings = await fetchMdbListRatingsForMedia({
-        settings: fullMdbListSettings,
+        settings: mdbListSettings,
         mediaType: next.type,
         mediaId: typeof next.ids?.tmdb === "number" && next.ids.tmdb > 0 ? `tmdb:${next.ids.tmdb}` : next.id,
         imdbId: resolveDetailImdbId(next),
@@ -1460,7 +1528,7 @@ export default function DetailPage() {
       }}
     >
       <div className="detail-page-scale" style={{ position:"relative",minHeight:"100vh" }}>
-        <div style={{ position:"relative",width:"100vw",left:"50%",marginLeft:"-50vw",height:DETAIL_HERO_HEIGHT,minHeight:450,overflow:"hidden" }}>
+        <div className="detail-page-hero" style={{ position:"relative",width:"100vw",left:"50%",marginLeft:"-50vw",height:DETAIL_HERO_HEIGHT,minHeight:450,overflow:"hidden" }}>
           <div className="skeleton" style={{ position:"absolute",inset:0,opacity:0.38 }} />
           <div style={{ position:"absolute",inset:0,background:"linear-gradient(90deg, rgba(0,0,0,0.78), rgba(0,0,0,0.18) 58%, transparent)" }} />
           <div style={{ position:"absolute",left:"var(--app-safe-x)",bottom:4,width:460,maxWidth:"42vw",paddingBottom:22,display:"flex",flexDirection:"column",gap:11 }}>
@@ -2066,7 +2134,7 @@ export default function DetailPage() {
                   </div>
                   {awards.featured.categoryEs && (
                     <div style={{ fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.75)", marginTop: 2 }}>
-                      {awards.featured.categoryEs}
+                      {awardCategoryLabel(awards.featured)}
                     </div>
                   )}
                 </div>
@@ -2200,7 +2268,7 @@ export default function DetailPage() {
                 <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>Temporada {curSeason.number}</h2>
               )}
             </div>
-            <ScrollRow gap={10} initialScrollKey={episodeScrollKey || getEpisodeKey(curSeason.episodes[0]?.season, curSeason.episodes[0]?.episode)}>
+            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP} initialScrollKey={episodeScrollKey || getEpisodeKey(curSeason.episodes[0]?.season, curSeason.episodes[0]?.episode)}>
               {curSeason.episodes.map(ep=>(
                 <EpCard
                   key={ep.id}
@@ -2233,7 +2301,7 @@ export default function DetailPage() {
         {!isMovie&&Boolean(specialSeason?.episodes.length)&&(
           <section>
             <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1,marginBottom:18 }}>Especiales</h2>
-            <ScrollRow gap={10}>
+            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
               {specialSeason!.episodes.map(ep=>(
                 <EpCard
                   key={ep.id}
@@ -2266,7 +2334,7 @@ export default function DetailPage() {
         {!!data.trailers?.length&&(
           <section>
             <SectionH title="Tráilers" />
-            <ScrollRow gap={10}>
+            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
               {data.trailers.map((t,index)=><TrailerCard key={t.key ?? `trailer-${index}`} trailer={t} media={data} />)}
             </ScrollRow>
           </section>
@@ -2315,7 +2383,7 @@ export default function DetailPage() {
         {!!data.related?.length&&(
           <section>
             <SectionH title="Más como esto" />
-            <ScrollRow gap={8}>
+            <ScrollRow gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER}>
               {data.related.map(r=>(
                 <div key={r.id}
                   onClick={()=>navigate(`/detail/${r.media_type}/tmdb:${r.id}`)}
@@ -2324,15 +2392,11 @@ export default function DetailPage() {
                     const card = e.currentTarget as HTMLDivElement;
                     tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
                     gsap.set(card, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
-                    const image = card.querySelector("img") as HTMLImageElement | null;
-                    if (image) tweenTo(image, { scale: 1.04 }, 0.32);
                   }}
                   onMouseLeave={e=>{
                     const card = e.currentTarget as HTMLDivElement;
                     tweenTo(card, { y: 0, scale: 1, zIndex: 1 }, 0.32);
                     gsap.set(card, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-                    const image = card.querySelector("img") as HTMLImageElement | null;
-                    if (image) tweenTo(image, { scale: 1 }, 0.32);
                   }}
                 >
                   {completedMediaKeys.has(`${r.media_type}:tmdb:${r.id}`) ? (
@@ -2404,7 +2468,7 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
 
   return (
     <div className="liquid-glass-dark" style={{ borderRadius:18,padding:"22px 24px",minHeight:138 }}>
-      <h2 style={{ fontSize:15,fontWeight:700,color:"rgba(255,255,255,0.62)",marginBottom:18,letterSpacing:0 }}>{title}</h2>
+    <h2 style={{ fontSize:15,fontWeight:700,color:"#fff",marginBottom:18,letterSpacing:0 }}>{title}</h2>
       <div style={{ display:"flex",alignItems:"center",gap:14,flexWrap:"wrap" }}>
         {items.slice(0, 8).map(item => (
           <button
@@ -2436,28 +2500,11 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
   );
 }
 
-function SectionH({ title, onClick }:{title:string;onClick?:()=>void}) {
-  const navigate = useNavigate();
-  const { type, id } = useParams<{type:string;id:string}>();
-  const fallbackClick = () => {
-    if (!type || !id) return;
-    const lowerTitle = title.toLowerCase();
-    const section = lowerTitle.startsWith("tr")
-      ? "trailers"
-      : lowerTitle.includes("reparto")
-        ? "cast"
-        : lowerTitle.includes("relacion")
-          ? "related"
-          : "";
-    if (!section) return;
-    navigate(`/detail/${encodeURIComponent(type)}/${encodeURIComponent(id)}/${section}`);
-  };
-  const handleClick = onClick ?? fallbackClick;
+function SectionH({ title }:{title:string}) {
   return (
-    <button type="button" onClick={handleClick} style={{ display:"flex",alignItems:"center",gap:6,marginBottom:16,background:"none",border:"none",padding:0,cursor:"pointer" }}>
+    <div style={{ display:"flex",alignItems:"center",marginBottom:16 }}>
       <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>{title}</h2>
-      <ChevronRight size={16} style={{ color:"rgba(255,255,255,0.35)",marginTop:1 }} />
-    </button>
+    </div>
   );
 }
 
@@ -2596,14 +2643,10 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
       onMouseEnter={event=>{
         tweenTo(event.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
         gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-        const image = (event.currentTarget as HTMLButtonElement).querySelector("img");
-        if (image) tweenTo(image, { scale: 1.04 }, 0.32);
       }}
       onMouseLeave={event=>{
         tweenTo(event.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
         gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-        const image = (event.currentTarget as HTMLButtonElement).querySelector("img");
-        if (image) tweenTo(image, { scale: 1 }, 0.32);
       }}
       style={{
         position:"relative",
@@ -2651,7 +2694,7 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
     </button>
   );
 }
-function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;gap?:number;initialScrollKey?:string}) {
+function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTop }:{children:ReactNode;gap?:number;initialScrollKey?:string;shadowGutter?:{top:number;bottom:number};arrowTop?:number|string}) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -2734,7 +2777,7 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
       <div
         ref={leftArrowRef}
         className="liquid-glass-arrow row-arrow-shell"
-        style={{ position:"absolute",left:0,top:"50%",zIndex:10,transform:"translate(-30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollLeft?"auto":"none" }}
+        style={{ position:"absolute",left:0,top:arrowTop ?? "50%",zIndex:10,transform:"translate(-30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollLeft?"auto":"none" }}
       >
         <button
           onClick={()=>move("left")}
@@ -2756,8 +2799,10 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
           overflowX: "auto",
           overflowY: "visible",
           margin: "-12px calc(-1 * var(--app-safe-x)) -28px",
-          paddingTop: 20,
-          paddingBottom: 30,
+          // The horizontal scroller clips vertical overflow by definition. Keep
+          // enough scrollport gutter for the scaled card and its shadow.
+          paddingTop: shadowGutter?.top ?? DETAIL_ROW_SHADOW_TOP_GUTTER,
+          paddingBottom: shadowGutter?.bottom ?? DETAIL_ROW_SHADOW_BOTTOM_GUTTER,
           paddingLeft: "var(--app-safe-x)",
           paddingRight: "var(--app-safe-x)",
           scrollPaddingInline: 0,
@@ -2770,7 +2815,7 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
       <div
         ref={rightArrowRef}
         className="liquid-glass-arrow row-arrow-shell"
-        style={{ position:"absolute",right:0,top:"50%",zIndex:10,transform:"translate(30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollRight?"auto":"none" }}
+        style={{ position:"absolute",right:0,top:arrowTop ?? "50%",zIndex:10,transform:"translate(30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollRight?"auto":"none" }}
       >
         <button
           onClick={()=>move("right")}
@@ -2845,16 +2890,12 @@ function EpCard({
         const card = e.currentTarget as HTMLDivElement;
         tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
         gsap.set(card,{boxShadow:"0 18px 40px rgba(0,0,0,0.42)"});
-        const img=card.querySelector("img.detail-episode-card__image") as HTMLImageElement | null;
-        if(img) tweenTo(img,{scale:1.04},0.28);
       }}
       onMouseLeave={(e)=>{
         setFocused(false);
         const card = e.currentTarget as HTMLDivElement;
         tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
         gsap.set(card,{boxShadow:"none"});
-        const img=card.querySelector("img.detail-episode-card__image") as HTMLImageElement | null;
-        if(img) tweenTo(img,{scale:1},0.28);
       }}
     >
       <div className="detail-episode-card__media">
@@ -2964,14 +3005,10 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
       onMouseEnter={e=>{
          tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
          gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-         const img=(e.currentTarget as HTMLButtonElement).querySelector("img");
-         if(img) tweenTo(img, { scale: 1.04 }, 0.32);
        }}
        onMouseLeave={e=>{
          tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
          gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-         const img=(e.currentTarget as HTMLButtonElement).querySelector("img");
-         if(img) tweenTo(img, { scale: 1 }, 0.32);
        }}
     >
       {thumbSrc ? (

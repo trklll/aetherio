@@ -7,12 +7,14 @@ export function AwardLogo({
   ceremony,
   height = 50,
   maxWidth = 100,
+  tone = "default",
   className,
   style,
 }: {
   ceremony: AwardCeremony;
   height?: number;
   maxWidth?: number;
+  tone?: "default" | "light";
   className?: string;
   style?: CSSProperties;
 }) {
@@ -31,6 +33,7 @@ export function AwardLogo({
         maxWidth,
         objectFit: "contain",
         flexShrink: 0,
+        ...(tone === "light" ? { filter: "brightness(0) invert(1)" } : {}),
         ...style,
       }}
     />

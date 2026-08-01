@@ -4,6 +4,7 @@ import { tmdbFetch } from "../config/apiKeys.ts";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
 import { isPlayableMediaStream } from "../utils/playableMedia.ts";
 import { streamSpanishPriority } from "../utils/streamLanguagePriority.ts";
+import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetadata.ts";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -267,6 +268,7 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
       ?? detectStreamLanguages(raw, behaviorHints),
     sources,
     behaviorHints,
+    technicalMetadata: normalizeStreamTechnicalMetadata(raw, behaviorHints),
     subtitles:    normalizeSubtitles(raw.subtitles),
   } satisfies MediaStream;
   return isPlayableMediaStream(stream) ? stream : null;

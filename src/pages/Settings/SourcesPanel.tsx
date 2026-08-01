@@ -30,6 +30,7 @@ import {
   getGlobalCloudstreamRepositories,
   type GlobalCloudstreamRepositoryInfo,
 } from "../../services/cloudstreamRepositoryService.ts";
+import { openExternalUrl } from "../../runtime/platform.ts";
 
 const CATEGORY_LABELS: Record<string, string> = {
   aggregator: "AGREGADORES",
@@ -273,6 +274,7 @@ export default function SourcesPanel() {
                   href={addon.url}
                   target="_blank"
                   rel="noreferrer"
+                  onClick={event => { event.preventDefault(); void openExternalUrl(addon.url); }}
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
                   aria-label={`Abrir manifest de ${addon.name}`}
                   title="Abrir manifest"
@@ -336,6 +338,7 @@ export default function SourcesPanel() {
                         href={repository.manifestUrl}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={event => { event.preventDefault(); void openExternalUrl(repository.manifestUrl); }}
                         className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
                         aria-label={`Abrir manifest de ${repository.ownerName}`}
                         title="Abrir manifest"
@@ -402,9 +405,10 @@ export default function SourcesPanel() {
                 : `${repository.spanishPluginCount}/${repository.pluginCount} extensiones en español · ${repository.compatibleProviderNames.length} adapters reproducibles: ${repository.compatibleProviderNames.join(", ") || "ninguno todavía"}`}
               action={(
                 <a
-                  href={repository.url}
-                  target="_blank"
-                  rel="noreferrer"
+                 href={repository.url}
+                 target="_blank"
+                 rel="noreferrer"
+                  onClick={event => { event.preventDefault(); void openExternalUrl(repository.url); }}
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
                   aria-label={`Abrir repositorio ${repository.name}`}
                   title="Abrir repositorio"
@@ -434,9 +438,10 @@ export default function SourcesPanel() {
               action={(
                 <div className="flex items-center gap-1">
                   <a
-                    href={extension.manifestURI}
-                    target="_blank"
-                    rel="noreferrer"
+                   href={extension.manifestURI}
+                   target="_blank"
+                   rel="noreferrer"
+                    onClick={event => { event.preventDefault(); void openExternalUrl(extension.manifestURI); }}
                     className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
                     aria-label={`Abrir manifest de ${extension.name}`}
                     title="Abrir manifest"

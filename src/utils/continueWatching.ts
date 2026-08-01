@@ -13,6 +13,9 @@ const MIN_SAVE_SECONDS = 5;
 const MIN_RESUME_SECONDS = 12;
 const COMPLETE_PERCENT = 0.92;
 const COMPLETE_REMAINING_SECONDS = 90;
+const RECENT_RELEASE_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
+
+export type ContinueWatchingEntryKind = "resume" | "next" | "new" | "new-season";
 
 export interface ContinueWatchingEntry {
   key: string;
@@ -31,7 +34,7 @@ export interface ContinueWatchingEntry {
   duration: number;
   updatedAt: number;
   completed: boolean;
-  entryKind?: "resume" | "next" | "new";
+  entryKind?: ContinueWatchingEntryKind;
   remoteProgressPercent?: number;
   source?: "local" | "trakt";
   traktPlaybackId?: number;
@@ -102,7 +105,7 @@ export interface NextEpisodePromptInput {
   poster?: string;
   episodeStill?: string;
   runtimeSeconds?: number;
-  entryKind?: "next" | "new";
+  entryKind?: Exclude<ContinueWatchingEntryKind, "resume">;
   updatedAt?: number;
   source?: "local" | "trakt";
 }
@@ -114,6 +117,25 @@ export function buildMediaKey(type: string, id: string) {
 export function buildContinueWatchingKey(query: StreamQuery) {
   if (query.type === "movie") return buildMediaKey(query.type, query.id);
   return `${buildMediaKey(query.type, query.id)}:${query.season ?? 0}:${query.episode ?? 0}`;
+}
+
+export function classifyContinueWatchingEntryKind(input: {
+  nextSeason: number;
+  watchedSeason?: number;
+  releaseAt: number;
+  watchedAt: number;
+  now?: number;
+}): Exclude<ContinueWatchingEntryKind, "resume"> {
+  const now = input.now ?? Date.now();
+  const isRecentRelease = input.releaseAt > input.watchedAt
+    && input.releaseAt <= now
+    && now - input.releaseAt < RECENT_RELEASE_WINDOW_MS;
+
+  if (!isRecentRelease) return "next";
+  if (typeof input.watchedSeason === "number" && input.nextSeason > input.watchedSeason) {
+    return "new-season";
+  }
+  return "new";
 }
 
 export function readContinueWatchingEntries(): ContinueWatchingEntry[] {
@@ -239,19 +261,22 @@ export function saveContinueWatchingProgress(input: ContinueWatchingInput) {
   const completed = isCompleted(currentTime, duration);
   const key = buildContinueWatchingKey(input.query);
   const mediaKey = buildMediaKey(input.query.type, input.query.id);
+  const existing = readContinueWatchingEntries().find(item => item.key === key);
   const entry: ContinueWatchingEntry = {
     key,
     mediaKey,
     type: input.query.type,
     id: input.query.id,
-    name: input.name || input.query.id,
-    logo: sanitizeLogoUrl(input.logo),
-    background: input.background,
-    poster: input.poster,
-    episodeStill: input.episodeStill ?? (input.query.type !== "movie" ? input.background : undefined),
+    name: input.name || existing?.name || input.query.id,
+    logo: sanitizeLogoUrl(input.logo) ?? existing?.logo,
+    background: input.background ?? existing?.background,
+    poster: input.poster ?? existing?.poster,
+    episodeStill: input.episodeStill
+      ?? existing?.episodeStill
+      ?? (input.query.type !== "movie" ? input.background ?? existing?.background : undefined),
     season: input.query.season,
     episode: input.query.episode,
-    episodeName: input.episodeName,
+    episodeName: input.episodeName ?? existing?.episodeName,
     currentTime,
     duration,
     updatedAt: Date.now(),
@@ -550,7 +575,7 @@ function isResumableEntry(entry: ContinueWatchingEntry) {
 
 function isVisibleContinueWatchingEntry(entry: ContinueWatchingEntry) {
   if (entry.completed) return false;
-  if (entry.entryKind === "next" || entry.entryKind === "new") return true;
+  if (entry.entryKind === "next" || entry.entryKind === "new" || entry.entryKind === "new-season") return true;
   return isResumableEntry(entry);
 }
 
@@ -565,8 +590,26 @@ function clampFinite(value: number) {
 }
 
 function shouldReplaceEntry(existing: ContinueWatchingEntry, candidate: ContinueWatchingEntry) {
+  const existingKindPriority = entryKindPriority(existing.entryKind);
+  const candidateKindPriority = entryKindPriority(candidate.entryKind);
+  if (candidateKindPriority !== existingKindPriority) {
+    return candidateKindPriority > existingKindPriority;
+  }
   if (candidate.updatedAt !== existing.updatedAt) return candidate.updatedAt > existing.updatedAt;
   return metadataScore(candidate) > metadataScore(existing);
+}
+
+function entryKindPriority(kind: ContinueWatchingEntryKind | undefined) {
+  switch (kind) {
+    case "new-season":
+      return 3;
+    case "new":
+      return 2;
+    case "next":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function mergeEntries(

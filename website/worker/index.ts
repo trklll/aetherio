@@ -2,6 +2,7 @@ import { handleAuthRequest, type AuthEnv } from "./auth";
 import { handleReleaseRequest, type ReleaseEnv } from "./releases";
 import { handleAwardsRequest, type AwardsApiEnv } from "./awards/api";
 import { runImport, weeklyTargets } from "./awards/import";
+import { resolvePeopleBatch } from "./awards/people";
 
 interface Env extends AuthEnv, ReleaseEnv, AwardsApiEnv {
   ASSETS: Fetcher;
@@ -27,6 +28,12 @@ export default {
     const releaseResponse = await handleReleaseRequest(request, env, url);
     if (releaseResponse) return releaseResponse;
 
+    // Nunca dejes que el fallback SPA convierta una ruta API desconocida en
+    // HTML: los clientes deben recibir un error JSON y CORS consistente.
+    if (url.pathname.startsWith("/api/")) {
+      return json({ error: "Ruta API no encontrada." }, 404);
+    }
+
     return env.ASSETS.fetch(request);
   },
 
@@ -35,6 +42,7 @@ export default {
     if (!env.AWARDS_DB) return;
     const targets = weeklyTargets();
     await runImport(env, "weekly", targets);
+    try { await resolvePeopleBatch(env, 40); } catch { /* El siguiente ciclo reintentará pendientes. */ }
   },
 } satisfies ExportedHandler<Env>;
 

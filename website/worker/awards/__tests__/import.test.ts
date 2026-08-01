@@ -51,12 +51,16 @@ describe("importEditionFromHtml", () => {
     expect(first.imported).toBe(3);
     expect(first.updated).toBe(0);
     expect(await countRecords(db)).toBe(3);
+    const people = await db.prepare("SELECT COUNT(*) AS count FROM award_record_people").bind().first<{ count: number }>();
+    expect(Number(people?.count ?? 0)).toBeGreaterThan(0);
 
     const second = await importEditionFromHtml(env, PARSERS.oscar, oscarMeta(), OSCAR_HTML, "checksum-a");
     expect(second.ok).toBe(true);
     expect(second.imported).toBe(0);
     expect(second.updated).toBe(3);
     expect(await countRecords(db)).toBe(3);
+    const peopleAfterSecond = await db.prepare("SELECT COUNT(*) AS count FROM award_record_people").bind().first<{ count: number }>();
+    expect(Number(peopleAfterSecond?.count ?? 0)).toBe(Number(people?.count ?? 0));
   });
 
   it("conserva el dataset anterior si el parser devuelve cero registros", async () => {

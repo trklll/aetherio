@@ -33,9 +33,11 @@ import {
 import { readDetailMediaMeta, readDetailBackgroundOverride } from "../../utils/mediaMetadata.ts";
 import { gsap, tweenTo } from "../../utils/motion.ts";
 import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/streamFormatters.ts";
+import { inspectStreamManifest, shouldInspectStreamManifest } from "../../utils/streamManifestMetadata.ts";
 import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
 import { getSourceLogo } from "../../utils/sourceLogos.ts";
+import { pickBestMatchingSource, type AutoNextSourceHint } from "../../utils/autoNextSource.ts";
 import {
   AVAILABLE_STREAMS_KEY,
   AUTO_NEXT_SOURCE_KEY,
@@ -70,13 +72,6 @@ interface EpisodePageMeta {
   mdbListRatings?: MdbListRatings;
   voteAverage?: number;
   trailerVideoIds?: string[];
-}
-
-interface AutoNextSourceHint {
-  addonId?: string;
-  addonName?: string;
-  name?: string;
-  title?: string;
 }
 
 type SelectOption = {
@@ -134,15 +129,6 @@ export default function EpisodiePage() {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
   const playbackPreferences = usePlaybackPreferences();
   const mdbListSettings = useMdbListSettings();
-  const fullMdbListSettings = useMemo(() => ({
-    ...mdbListSettings,
-    showTrakt: true,
-    showImdb: true,
-    showTmdb: true,
-    showLetterboxd: true,
-    showTomatoes: true,
-    showMetacritic: true,
-  }), [mdbListSettings]);
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const query = useMemo<StreamQuery | null>(() => {
     const type = params.get("type");
@@ -338,7 +324,7 @@ export default function EpisodiePage() {
           const tmdbBackdrops = mapTmdbScreenshotBackdrops(images?.backdrops);
           const preferredBackdrop = pickPreferredTmdbBackdrop(images?.backdrops, details?.backdrop_path);
           const mdbListRatings = await fetchMdbListRatingsForMedia({
-            settings: fullMdbListSettings,
+            settings: mdbListSettings,
             mediaType: query.type,
             mediaId: `tmdb:${tmdbId}`,
             imdbId: details?.external_ids?.imdb_id ?? details?.imdb_id,
@@ -400,7 +386,7 @@ export default function EpisodiePage() {
 
       if (!nextMeta.mdbListRatings) {
         const fallbackRatings = await fetchMdbListRatingsForMedia({
-          settings: fullMdbListSettings,
+          settings: mdbListSettings,
           mediaType: query.type,
           mediaId: query.id,
           imdbId: query.id.startsWith("tt") ? query.id : undefined,
@@ -430,7 +416,20 @@ export default function EpisodiePage() {
 
     void loadMeta();
     return () => { cancelled = true; };
-  }, [allowTmdbArtworkFallback, episodeTitleParam, fullMdbListSettings, getEnabledAddons, query]);
+  }, [
+    allowTmdbArtworkFallback,
+    episodeTitleParam,
+    getEnabledAddons,
+    mdbListSettings.apiKey,
+    mdbListSettings.enabled,
+    mdbListSettings.showTrakt,
+    mdbListSettings.showImdb,
+    mdbListSettings.showTmdb,
+    mdbListSettings.showLetterboxd,
+    mdbListSettings.showTomatoes,
+    mdbListSettings.showMetacritic,
+    query,
+  ]);
 
   useEffect(() => {
     if (!query?.type || !query?.id) return;
@@ -642,6 +641,7 @@ export default function EpisodiePage() {
     if (!query) return;
     const resume = getExactResumeForQuery(query);
     const playbackBackground = ensureOriginalTmdbImage(meta?.background)
+      ?? ensureOriginalTmdbImage(meta?.episodeStill)
       ?? meta?.poster
       ?? ensureOriginalTmdbImage(resume?.background)
       ?? resume?.poster;
@@ -1017,17 +1017,50 @@ const StreamItemButton = memo(function StreamItemButton({
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [manifestMetadata, setManifestMetadata] = useState<MediaStream["technicalMetadata"]>();
   const priority = isPriorityStream(stream);
   const isTorrent = isTorrentStream(stream);
   const seeders = torrentSeedersCount(stream);
-  const formatBadges = useMemo(() => getStreamFormatBadges(stream), [stream]);
+  const formatBadges = useMemo(
+    () => getStreamFormatBadges(stream, manifestMetadata),
+    [stream, manifestMetadata],
+  );
   const languageMetadata = useMemo(() => formatStreamLanguageMetadata(stream), [stream]);
   const fileName = useMemo(() => extractSourceFileName(stream), [stream]);
   const summary = useMemo(() => formatSourceSummary(stream), [stream]);
   const metadata = useMemo(() => formatSourceCardMetadata(stream), [stream]);
 
+  useEffect(() => {
+    if (!shouldInspectStreamManifest(stream)) return;
+    const element = buttonRef.current;
+    if (!element) return;
+    let cancelled = false;
+    let inspected = false;
+    const inspect = () => {
+      if (inspected) return;
+      inspected = true;
+      void inspectStreamManifest(stream).then(value => {
+        if (!cancelled && value) setManifestMetadata(value);
+      });
+    };
+    if (typeof IntersectionObserver === "undefined") return undefined;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        inspect();
+        observer.disconnect();
+      }
+    }, { rootMargin: "200px" });
+    observer.observe(element);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [stream]);
+
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={() => onSelect(stream.id)}
       className={`rounded-2xl border px-4 py-3 text-left ${
@@ -1437,35 +1470,6 @@ function readAutoNextSourceHint(): AutoNextSourceHint | null {
   } catch {
     return null;
   }
-}
-
-function pickBestMatchingSource(streams: MediaStream[], hint: AutoNextSourceHint) {
-  const scored = streams
-    .map(stream => ({ stream, score: sourceScore(stream, hint) }))
-    .sort((a, b) => b.score - a.score);
-  const best = scored[0];
-  return best && best.score > 0 ? best.stream : null;
-}
-
-function sourceScore(stream: MediaStream, hint: AutoNextSourceHint) {
-  const normalize = (value?: string) => (value ?? "").trim().toLowerCase();
-  const addonId = normalize(hint.addonId);
-  const addonName = normalize(hint.addonName);
-  const name = normalize(hint.name);
-  const title = normalize(hint.title);
-  let score = 0;
-
-  if (addonId && normalize(stream.addonId) === addonId) score += 8;
-  if (addonName && normalize(stream.addonName) === addonName) score += 4;
-  if (name && normalize(stream.name) === name) score += 3;
-  if (title) {
-    const streamTitle = normalize(stream.title);
-    const streamDescription = normalize(stream.description);
-    if (streamTitle && streamTitle === title) score += 3;
-    if (streamDescription && streamDescription.includes(title)) score += 1;
-  }
-
-  return score;
 }
 
 function pickStreamByResume(streams: MediaStream[], resumeStreamId?: string) {

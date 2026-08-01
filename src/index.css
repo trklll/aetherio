@@ -174,13 +174,15 @@ html.aetherio-android-tv .scroll-row{
   box-sizing:border-box;
 }
 .home-page-scale .row-arrow-shell,
-.detail-page-scale .row-arrow-shell{
+.detail-page-scale .row-arrow-shell,
+.entity-page-scale .row-arrow-shell{
   width:30px;
   height:50px;
   border-radius:15px;
 }
 .home-page-scale .row-arrow-shell .row-arrow-button svg,
-.detail-page-scale .row-arrow-shell .row-arrow-button svg{
+.detail-page-scale .row-arrow-shell .row-arrow-button svg,
+.entity-page-scale .row-arrow-shell .row-arrow-button svg{
   width:15px;
   height:25px;
 }
@@ -286,7 +288,8 @@ html.aetherio-android-tv .scroll-row{
   transform-origin:top left;
 }
 
-.home-page-scale{
+.home-page-scale,
+.entity-page-scale{
   width:83.333333%;
   transform:scale(1.2);
   transform-origin:top left;
@@ -309,14 +312,6 @@ html.aetherio-android-tv .scroll-row{
 .detail-episode-card:focus-visible,
 .detail-episode-card:focus-within{
   transform:translateY(-3px);
-}
-.detail-episode-card__image{
-  transform:scale(1);
-}
-.detail-episode-card:hover .detail-episode-card__image,
-.detail-episode-card:focus-visible .detail-episode-card__image,
-.detail-episode-card:focus-within .detail-episode-card__image{
-  transform:scale(1.035);
 }
 .detail-episode-card:focus-visible .detail-episode-card__media{
   box-shadow:0 0 0 2px rgba(255,255,255,0.86),0 14px 34px rgba(0,0,0,0.34);
