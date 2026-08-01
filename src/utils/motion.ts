@@ -67,6 +67,134 @@ export function scrollToElementGsap(element: HTMLElement | null, duration = 0.52
   tweenTo(scroller, { scrollTop: top }, duration);
 }
 
+interface InertialScrollState {
+  target: number;
+  tween: gsap.core.Tween | null;
+}
+
+const inertialScrollStates = new WeakMap<HTMLElement, InertialScrollState>();
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizedWheelDelta(event: WheelEvent, viewportHeight: number) {
+  const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 18
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? viewportHeight
+      : 1;
+  return clamp(event.deltaY * unit, -240, 240);
+}
+
+function canScrollVertically(element: HTMLElement) {
+  if (element.scrollHeight <= element.clientHeight + 1) return false;
+  const overflow = getComputedStyle(element).overflowY;
+  return overflow === "auto" || overflow === "scroll" || overflow === "overlay";
+}
+
+function canConsumeScroll(element: HTMLElement, delta: number) {
+  const max = Math.max(0, element.scrollHeight - element.clientHeight);
+  return delta < 0 ? element.scrollTop > 0 : element.scrollTop < max;
+}
+
+function resolveVerticalScroller(root: HTMLElement, target: EventTarget | null, delta: number) {
+  let node = target instanceof HTMLElement ? target : null;
+  while (node && node !== root) {
+    if (canScrollVertically(node) && canConsumeScroll(node, delta)) return node;
+    node = node.parentElement;
+  }
+  return canConsumeScroll(root, delta) ? root : null;
+}
+
+export function stopInertialScroll(element: HTMLElement | null) {
+  if (!element) return;
+  const state = inertialScrollStates.get(element);
+  state?.tween?.kill();
+  inertialScrollStates.delete(element);
+  gsap.killTweensOf(element, "scrollTop");
+}
+
+/**
+ * Adds desktop wheel inertia without replacing native touch, keyboard or
+ * scrollbar interaction. Nested vertical scrollers consume the gesture first.
+ */
+export function installInertialScroll(root: HTMLElement) {
+  if (prefersReducedMotion()) return () => undefined;
+  const controlled = new Set<HTMLElement>();
+
+  const stopControlled = () => {
+    controlled.forEach(stopInertialScroll);
+    controlled.clear();
+  };
+
+  const onWheel = (event: WheelEvent) => {
+    if (
+      event.defaultPrevented
+      || event.ctrlKey
+      || event.metaKey
+      || event.shiftKey
+      || Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      || event.deltaY === 0
+    ) {
+      return;
+    }
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (target?.closest("[data-disable-inertial-scroll]")) return;
+
+    const delta = normalizedWheelDelta(event, root.clientHeight);
+    const scroller = resolveVerticalScroller(root, event.target, delta);
+    if (!scroller) return;
+
+    const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const existing = inertialScrollStates.get(scroller);
+    const active = existing?.tween?.isActive() === true;
+    const currentTarget = active ? existing.target : scroller.scrollTop;
+    const trackpadGesture = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(event.deltaY) < 42;
+    const multiplier = trackpadGesture ? 1.16 : 1.34;
+    const nextTarget = clamp(currentTarget + delta * multiplier, 0, max);
+    if (Math.abs(nextTarget - scroller.scrollTop) < 0.5) return;
+
+    event.preventDefault();
+    existing?.tween?.kill();
+
+    const distance = Math.abs(nextTarget - scroller.scrollTop);
+    const state: InertialScrollState = {
+      target: nextTarget,
+      tween: null,
+    };
+    state.tween = gsap.to(scroller, {
+      scrollTop: nextTarget,
+      duration: trackpadGesture ? clamp(0.28 + distance / 1800, 0.28, 0.52) : clamp(0.5 + distance / 1500, 0.5, 0.88),
+      ease: trackpadGesture ? "power3.out" : "power4.out",
+      overwrite: "auto",
+      onComplete: () => {
+        state.tween = null;
+        state.target = scroller.scrollTop;
+      },
+    });
+    inertialScrollStates.set(scroller, state);
+    controlled.add(scroller);
+  };
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+      stopControlled();
+    }
+  };
+
+  root.addEventListener("wheel", onWheel, { passive: false });
+  root.addEventListener("pointerdown", stopControlled, { passive: true });
+  window.addEventListener("keydown", onKeyDown, true);
+
+  return () => {
+    root.removeEventListener("wheel", onWheel);
+    root.removeEventListener("pointerdown", stopControlled);
+    window.removeEventListener("keydown", onKeyDown, true);
+    stopControlled();
+  };
+}
+
 const initialized = new WeakSet<Element>();
 const ignoredClassMutations = new WeakMap<Element, number>();
 const restingStyles = new WeakMap<HTMLElement, ReturnType<typeof snapshotStyles>>();

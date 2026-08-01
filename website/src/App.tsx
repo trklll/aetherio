@@ -29,6 +29,14 @@ interface ReleaseInfo {
 const REPOSITORY_URL = "https://github.com/trklll/aetherio";
 const WINDOWS_DOWNLOAD_URL = "/download/windows";
 
+const SCREENSHOTS = [
+  { src: "/screenshot_home.png", alt: "Pantalla principal de Aetherio" },
+  { src: "/screenshot-profiles.jpg", alt: "Selección de perfiles de usuario" },
+  { src: "/screenshot-detail_movie.jpg", alt: "Detalle de película en Aetherio" },
+  { src: "/screenshot-detail_series.jpg", alt: "Detalle de serie en Aetherio" },
+  { src: "/screenshot-episodes.png", alt: "Episodios, tráilers y reparto" },
+];
+
 function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [release, setRelease] = useState<ReleaseInfo | null>(null);
@@ -186,7 +194,7 @@ function App() {
             </div>
           </div>
 
-          <ProductStage />
+          <ScreenshotCarousel />
         </section>
 
         <section id="experiencia" className="experience section-shell">
@@ -297,11 +305,42 @@ function App() {
   );
 }
 
-function ProductStage() {
+function ScreenshotCarousel() {
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrent(prev => (prev + 1) % SCREENSHOTS.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
-    <figure className="product-stage" aria-label="Captura de la pantalla principal de Aetherio">
-      <img src="/stageweb.jpg" alt="Pantalla principal de Aetherio mostrando la película Obsesión" />
-    </figure>
+    <div className="carousel-wrapper">
+      <figure className="product-stage carousel" aria-label="Capturas de Aetherio">
+        {SCREENSHOTS.map((shot, i) => (
+          <img
+            key={shot.src}
+            src={shot.src}
+            alt={shot.alt}
+            aria-hidden={i !== current}
+            className={`carousel-slide ${i === current ? "carousel-slide--active" : ""}`}
+          />
+        ))}
+      </figure>
+      <div className="carousel-dots" role="tablist" aria-label="Capturas de la aplicación">
+        {SCREENSHOTS.map((shot, i) => (
+          <button
+            key={i}
+            className={`carousel-dot ${i === current ? "carousel-dot--active" : ""}`}
+            onClick={() => setCurrent(i)}
+            role="tab"
+            aria-selected={i === current}
+            aria-label={shot.alt}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 

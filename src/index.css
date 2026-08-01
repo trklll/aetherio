@@ -151,14 +151,38 @@ html.aetherio-android-tv .scroll-row{
 }
 .liquid-glass-arrow{
   position:relative;
-  background:rgba(0,0,0,0.32);
-  backdrop-filter:blur(16px) saturate(160%);
-  -webkit-backdrop-filter:blur(16px) saturate(160%);
-  border:1px solid rgba(225,230,238,0.10);
-  box-shadow:0 2px 12px rgba(0,0,0,0.32),inset 0 1px 0 rgba(255,255,255,0.06);
-  will-change:backdrop-filter,opacity;
-  -webkit-transform:translateZ(0);
-  transform:translateZ(0);
+  overflow:hidden;
+  border-radius:18px;
+  background:rgba(12,12,14,0.28);
+  backdrop-filter:blur(18px) saturate(175%);
+  -webkit-backdrop-filter:blur(18px) saturate(175%);
+  border:1px solid rgba(235,240,248,0.14);
+  box-shadow:0 8px 26px rgba(0,0,0,0.34),inset 0 1px 0 rgba(255,255,255,0.09);
+}
+.row-arrow-button{
+  appearance:none;
+  width:100% !important;
+  height:100% !important;
+  padding:0;
+  background:transparent;
+  border:0;
+  box-shadow:none;
+}
+.row-arrow-shell{
+  width:36px;
+  height:60px;
+  box-sizing:border-box;
+}
+.home-page-scale .row-arrow-shell,
+.detail-page-scale .row-arrow-shell{
+  width:30px;
+  height:50px;
+  border-radius:15px;
+}
+.home-page-scale .row-arrow-shell .row-arrow-button svg,
+.detail-page-scale .row-arrow-shell .row-arrow-button svg{
+  width:15px;
+  height:25px;
 }
 .liquid-glass-dark{
   background:rgba(0,0,0,0.65);

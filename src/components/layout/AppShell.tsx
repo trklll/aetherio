@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import BackButton from "./BackButton";
 import FloatingActionButton from "./FloatingActionButton";
@@ -7,7 +7,7 @@ import { Maximize, Minus, X } from "lucide-react";
 import { toggleWindowFullscreen, minimizeWindow, closeWindow } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
-import { gsap, tweenTo, prefersReducedMotion } from "../../utils/motion";
+import { gsap, installInertialScroll, tweenTo, prefersReducedMotion, stopInertialScroll } from "../../utils/motion";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -16,8 +16,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const isEpisodePage = loc.pathname === "/episode" || loc.pathname === "/streams";
   const isDetailPage = loc.pathname.startsWith("/detail/");
   const isPersonPage = loc.pathname.startsWith("/person/");
+  const navigationScrollKey = makeScrollKey(loc.pathname, loc.search);
   const hideNav = isPlayer || isEpisodePage;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollPositionsRef = useRef(new Map<string, number>());
+  const routeHistoryRef = useRef(new Map<number, string>());
+  const activeScrollKeyRef = useRef(makeScrollKey(loc.pathname, loc.search));
   const backChromeRef = useRef<HTMLDivElement>(null);
   const actionChromeRef = useRef<HTMLDivElement>(null);
   const mouseBackAtRef = useRef(0);
@@ -105,10 +109,32 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [isPlayer, showBack]);
 
+  useLayoutEffect(() => {
+    const shell = scrollRef.current;
+    if (!shell) return;
+
+    const nextKey = navigationScrollKey;
+    const historyIndex = getRouterHistoryIndex();
+    if (historyIndex !== null) {
+      routeHistoryRef.current.set(historyIndex, nextKey);
+    }
+    const previousKey = activeScrollKeyRef.current;
+    if (previousKey === nextKey) return;
+
+    scrollPositionsRef.current.set(previousKey, shell.scrollTop);
+
+    stopInertialScroll(shell);
+    const homeScroll = loc.pathname === "/home" ? getHomeScroll()?.vertical : undefined;
+    const nextScroll = scrollPositionsRef.current.get(nextKey) ?? homeScroll ?? 0;
+    shell.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
+    activeScrollKeyRef.current = nextKey;
+  }, [loc.pathname, navigationScrollKey]);
+
   useEffect(() => {
-    if (loc.pathname === "/home" && getHomeScroll()) return;
-    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-  }, [loc.pathname, loc.search]);
+    const shell = scrollRef.current;
+    if (!shell || androidRuntime || isPlayer) return;
+    return installInertialScroll(shell);
+  }, [androidRuntime, isPlayer, navigationScrollKey]);
 
   useEffect(() => {
     if (!isPlayer) {
@@ -225,10 +251,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   function goBack() {
     if (isDetailPage) {
-      const params = new URLSearchParams(loc.search);
-      const searchPath = getSearchReturnPath(params);
-      if (searchPath) {
-        navigate(searchPath, { replace: true });
+      const historyIndex = getRouterHistoryIndex();
+      const returnDelta = historyIndex === null
+        ? null
+        : findDetailReturnDelta(
+            routeHistoryRef.current,
+            historyIndex,
+            makeScrollKey(loc.pathname, loc.search),
+          );
+      if (returnDelta !== null) {
+        navigate(returnDelta);
         return;
       }
       navigate("/home", { replace: true });
@@ -370,8 +402,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function getSearchReturnPath(params: URLSearchParams) {
-  if (params.get("fromSearch") !== "1") return null;
-  const query = params.get("q")?.trim();
-  return query ? `/search?q=${encodeURIComponent(query)}` : "/search";
+function makeScrollKey(pathname: string, search: string) {
+  if (pathname === "/settings") return pathname;
+  return `${pathname}${search}`;
+}
+
+function getRouterHistoryIndex() {
+  const index = window.history.state?.idx;
+  return typeof index === "number" && Number.isInteger(index) ? index : null;
+}
+
+function findDetailReturnDelta(
+  history: Map<number, string>,
+  currentIndex: number,
+  currentPath: string,
+) {
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const candidate = history.get(index);
+    if (!candidate) continue;
+    const pathname = candidate.split("?")[0];
+    if (pathname === "/episode" || pathname === "/streams" || pathname === "/player") continue;
+    if (candidate === currentPath) continue;
+    return index - currentIndex;
+  }
+  return null;
 }

@@ -1,6 +1,7 @@
 import { tmdbFetch } from "../config/apiKeys.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
 import { normalizeAddonMediaMeta, type MediaMetadataSeed } from "./mediaMetadata";
+import { searchTmdbSemantically } from "./semanticSearch";
 
 const IMG = "https://image.tmdb.org/t/p";
 
@@ -154,12 +155,17 @@ export function mergeSearchResults(results: UnifiedSearchResult[], limit = 42, q
       logo: item.logo ?? existing.logo,
       description: item.description ?? existing.description,
       year: item.year ?? existing.year,
+      searchScore: Math.max(existing.searchScore ?? 0, item.searchScore ?? 0),
       sourceName: existing.sourceName === item.sourceName ? existing.sourceName : `${existing.sourceName ?? existing.source}, ${item.sourceName ?? item.source}`,
     });
   }
   return Array.from(byKey.values())
     .map(item => ({ ...item, searchScore: searchScore(item, query) }))
-    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0))
+    .sort((a, b) =>
+      (b.searchScore ?? 0) - (a.searchScore ?? 0)
+      || (b.popularity ?? 0) - (a.popularity ?? 0)
+      || (b.voteCount ?? 0) - (a.voteCount ?? 0)
+    )
     .slice(0, limit);
 }
 
@@ -240,9 +246,10 @@ export async function searchAddons(query: string, addons: InstalledAddon[]): Pro
 }
 
 export async function searchMedia(query: string, addons: InstalledAddon[], limit = 42) {
-  const [tmdbResults, addonResults] = await Promise.all([
+  const [tmdbResults, semanticResults, addonResults] = await Promise.all([
     searchTmdb(query),
+    searchTmdbSemantically(query),
     searchAddons(query, addons),
   ]);
-  return mergeSearchResults([...tmdbResults, ...addonResults], limit, query);
+  return mergeSearchResults([...tmdbResults, ...semanticResults, ...addonResults], limit, query);
 }

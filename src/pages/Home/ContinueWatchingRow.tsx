@@ -257,6 +257,7 @@ export default function ContinueWatchingRow() {
       >
         <div
           ref={leftArrowRef}
+          className="liquid-glass-arrow row-arrow-shell"
           style={{
             position: "absolute",
             left: 20,
@@ -271,7 +272,7 @@ export default function ContinueWatchingRow() {
             onClick={() => scroll("left")}
             title="Anterior"
             aria-label="Anterior"
-            className="liquid-glass-arrow"
+            className="row-arrow-button"
             style={{
               width: 36,
               height: 60,
@@ -327,6 +328,7 @@ export default function ContinueWatchingRow() {
 
         <div
           ref={rightArrowRef}
+          className="liquid-glass-arrow row-arrow-shell"
           style={{
             position: "absolute",
             right: 20,
@@ -341,7 +343,7 @@ export default function ContinueWatchingRow() {
             onClick={() => scroll("right")}
             title="Siguiente"
             aria-label="Siguiente"
-            className="liquid-glass-arrow"
+            className="row-arrow-button"
             style={{
               width: 36,
               height: 60,

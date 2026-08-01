@@ -19,6 +19,7 @@ export interface PlaybackPreferences {
   lastLinkCacheHours: number;
   sourceSelectionMode: SourceSelectionMode;
   hardwareDecoding: HardwareDecodingMode;
+  audioPassthrough: boolean;
   skipSegmentsEnabled: boolean;
   animeSkipEnabled: boolean;
   introDbSubmissionEnabled: boolean;
@@ -52,6 +53,7 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   lastLinkCacheHours: 24,
   sourceSelectionMode: "manual",
   hardwareDecoding: "auto",
+  audioPassthrough: false,
   skipSegmentsEnabled: true,
   animeSkipEnabled: false,
   introDbSubmissionEnabled: false,
@@ -212,6 +214,9 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
     lastLinkCacheHours: clampNumber(preferences.lastLinkCacheHours, 1, 720, DEFAULT_PLAYBACK_PREFERENCES.lastLinkCacheHours),
     sourceSelectionMode: preferences.sourceSelectionMode === "first" ? "first" : "manual",
     hardwareDecoding: normalizeHardwareDecoding(preferences.hardwareDecoding),
+    audioPassthrough: typeof preferences.audioPassthrough === "boolean"
+      ? preferences.audioPassthrough
+      : DEFAULT_PLAYBACK_PREFERENCES.audioPassthrough,
     skipSegmentsEnabled: typeof preferences.skipSegmentsEnabled === "boolean" ? preferences.skipSegmentsEnabled : DEFAULT_PLAYBACK_PREFERENCES.skipSegmentsEnabled,
     animeSkipEnabled: typeof preferences.animeSkipEnabled === "boolean" ? preferences.animeSkipEnabled : DEFAULT_PLAYBACK_PREFERENCES.animeSkipEnabled,
     introDbSubmissionEnabled: typeof preferences.introDbSubmissionEnabled === "boolean" ? preferences.introDbSubmissionEnabled : DEFAULT_PLAYBACK_PREFERENCES.introDbSubmissionEnabled,

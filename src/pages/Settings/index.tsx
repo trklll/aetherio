@@ -51,6 +51,7 @@ import {
   type PlaybackPreferences,
 } from "../../config/playbackPreferences";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
+import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData } from "../../types/ui";
 import {
@@ -94,6 +95,7 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const addons = useAddonStore(state => state.addons);
   const { rows: catalogRows, loading: catalogLoading } = useHomeCatalogs(addons);
+  const { gradient } = useProfileGradient();
   const homePreferences = useHomePreferences();
   const [localHomePreferences, setLocalHomePreferences] = useState<HomePreferences>(homePreferences);
   const [keys, setKeys] = useState<ApiKeys>(() => getApiKeys());
@@ -112,6 +114,16 @@ export default function SettingsPage() {
   const [newProfilePin, setNewProfilePin] = useState("");
   const [newProfileAvatar, setNewProfileAvatar] = useState<string | undefined>();
   const [profileError, setProfileError] = useState("");
+
+  useEffect(() => {
+    if (gradient) {
+      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
+    }
+
+    return () => {
+      document.documentElement.style.removeProperty("--aetherio-page-bg");
+    };
+  }, [gradient]);
 
   useEffect(() => {
     setKeys(getApiKeys());
@@ -1258,8 +1270,8 @@ function PlaybackPanel({
             onChange={checked => onPlaybackChange("showLoadingOverlay", checked)}
           />
           <ToggleRow
-            title="Mantener para acelerar"
-            description="Manten pulsado en cualquier parte de la superficie del reproductor para aumentar temporalmente la velocidad."
+            title="Mantener Espacio para 2x"
+            description="Un toque corto reproduce o pausa. Al mantener la barra espaciadora, el vídeo acelera temporalmente a 2x."
             checked={playback.holdToAccelerate}
             onChange={checked => onPlaybackChange("holdToAccelerate", checked)}
           />
@@ -1305,7 +1317,7 @@ function PlaybackPanel({
           />
         </PillBlock>
 
-        <PillBlock title="Decoder (Desktop)">
+        <PillBlock title="VIDEO Y AUDIO (DESKTOP)">
           <SelectRow
             title="Hardware Decoding"
             value={playback.hardwareDecoding}
@@ -1317,8 +1329,14 @@ function PlaybackPanel({
             onChange={value => onPlaybackChange("hardwareDecoding", value)}
           />
           <StaticText>
-            Este reproductor usa libmpv integrado. Auto usa hwdec auto-safe y conserva el renderizado dentro de la ventana de Aetherio.
+            libmpv usa GPU Next con D3D11, decodificación por hardware y negociación HDR automática con la pantalla.
           </StaticText>
+          <ToggleRow
+            title="Passthrough de audio avanzado"
+            description="Envía AC3, E-AC3/Atmos, DTS, DTS-HD y TrueHD/Atmos sin decodificar a un receptor compatible. Déjalo apagado para altavoces normales."
+            checked={playback.audioPassthrough}
+            onChange={checked => onPlaybackChange("audioPassthrough", checked)}
+          />
         </PillBlock>
 
         <PillBlock title="SALTAR SEGMENTOS">

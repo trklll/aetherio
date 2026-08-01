@@ -2,8 +2,10 @@ import { tmdbFetch } from "../../config/apiKeys";
 import { isAndroidRuntime, openNativePlayback } from "../../runtime/platform";
 import type { MediaStream, StreamKind, StreamQuery } from "../../types/stream";
 import { getDirectPlaybackUrl, hasP2pPlayback } from "../../utils/playableMedia";
+import { getPlaybackPreferences } from "../../config/playbackPreferences";
 
 export const SELECTED_STREAM_KEY = "aetherio-selected-stream";
+export const AVAILABLE_STREAMS_KEY = "aetherio-available-streams";
 export const SELECTED_ENGINE_KEY = "aetherio-selected-engine";
 export const SELECTED_MEDIA_META_KEY = "aetherio-selected-media-meta";
 export const SELECTED_PLAYBACK_OVERRIDES_KEY = "aetherio-selected-playback-overrides";
@@ -113,6 +115,11 @@ export function formatTime(value: number) {
 
 export function getPlaybackTarget(stream: MediaStream | null | undefined) {
   if (!stream) return "";
+  const localFile = stream.behaviorHints?.localFile === true
+    && typeof stream.url === "string"
+    ? stream.url.trim()
+    : "";
+  if (localFile) return localFile;
   const directUrl = getDirectPlaybackUrl(stream);
   const magnet = directUrl ? "" : buildMagnetTarget(stream);
   return directUrl
@@ -198,6 +205,7 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       ? stream.behaviorHints.providerHttpSessionKey.trim()
       : "";
     const requestedBackend = isAndroidRuntime() ? "android-media3" : "mpv";
+    const audioPassthrough = getPlaybackPreferences().audioPassthrough;
     console.info("[AETHERIO:PLAYER:OPEN_NATIVE] request", {
       backend: requestedBackend,
       streamId: stream.id,
@@ -219,6 +227,7 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       startTime: normalizedStartTime > 0 ? normalizedStartTime : undefined,
       privateTorrent: getStreamKind(stream) === "p2p" && hasPrivateTorrentHint(stream),
       providerSessionKey: providerSessionKey || undefined,
+      audioPassthrough,
     });
     console.info("[AETHERIO:PLAYER:OPEN_NATIVE] response", {
       requestedBackend,

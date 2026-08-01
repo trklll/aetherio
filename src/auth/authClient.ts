@@ -18,7 +18,7 @@ interface AuthResponse {
 }
 
 const API_BASE = import.meta.env.VITE_AETHERIO_API_URL?.replace(/\/$/, "")
-  ?? "https://aetherio.aetherio.workers.dev";
+  ?? "https://trkll.aetherio.workers.dev";
 const TOKEN_KEY = "aetherio-account-token-v1";
 const USER_KEY = "aetherio-account-user-v1";
 const LOCAL_MODE_KEY = "aetherio-local-mode-v1";

@@ -35,7 +35,7 @@ const HOME_GC_TIME = 1000 * 60 * 60 * 24;
 const HOME_ROWS_DATA_VERSION = "native-home-rails-v16";
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
-const HOME_RAIL_ITEM_LIMIT = 10;
+const HOME_RAIL_ITEM_LIMIT = 20;
 
 interface HomeCatalogRequest {
   catalog: any;

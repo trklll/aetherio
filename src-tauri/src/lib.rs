@@ -343,6 +343,71 @@ fn toggle_window_fullscreen(window: tauri::WebviewWindow) -> Result<(), String> 
 }
 
 #[derive(Default)]
+struct PendingOpenFiles {
+    paths: Mutex<Vec<String>>,
+}
+
+impl PendingOpenFiles {
+    fn new(paths: Vec<String>) -> Self {
+        Self {
+            paths: Mutex::new(paths),
+        }
+    }
+}
+
+fn collect_openable_file_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    const OPENABLE_EXTENSIONS: &[&str] = &[
+        "3gp", "aac", "ac3", "aiff", "avi", "divx", "dts", "eac3", "flac", "flv", "m2ts", "m4a",
+        "m4v", "mka", "mkv", "mov", "mp2", "mp3", "mp4", "mpeg", "mpg", "mts", "ogg", "ogm",
+        "opus", "rm", "rmvb", "ts", "vob", "wav", "webm", "wma", "wmv", "ass", "smi", "srt", "ssa",
+        "stl", "sub", "sup", "ttml", "vtt",
+    ];
+    args.into_iter()
+        .filter_map(|raw| {
+            let value = raw.trim_matches('"').trim();
+            if value.is_empty() {
+                return None;
+            }
+            let path = PathBuf::from(value);
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)?;
+            if !OPENABLE_EXTENSIONS.contains(&extension.as_str()) || !path.is_file() {
+                return None;
+            }
+            let resolved = path.canonicalize().unwrap_or(path);
+            Some(resolved.display().to_string())
+        })
+        .take(16)
+        .collect()
+}
+
+fn queue_open_files(app: &tauri::AppHandle, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    let state = app.state::<PendingOpenFiles>();
+    match state.paths.lock() {
+        Ok(mut pending) => {
+            *pending = paths.clone();
+        }
+        Err(poisoned) => {
+            *poisoned.into_inner() = paths.clone();
+        }
+    }
+    let _ = app.emit("aetherio-open-files", paths);
+}
+
+#[tauri::command]
+fn take_pending_open_files(state: tauri::State<'_, PendingOpenFiles>) -> Vec<String> {
+    match state.paths.lock() {
+        Ok(mut pending) => std::mem::take(&mut *pending),
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    }
+}
+
+#[derive(Default)]
 struct MpvState {
     lifecycle: Mutex<()>,
     session: Mutex<Option<MpvSession>>,
@@ -430,6 +495,10 @@ struct MpvApi {
     terminate_destroy: unsafe extern "C" fn(*mut MpvHandle),
     command_async: unsafe extern "C" fn(*mut MpvHandle, u64, *const *const c_char) -> c_int,
     set_option_string: unsafe extern "C" fn(*mut MpvHandle, *const c_char, *const c_char) -> c_int,
+    set_property_string:
+        unsafe extern "C" fn(*mut MpvHandle, *const c_char, *const c_char) -> c_int,
+    get_property_string: unsafe extern "C" fn(*mut MpvHandle, *const c_char) -> *mut c_char,
+    free: unsafe extern "C" fn(*mut c_void),
     observe_property: unsafe extern "C" fn(*mut MpvHandle, u64, *const c_char, c_int) -> c_int,
     wait_event: unsafe extern "C" fn(*mut MpvHandle, f64) -> *mut MpvEvent,
     event_name: unsafe extern "C" fn(c_int) -> *const c_char,
@@ -1126,6 +1195,11 @@ impl MpvApi {
         let terminate_destroy = unsafe { load_mpv_symbol(&library, b"mpv_terminate_destroy\0") }?;
         let command_async = unsafe { load_mpv_symbol(&library, b"mpv_command_async\0") }?;
         let set_option_string = unsafe { load_mpv_symbol(&library, b"mpv_set_option_string\0") }?;
+        let set_property_string =
+            unsafe { load_mpv_symbol(&library, b"mpv_set_property_string\0") }?;
+        let get_property_string =
+            unsafe { load_mpv_symbol(&library, b"mpv_get_property_string\0") }?;
+        let free = unsafe { load_mpv_symbol(&library, b"mpv_free\0") }?;
         let observe_property = unsafe { load_mpv_symbol(&library, b"mpv_observe_property\0") }?;
         let wait_event = unsafe { load_mpv_symbol(&library, b"mpv_wait_event\0") }?;
         let event_name = unsafe { load_mpv_symbol(&library, b"mpv_event_name\0") }?;
@@ -1138,6 +1212,9 @@ impl MpvApi {
             terminate_destroy,
             command_async,
             set_option_string,
+            set_property_string,
+            get_property_string,
+            free,
             observe_property,
             wait_event,
             event_name,
@@ -1199,6 +1276,38 @@ fn mpv_set_option_string(client: &Arc<MpvClient>, name: &str, value: &str) -> Re
     let result =
         unsafe { (client.api.set_option_string)(client.handle.0, name.as_ptr(), value.as_ptr()) };
     mpv_check(&client.api, result, "No se pudo configurar libmpv")
+}
+
+fn mpv_set_property_string(
+    client: &Arc<MpvClient>,
+    name: &str,
+    value: &str,
+) -> Result<(), String> {
+    let name = cstring_arg(name, "Nombre de propiedad MPV")?;
+    let value = cstring_arg(value, "Valor de propiedad MPV")?;
+    let _guard = client
+        .call_lock
+        .lock()
+        .map_err(|_| String::from("No se pudo bloquear libmpv."))?;
+    let result = unsafe {
+        (client.api.set_property_string)(client.handle.0, name.as_ptr(), value.as_ptr())
+    };
+    mpv_check(&client.api, result, "No se pudo cambiar una propiedad de libmpv")
+}
+
+fn mpv_get_property_string(client: &Arc<MpvClient>, name: &str) -> Result<String, String> {
+    let name = cstring_arg(name, "Nombre de propiedad MPV")?;
+    let _guard = client
+        .call_lock
+        .lock()
+        .map_err(|_| String::from("No se pudo bloquear libmpv."))?;
+    let raw = unsafe { (client.api.get_property_string)(client.handle.0, name.as_ptr()) };
+    if raw.is_null() {
+        return Err(String::from("MPV no devolvió el valor solicitado."));
+    }
+    let value = unsafe { CStr::from_ptr(raw).to_string_lossy().into_owned() };
+    unsafe { (client.api.free)(raw.cast()) };
+    Ok(value)
 }
 
 fn mpv_initialize_client(client: &Arc<MpvClient>) -> Result<(), String> {
@@ -3628,12 +3737,232 @@ const ALLOWED_MPV_PROPERTIES: &[&str] = &[
     "aid",
     "sub-delay",
     "sub-pos",
+    "sub-scale",
+    "sub-use-margins",
     "audio-delay",
+    "cache-pause",
+    "chapter",
+    "hwdec",
     "playlist-pos",
     "loop",
     "video-align-x",
     "video-align-y",
 ];
+
+const ANIME4K_MODE_A_FAST: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+];
+const ANIME4K_MODE_B_FAST: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_Soft_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+];
+const ANIME4K_MODE_C_FAST: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Upscale_Denoise_CNN_x2_M.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+];
+const ANIME4K_MODE_AA_FAST: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Restore_CNN_S.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+];
+const ANIME4K_MODE_BB_FAST: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_Soft_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Restore_CNN_Soft_S.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+];
+const ANIME4K_MODE_CA_FAST: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Upscale_Denoise_CNN_x2_M.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+];
+const ANIME4K_MODE_A_HQ: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+];
+const ANIME4K_MODE_B_HQ: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_Soft_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+];
+const ANIME4K_MODE_C_HQ: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Upscale_Denoise_CNN_x2_VL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+];
+const ANIME4K_MODE_AA_HQ: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+];
+const ANIME4K_MODE_BB_HQ: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_Soft_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
+    "Anime4K_Restore_CNN_Soft_M.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+];
+const ANIME4K_MODE_CA_HQ: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Upscale_Denoise_CNN_x2_VL.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+];
+
+fn anime4k_shader_names(profile: &str) -> Option<&'static [&'static str]> {
+    match profile {
+        "off" => Some(&[]),
+        "fast:mode-a" => Some(ANIME4K_MODE_A_FAST),
+        "fast:mode-b" => Some(ANIME4K_MODE_B_FAST),
+        "fast:mode-c" => Some(ANIME4K_MODE_C_FAST),
+        "fast:mode-aa" => Some(ANIME4K_MODE_AA_FAST),
+        "fast:mode-bb" => Some(ANIME4K_MODE_BB_FAST),
+        "fast:mode-ca" => Some(ANIME4K_MODE_CA_FAST),
+        "hq:mode-a" => Some(ANIME4K_MODE_A_HQ),
+        "hq:mode-b" => Some(ANIME4K_MODE_B_HQ),
+        "hq:mode-c" => Some(ANIME4K_MODE_C_HQ),
+        "hq:mode-aa" => Some(ANIME4K_MODE_AA_HQ),
+        "hq:mode-bb" => Some(ANIME4K_MODE_BB_HQ),
+        "hq:mode-ca" => Some(ANIME4K_MODE_CA_HQ),
+        "fast:cnn-2x-medium" | "hq:cnn-2x-medium" => Some(&["Anime4K_Upscale_CNN_x2_M.glsl"]),
+        "fast:cnn-2x-very-large" | "hq:cnn-2x-very-large" => {
+            Some(&["Anime4K_Upscale_CNN_x2_VL.glsl"])
+        }
+        "fast:denoise-cnn-2x-very-large" | "hq:denoise-cnn-2x-very-large" => {
+            Some(&["Anime4K_Upscale_Denoise_CNN_x2_VL.glsl"])
+        }
+        "fast:cnn-2x-ultra-large" | "hq:cnn-2x-ultra-large" => {
+            Some(&["Anime4K_Upscale_CNN_x2_UL.glsl"])
+        }
+        _ => None,
+    }
+}
+
+fn resolve_video_shader_list(
+    runtime_dir: &Path,
+    controls_blur_shader: &Path,
+    names: &[&str],
+) -> Result<String, String> {
+    let shader_dir = runtime_dir.join("shaders");
+    let mut paths = Vec::with_capacity(names.len() + 1);
+    for name in names {
+        let path = shader_dir.join(name);
+        if !path.is_file() {
+            return Err(format!("Falta el shader de mejora de vídeo empaquetado: {name}"));
+        }
+        paths.push(path.display().to_string());
+    }
+    // The controls shader runs last so its masks are composed over the processed video.
+    paths.push(controls_blur_shader.display().to_string());
+    Ok(paths.join(if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    }))
+}
+
+struct VideoEnhancementConfiguration {
+    kind: &'static str,
+    shader_names: &'static [&'static str],
+    video_filter: &'static str,
+    scale: &'static str,
+    scale_antiring: &'static str,
+    deband: &'static str,
+}
+
+fn video_enhancement_configuration(
+    profile: &str,
+) -> Option<VideoEnhancementConfiguration> {
+    let defaults = |kind, shader_names| VideoEnhancementConfiguration {
+        kind,
+        shader_names,
+        video_filter: "",
+        scale: "bilinear",
+        scale_antiring: "0",
+        deband: "no",
+    };
+    if let Some(shader_names) = anime4k_shader_names(profile) {
+        return Some(defaults(
+            if profile == "off" { "off" } else { "anime4k" },
+            shader_names,
+        ));
+    }
+    match profile {
+        "fsr:quality" => Some(defaults("fsr", &["FSR.glsl"])),
+        "vsr:nvidia-2x" => Some(VideoEnhancementConfiguration {
+            kind: "hardware-vsr",
+            shader_names: &[],
+            video_filter: "d3d11vpp=scale=2:scaling-mode=nvidia",
+            scale: "bilinear",
+            scale_antiring: "0",
+            deband: "no",
+        }),
+        "scaler:ewa-lanczossharp" => Some(VideoEnhancementConfiguration {
+            kind: "mpv-scaler",
+            shader_names: &[],
+            video_filter: "",
+            scale: "ewa_lanczossharp",
+            scale_antiring: "0.6",
+            deband: "no",
+        }),
+        "scaler:spline36" => Some(VideoEnhancementConfiguration {
+            kind: "mpv-scaler",
+            shader_names: &[],
+            video_filter: "",
+            scale: "spline36",
+            scale_antiring: "0.4",
+            deband: "no",
+        }),
+        "deband:balanced" => Some(VideoEnhancementConfiguration {
+            kind: "mpv-deband",
+            shader_names: &[],
+            video_filter: "",
+            scale: "bilinear",
+            scale_antiring: "0",
+            deband: "yes",
+        }),
+        _ => None,
+    }
+}
 
 fn normalize_command(command: Vec<serde_json::Value>) -> Result<serde_json::Value, String> {
     if command.is_empty() {
@@ -3658,6 +3987,7 @@ async fn open_mpv(
     episode: Option<usize>,
     start_time: Option<f64>,
     private_torrent: Option<bool>,
+    audio_passthrough: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if target.trim().is_empty() {
         return Err(String::from("La fuente no tiene URL reproducible."));
@@ -3681,6 +4011,7 @@ async fn open_mpv(
             "fileIdx": file_idx,
             "episode": episode,
             "startTime": start_time,
+            "audioPassthrough": audio_passthrough.unwrap_or(false),
         }),
     );
 
@@ -3800,19 +4131,28 @@ async fn open_mpv(
         ("stream-buffer-size", "1MiB"),
         ("network-timeout", "15"),
         ("hwdec", "auto-safe"),
+        ("hwdec-codecs", "all"),
         ("vo", "gpu-next"),
         ("gpu-api", "d3d11"),
+        ("target-colorspace-hint", "yes"),
+        ("hdr-compute-peak", "yes"),
+        ("tone-mapping", "auto"),
+        ("video-output-levels", "auto"),
         ("osc", "no"),
         ("input-default-bindings", "yes"),
         ("input-vo-keyboard", "yes"),
         ("ao", "wasapi"),
         ("audio-channels", "auto-safe"),
         ("sub-auto", "fuzzy"),
+        ("blend-subtitles", "video"),
         ("cookies", "yes"),
         ("demuxer-max-bytes", "512MiB"),
         ("demuxer-max-back-bytes", "128MiB"),
     ] {
         mpv_set_option_string(&client, name, value)?;
+    }
+    if audio_passthrough.unwrap_or(false) {
+        mpv_set_option_string(&client, "audio-spdif", "ac3,eac3,dts,dts-hd,truehd")?;
     }
     mpv_set_option_string(&client, "ytdl", if ytdl_enabled { "yes" } else { "no" })?;
     if ytdl_enabled {
@@ -4179,6 +4519,79 @@ async fn mpv_command(app: tauri::AppHandle, command: Vec<serde_json::Value>) -> 
     tauri::async_runtime::spawn_blocking(move || mpv_command_value_async(&client, command))
         .await
         .map_err(|error| format!("Fallo la tarea de comando MPV: {}", error))?
+}
+
+#[tauri::command]
+async fn set_mpv_video_profile(
+    app: tauri::AppHandle,
+    profile: String,
+) -> Result<serde_json::Value, String> {
+    let profile = profile.trim().to_string();
+    let configuration = video_enhancement_configuration(&profile)
+        .ok_or_else(|| format!("Mejora de vídeo no permitida: {profile}"))?;
+    let runtime_dir = find_mpv_runtime_dir(&app)
+        .ok_or_else(|| String::from("No se encontró el runtime MPV integrado."))?;
+    let controls_blur_shader = ensure_player_controls_blur_shader(&app)?;
+    let shader_list = resolve_video_shader_list(
+        &runtime_dir,
+        &controls_blur_shader,
+        configuration.shader_names,
+    )?;
+    let shader_names = configuration
+        .shader_names
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    let kind = configuration.kind.to_string();
+    let video_filter = configuration.video_filter.to_string();
+    let scale = configuration.scale.to_string();
+    let scale_antiring = configuration.scale_antiring.to_string();
+    let deband = configuration.deband.to_string();
+    let client = {
+        let state = app.state::<MpvState>();
+        current_mpv_client(&state)?
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        mpv_set_property_string(&client, "glsl-shaders", &shader_list)?;
+        mpv_set_property_string(&client, "vf", &video_filter)?;
+        mpv_set_property_string(&client, "scale", &scale)?;
+        mpv_set_property_string(&client, "scale-antiring", &scale_antiring)?;
+        mpv_set_property_string(&client, "deband", &deband)?;
+
+        let active_shaders = mpv_get_property_string(&client, "glsl-shaders")?;
+        let active_video_filter = mpv_get_property_string(&client, "vf")?;
+        let active_scale = mpv_get_property_string(&client, "scale")?;
+        let active_deband = mpv_get_property_string(&client, "deband")?;
+        let shaders_verified = shader_names
+            .iter()
+            .all(|name| active_shaders.contains(name));
+        let verified = shaders_verified
+            && (video_filter.is_empty() || active_video_filter.contains(&video_filter))
+            && active_scale == scale
+            && active_deband == deband;
+
+        let result = serde_json::json!({
+            "profile": profile,
+            "kind": kind,
+            "verified": verified,
+            "requestedShaders": shader_names,
+            "activeShaders": active_shaders,
+            "requestedVideoFilter": video_filter,
+            "activeVideoFilter": active_video_filter,
+            "activeScale": active_scale,
+            "activeDeband": active_deband,
+        });
+        eprintln!("[AETHERIO:VIDEO-FILTER] {}", result);
+        if !verified {
+            return Err(format!(
+                "MPV aceptó la mejora, pero la verificación activa no coincide: {}",
+                result
+            ));
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|error| format!("Falló la tarea de mejoras de vídeo: {error}"))?
 }
 
 #[tauri::command]
@@ -4557,6 +4970,7 @@ fn trakt_oauth_error_message(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    let initial_open_files = collect_openable_file_args(std::env::args().skip(1));
     let youtube_state = YouTubeState::new()
         .unwrap_or_else(|error| panic!("No se pudo inicializar YouTube: {error}"));
 
@@ -4564,7 +4978,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        queue_open_files(app, collect_openable_file_args(argv.into_iter().skip(1)));
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
             let _ = window.set_focus();
@@ -4596,6 +5011,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .manage(MpvState::default())
+        .manage(PendingOpenFiles::new(initial_open_files))
         .manage(P2pState::default())
         .manage(youtube_state)
         .manage(scraper::provider_http::ProviderHttpState::default())
@@ -4612,10 +5028,12 @@ pub fn run() {
             android_player_status,
             toggle_window_maximize,
             toggle_window_fullscreen,
+            take_pending_open_files,
             open_mpv,
             set_mpv_surface_visible,
             set_mpv_controls_blur,
             mpv_command,
+            set_mpv_video_profile,
             mpv_set_property,
             mpv_autocrop,
             mpv_status,

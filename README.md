@@ -36,7 +36,7 @@ La aplicación consulta el endpoint dinámico de Aetherio Web alojado en Cloudfl
 
 Cuando encuentra una versión SemVer superior, Aetherio muestra el popup, descarga el instalador, valida la firma minisign incluida en el registro interno, lo instala y reinicia. El pipeline comprueba antes de publicar que la firma fue creada por la misma clave pública incluida en la aplicación.
 
-El sitio público está disponible en [aetherio.aetherio.workers.dev](https://aetherio.aetherio.workers.dev). Su código vive en [`website/`](website/) y el mismo Worker sirve la web, la descarga del instalador y el endpoint del updater.
+El sitio público está disponible en [trkll.aetherio.workers.dev](https://trkll.aetherio.workers.dev). Su código vive en [`website/`](website/) y el mismo Worker sirve la web, la descarga del instalador y el endpoint del updater.
 
 El workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) compila el instalador, publica sus firmas y registra el release en Aetherio Web. GitHub debe tener configurados `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_LEGACY` y `AETHERIO_RELEASE_TOKEN`.
 
@@ -85,8 +85,8 @@ npm run deploy
 
 Configura estas URL de redirección en las consolas de cada proveedor:
 
-- Google: `https://aetherio.aetherio.workers.dev/api/auth/oauth/google/callback`
-- Discord: `https://aetherio.aetherio.workers.dev/api/auth/oauth/discord/callback`
+- Google: `https://trkll.aetherio.workers.dev/api/auth/oauth/google/callback`
+- Discord: `https://trkll.aetherio.workers.dev/api/auth/oauth/discord/callback`
 
 Después guarda las credenciales exclusivamente como secretos del Worker:
 

@@ -1,6 +1,6 @@
 ﻿import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, ChevronRight, Image as ImageIcon } from "lucide-react";
+import { BookmarkMinus, BookmarkPlus, Check, ChevronRight, Image as ImageIcon } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
 import type { HomePosterLayout } from "../../config/homePreferences";
 import { supportsAiringSchedule, useAiringSchedule } from "../../hooks/useAiringSchedule";
@@ -18,6 +18,7 @@ import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/media
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
+import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
@@ -71,9 +72,10 @@ interface CatalogRowProps {
   embedded?: boolean;
   onScrollOriginChange?: (atOrigin: boolean) => void;
   restoreScrollLeft?: number;
+  disableHeaderNavigation?: boolean;
 }
 
-function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft }: CatalogRowProps) {
+function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false }: CatalogRowProps) {
   const navigate = useNavigate();
   const rafRef = useRef<number | null>(null);
   const measureTimerRef = useRef<number | null>(null);
@@ -88,7 +90,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [watchedVersion, setWatchedVersion] = useState(0);
   const title = useMemo(() => homeRailTitle(row.name, row.type), [row.name, row.type]);
   const ranked = useMemo(() => isTrendingRow(row), [row]);
-  const maxCards = ranked ? 10 : 7;
+  const maxCards = ranked ? 10 : 20;
   const rowItems = useMemo(() => row.items.slice(0, maxCards), [row.items, maxCards]);
   const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
   const virtualWindow = useHorizontalVirtualWindow({
@@ -223,11 +225,11 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
     <section style={{ paddingLeft: 0, paddingRight: 0 }}>
       {!hideHeader ? (
         <button
-          onClick={openCatalog}
-          style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14, background: "none", border: "none", cursor: "pointer", paddingLeft: 48, paddingRight: 48 }}
+          onClick={disableHeaderNavigation ? undefined : openCatalog}
+          style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14, background: "none", border: "none", cursor: disableHeaderNavigation ? "default" : "pointer", paddingLeft: 48, paddingRight: 48 }}
         >
           <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>{title}</span>
-          <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} />
+          {!disableHeaderNavigation ? <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} /> : null}
         </button>
       ) : null}
 
@@ -238,6 +240,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
       >
         <div
           ref={leftArrowRef}
+          className="liquid-glass-arrow row-arrow-shell"
           style={{
             position: "absolute",
             left: embedded ? 0 : 20,
@@ -252,7 +255,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             onClick={() => scroll("left")}
             title="Anterior"
             aria-label="Anterior"
-            className="liquid-glass-arrow"
+            className="row-arrow-button"
             style={{
               width: 36,
               height: 60,
@@ -322,6 +325,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
 
         <div
           ref={rightArrowRef}
+          className="liquid-glass-arrow row-arrow-shell"
           style={{
             position: "absolute",
             right: embedded ? 0 : 20,
@@ -336,7 +340,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             onClick={() => scroll("right")}
             title="Siguiente"
             aria-label="Siguiente"
-            className="liquid-glass-arrow"
+            className="row-arrow-button"
             style={{
               width: 36,
               height: 60,
@@ -368,6 +372,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
+  const [inLibrary, setInLibrary] = useState(() => isInLibrary(type, item.id));
   const [, setArtworkVersion] = useState(0);
   const detailBackground = resolveDetailBackground(type, item.id, item.background);
   const ranked = typeof rank === "number";
@@ -429,6 +434,16 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     return () => window.removeEventListener(HOME_CARD_ARTWORK_CHANGED_EVENT, refresh);
   }, [item.id, type]);
 
+  useEffect(() => {
+    const refresh = () => setInLibrary(isInLibrary(type, item.id));
+    window.addEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [item.id, type]);
+
   const openArtworkMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -476,6 +491,18 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         placement="below-start"
         width={238}
         items={[
+          ...(isHorizontal ? [{
+            label: inLibrary ? "Quitar de la biblioteca" : "Añadir a la biblioteca",
+            icon: inLibrary ? <BookmarkMinus size={15} /> : <BookmarkPlus size={15} />,
+            onSelect: () => {
+              const added = toggleLibraryItem({
+                ...item,
+                type,
+                background: detailBackground,
+              });
+              setInLibrary(added);
+            },
+          }] : []),
           ...(!effectiveWatched ? [{
             label: "Marcar como visto",
             icon: <Check size={15} />,

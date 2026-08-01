@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "aetherio",
+  "name": "trkll",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-07-27",
   "workers_dev": true,
@@ -10,8 +10,16 @@
       "binding": "USERS_DB",
       "database_name": "aetherio-users",
       "database_id": "5b6d77fc-7696-4223-aaaa-fba956e00123"
+    },
+    {
+      "binding": "AWARDS_DB",
+      "database_name": "aetherio-awards",
+      "database_id": "77d9aba9-935c-4a2b-84bc-3944e9c01a82"
     }
   ],
+  "triggers": {
+    "crons": ["0 3 * * 1"]
+  },
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS",

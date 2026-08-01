@@ -1,9 +1,12 @@
 import { handleAuthRequest, type AuthEnv } from "./auth";
 import { handleReleaseRequest, type ReleaseEnv } from "./releases";
+import { handleAwardsRequest, type AwardsApiEnv } from "./awards/api";
+import { runImport, weeklyTargets } from "./awards/import";
 
-interface Env extends AuthEnv, ReleaseEnv {
+interface Env extends AuthEnv, ReleaseEnv, AwardsApiEnv {
   ASSETS: Fetcher;
   RELEASE_PUBLISH_TOKEN?: string;
+  AWARDS_IMPORT_TOKEN?: string;
 }
 
 export default {
@@ -18,10 +21,20 @@ export default {
       return handleAuthRequest(request, env, url.pathname);
     }
 
+    const awardsResponse = await handleAwardsRequest(request, env, url);
+    if (awardsResponse) return awardsResponse;
+
     const releaseResponse = await handleReleaseRequest(request, env, url);
     if (releaseResponse) return releaseResponse;
 
     return env.ASSETS.fetch(request);
+  },
+
+  // Revisión semanal: las dos ediciones más recientes de cada ceremonia.
+  async scheduled(_controller, env): Promise<void> {
+    if (!env.AWARDS_DB) return;
+    const targets = weeklyTargets();
+    await runImport(env, "weekly", targets);
   },
 } satisfies ExportedHandler<Env>;
 

@@ -206,7 +206,7 @@ Consultar como una instalación anterior:
 
 ```powershell
 $response = Invoke-WebRequest `
-  -Uri "https://aetherio.aetherio.workers.dev/api/update/windows/x86_64/0.4.4" `
+  -Uri "https://trkll.aetherio.workers.dev/api/update/windows/x86_64/0.4.4" `
   -UseBasicParsing
 $response.StatusCode
 $response.Content
@@ -234,7 +234,7 @@ Finalmente, probar desde una instalación anterior:
 Los dos botones de descarga de la web deben usar siempre esta ruta estable:
 
 ```text
-https://aetherio.aetherio.workers.dev/download/windows
+https://trkll.aetherio.workers.dev/download/windows
 ```
 
 El Worker consulta D1 y responde con una redirección al asset
@@ -260,12 +260,12 @@ Verificación de la web:
 
 ```powershell
 $release = Invoke-RestMethod `
-  -Uri "https://aetherio.aetherio.workers.dev/api/release"
+  -Uri "https://trkll.aetherio.workers.dev/api/release"
 $release.version
 $release.downloadUrl
 
 curl.exe -sS -D - -o NUL --max-redirs 0 `
-  "https://aetherio.aetherio.workers.dev/download/windows"
+  "https://trkll.aetherio.workers.dev/download/windows"
 ```
 
 `downloadUrl` debe ser `/download/windows`; la segunda respuesta debe ser

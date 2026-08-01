@@ -199,7 +199,7 @@ async function updateManifest(env: ReleaseEnv, url: URL) {
           error: legacyClient
             ? "Esta instalación necesita el puente de actualización legacy."
             : "El release interno no contiene una firma compatible.",
-          repairUrl: "https://aetherio.aetherio.workers.dev/download/windows",
+          repairUrl: "https://trkll.aetherio.workers.dev/download/windows",
         },
         409,
       );

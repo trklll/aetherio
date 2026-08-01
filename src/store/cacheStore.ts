@@ -23,7 +23,7 @@ export const HOME_CACHE_MAX_AGE = 1000 * 60 * 60 * 24;
 // The starter Home currently includes the base, anime-decade and ten
 // streaming-provider rails. Keep the complete set across app restarts.
 const HOME_CACHE_MAX_ROWS = 32;
-const HOME_CACHE_MAX_ROW_ITEMS = 16;
+const HOME_CACHE_MAX_ROW_ITEMS = 20;
 const HOME_CACHE_MAX_HERO_ITEMS = 16;
 
 const safeLocalStorage: StateStorage = {

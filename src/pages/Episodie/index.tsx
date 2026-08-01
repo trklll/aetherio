@@ -35,7 +35,9 @@ import { gsap, tweenTo } from "../../utils/motion.ts";
 import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/streamFormatters.ts";
 import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
+import { getSourceLogo } from "../../utils/sourceLogos.ts";
 import {
+  AVAILABLE_STREAMS_KEY,
   AUTO_NEXT_SOURCE_KEY,
   IMG,
   SELECTED_ENGINE_KEY,
@@ -47,39 +49,6 @@ import {
   playbackOverrideQueryKey,
   resolveTmdbId,
 } from "../Player/utils.ts";
-
-const sourceLogoUrls = import.meta.glob("../../assets/logosaddons/*.{png,jpg,jpeg}", {
-  eager: true,
-  query: "?url",
-  import: "default",
-}) as Record<string, string>;
-
-const SOURCE_LOGO_MAP: Record<string, string> = {};
-for (const [path, url] of Object.entries(sourceLogoUrls)) {
-  const name = path.split("/").pop()?.toLowerCase() ?? "";
-  const urlStr = String(url);
-  const cleanKey = name
-    .replace(/-(logo|png)\.[a-z]+$/, "")
-    .replace(/-png$/, "")
-    .toLowerCase();
-  SOURCE_LOGO_MAP[cleanKey] = urlStr;
-
-  const noHyphenKey = cleanKey.replace(/-/g, "");
-  if (noHyphenKey !== cleanKey) {
-    SOURCE_LOGO_MAP[noHyphenKey] = urlStr;
-  }
-}
-
-function getSourceLogo(sourceName: string): string | null {
-  let key = sourceName.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (SOURCE_LOGO_MAP[key]) return SOURCE_LOGO_MAP[key];
-  if (key === "nyaasi") {
-    if (SOURCE_LOGO_MAP["nyaa"]) return SOURCE_LOGO_MAP["nyaa"];
-  }
-  const fuzzy = sourceName.toLowerCase();
-  if (SOURCE_LOGO_MAP[fuzzy]) return SOURCE_LOGO_MAP[fuzzy];
-  return null;
-}
 
 interface EpisodePageMeta {
   name: string;
@@ -691,6 +660,7 @@ export default function EpisodiePage() {
     saveLastLink(streamCacheKey(query.type, query.id, query.season, query.episode), stream);
     writePlaybackOverrides(query, playbackSelection, subtitleChoice === AUTO_OPTION);
     sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
+    sessionStorage.setItem(AVAILABLE_STREAMS_KEY, JSON.stringify(allStreams));
     if (getStreamKind(stream) === "https") {
       const fallbacks = allStreams
         .filter((candidate: MediaStream) => (

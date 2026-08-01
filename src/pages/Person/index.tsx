@@ -53,8 +53,10 @@ export default function PersonPage() {
   const [loading, setLoading] = useState(true);
   const [biographyOpen, setBiographyOpen] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
+  const loadedPersonKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (loadedPersonKeyRef.current === id && person) return;
     let cancelled = false;
 
     async function load() {
@@ -102,6 +104,7 @@ export default function PersonPage() {
           knownFor: knownForBase,
           credits: deduped,
         };
+        loadedPersonKeyRef.current = id;
         setPerson(basePerson);
         setLoading(false);
 

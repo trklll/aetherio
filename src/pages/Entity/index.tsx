@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
@@ -44,6 +44,7 @@ export default function EntityPage() {
   const [rows, setRows] = useState<EntityRowData[]>([]);
   const [loading, setLoading] = useState(true);
   const [watchedVersion, setWatchedVersion] = useState(0);
+  const loadedEntityKeyRef = useRef<string | null>(null);
   const watchedMediaKeys = useMemo(() => new Set(
     readPlaybackStateEntries()
       .filter(entry => entry.completed)
@@ -52,6 +53,8 @@ export default function EntityPage() {
 
   useEffect(() => {
     if (!kind || !id) return;
+    const entityKey = `${kind}:${id}`;
+    if (loadedEntityKeyRef.current === entityKey && entity) return;
     void load(kind, id);
   }, [kind, id]);
 
@@ -118,6 +121,7 @@ export default function EntityPage() {
 
       setEntity(nextEntity);
       setRows(nextRows);
+      loadedEntityKeyRef.current = `${rawKind}:${rawId}`;
     } catch (error) {
       console.warn("Entity load error:", error);
       setEntity(null);

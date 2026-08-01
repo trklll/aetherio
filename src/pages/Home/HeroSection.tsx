@@ -17,7 +17,8 @@ import {
   type YouTubeClipCandidate,
 } from "../../services/youtubeClips.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
-import { useAwards } from "../../hooks/useAwards.ts";
+import { useAwards, featuredText } from "../../hooks/useAwards.ts";
+import { AwardLogo } from "../../components/awards/AwardLogo";
 
 interface Props {
   item: MediaItem;
@@ -441,7 +442,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
             style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 42px 22px 36px", display: "flex", alignItems: "flex-end", zIndex: 11 }}
           >
             <div style={{ maxWidth: 560 }}>
-              {awards.length > 0 && awards[0] && (
+              {awards.featured && (
                 <div
                   style={{
                     display: "flex",
@@ -453,21 +454,12 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                     filter: "drop-shadow(0 2px 16px rgba(0,0,0,0.7))",
                   }}
                 >
-                  {awards[0].awardLogoUrl && (
-                    <img
-                      src={awards[0].awardLogoUrl}
-                      alt={awards[0].awardName}
-                      decoding="async"
-                      style={{
-                        height: 80,
-                        width: "auto",
-                        maxWidth: 150,
-                        objectFit: "contain",
-                        filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.6))",
-                        flexShrink: 0,
-                      }}
-                    />
-                  )}
+                  <AwardLogo
+                    ceremony={awards.featured.ceremony}
+                    height={80}
+                    maxWidth={150}
+                    style={{ filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.6))" }}
+                  />
                   <div style={{ color: "#fff", lineHeight: 1.1 }}>
                     <div
                       style={{
@@ -477,10 +469,10 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                         textShadow: "0 2px 12px rgba(0,0,0,0.7)",
                       }}
                     >
-                      {awards[0].winner ? "Ganadora del" : "Nominada al"} {awards[0].awardName}
-                      {awards[0].year ? ` ${awards[0].year}` : ""}
+                      {featuredText(awards.featured)}
+                      {awards.featured.awardYear ? ` ${awards.featured.awardYear}` : ""}
                     </div>
-                    {awards[0].category && (
+                    {awards.featured.categoryEs && (
                       <div
                         style={{
                           fontSize: 14,
@@ -490,7 +482,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                           textShadow: "0 2px 10px rgba(0,0,0,0.7)",
                         }}
                       >
-                        {awards[0].category}
+                        {awards.featured.categoryEs}
                       </div>
                     )}
                   </div>

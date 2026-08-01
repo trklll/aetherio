@@ -1,14 +1,15 @@
 {
   "name": "aetherio",
   "private": true,
-  "version": "0.4.6",
+  "version": "0.4.7",
   "type": "module",
   "scripts": {
-    "predev": "npm run providers:build",
+    "predev": "npm run anime4k:sync && npm run providers:build",
     "dev": "vite",
-    "prebuild": "npm run providers:build",
+    "prebuild": "npm run anime4k:sync && npm run providers:build",
     "build": "tsc && vite build",
     "providers:build": "node scripts/build-provider-runtime.mjs",
+    "anime4k:sync": "node scripts/sync-anime4k-shaders.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "android:init": "tauri android init --ci --skip-targets-install",

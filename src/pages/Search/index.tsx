@@ -1,37 +1,60 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
-import PageContainer from "../../components/layout/PageContainer";
+import { ChevronRight } from "lucide-react";
+import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { searchMedia, type UnifiedSearchResult } from "../../utils/searchProviders";
-import { scrollByGsap, useGsapState } from "../../utils/motion";
+import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
+
+const POSTER_CARD = { width: 180, height: 271 };
+const ROW_GAP = 22;
+const TOP_RESULTS_LIMIT = 3;
+const TOP_RESULT_SCALE = 1.2;
+const HOME_PAGE_SCALE = 1.2;
 
 export default function SearchPage() {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const navigate = useNavigate();
   const addons = useAddonStore(state => state.addons);
-  const initialQuery = params.get("q") ?? "";
-  const [query, setQuery] = useState(initialQuery);
+  const { gradient } = useProfileGradient();
   const [results, setResults] = useState<UnifiedSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const normalizedQuery = useMemo(() => initialQuery.trim(), [initialQuery]);
-
-  useEffect(() => setQuery(initialQuery), [initialQuery]);
+  const normalizedQuery = useMemo(() => (params.get("q") ?? "").trim(), [params]);
+  const searchKey = useMemo(
+    () => `${normalizedQuery}|${addons.map(addon => `${addon.id}:${addon.enabled}`).join(",")}`,
+    [addons, normalizedQuery],
+  );
+  const loadedSearchKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (gradient) {
+      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
+    }
+    return () => {
+      document.documentElement.style.removeProperty("--aetherio-page-bg");
+    };
+  }, [gradient]);
+
+  useEffect(() => {
+    if (loadedSearchKeyRef.current === searchKey) return;
     let cancelled = false;
 
     async function load() {
       if (!normalizedQuery) {
         setResults([]);
+        setLoading(false);
+        loadedSearchKeyRef.current = searchKey;
         return;
       }
 
       setLoading(true);
       try {
         const nextResults = await searchMedia(normalizedQuery, addons, 80);
-        if (!cancelled) setResults(nextResults);
+        if (!cancelled) {
+          setResults(nextResults);
+          loadedSearchKeyRef.current = searchKey;
+        }
       } catch {
         if (!cancelled) setResults([]);
       } finally {
@@ -43,14 +66,7 @@ export default function SearchPage() {
     return () => {
       cancelled = true;
     };
-  }, [normalizedQuery, addons]);
-
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const next = query.trim();
-    if (!next) return;
-    setParams({ q: next });
-  }
+  }, [addons, normalizedQuery, searchKey]);
 
   function openResult(item: UnifiedSearchResult) {
     writeDetailMediaMeta(item);
@@ -60,33 +76,27 @@ export default function SearchPage() {
   }
 
   return (
-    <PageContainer fullBleed className="min-h-screen bg-[#1f1f1f] pb-12 pt-24 text-white">
-      <form
-        onSubmit={submitSearch}
-        className="mx-auto flex items-center gap-3 rounded-full border border-white/70 bg-white/10 px-4 py-3 backdrop-blur-2xl"
-        style={{ width: 768, maxWidth: "calc(100vw - 260px)", marginBottom: 34 }}
-      >
-        <Search size={18} className="text-white/58" />
-        <input
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-base text-white outline-none placeholder:text-white/36"
-          placeholder="Busca peliculas, series, anime..."
-        />
-      </form>
+    <main className="min-h-screen pb-14 text-white">
+      <header style={{ padding: "42px 48px 28px" }}>
+        <h1 style={{ fontSize: 28, lineHeight: 1.12, fontWeight: 750, letterSpacing: -0.6 }}>
+          {normalizedQuery ? `Resultados para “${normalizedQuery}”` : "Encuentra algo para ver"}
+        </h1>
+      </header>
 
-      <div style={{ width: "calc(100vw - 260px)", maxWidth: 1600, margin: "0 auto", minWidth: 0 }}>
-        {loading ? (
-          <SearchSkeleton />
-        ) : results.length ? (
-          <SearchResultsSections results={results} onOpen={openResult} />
-        ) : (
-          <p className="rounded-2xl border border-white/8 bg-white/[0.04] px-5 py-4 text-sm text-white/50">
-            {normalizedQuery ? "No se encontraron resultados en TMDB ni en los addons instalados." : "Escribe algo para buscar."}
+      {loading ? (
+        <SearchSkeleton />
+      ) : results.length ? (
+        <SearchResultsSections results={results} onOpen={openResult} />
+      ) : (
+        <div style={{ padding: "10px 48px" }}>
+          <p style={{ maxWidth: 520, fontSize: 15, lineHeight: 1.5, color: "rgba(255,255,255,0.5)" }}>
+            {normalizedQuery
+              ? "No encontramos resultados en TMDB ni en tus fuentes instaladas."
+              : "Usa la búsqueda de la barra superior para encontrar películas, series y anime."}
           </p>
-        )}
-      </div>
-    </PageContainer>
+        </div>
+      )}
+    </main>
   );
 }
 
@@ -97,55 +107,107 @@ function SearchResultsSections({
   results: UnifiedSearchResult[];
   onOpen: (item: UnifiedSearchResult) => void;
 }) {
-  const series = results.filter(isSeriesResult);
-  const movies = results.filter(item => item.type === "movie");
-  const topResults = pickTopResults(results);
+  const rows = useMemo(() => {
+    const movies = results.filter(item => item.type === "movie");
+    const series = results.filter(isSeriesResult);
+    return [
+      { key: "movies", title: "Películas", items: movies },
+      { key: "series", title: "Programas de TV", items: series },
+    ]
+      .filter(row => row.items.length > 0)
+      .sort((a, b) => resultScore(b.items[0]) - resultScore(a.items[0]));
+  }, [results]);
+  const topResults = results.slice(0, TOP_RESULTS_LIMIT);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 42 }}>
-      {!!topResults.length && (
-        <section>
-          <SectionHead title="Top resultados" />
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-              gap: 20,
-              width: "100%",
-            }}
-          >
-            {topResults.map(item => <TopResultCard key={`top-${item.key}`} item={item} onOpen={() => onOpen(item)} />)}
-          </div>
-        </section>
-      )}
-
-      {!!series.length && (
-        <section>
-          <SectionHead title="Programas de TV" />
-          <PosterRow>
-            {series.map(item => <PosterResultCard key={`series-${item.key}`} item={item} onOpen={() => onOpen(item)} />)}
-          </PosterRow>
-        </section>
-      )}
-
-      {!!movies.length && (
-        <section>
-          <SectionHead title="Películas" />
-          <PosterRow>
-            {movies.map(item => <PosterResultCard key={`movie-${item.key}`} item={item} onOpen={() => onOpen(item)} />)}
-          </PosterRow>
-        </section>
-      )}
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <section style={{ padding: "0 48px 42px" }}>
+        <SectionHead title="Top resultados" inset={false} />
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 20,
+            width: "100%",
+          }}
+        >
+          {topResults.map(item => (
+            <TopResultCard key={`top-${item.key}`} item={item} onOpen={() => onOpen(item)} />
+          ))}
+        </div>
+      </section>
+      {rows.map(row => (
+        <ResultSection key={row.key} title={row.title} items={row.items} onOpen={onOpen} />
+      ))}
     </div>
   );
 }
 
-function SectionHead({ title }: { title: string }) {
+function ResultSection({
+  title,
+  items,
+  onOpen,
+}: {
+  title: string;
+  items: UnifiedSearchResult[];
+  onOpen: (item: UnifiedSearchResult) => void;
+}) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 16 }}>
-      <h2 style={{ fontSize: 18, fontWeight: 800, color: "#fff", lineHeight: 1 }}>{title}</h2>
-      <ChevronRight size={17} style={{ color: "rgba(255,255,255,0.42)", marginTop: 1 }} />
+    <section>
+      <SectionHead title={title} />
+      <PosterRow>
+        {items.map(item => (
+          <PosterResultCard key={`${title}-${item.key}`} item={item} onOpen={() => onOpen(item)} />
+        ))}
+      </PosterRow>
+    </section>
+  );
+}
+
+function SectionHead({ title, inset = true }: { title: string; inset?: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 * HOME_PAGE_SCALE, padding: inset ? "0 48px" : 0, marginBottom: 14 * HOME_PAGE_SCALE }}>
+      <h2 style={{ fontSize: 17 * HOME_PAGE_SCALE, fontWeight: 700, color: "#fff", lineHeight: 1 }}>{title}</h2>
+      <ChevronRight size={15 * HOME_PAGE_SCALE} style={{ color: "rgba(255,255,255,0.4)", marginTop: HOME_PAGE_SCALE }} />
     </div>
+  );
+}
+
+function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
+  const poster = item.poster ?? item.background;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 16 * TOP_RESULT_SCALE,
+        height: 100 * TOP_RESULT_SCALE,
+        minWidth: 0,
+        borderRadius: 12 * TOP_RESULT_SCALE,
+        border: "none",
+        background: "rgb(54,54,54)",
+        padding: `0 ${16 * TOP_RESULT_SCALE}px`,
+        textAlign: "left",
+        cursor: "pointer",
+        overflow: "hidden",
+      }}
+    >
+      <div style={{ width: 48 * TOP_RESULT_SCALE, height: 72 * TOP_RESULT_SCALE, flexShrink: 0, overflow: "hidden", borderRadius: 6 * TOP_RESULT_SCALE, background: "rgba(255,255,255,0.08)" }}>
+        {poster ? (
+          <img src={poster} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : null}
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 16 * TOP_RESULT_SCALE, fontWeight: 500, color: "#fff", lineHeight: 1.15 }}>
+          {item.name ?? "Sin título"}
+        </p>
+        <p style={{ marginTop: 4 * TOP_RESULT_SCALE, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 * TOP_RESULT_SCALE, fontWeight: 400, color: "rgba(255,255,255,0.82)", lineHeight: 1.15 }}>
+          {item.mediaLabel}{item.year ? ` · ${item.year}` : ""}
+        </p>
+      </div>
+    </button>
   );
 }
 
@@ -158,11 +220,7 @@ function PosterRow({ children }: { children: ReactNode }) {
 
   function updateScrollState() {
     const row = scrollRef.current;
-    if (!row) {
-      setCanScrollLeft(false);
-      setCanScrollRight(false);
-      return;
-    }
+    if (!row) return;
     setCanScrollLeft(row.scrollLeft > 10);
     setCanScrollRight(row.scrollLeft < row.scrollWidth - row.clientWidth - 10);
   }
@@ -195,9 +253,8 @@ function PosterRow({ children }: { children: ReactNode }) {
   }, [children]);
 
   function scroll(direction: "left" | "right") {
-    const row = scrollRef.current;
-    if (!row) return;
-    scrollByGsap(row, direction === "right" ? row.clientWidth * 0.82 : -row.clientWidth * 0.82);
+    const amount = (POSTER_CARD.width + ROW_GAP) * 3;
+    scrollByGsap(scrollRef.current, direction === "right" ? amount : -amount);
   }
 
   return (
@@ -207,148 +264,166 @@ function PosterRow({ children }: { children: ReactNode }) {
       onMouseLeave={() => setHovered(false)}
     >
       <SearchRowArrow visible={hovered && canScrollLeft} side="left" onClick={() => scroll("left")} />
-      <div ref={scrollRef} style={{ display: "flex", gap: 20, overflowX: "auto", overflowY: "visible", paddingBottom: 3, scrollbarWidth: "none" }}>
+      <div
+        ref={scrollRef}
+        className="scroll-row"
+        style={{
+          display: "flex",
+          gap: ROW_GAP,
+          overflowX: "auto",
+          overflowY: "hidden",
+          marginTop: -18,
+          padding: "25px 48px 50px",
+          scrollbarWidth: "none",
+        }}
+      >
         {children}
       </div>
-      <SearchRowFade visible={canScrollLeft} side="left" />
-      <SearchRowFade visible={canScrollRight} side="right" />
       <SearchRowArrow visible={hovered && canScrollRight} side="right" onClick={() => scroll("right")} />
     </div>
   );
 }
 
-function SearchRowArrow({ visible, side, onClick }: { visible: boolean; side: "left" | "right"; onClick: () => void }) {
-  const motionRef = useGsapState<HTMLButtonElement>({ opacity: visible ? 1 : 0 }, [visible], 0.2);
-  return (
-    <button
-      ref={motionRef}
-      type="button"
-      onClick={onClick}
-      aria-label={side === "left" ? "Anterior" : "Siguiente"}
-      title={side === "left" ? "Anterior" : "Siguiente"}
-      style={{
-        position: "absolute",
-        [side]: 0,
-        top: "50%",
-        zIndex: 10,
-        width: 38,
-        height: 38,
-        borderRadius: "50%",
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "rgba(18,18,18,0.72)",
-        backdropFilter: "blur(6px)",
-        WebkitBackdropFilter: "blur(6px)",
-        color: "#fff",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        cursor: "pointer",
-        opacity: 0,
-        pointerEvents: visible ? "auto" : "none",
-        transform: `translate(${side === "left" ? "-30%" : "30%"}, -50%)`,
-      }}
-    >
-      {side === "left" ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-    </button>
-  );
-}
-
-function SearchRowFade({ visible, side }: { visible: boolean; side: "left" | "right" }) {
-  const motionRef = useGsapState<HTMLDivElement>({ opacity: visible ? 1 : 0 }, [visible], 0.2);
+function SearchRowArrow({
+  visible,
+  side,
+  onClick,
+}: {
+  visible: boolean;
+  side: "left" | "right";
+  onClick: () => void;
+}) {
+  const motionRef = useGsapState<HTMLDivElement>({ opacity: visible ? 1 : 0 }, [visible], 0.45);
   return (
     <div
       ref={motionRef}
+      className="liquid-glass-arrow row-arrow-shell"
       style={{
         position: "absolute",
-        [side]: 0,
-        top: 0,
-        bottom: 3,
-        width: 34,
-        zIndex: 5,
-        pointerEvents: "none",
+        [side]: 20,
+        top: "50%",
+        zIndex: 10,
         opacity: 0,
-        background: side === "left"
-          ? "linear-gradient(to right, #1f1f1f 0%, rgba(31,31,31,0) 100%)"
-          : "linear-gradient(to left, #1f1f1f 0%, rgba(31,31,31,0) 100%)",
-      }}
-    />
-  );
-}
-
-function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
-  const poster = item.poster ?? item.background;
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        height: 100,
-        minWidth: 0,
-        borderRadius: 12,
-        border: "none",
-        background: "rgb(54,54,54)",
-        padding: "0 16px",
-        textAlign: "left",
-        cursor: "pointer",
-        overflow: "hidden",
+        pointerEvents: visible ? "auto" : "none",
+        transform: `translate(${side === "left" ? "-35%" : "35%"}, -50%)`,
       }}
     >
-      <div style={{ width: 48, height: 72, flexShrink: 0, overflow: "hidden", borderRadius: 6, background: "rgba(255,255,255,0.08)" }}>
-        {poster ? <img src={poster} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
-      </div>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 16, fontWeight: 500, color: "#fff", lineHeight: 1.15 }}>{item.name ?? "Sin titulo"}</p>
-        <p style={{ marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 400, color: "rgba(255,255,255,0.82)", lineHeight: 1.15 }}>
-          {item.mediaLabel}{item.year ? ` - ${item.year}` : ""}{item.sourceName ? ` - ${item.sourceName}` : ""}
-        </p>
-      </div>
-    </button>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={side === "left" ? "Anterior" : "Siguiente"}
+        title={side === "left" ? "Anterior" : "Siguiente"}
+        className="row-arrow-button"
+        style={{
+          width: 36,
+          height: 60,
+          borderRadius: 18,
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+        }}
+      >
+        <svg
+          width="18"
+          height="30"
+          viewBox="0 -0.5 17 17"
+          fill="#fff"
+          xmlns="http://www.w3.org/2000/svg"
+          style={{ transform: side === "left" ? "rotate(180deg)" : undefined, overflow: "visible" }}
+        >
+          <path
+            d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z"
+            transform="scale(1.15,1.9) translate(-1.3,-3.5)"
+          />
+        </svg>
+      </button>
+    </div>
   );
 }
 
 function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
+  const cardRef = useRef<HTMLButtonElement>(null);
   const poster = item.poster ?? item.background;
+
   return (
     <button
+      ref={cardRef}
       type="button"
       onClick={onOpen}
+      aria-label={`${item.name ?? "Sin título"}${item.year ? `, ${item.year}` : ""}`}
       style={{
-        width: 180,
-        height: 271,
-        flex: "0 0 180px",
+        position: "relative",
+        zIndex: 1,
+        width: POSTER_CARD.width,
+        height: POSTER_CARD.height,
+        flex: `0 0 ${POSTER_CARD.width}px`,
         overflow: "hidden",
         borderRadius: 10,
-        border: "1px solid rgba(255,255,255,0.12)",
-        background: "#242424",
+        border: "none",
+        background: "#1c1c1e",
         padding: 0,
         cursor: "pointer",
+        boxShadow: "0 12px 28px rgba(0,0,0,0.28)",
+        willChange: "transform",
+      }}
+      onMouseEnter={() => {
+        tweenTo(cardRef.current, { scale: 1.05, zIndex: 5 }, 0.32);
+        gsap.set(cardRef.current, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+      }}
+      onMouseLeave={() => {
+        tweenTo(cardRef.current, { scale: 1, zIndex: 1 }, 0.32);
+        gsap.set(cardRef.current, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
       }}
     >
-      <div style={{ width: 180, height: 271, background: "rgba(255,255,255,0.06)" }}>
-        {poster ? <img src={poster} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
-      </div>
+      {poster ? (
+        <img
+          src={poster}
+          alt={item.name ?? ""}
+          loading="lazy"
+          decoding="async"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : (
+        <span style={{ display: "grid", height: "100%", placeItems: "center", padding: 18, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
+          {item.name ?? "Sin imagen"}
+        </span>
+      )}
     </button>
   );
 }
 
 function SearchSkeleton() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 42 }}>
-      <section>
-        <SectionHead title="Top resultados" />
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <section style={{ padding: "0 48px 42px" }}>
+        <SectionHead title="Top resultados" inset={false} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 20 }}>
-          {Array.from({ length: 3 }, (_, index) => <div key={index} className="skeleton rounded-xl" style={{ height: 100 }} />)}
+          {Array.from({ length: 3 }, (_, index) => (
+            <div key={index} className="skeleton" style={{ height: 100 * TOP_RESULT_SCALE, borderRadius: 12 * TOP_RESULT_SCALE }} />
+          ))}
         </div>
       </section>
-      <section>
-        <SectionHead title="Programas de TV" />
-        <PosterRow>
-          {Array.from({ length: 6 }, (_, index) => <div key={index} className="skeleton h-[271px] w-[180px] rounded-xl" />)}
-        </PosterRow>
-      </section>
+      {["Películas", "Programas de TV"].map(title => (
+        <section key={title}>
+          <SectionHead title={title} />
+          <PosterRow>
+            {Array.from({ length: 7 }, (_, index) => (
+              <div
+                key={index}
+                className="skeleton"
+                style={{
+                  width: POSTER_CARD.width,
+                  height: POSTER_CARD.height,
+                  flex: `0 0 ${POSTER_CARD.width}px`,
+                  borderRadius: 10,
+                }}
+              />
+            ))}
+          </PosterRow>
+        </section>
+      ))}
     </div>
   );
 }
@@ -357,15 +432,6 @@ function isSeriesResult(item: UnifiedSearchResult) {
   return item.type === "series" || item.type === "anime" || item.type === "tv";
 }
 
-function pickTopResults(results: UnifiedSearchResult[]) {
-  const top: UnifiedSearchResult[] = [];
-  const series = results.find(isSeriesResult);
-  const movie = results.find(item => item.type === "movie");
-  if (series) top.push(series);
-  if (movie && !top.some(item => item.key === movie.key)) top.push(movie);
-  for (const item of results) {
-    if (top.length >= 3) break;
-    if (!top.some(existing => existing.key === item.key)) top.push(item);
-  }
-  return top;
+function resultScore(item?: UnifiedSearchResult) {
+  return item?.searchScore ?? item?.popularity ?? 0;
 }

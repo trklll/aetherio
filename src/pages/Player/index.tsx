@@ -32,12 +32,14 @@ import {
   isAndroidRuntime,
   openExternalUrl,
   sendNativePlaybackCommand,
+  setNativeMpvVideoProfile,
   setNativeAutocrop,
   setNativeMpvSurfaceVisible,
   stopNativePlayback,
 } from "../../runtime/platform";
 import type { ChapterOption, MpvTrack, VideoScaleMode } from "./types";
 import EpisodePanel from "./EpisodePanel";
+import SourcePanel from "./SourcePanel";
 import PlayerControls from "./PlayerControls";
 import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
 import { useControlsVisibility } from "./useControlsVisibility";
@@ -45,9 +47,16 @@ import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
 import { useMpvStatus } from "./useMpvStatus";
 import { useSkipIntro } from "./useSkipIntro";
+import {
+  VIDEO_ENHANCEMENT_OPTIONS,
+  readVideoEnhancementProfile,
+  saveVideoEnhancementProfile,
+} from "./videoEnhancements";
+import { LOCAL_FILES_DROPPED_EVENT } from "../../utils/localMedia";
 import { useDiscordPresence } from "../../hooks/useDiscordPresence";
 import {
   AUTO_NEXT_SOURCE_KEY,
+  AVAILABLE_STREAMS_KEY,
   SELECTED_ENGINE_KEY,
   SELECTED_MEDIA_META_KEY,
   SELECTED_PLAYBACK_OVERRIDES_KEY,
@@ -130,6 +139,7 @@ export default function PlayerPage() {
   const lastProgressTimeRef = useRef(0);
   const lastProgressAtRef = useRef(0);
   const lastContinueSaveAtRef = useRef(0);
+  const lastAudibleVolumeRef = useRef(0.86);
   const lastMpvFileLoadedRef = useRef(false);
   const lastMpvCacheRef = useRef(-1);
   const lastMpvPauseRef = useRef<boolean | null>(null);
@@ -164,6 +174,7 @@ export default function PlayerPage() {
   const savedAudioRestoreTimerRef = useRef<number | null>(null);
   const holdSpeedTimerRef = useRef<number | null>(null);
   const holdSpeedActiveRef = useRef(false);
+  const holdSpeedRestoreRef = useRef(1);
   const ignoreNextScreenClickRef = useRef(false);
   const traktStartedKeyRef = useRef("");
   const traktStoppedKeyRef = useRef("");
@@ -191,6 +202,7 @@ export default function PlayerPage() {
   const [selectedMpvSubtitle, setSelectedMpvSubtitle] = useState("");
   const [selectedMpvAudio, setSelectedMpvAudio] = useState("");
   const [selectedSpeed, setSelectedSpeed] = useState("1");
+  const [selectedVideoProfile, setSelectedVideoProfile] = useState(readVideoEnhancementProfile);
   const [subtitleDelayMs, setSubtitleDelayMs] = useState(0);
   const [subtitleScalePercent, setSubtitleScalePercent] = useState(100);
   const [subtitleVerticalPercent, setSubtitleVerticalPercent] = useState(5);
@@ -199,7 +211,8 @@ export default function PlayerPage() {
   const [mpvTracks, setMpvTracks] = useState<MpvTrack[]>([]);
   const [chapterIndex, setChapterIndex] = useState<number | null>(null);
   const [chapterOptions, setChapterOptions] = useState<ChapterOption[]>([]);
-  const [showEpisodePanel, setShowEpisodePanel] = useState(false);
+  const [activeSidePanel, setActiveSidePanel] = useState<"episodes" | "sources" | null>(null);
+  const [availableStreams, setAvailableStreams] = useState<MediaStream[]>([]);
   const [playbackStarted, setPlaybackStarted] = useState(false);
   const [mpvReadyForCommands, setMpvReadyForCommands] = useState(false);
   const [mpvFileLoaded, setMpvFileLoaded] = useState(false);
@@ -216,6 +229,9 @@ export default function PlayerPage() {
   const seekBufferingRef = useRef(false);
   const seekStartedAtRef = useRef(0);
   const [seekBuffering, setSeekBuffering] = useState(false);
+  const [fileDropNotice, setFileDropNotice] = useState("");
+  const fileDropNoticeTimerRef = useRef<number | null>(null);
+  const localPlaybackKey = params.get("local");
 
   const query = useMemo(() => buildQuery(params), [
   params.get("type"),
@@ -344,6 +360,19 @@ export default function PlayerPage() {
   useEffect(() => {
     const saved = sessionStorage.getItem(SELECTED_STREAM_KEY);
     const savedMediaMeta = sessionStorage.getItem(SELECTED_MEDIA_META_KEY);
+    const savedAvailableStreams = sessionStorage.getItem(AVAILABLE_STREAMS_KEY);
+    try {
+      const parsedAvailable = savedAvailableStreams ? JSON.parse(savedAvailableStreams) as unknown : [];
+      setAvailableStreams(Array.isArray(parsedAvailable)
+        ? parsedAvailable.filter((candidate): candidate is MediaStream => (
+            Boolean(candidate)
+            && typeof candidate === "object"
+            && isPlayableMediaStream(candidate as MediaStream)
+          ))
+        : []);
+    } catch {
+      setAvailableStreams([]);
+    }
     if (!saved) return;
     try {
       const parsed = JSON.parse(saved) as MediaStream;
@@ -390,7 +419,7 @@ export default function PlayerPage() {
     } catch {
       setStream(null);
     }
-  }, []);
+  }, [localPlaybackKey]);
 
   useEffect(() => {
     if (isP2pStream || !mpvStatus?.startsWith("MPV no pudo cargar esta fuente") || leavingPlayerRef.current) return;
@@ -498,8 +527,17 @@ export default function PlayerPage() {
           ? "auto"
           : "auto-safe";
       void sendMpvCommand(["set_property", "hwdec", hwdec]);
+      void setNativeMpvVideoProfile(selectedVideoProfile)
+        .then(result => {
+          if (!result) return;
+          console.info("[AETHERIO:VIDEO-FILTER]", result);
+        })
+        .catch(error => {
+          console.error("[AETHERIO:VIDEO-FILTER] No se pudo aplicar la mejora.", error);
+          setMpvStatus(`Mejoras de vídeo: ${String(error)}`);
+        });
     }
-  }, [mpvFileLoaded, playbackPreferences.hardwareDecoding, videoScaleMode, volume]);
+  }, [mpvFileLoaded, playbackPreferences.hardwareDecoding, selectedVideoProfile, videoScaleMode, volume]);
 
   const applySubtitleSettings = useCallback((input?: {
     delayMs?: number;
@@ -524,10 +562,43 @@ export default function PlayerPage() {
     applySubtitleSettings();
   }, [applySubtitleSettings, mpvFileLoaded]);
 
+  useEffect(() => {
+    const onLocalFilesDropped = (event: Event) => {
+      const paths = (event as CustomEvent<string[]>).detail ?? [];
+      if (!paths.length) return;
+      if (!mpvReadyForCommands) {
+        setFileDropNotice("Espera a que el vídeo termine de abrir.");
+        return;
+      }
+      paths.forEach(path => {
+        void sendMpvCommand(["sub-add", path, "select"]);
+      });
+      window.setTimeout(() => applySubtitleSettings(), 160);
+      setFileDropNotice(paths.length === 1
+        ? "Subtítulo añadido"
+        : `${paths.length} subtítulos añadidos`);
+      if (fileDropNoticeTimerRef.current !== null) {
+        window.clearTimeout(fileDropNoticeTimerRef.current);
+      }
+      fileDropNoticeTimerRef.current = window.setTimeout(() => {
+        fileDropNoticeTimerRef.current = null;
+        setFileDropNotice("");
+      }, 2400);
+    };
+    window.addEventListener(LOCAL_FILES_DROPPED_EVENT, onLocalFilesDropped);
+    return () => window.removeEventListener(LOCAL_FILES_DROPPED_EVENT, onLocalFilesDropped);
+  }, [applySubtitleSettings, mpvReadyForCommands]);
+
   useEffect(() => () => {
     if (holdSpeedTimerRef.current !== null) {
       window.clearTimeout(holdSpeedTimerRef.current);
       holdSpeedTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (fileDropNoticeTimerRef.current !== null) {
+      window.clearTimeout(fileDropNoticeTimerRef.current);
     }
   }, []);
 
@@ -691,7 +762,7 @@ export default function PlayerPage() {
 
   useEffect(() => {
     if (query?.type === "movie") {
-      setShowEpisodePanel(false);
+      setActiveSidePanel(current => current === "episodes" ? null : current);
     }
   }, [query?.type]);
 
@@ -893,8 +964,13 @@ export default function PlayerPage() {
 
   function applyVolume(nextVolume: number) {
     const clamped = Math.min(2, Math.max(0, nextVolume));
+    if (clamped > 0) lastAudibleVolumeRef.current = clamped;
     setVolume(clamped);
     void sendMpvCommand(["set_property", "volume", Math.round(clamped * 100)]);
+  }
+
+  function toggleMute() {
+    applyVolume(volume === 0 ? Math.max(0.01, lastAudibleVolumeRef.current) : 0);
   }
 
   function applyVideoScale(mode: VideoScaleMode) {
@@ -932,6 +1008,22 @@ export default function PlayerPage() {
     const nextMode = videoScaleMode === "original" ? "crop" : "original";
     setVideoScaleMode(nextMode);
     applyVideoScale(nextMode);
+  }
+
+  function applyVideoProfile(profile: string) {
+    const normalized = saveVideoEnhancementProfile(profile);
+    setSelectedVideoProfile(normalized);
+    if (!mpvFileLoaded) return;
+    console.info("[AETHERIO:VIDEO-FILTER] applying", { profile: normalized });
+    void setNativeMpvVideoProfile(normalized)
+      .then(result => {
+        console.info("[AETHERIO:VIDEO-FILTER] verified", result);
+        setMpvStatus(null);
+      })
+      .catch(error => {
+        console.error("[AETHERIO:VIDEO-FILTER] failed", { profile: normalized, error });
+        setMpvStatus(`Mejoras de vídeo: ${String(error)}`);
+      });
   }
 
   async function launchMpv(showOpening = true) {
@@ -1031,6 +1123,45 @@ export default function PlayerPage() {
       });
   }
 
+  function selectSource(nextStream: MediaStream) {
+    if (nextStream.id === stream?.id) {
+      setActiveSidePanel(null);
+      return;
+    }
+    const resumeTime = currentTimeRef.current;
+    saveCurrentProgressNow("changeSource");
+    setSelectedResumeTime(resumeTime);
+    try {
+      const rawMeta = sessionStorage.getItem(SELECTED_MEDIA_META_KEY);
+      const mediaMeta = rawMeta ? JSON.parse(rawMeta) as Record<string, unknown> : {};
+      sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
+        ...mediaMeta,
+        resumeTime,
+      }));
+      sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(nextStream));
+    } catch {
+      sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(nextStream));
+    }
+    const directFallbacks = availableStreams
+      .filter(candidate => (
+        candidate.id !== nextStream.id
+        && getStreamKind(candidate) === "https"
+        && candidate.behaviorHints?.scraperPlayback !== "iframe"
+      ))
+      .slice(0, 6);
+    directFallbacksRef.current = directFallbacks;
+    const nextTarget = getPlaybackTarget(nextStream);
+    attemptedDirectTargetsRef.current = new Set(nextTarget ? [nextTarget] : []);
+    sessionStorage.setItem(DIRECT_STREAM_FALLBACKS_KEY, JSON.stringify(directFallbacks));
+    console.info("[AETHERIO:SOURCE-PANEL] switching source", {
+      from: stream?.addonName ?? stream?.name,
+      to: nextStream.addonName ?? nextStream.name,
+      resumeTime,
+    });
+    setActiveSidePanel(null);
+    setStream(nextStream);
+  }
+
   function navigateEpisode(direction: "prev" | "next") {
     if (!query?.season || !query.episode) return;
     const currentIndex = episodeOptions.findIndex(episode => episode.episode === query.episode);
@@ -1079,6 +1210,7 @@ export default function PlayerPage() {
       holdSpeedTimerRef.current = null;
       holdSpeedActiveRef.current = true;
       ignoreNextScreenClickRef.current = true;
+      holdSpeedRestoreRef.current = Number(selectedSpeed) || 1;
       void sendMpvCommand(["set_property", "speed", playbackPreferences.holdToAccelerateSpeed]);
     }, 260);
   }
@@ -1090,7 +1222,26 @@ export default function PlayerPage() {
     }
     if (!holdSpeedActiveRef.current) return;
     holdSpeedActiveRef.current = false;
-    void sendMpvCommand(["set_property", "speed", Number(selectedSpeed) || 1.0]);
+    void sendMpvCommand(["set_property", "speed", holdSpeedRestoreRef.current]);
+  }
+
+  function startSpaceAcceleration() {
+    if (
+      !playbackPreferences.holdToAccelerate
+      || showFallbackPanel
+      || manualPaused
+      || !mpvReadyForCommands
+      || !playbackStarted
+    ) {
+      return false;
+    }
+    holdSpeedRestoreRef.current = Number(selectedSpeed) || 1;
+    void sendMpvCommand(["set_property", "speed", 2]);
+    return true;
+  }
+
+  function stopSpaceAcceleration() {
+    void sendMpvCommand(["set_property", "speed", holdSpeedRestoreRef.current]);
   }
 
   useEffect(() => {
@@ -1679,8 +1830,16 @@ export default function PlayerPage() {
     void sendMpvCommand(["set_property", "pause", false]);
     void sendMpvCommand(["set_property", "speed", 1.0]);
   }, [manualPaused, mpvCacheBuffering, mpvFileLoaded, mpvPausedForCache, playbackStarted, stalledPlayback, stream]);
-  usePlayerKeyboardShortcuts({ togglePlay, jump, applyVolume, wakeControls, volume });
-  const controlsActive = controlsVisible || showEpisodePanel;
+  usePlayerKeyboardShortcuts({
+    togglePlay,
+    jump,
+    applyVolume,
+    wakeControls,
+    startSpaceAcceleration,
+    stopSpaceAcceleration,
+    volume,
+  });
+  const controlsActive = controlsVisible || activeSidePanel !== null;
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("aetherio-player-controls", { detail: { visible: controlsActive } }));
@@ -2021,7 +2180,7 @@ if (isIframeStream && playbackTarget) {
         src={playbackTarget}
         title={stream?.title ?? stream?.addonName ?? "Reproductor web"}
         className="absolute inset-0 h-full w-full border-0 bg-black"
-        allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+        allow="autoplay; encrypted-media; fullscreen"
         allowFullScreen
         referrerPolicy="strict-origin-when-cross-origin"
       />
@@ -2151,6 +2310,14 @@ if (!stream) {
       ) : null}
 
       <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} message={mpvStatus} hideMessage={playbackStarted} p2p={isP2pStream} />
+      {fileDropNotice ? (
+        <div
+          data-player-interactive
+          className="pointer-events-none absolute left-1/2 top-6 z-50 -translate-x-1/2 rounded-full border border-white/14 bg-black/76 px-4 py-2 text-sm font-semibold text-white shadow-2xl"
+        >
+          {fileDropNotice}
+        </div>
+      ) : null}
 
       {!androidPlayback && playbackPreferences.skipSegmentsEnabled && activeSkipSegment && mpvReadyForCommands && playbackStarted ? (
         <button
@@ -2172,7 +2339,7 @@ if (!stream) {
       ) : null}
 
       <EpisodePanel
-        visible={!androidPlayback && playbackStarted && showEpisodePanel && showPanelToggle}
+        visible={!androidPlayback && activeSidePanel === "episodes" && showPanelToggle}
         title={title}
         streamName={mediaTitle}
         seriesLogoUrl={seriesLogoUrl}
@@ -2182,8 +2349,15 @@ if (!stream) {
         hasEpisodeOptions={episodeOptions.length > 0}
         canGoPrevEpisode={canGoPrevEpisode}
         canGoNextEpisode={canGoNextEpisode}
-        onClose={() => setShowEpisodePanel(false)}
+        onClose={() => setActiveSidePanel(null)}
         onNavigateEpisode={navigateEpisode}
+      />
+      <SourcePanel
+        visible={!androidPlayback && activeSidePanel === "sources"}
+        streams={availableStreams}
+        currentStreamId={stream.id}
+        onClose={() => setActiveSidePanel(null)}
+        onSelect={selectSource}
       />
 
       <PlayerControls
@@ -2197,26 +2371,30 @@ if (!stream) {
         selectedMpvAudio={selectedMpvAudio}
         selectedSubtitleValue={selectedSubtitleValue}
         selectedSpeed={selectedSpeed}
+        selectedVideoProfile={selectedVideoProfile}
         videoScaleMode={videoScaleMode}
         audioOptions={normalizedAudioOptions}
         subtitleOptions={subtitleOptions}
         speedOptions={speedOptions}
+        videoProfileOptions={VIDEO_ENHANCEMENT_OPTIONS}
         subtitlesLoading={subtitlesLoading}
         subtitleDelayMs={subtitleDelayMs}
         subtitleScalePercent={subtitleScalePercent}
         subtitleVerticalPercent={subtitleVerticalPercent}
         showPanelToggle={showPanelToggle}
-        showEpisodePanel={showEpisodePanel}
+        activeSidePanel={activeSidePanel}
         hasEpisodeOptions={episodeOptions.length > 0}
         controlsLocked={false}
         canGoPrevEpisode={canGoPrevEpisode}
         canGoNextEpisode={canGoNextEpisode}
+        canChangeSource={availableStreams.length > 0 && !isTrailerStream}
         onControlsEnter={holdControls}
         onControlsLeave={() => releaseControls(2)}
         onSeek={seek}
         onJump={jump}
         onTogglePlay={togglePlay}
         onVolumeChange={applyVolume}
+        onToggleMute={toggleMute}
         onAudioChange={value => {
           manualAudioSelectionRef.current = true;
           autoLangLog("audio manual change", { value });
@@ -2282,8 +2460,10 @@ if (!stream) {
           setSelectedSpeed(value);
           void sendMpvCommand(["set_property", "speed", Number(value)]);
         }}
+        onVideoProfileChange={applyVideoProfile}
         onToggleVideoScale={toggleVideoScale}
-        onToggleEpisodePanel={() => setShowEpisodePanel(value => !value)}
+        onToggleSourcePanel={() => setActiveSidePanel(value => value === "sources" ? null : "sources")}
+        onToggleEpisodePanel={() => setActiveSidePanel(value => value === "episodes" ? null : "episodes")}
         onNavigateEpisode={navigateEpisode}
       />
     </div>

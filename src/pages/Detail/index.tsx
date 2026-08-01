@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { Image as ImageIcon, MoreHorizontal, Play, X, ChevronRight, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
+import { BookmarkMinus, BookmarkPlus, Image as ImageIcon, MoreHorizontal, Play, X, ChevronRight, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
 import addImageIcon from "../../assets/add-image-svgrepo-com.svg";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
@@ -13,6 +13,7 @@ import type { MediaStream } from "../../types/stream";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
 import { fetchDetailCollection, type DetailCollectionItem } from "../../services/detailCollections";
 import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
+import { fetchAnilistIdByMalId } from "../../services/anilist";
 import {
   CONTINUE_WATCHING_EVENT,
   formatResumeTime,
@@ -33,6 +34,7 @@ import {
   writeDetailLogoOverride,
   writeDetailMediaMeta,
 } from "../../utils/mediaMetadata";
+import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
 import {
   syncTraktMarkedUnwatched,
   syncTraktMarkedWatched,
@@ -42,7 +44,8 @@ import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../service
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
 import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
-import { useAwardsByTmdbId } from "../../hooks/useAwards";
+import { useAwardsByTmdbId, featuredText } from "../../hooks/useAwards";
+import { AwardLogo } from "../../components/awards/AwardLogo";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 const IMG      = "https://image.tmdb.org/t/p";
 const DEBUG_LOGO = false;
@@ -704,6 +707,7 @@ export default function DetailPage() {
   const [tmdbCommentsLoading, setTmdbCommentsLoading] = useState(false);
   const [tmdbCommentsError, setTmdbCommentsError] = useState("");
   const [detailMenuOpen, setDetailMenuOpen] = useState(false);
+  const [inLibrary, setInLibrary] = useState(() => isInLibrary(type ?? "", id ?? ""));
   const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
   const popupOpenTimerRef = useRef<number | null>(null);
@@ -723,7 +727,15 @@ export default function DetailPage() {
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const mdbListSettings = useMdbListSettings();
   const tmdbIdForAwards = data?.ids?.tmdb ?? (id?.startsWith("tmdb:") ? Number(id.replace("tmdb:", "")) : null);
-  const awards = useAwardsByTmdbId(type ?? "", typeof tmdbIdForAwards === "number" ? tmdbIdForAwards : null, Boolean(type && (tmdbIdForAwards !== null)));
+  const awards = useAwardsByTmdbId(
+    type ?? "",
+    typeof tmdbIdForAwards === "number" ? tmdbIdForAwards : null,
+    Boolean(type && (tmdbIdForAwards !== null || data?.ids?.imdb || data?.ids?.anilist)),
+    data?.ids?.imdb ?? null,
+    data?.ids?.anilist ?? null,
+    data?.name ?? null,
+    data?.year ?? null,
+  );
   const fullMdbListSettings = ({
     ...mdbListSettings,
     showTrakt: true,
@@ -848,7 +860,7 @@ export default function DetailPage() {
 
   useLayoutEffect(() => {
     const badge = awardBadgeRef.current;
-    const award = awards[0];
+    const award = awards.featured;
     if (!badge || !award) return;
 
     const tween = gsap.fromTo(
@@ -875,11 +887,23 @@ export default function DetailPage() {
       gsap.set(badge, { clearProps: "opacity,transform,visibility" });
     };
   }, [
-    awards[0]?.awardName,
-    awards[0]?.category,
-    awards[0]?.year,
-    awards[0]?.winner,
+    awards.featured?.ceremony,
+    awards.featured?.categoryEs,
+    awards.featured?.awardYear,
+    awards.featured?.status,
   ]);
+
+  useEffect(() => {
+    if (!type || !id) return;
+    const refresh = () => setInLibrary(isInLibrary(type, id));
+    refresh();
+    window.addEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [id, type]);
 
   useEffect(() => () => { clearSharedElementName(); }, []);
 
@@ -945,6 +969,12 @@ export default function DetailPage() {
       ]),
     };
     const finish = async (next: DetailData) => {
+      if (next.type === "anime" && !next.ids?.anilist && typeof next.ids?.mal === "number") {
+        const anilistId = await fetchAnilistIdByMalId(next.ids.mal).catch(() => null);
+        if (anilistId) {
+          next = { ...next, ids: { ...next.ids, anilist: anilistId } };
+        }
+      }
       logoLog("detail data ready", { resolvedLogo: next.logo ?? null });
       if (next.logo) setCachedLogo(writeCachedLogo(getDetailLogoKey(t, mediaId), next.logo) ?? null);
       else setCachedLogo(null);
@@ -1970,6 +2000,25 @@ export default function DetailPage() {
               width={238}
               items={[
                 {
+                  label: inLibrary ? "Quitar de la biblioteca" : "Añadir a la biblioteca",
+                  icon: inLibrary ? <BookmarkMinus size={15} /> : <BookmarkPlus size={15} />,
+                  onSelect: () => {
+                    const added = toggleLibraryItem({
+                      id: data.id,
+                      type: data.type,
+                      name: data.name,
+                      poster: data.poster,
+                      background: data.backdrop,
+                      logo: data.logo,
+                      description: data.description,
+                      year: data.year,
+                      genres: data.genres,
+                      rating: data.rating,
+                    });
+                    setInLibrary(added);
+                  },
+                },
+                {
                   label: "Elegir fondo del medio",
                   icon: <ImageIcon size={15} />,
                   disabled: !(data.backgroundOptions?.length),
@@ -1997,9 +2046,9 @@ export default function DetailPage() {
           </div>
         </div>
 
-        {(data.cast?.length||data.director)&&(
+        {(data.cast?.length || data.director || awards.featured)&&(
           <div className="detail-hero-credits" style={{ position:"absolute",bottom:4,right:0,padding:"0 var(--app-safe-x) 22px",textAlign:"right",maxWidth:300 }}>
-            {awards.length > 0 && awards[0] && (
+            {awards.featured && (
               <div
                 ref={awardBadgeRef}
                 style={{
@@ -2013,24 +2062,20 @@ export default function DetailPage() {
               >
                 <div style={{ color: "#fff", lineHeight: 1.1, textShadow: "0 2px 10px rgba(0,0,0,0.7)", textAlign: "right" }}>
                   <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: -0.2 }}>
-                    {awards[0].winner ? "Ganadora del" : "Nominada al"} {awards[0].awardName}{awards[0].year ? ` ${awards[0].year}` : ""}
+                    {featuredText(awards.featured)}{awards.featured.awardYear ? ` ${awards.featured.awardYear}` : ""}
                   </div>
-                  {awards[0].category && (
+                  {awards.featured.categoryEs && (
                     <div style={{ fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.75)", marginTop: 2 }}>
-                      {awards[0].category}
+                      {awards.featured.categoryEs}
                     </div>
                   )}
                 </div>
-                {awards[0].awardLogoUrl && (
-                  <img
-                    className="detail-award-logo-adaptive"
-                    src={awards[0].awardLogoUrl}
-                    alt={awards[0].awardName}
-                    loading="lazy"
-                    decoding="async"
-                    style={{ height: 50, width: "auto", maxWidth: 100, objectFit: "contain", flexShrink: 0 }}
-                  />
-                )}
+                <AwardLogo
+                  className="detail-award-logo-adaptive"
+                  ceremony={awards.featured.ceremony}
+                  height={50}
+                  maxWidth={100}
+                />
               </div>
             )}
             {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button></span>))}</p>)}
@@ -2688,13 +2733,14 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
     >
       <div
         ref={leftArrowRef}
+        className="liquid-glass-arrow row-arrow-shell"
         style={{ position:"absolute",left:0,top:"50%",zIndex:10,transform:"translate(-30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollLeft?"auto":"none" }}
       >
         <button
           onClick={()=>move("left")}
           title="Anterior"
           aria-label="Anterior"
-          className="liquid-glass-arrow"
+          className="row-arrow-button"
           style={{ width:36,height:60,borderRadius:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
         >
           <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ transform:"rotate(180deg)", overflow:"visible" }}>
@@ -2723,13 +2769,14 @@ function ScrollRow({ children, gap = 10, initialScrollKey }:{children:ReactNode;
       </div>
       <div
         ref={rightArrowRef}
+        className="liquid-glass-arrow row-arrow-shell"
         style={{ position:"absolute",right:0,top:"50%",zIndex:10,transform:"translate(30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollRight?"auto":"none" }}
       >
         <button
           onClick={()=>move("right")}
           title="Siguiente"
           aria-label="Siguiente"
-          className="liquid-glass-arrow"
+          className="row-arrow-button"
           style={{ width:36,height:60,borderRadius:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
         >
           <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ overflow:"visible" }}>

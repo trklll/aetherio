@@ -11,15 +11,19 @@ import {
   Pause,
   Play,
   Plus,
+  Radio,
   RotateCcw,
   RotateCw,
+  Sparkles,
   TimerReset,
   Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import type { SelectOption, VideoScaleMode } from "./types";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
+import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
 import { tweenTo } from "../../utils/motion";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
 
@@ -58,33 +62,39 @@ interface PlayerControlsProps {
   selectedMpvAudio: string;
   selectedSubtitleValue: string;
   selectedSpeed: string;
+  selectedVideoProfile: string;
   videoScaleMode: VideoScaleMode;
   audioOptions: SelectOption[];
   subtitleOptions: SelectOption[];
   speedOptions: string[];
+  videoProfileOptions: SelectOption[];
   subtitlesLoading: boolean;
   subtitleDelayMs: number;
   subtitleScalePercent: number;
   subtitleVerticalPercent: number;
   showPanelToggle: boolean;
-  showEpisodePanel: boolean;
+  activeSidePanel: "episodes" | "sources" | null;
   hasEpisodeOptions: boolean;
   controlsLocked: boolean;
   canGoPrevEpisode: boolean;
   canGoNextEpisode: boolean;
+  canChangeSource: boolean;
   onControlsEnter: () => void;
   onControlsLeave: () => void;
   onSeek: (value: number) => void;
   onJump: (offset: number) => void;
   onTogglePlay: () => void;
   onVolumeChange: (value: number) => void;
+  onToggleMute: () => void;
   onAudioChange: (value: string) => void;
   onSubtitleChange: (value: string) => void;
   onSubtitleDelayChange: (next: number) => void;
   onSubtitleScaleChange: (next: number) => void;
   onSubtitleVerticalChange: (next: number) => void;
   onSpeedChange: (value: string) => void;
+  onVideoProfileChange: (value: string) => void;
   onToggleVideoScale: () => void;
+  onToggleSourcePanel: () => void;
   onToggleEpisodePanel: () => void;
   onNavigateEpisode: (direction: "prev" | "next") => void;
 }
@@ -100,33 +110,39 @@ export default function PlayerControls({
   selectedMpvAudio,
   selectedSubtitleValue,
   selectedSpeed,
+  selectedVideoProfile,
   videoScaleMode,
   audioOptions,
   subtitleOptions,
   speedOptions,
+  videoProfileOptions,
   subtitlesLoading,
   subtitleDelayMs,
   subtitleScalePercent,
   subtitleVerticalPercent,
   showPanelToggle,
-  showEpisodePanel,
+  activeSidePanel,
   hasEpisodeOptions,
   controlsLocked,
   canGoPrevEpisode,
   canGoNextEpisode,
+  canChangeSource,
   onControlsEnter,
   onControlsLeave,
   onSeek,
   onJump,
   onTogglePlay,
   onVolumeChange,
+  onToggleMute,
   onAudioChange,
   onSubtitleChange,
   onSubtitleDelayChange,
   onSubtitleScaleChange,
   onSubtitleVerticalChange,
   onSpeedChange,
+  onVideoProfileChange,
   onToggleVideoScale,
+  onToggleSourcePanel,
   onToggleEpisodePanel,
   onNavigateEpisode,
 }: PlayerControlsProps) {
@@ -140,10 +156,41 @@ export default function PlayerControls({
   const subtitlePositionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastSubtitlePositionRef = useRef<number | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const subtitleBlurRefreshKey = useMemo(
+    () => `${selectedSubtitleValue}|${subtitlesLoading ? "loading" : "ready"}|${subtitleOptions.map(option => option.value).join("\u0000")}`,
+    [selectedSubtitleValue, subtitleOptions, subtitlesLoading],
+  );
 
   useEffect(() => {
     tweenTo(controlsRef.current, { opacity: active ? 1 : 0 }, 0.3);
   }, [active]);
+
+  useEffect(() => {
+    const syncControlsTop = () => {
+      const glass = controlsGlassRef.current;
+      if (!glass) return;
+      document.documentElement.style.setProperty(
+        "--aetherio-player-controls-top",
+        `${glass.getBoundingClientRect().top}px`,
+      );
+    };
+    syncControlsTop();
+    const observer = new ResizeObserver(syncControlsTop);
+    if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", syncControlsTop);
+    window.visualViewport?.addEventListener("resize", syncControlsTop);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", syncControlsTop);
+      window.visualViewport?.removeEventListener("resize", syncControlsTop);
+    };
+  }, []);
+
+  useEffect(() => () => {
+    document.documentElement.style.removeProperty("--aetherio-player-controls-top");
+    void setNativeMpvControlsBlur(false);
+  }, []);
 
   useEffect(() => {
     let animationFrame = 0;
@@ -196,6 +243,7 @@ export default function PlayerControls({
     let disposed = false;
     let animationFrame = 0;
     let resizeSettleTimers: number[] = [];
+    const subtitleRefreshTimers: number[] = [];
 
     const flushLatestBlurCommand = () => {
       const command = pendingBlurCommandRef.current;
@@ -248,12 +296,12 @@ export default function PlayerControls({
         const glass = controlsGlassRef.current;
         if (!glass) return;
         const rect = glass.getBoundingClientRect();
-        const episodePanel = showEpisodePanel
+        const episodePanel = activeSidePanel
           ? document.querySelector<HTMLElement>("[data-player-episode-panel-glass]")
           : null;
         const episodeRect = episodePanel?.getBoundingClientRect();
-        const subtitlePanel = openMenu === "subtitles"
-          ? document.querySelector<HTMLElement>("[data-player-subtitle-panel-glass]")
+        const subtitlePanel = openMenu
+          ? document.querySelector<HTMLElement>("[data-player-floating-panel-glass]")
           : null;
         const subtitleRect = subtitlePanel?.getBoundingClientRect();
         const scale = window.devicePixelRatio || 1;
@@ -280,7 +328,7 @@ export default function PlayerControls({
                 top: subtitleRect.top * scale,
                 right: subtitleRect.right * scale,
                 bottom: subtitleRect.bottom * scale,
-                cornerRadius: 8 * scale,
+                cornerRadius: 24 * scale,
               }
             : undefined,
         };
@@ -299,12 +347,20 @@ export default function PlayerControls({
       }
     };
 
-    syncBlurGeometry();
+    const forceBlurGeometryRefresh = () => {
+      lastBlurGeometryRef.current = "";
+      syncBlurGeometry();
+    };
+
+    forceBlurGeometryRefresh();
+    for (const delay of [100, 300, 750, 1500, 3000]) {
+      subtitleRefreshTimers.push(window.setTimeout(forceBlurGeometryRefresh, delay));
+    }
     const observer = new ResizeObserver(syncBlurAfterResize);
     if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
     const episodePanel = document.querySelector<HTMLElement>("[data-player-episode-panel-glass]");
     if (episodePanel) observer.observe(episodePanel);
-    const subtitlePanel = document.querySelector<HTMLElement>("[data-player-subtitle-panel-glass]");
+    const subtitlePanel = document.querySelector<HTMLElement>("[data-player-floating-panel-glass]");
     if (subtitlePanel) observer.observe(subtitlePanel);
     observer.observe(document.documentElement);
     window.addEventListener("resize", syncBlurAfterResize);
@@ -316,9 +372,9 @@ export default function PlayerControls({
       window.visualViewport?.removeEventListener("resize", syncBlurAfterResize);
       window.cancelAnimationFrame(animationFrame);
       resizeSettleTimers.forEach(timer => window.clearTimeout(timer));
-      disableBlur();
+      subtitleRefreshTimers.forEach(timer => window.clearTimeout(timer));
     };
-  }, [active, controlsLocked, openMenu, showEpisodePanel]);
+  }, [active, activeSidePanel, controlsLocked, openMenu, subtitleBlurRefreshKey]);
 
   function runControlAction(action: () => void) {
     setOpenMenu(null);
@@ -338,6 +394,7 @@ export default function PlayerControls({
     >
       <div
         ref={controlsGlassRef}
+        data-player-controls-glass
         className="relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)]"
         style={{
           background: "rgba(70, 70, 70, 0.22)",
@@ -384,8 +441,17 @@ export default function PlayerControls({
             <IconButton label="Avanzar 10 segundos" disabled={controlsLocked} onClick={() => runControlAction(() => onJump(10))}>
               <RotateCw size={19} />
             </IconButton>
-            <div className="flex items-center gap-3 rounded-full border border-white/[0.08] bg-white/12 px-3.5 py-2.5">
-              <Volume2 size={17} className="text-white/84" />
+            <div className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/12 px-2.5 py-2">
+              <button
+                type="button"
+                onClick={() => runControlAction(onToggleMute)}
+                disabled={controlsLocked}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-white/84 gsap-transition hover:bg-white/12 hover:text-white disabled:opacity-35"
+                title={volume === 0 ? "Restaurar volumen" : "Silenciar"}
+                aria-label={volume === 0 ? "Restaurar volumen" : "Silenciar"}
+              >
+                {volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
+              </button>
               <input
                 type="range"
                 min={0}
@@ -440,6 +506,17 @@ export default function PlayerControls({
               onToggle={() => setOpenMenu(value => value === "speed" ? null : "speed")}
               onClose={() => setOpenMenu(null)}
             />
+            <VideoEnhancementMenu
+              label="Mejoras de video"
+              icon={<Sparkles size={17} />}
+              value={selectedVideoProfile}
+              options={videoProfileOptions}
+              onChange={onVideoProfileChange}
+              open={openMenu === "video-enhancements"}
+              disabled={controlsLocked}
+              onToggle={() => setOpenMenu(value => value === "video-enhancements" ? null : "video-enhancements")}
+              onClose={() => setOpenMenu(null)}
+            />
 
             <IconButton
               label={videoScaleMode === "crop" ? "Recortar" : "Original"}
@@ -448,13 +525,22 @@ export default function PlayerControls({
             >
               <Crop size={18} />
             </IconButton>
+            {canChangeSource ? (
+              <IconButton
+                label={activeSidePanel === "sources" ? "Cerrar fuentes" : "Fuentes"}
+                disabled={controlsLocked}
+                onClick={() => runControlAction(onToggleSourcePanel)}
+              >
+                <Radio size={18} />
+              </IconButton>
+            ) : null}
 
             {showPanelToggle && (
               <button
                 onClick={() => runControlAction(onToggleEpisodePanel)}
                 disabled={controlsLocked}
                 className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition ${
-                  showEpisodePanel
+                  activeSidePanel === "episodes"
                     ? "border-white/[0.11] bg-white/18 text-white"
                     : "border-white/[0.07] bg-white/10 text-white/90 hover:bg-white/14"
                 }`}
@@ -592,20 +678,22 @@ function SubtitleMenu({
         <div
           ref={menuRef}
           data-player-subtitle-panel-glass
+          data-player-floating-panel-glass
           role="dialog"
           aria-label="Subtítulos"
-          className="fixed bottom-[81px] left-1/2 z-[45] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg text-white shadow-[0_24px_70px_rgba(0,0,0,0.68)]"
+          className="fixed left-1/2 z-[45] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white"
           style={{
-            height: "min(460px, calc(100vh - 190px))",
+            ...CONTEXT_GLASS_STYLE,
+            bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
+            height: "min(470px, calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top) - 86px))",
             minHeight: 300,
-            background: "rgba(70, 70, 70, 0.22)",
           }}
         >
-          <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-4">
+          <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
             <div className="flex min-w-0 items-center gap-2.5">
               <Captions size={18} className="shrink-0 text-white/72" />
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-white">Subtítulos</h3>
+                <h3 className="text-[15px] font-semibold tracking-[-0.01em] text-white">Subtítulos</h3>
                 <p className="truncate text-xs text-white/48">{selectedOption?.label || "Apagados"}</p>
               </div>
             </div>
@@ -613,7 +701,7 @@ function SubtitleMenu({
               type="button"
               onClick={onClose}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/64 gsap-transition hover:bg-white/10 hover:text-white"
-              aria-label="Cerrar subtitulos"
+              aria-label="Cerrar subtítulos"
               title="Cerrar"
             >
               <X size={17} />
@@ -624,8 +712,8 @@ function SubtitleMenu({
             className="grid min-h-0 flex-1"
             style={{ gridTemplateColumns: "minmax(160px, 0.72fr) minmax(0, 1.6fr)" }}
           >
-            <section className="flex min-h-0 flex-col border-r border-white/10 p-3">
-              <h4 className="mb-2 px-1 text-xs font-bold uppercase text-white/46">Idioma</h4>
+            <section className="flex min-h-0 flex-col border-r border-white/[0.08] bg-black/[0.08] p-3">
+              <h4 className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Idioma</h4>
               <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
                 {languageEntries.map(entry => (
                   <SubtitleItemButton
@@ -647,7 +735,7 @@ function SubtitleMenu({
 
             <section className="flex min-h-0 min-w-0 flex-col">
               <div className="flex min-h-0 flex-1 flex-col p-3">
-                <h4 className="mb-2 px-1 text-xs font-bold uppercase text-white/46">Pista</h4>
+                <h4 className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Pista</h4>
                 <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
                   {selectedLanguage === "off" ? (
                     <p className="px-2 py-3 text-sm text-white/42">Subtítulos desactivados.</p>
@@ -666,8 +754,21 @@ function SubtitleMenu({
                 </div>
               </div>
 
-              <div className="shrink-0 border-t border-white/10 p-3">
-                <h4 className="mb-2 px-1 text-xs font-bold uppercase text-white/46">Ajustes</h4>
+              <div className="shrink-0 border-t border-white/[0.08] bg-black/[0.06] p-3">
+                <div className="mb-2 flex items-center justify-between px-1">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Ajustes</h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSubtitleDelayChange(0);
+                      onSubtitleScaleChange(100);
+                      onSubtitleVerticalChange(5);
+                    }}
+                    className="rounded-full px-2.5 py-1 text-xs font-semibold text-white/58 gsap-transition hover:bg-white/[0.08] hover:text-white"
+                  >
+                    Restablecer
+                  </button>
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   <SubtitleStepper
                     label="Atraso"
@@ -676,13 +777,13 @@ function SubtitleMenu({
                     onIncrease={() => onSubtitleDelayChange(subtitleDelayMs + 250)}
                   />
                   <SubtitleStepper
-                    label="Tamano"
+                    label="Tamaño"
                     value={`${subtitleScalePercent}%`}
                     onDecrease={() => onSubtitleScaleChange(subtitleScalePercent - 5)}
                     onIncrease={() => onSubtitleScaleChange(subtitleScalePercent + 5)}
                   />
                   <SubtitleStepper
-                    label="Posicion vertical"
+                    label="Posición vertical"
                     value={`${subtitleVerticalPercent}%`}
                     onDecrease={() => onSubtitleVerticalChange(subtitleVerticalPercent - 5)}
                     onIncrease={() => onSubtitleVerticalChange(subtitleVerticalPercent + 5)}
@@ -722,6 +823,137 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+const VIDEO_FILTER_CATEGORIES = [
+  {
+    id: "anime4k",
+    label: "Anime4K",
+    description: "Upscaling y restauración para animación",
+    matches: (value: string) => value.startsWith("fast:") || value.startsWith("hq:"),
+  },
+  {
+    id: "fsr",
+    label: "AMD FSR",
+    description: "Escalado espacial FidelityFX",
+    matches: (value: string) => value.startsWith("fsr:"),
+  },
+  {
+    id: "hardware",
+    label: "Super Resolution",
+    description: "Mejoras aceleradas por la GPU",
+    matches: (value: string) => value.startsWith("vsr:"),
+  },
+  {
+    id: "scalers",
+    label: "Escaladores MPV",
+    description: "Algoritmos de escalado de alta calidad",
+    matches: (value: string) => value.startsWith("scaler:"),
+  },
+  {
+    id: "processing",
+    label: "Procesamiento MPV",
+    description: "Limpieza y reducción de banding",
+    matches: (value: string) => value.startsWith("deband:"),
+  },
+] as const;
+
+function VideoEnhancementMenu({
+  icon,
+  label,
+  value,
+  options,
+  onChange,
+  open,
+  onToggle,
+  onClose,
+  disabled = false,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  disabled?: boolean;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) setCategoryId(null);
+  }, [open]);
+
+  const category = VIDEO_FILTER_CATEGORIES.find(item => item.id === categoryId);
+  const uncategorizedOptions = options.filter(option =>
+    option.value === "" || !VIDEO_FILTER_CATEGORIES.some(item => item.matches(option.value)),
+  );
+  const categoryOptions = category ? options.filter(option => category.matches(option.value)) : [];
+  const items = category
+    ? [
+        {
+          label: category.label,
+          description: "Volver a las categorías",
+          icon: <ChevronLeft size={15} />,
+          closeOnSelect: false,
+          onSelect: () => setCategoryId(null),
+        },
+        ...categoryOptions.map(option => ({
+          label: option.label,
+          description: option.description,
+          icon: option.value === value ? <Check size={14} /> : undefined,
+          onSelect: () => onChange(option.value),
+        })),
+      ]
+    : [
+        ...uncategorizedOptions.map(option => ({
+          label: option.label,
+          description: option.description,
+          icon: option.value === value ? <Check size={14} /> : undefined,
+          onSelect: () => onChange(option.value),
+        })),
+        ...VIDEO_FILTER_CATEGORIES.map(item => {
+          const count = options.filter(option => item.matches(option.value)).length;
+          return {
+            label: item.label,
+            description: `${item.description} · ${count} ${count === 1 ? "filtro" : "filtros"}`,
+            icon: <ChevronRight size={15} />,
+            closeOnSelect: false,
+            onSelect: () => setCategoryId(item.id),
+          };
+        }),
+      ];
+
+  return (
+    <div className="relative" data-player-menu data-menu-id="video-enhancements">
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        onClick={onToggle}
+        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition ${
+          open ? "border-white/[0.12] bg-white/18" : "border-white/[0.07] bg-white/10 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-35"
+        }`}
+        title={label}
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {icon}
+      </button>
+      <ContextMenu
+        open={open && !disabled}
+        anchorRef={buttonRef}
+        onClose={onClose}
+        width={340}
+        maxHeight={420}
+        placement="above-end"
+        items={items}
+      />
+    </div>
   );
 }
 
@@ -771,11 +1003,12 @@ function IconMenu({
         open={open && !disabled}
         anchorRef={buttonRef}
         onClose={onClose}
-        width={224}
-        maxHeight={288}
+        width={id === "video-enhancements" ? 340 : 224}
+        maxHeight={id === "video-enhancements" ? 380 : 288}
         placement="above-end"
         items={options.map(option => ({
           label: option.label,
+          description: option.description,
           icon: option.value === value ? <Check size={14} /> : undefined,
           onSelect: () => onChange(option.value),
         }))}
@@ -852,9 +1085,23 @@ function SubtitleStepper({
     <div className="min-w-0">
       <p className="mb-1.5 truncate px-1 text-xs font-semibold text-white/56" title={label}>{label}</p>
       <div className="grid h-10 min-w-0 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-1 rounded-md border border-white/10 bg-white/[0.05] px-1">
-        <button type="button" onClick={onDecrease} style={stepperButtonStyle}><Minus size={16} /></button>
+        <button
+          type="button"
+          onClick={onDecrease}
+          style={stepperButtonStyle}
+          aria-label={`Disminuir ${label.toLowerCase()}`}
+        >
+          <Minus size={16} />
+        </button>
         <span className="truncate text-center text-sm font-bold text-white/94">{value}</span>
-        <button type="button" onClick={onIncrease} style={stepperButtonStyle}><Plus size={16} /></button>
+        <button
+          type="button"
+          onClick={onIncrease}
+          style={stepperButtonStyle}
+          aria-label={`Aumentar ${label.toLowerCase()}`}
+        >
+          <Plus size={16} />
+        </button>
       </div>
     </div>
   );

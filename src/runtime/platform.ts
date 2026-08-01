@@ -16,12 +16,25 @@ export interface PlaybackOpenRequest {
   startTime?: number;
   privateTorrent?: boolean;
   providerSessionKey?: string;
+  audioPassthrough?: boolean;
 }
 
 export interface PlaybackCapabilities {
   mpvBundled: boolean;
   backend?: string;
   formats?: string[];
+}
+
+export interface MpvVideoEnhancementResult {
+  profile: string;
+  kind: string;
+  verified: boolean;
+  requestedShaders: string[];
+  activeShaders: string;
+  requestedVideoFilter: string;
+  activeVideoFilter: string;
+  activeScale: string;
+  activeDeband: string;
 }
 
 export function isTauriRuntime() {
@@ -155,6 +168,23 @@ export async function listenOpenUrls(handler: (urls: string[]) => void) {
   }
 }
 
+export async function takePendingOpenFiles() {
+  if (!isTauriRuntime() || isAndroidRuntime()) return [] as string[];
+  return invokeCommand<string[]>("take_pending_open_files");
+}
+
+export async function listenOpenFiles(handler: (paths: string[]) => void) {
+  if (!isTauriRuntime() || isAndroidRuntime()) return () => undefined;
+  return listenPlatformEvent<string[]>("aetherio-open-files", event => handler(event.payload));
+}
+
+export async function listenWindowFileDrops(handler: (paths: string[]) => void) {
+  if (!isTauriRuntime() || isAndroidRuntime()) return () => undefined;
+  return getCurrentWindow().onDragDropEvent(event => {
+    if (event.payload.type === "drop") handler(event.payload.paths);
+  });
+}
+
 export async function openExternalUrl(url: string) {
   if (isTauriRuntime()) {
     try {
@@ -242,6 +272,7 @@ export async function openNativePlayback(request: PlaybackOpenRequest): Promise<
     startTime: request.startTime,
     privateTorrent: request.privateTorrent,
     providerSessionKey: request.providerSessionKey,
+    audioPassthrough: request.audioPassthrough,
   });
 }
 
@@ -283,6 +314,11 @@ export async function sendNativePlaybackCommand(command: unknown[]) {
 export async function setNativeAutocrop(enabled: boolean) {
   if (isAndroidRuntime()) return { enabled, sourceCropApplied: false };
   return invokeCommand("mpv_autocrop", { enabled });
+}
+
+export async function setNativeMpvVideoProfile(profile: string) {
+  if (!isTauriRuntime() || isAndroidRuntime()) return;
+  return invokeCommand<MpvVideoEnhancementResult>("set_mpv_video_profile", { profile });
 }
 
 export async function setNativeMpvSurfaceVisible(visible: boolean) {

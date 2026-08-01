@@ -72,6 +72,17 @@ async function anilistQuery<T>(query: string, variables: Record<string, unknown>
   }
 }
 
+/** Resuelve el identificador AniList de una obra que solo trae ID de MyAnimeList. */
+export async function fetchAnilistIdByMalId(malId: number): Promise<number | null> {
+  if (!Number.isInteger(malId) || malId <= 0) return null;
+  const result = await anilistQuery<{ data?: { Media?: { id?: number | null } | null } }>(
+    `query ($idMal: Int) { Media(idMal: $idMal, type: ANIME) { id } }`,
+    { idMal: malId },
+  );
+  const id = result?.data?.Media?.id;
+  return typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null;
+}
+
 const MEDIA_FIELDS = `
   id
   idMal
@@ -110,6 +121,28 @@ export async function fetchAnilistTopAnime(): Promise<MediaItem[]> {
         }
       }
     }`,
+  );
+  return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+export async function fetchAnilistDiscover({
+  page = 1,
+  genre,
+  sort = "POPULARITY_DESC",
+}: {
+  page?: number;
+  genre?: string;
+  sort?: "POPULARITY_DESC" | "SCORE_DESC" | "TRENDING_DESC" | "FAVOURITES_DESC";
+} = {}): Promise<MediaItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query ($page: Int, $genre: String, $sort: [MediaSort]) {
+      Page(page: $page, perPage: 25) {
+        media(type: ANIME, genre: $genre, sort: $sort, isAdult: false) {
+          ${MEDIA_FIELDS}
+        }
+      }
+    }`,
+    { page, genre: genre || null, sort: [sort] },
   );
   return (result?.data?.Page?.media ?? []).map(mediaToItem);
 }

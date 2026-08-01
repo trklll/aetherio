@@ -1,5 +1,21 @@
-import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  useNavigate,
+  type Location,
+} from "react-router-dom";
+import {
+  Activity,
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { reloadAddonsForActiveProfile, useAddonStore } from "./store/addonStore.ts";
 import { rehydrateHomeCacheForActiveProfile } from "./store/cacheStore.ts";
@@ -14,7 +30,13 @@ import { prefetchHomeData, warmHomeStartup } from "./hooks/useCatalogs.ts";
 import { useFullscreen } from "./hooks/useFullscreen.ts";
 import { getHomePreferences } from "./config/homePreferences.ts";
 import { completeTraktAuthorization, TRAKT_AUTH_CHANGED_EVENT, type TraktAuthEventDetail } from "./trakt";
-import { getCurrentDeepLinks, listenOpenUrls } from "./runtime/platform.ts";
+import {
+  getCurrentDeepLinks,
+  listenOpenFiles,
+  listenOpenUrls,
+  listenWindowFileDrops,
+  takePendingOpenFiles,
+} from "./runtime/platform.ts";
 import AuthPage from "./pages/AuthPage.tsx";
 import StartupExperience from "./components/startup/StartupExperience.tsx";
 import {
@@ -35,6 +57,11 @@ import {
   getPlaybackPreferences,
   PLAYBACK_PREFERENCES_CHANGED_EVENT,
 } from "./config/playbackPreferences.ts";
+import {
+  dispatchLocalSubtitleDrop,
+  prepareLocalMediaPlayback,
+  splitLocalFiles,
+} from "./utils/localMedia.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();
@@ -54,6 +81,9 @@ const SearchPage = lazy(() => import("./pages/Search"));
 const GenreListingPage = lazy(() => import("./pages/GenreListing"));
 const QuickStart = lazy(() => import("./pages/QuickStart"));
 const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
+
+const MAX_CACHED_PAGES = 16;
+const TRANSIENT_PAGE_PATHS = new Set(["/", "/episode", "/streams", "/player"]);
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -236,6 +266,42 @@ export default function App() {
     };
   }, [navigate]);
 
+  useEffect(() => {
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+    const handleFiles = (paths: string[]) => {
+      if (disposed || !paths.length) return;
+      const { mediaPath, subtitlePaths } = splitLocalFiles(paths);
+      if (mediaPath) {
+        navigate(prepareLocalMediaPlayback(mediaPath, subtitlePaths), { replace: false });
+        return;
+      }
+      if (subtitlePaths.length) dispatchLocalSubtitleDrop(subtitlePaths);
+    };
+
+    void takePendingOpenFiles()
+      .then(handleFiles)
+      .catch(error => console.warn("[AETHERIO:LOCAL] No se pudieron leer los archivos iniciales.", error));
+    void listenOpenFiles(handleFiles).then(unlisten => {
+      if (disposed) unlisten();
+      else cleanups.push(unlisten);
+    });
+    void listenWindowFileDrops(handleFiles).then(unlisten => {
+      if (disposed) unlisten();
+      else cleanups.push(unlisten);
+    });
+
+    const preventBrowserDrop = (event: DragEvent) => event.preventDefault();
+    window.addEventListener("dragover", preventBrowserDrop);
+    window.addEventListener("drop", preventBrowserDrop);
+    return () => {
+      disposed = true;
+      cleanups.forEach(cleanup => cleanup());
+      window.removeEventListener("dragover", preventBrowserDrop);
+      window.removeEventListener("drop", preventBrowserDrop);
+    };
+  }, [navigate]);
+
   const withStartup = (content: ReactNode) => (
     <StartupExperience ready={startupReady} status={startupStatus}>
       {content}
@@ -309,30 +375,82 @@ export default function App() {
 
   return withStartup(
     <AppShell>
-        <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
-        <div key={location.key} className="min-h-full aetherio-page-enter">
-          <Suspense fallback={<RouteFallback />}>
-            <Routes location={location}>
-              <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
-              <Route path="/home"              element={<HomePage />} />
-              <Route path="/library"           element={<LibraryPage />} />
-              <Route path="/addons"            element={<AddonsPage />} />
-              <Route path="/settings"          element={<SettingsPage />} />
-              <Route path="/catalog"           element={<CatalogPage />} />
-              <Route path="/detail/:type/:id"  element={<DetailPage />} />
-              <Route path="/detail/:type/:id/:section" element={<DetailSectionPage />} />
-              <Route path="/episode"           element={<EpisodiePage />} />
-              <Route path="/streams"           element={<EpisodiePage />} />
-              <Route path="/player"            element={<PlayerPage />} />
-              <Route path="/person/:id"        element={<PersonPage />} />
-              <Route path="/entity/:kind/:id"   element={<EntityPage />} />
-              <Route path="/search"            element={<SearchPage />} />
-              <Route path="/genre"              element={<GenreListingPage />} />
-            </Routes>
-          </Suspense>
-        </div>
-      </AppShell>,
+      <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
+      <CachedPageRoutes key={profileRevision} location={location} defaultRoute={defaultRoute} />
+    </AppShell>,
   );
+}
+
+function CachedPageRoutes({
+  location,
+  defaultRoute,
+}: {
+  location: Location;
+  defaultRoute: string;
+}) {
+  const pagesRef = useRef(new Map<string, Location>());
+  const currentKey = makePageCacheKey(location);
+  const cacheCurrentPage = !TRANSIENT_PAGE_PATHS.has(location.pathname);
+
+  if (cacheCurrentPage) {
+    pagesRef.current.delete(currentKey);
+    pagesRef.current.set(currentKey, location);
+
+    while (pagesRef.current.size > MAX_CACHED_PAGES) {
+      const oldestKey = pagesRef.current.keys().next().value;
+      if (typeof oldestKey !== "string") break;
+      pagesRef.current.delete(oldestKey);
+    }
+  }
+
+  return (
+    <>
+      {[...pagesRef.current.entries()].map(([cacheKey, cachedLocation]) => {
+        const active = cacheCurrentPage && cacheKey === currentKey;
+        return (
+          <Activity key={cacheKey} mode={active ? "visible" : "hidden"} name={`page:${cacheKey}`}>
+            <div className="min-h-full aetherio-page-enter">
+              <PageRoutes location={cachedLocation} defaultRoute={defaultRoute} />
+            </div>
+          </Activity>
+        );
+      })}
+
+      {!cacheCurrentPage && (
+        <div key={location.key} className="min-h-full aetherio-page-enter">
+          <PageRoutes location={location} defaultRoute={defaultRoute} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function PageRoutes({ location, defaultRoute }: { location: Location; defaultRoute: string }) {
+  return (
+    <Suspense fallback={<RouteFallback />}>
+      <Routes location={location}>
+        <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
+        <Route path="/home"              element={<HomePage />} />
+        <Route path="/library"           element={<LibraryPage />} />
+        <Route path="/addons"            element={<AddonsPage />} />
+        <Route path="/settings"          element={<SettingsPage />} />
+        <Route path="/catalog"           element={<CatalogPage />} />
+        <Route path="/detail/:type/:id"  element={<DetailPage />} />
+        <Route path="/detail/:type/:id/:section" element={<DetailSectionPage />} />
+        <Route path="/episode"           element={<EpisodiePage />} />
+        <Route path="/streams"           element={<EpisodiePage />} />
+        <Route path="/player"            element={<PlayerPage />} />
+        <Route path="/person/:id"        element={<PersonPage />} />
+        <Route path="/entity/:kind/:id"  element={<EntityPage />} />
+        <Route path="/search"            element={<SearchPage />} />
+        <Route path="/genre"             element={<GenreListingPage />} />
+      </Routes>
+    </Suspense>
+  );
+}
+
+function makePageCacheKey(location: Location) {
+  return `${location.pathname}${location.search}`;
 }
 
 function RouteFallback() {

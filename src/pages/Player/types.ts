@@ -68,6 +68,7 @@ export interface PlayerPanelItem {
 export interface SelectOption {
   value: string;
   label: string;
+  description?: string;
   languageKey?: string;
   languageLabel?: string;
   sourceLabel?: string;
