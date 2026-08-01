@@ -19,6 +19,8 @@ export class SqliteD1 {
     const stmt = this.db.prepare(sql);
     const params = (...args: unknown[]) => args as never[];
     return {
+      all: <T = Record<string, unknown>>() => ({ results: stmt.all() as unknown as T[] }),
+      first: <T = Record<string, unknown>>() => (stmt.get() ?? null) as T | null,
       bind: (...args: unknown[]) => ({
         _sql: sql,
         _args: args,

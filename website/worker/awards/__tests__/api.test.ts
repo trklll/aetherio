@@ -181,3 +181,28 @@ describe("endpoints internos", () => {
     await expect(response?.json()).resolves.toMatchObject({ ok: true, synced: expect.any(Number) });
   });
 });
+
+describe("mediaEndpoint", () => {
+  it("no mezcla un ID TMDB de película con una ficha de TV", async () => {
+    const env = makeEnv();
+    env.AWARDS_DB.exec(`
+      INSERT INTO award_media_links
+        (id, work_key, work_title, work_year, media_type, tmdb_id, resolve_status, matched_title, matched_year, created_at, updated_at)
+      VALUES ('link-dive', 'dive hi champs [1946]', 'Dive-Hi Champs', 1946, 'movie', 240411, 'resolved', 'Dive-Hi Champs', 1946, '2026-01-01', '2026-01-01');
+      INSERT INTO award_records
+        (id, ceremony, edition, award_year, category_es, category_original, status, subject, recipients, work_title, work_year, work_key, section, source_url, source_tier, import_key, created_at, updated_at)
+      VALUES ('record-dive', 'oscar', 19, 1947, 'Mejor cortometraje', 'Best Short Subject (One-Reel)', 'nominee', 'work', '[]', 'Dive-Hi Champs', 1946, 'dive hi champs [1946]', NULL, 'https://example.test/oscar', 'secondary', 'import-dive', '2026-01-01', '2026-01-01');
+    `);
+
+    const response = await handleAwardsRequest(
+      new Request("https://test/api/awards/media?tmdbId=240411&type=tv"),
+      env,
+      new URL("https://test/api/awards/media?tmdbId=240411&type=tv"),
+    );
+    const payload = await response?.json() as { records: AwardRecord[]; resolution: { status: string }; reason: string | null };
+    expect(response?.status).toBe(200);
+    expect(payload.records).toHaveLength(0);
+    expect(payload.resolution.status).toBe("unresolved");
+    expect(payload.reason).toBe("identity_unresolved");
+  });
+});

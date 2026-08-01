@@ -284,12 +284,18 @@ async function mediaEndpoint(request: Request, env: AwardsApiEnv, url: URL): Pro
   if (tmdbId !== null) { clauses.push("tmdb_id = ?"); binds.push(tmdbId); }
   if (imdbId) { clauses.push("imdb_id = ?"); binds.push(imdbId); }
   if (anilistId !== null) { clauses.push("anilist_id = ?"); binds.push(anilistId); }
+  // TMDB reutiliza IDs entre películas y TV. Nunca mezclar una identidad de
+  // película con una ficha de serie/anime (por ejemplo Dandadan vs. una
+  // película histórica que comparte el mismo número).
+  const identityWhere = clauses.join(" OR ");
+  const where = mediaType ? `(${identityWhere}) AND media_type = ?` : identityWhere;
+  if (mediaType) binds.push(mediaType);
 
   let links;
   try {
     links = await env.AWARDS_DB.prepare(
       `SELECT work_key, work_title, work_year, media_type, resolve_status, tmdb_id, imdb_id, anilist_id, matched_title, matched_year
-       FROM award_media_links WHERE ${clauses.join(" OR ")} LIMIT 5`,
+       FROM award_media_links WHERE ${where} LIMIT 5`,
     ).bind(...binds).all<{ work_key: string; work_title: string; work_year: number | null; media_type: string | null; resolve_status: string; tmdb_id: number | null; imdb_id: string | null; anilist_id: number | null; matched_title: string | null; matched_year: number | null }>();
   } catch (error) {
     return errorResponse(502, `No se pudo consultar la obra: ${describeError(error)}`);
