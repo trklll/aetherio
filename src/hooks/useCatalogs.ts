@@ -21,7 +21,7 @@ import { fetchYouTubeClip } from "../services/youtubeClips.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
 import { HOME_CACHE_MAX_AGE, isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
 import type { CatalogRowData, MediaItem } from "../types/ui.ts";
-import { type ContentOrientation } from "../config/homePreferences.ts";
+import { matchesContentOrientation, type ContentOrientation } from "../config/homePreferences.ts";
 import { sanitizeLogoUrl } from "../utils/artwork.ts";
 import { resolveDetailBackground } from "../utils/mediaMetadata.ts";
 import { readHomeCardArtwork } from "../utils/homeCardArtwork.ts";
@@ -32,10 +32,13 @@ const HERO_TOTAL_LIMIT = 15;
 const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v16";
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v22";
+const HOME_BACKGROUND_IMAGE_SIZE = "w1280" as const;
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
 const HOME_RAIL_ITEM_LIMIT = 20;
+const CINEMETA_HOST = "v3-cinemeta.strem.io";
+const CINEMETA_RESOLVE_CONCURRENCY = 8;
 
 interface HomeCatalogRequest {
   catalog: any;
@@ -71,9 +74,9 @@ function normalizeMediaItem(item: MediaItem): MediaItem {
   const detailBackground = resolveDetailBackground(item.type, item.id, item.background);
   return {
     ...item,
-    poster: upgradeTmdbImage(readHomeCardArtwork("poster", item.type, item.id, item.poster), "w342"),
-    background: upgradeTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground), "w500"),
-    logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w342")),
+    poster: upgradeTmdbImage(readHomeCardArtwork("poster", item.type, item.id, item.poster), "original"),
+    background: upgradeTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground), HOME_BACKGROUND_IMAGE_SIZE),
+    logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "original")),
   };
 }
 
@@ -195,6 +198,43 @@ function homeRequests(catalog: any): HomeCatalogRequest[] {
   return [{ catalog, extraParams, title: `${title} - ${Object.values(extraParams).join(" / ")}` }];
 }
 
+function isCinemetaAddon(addon: InstalledAddon) {
+  return addon.id === "com.linvo.cinemeta" || addon.url.toLowerCase().includes(CINEMETA_HOST);
+}
+
+function homeCatalogTitle(addon: InstalledAddon, catalog: any, requestTitle: string) {
+  // Cinemeta calls this catalog "Featured"; in Aetherio it is the Tendencias rail.
+  if (isCinemetaAddon(addon) && String(catalog?.id ?? "") === "imdbRating") return "Tendencias";
+  return requestTitle;
+}
+
+function createPromiseLimiter(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  const drain = () => {
+    while (active < limit && queue.length) {
+      queue.shift()?.();
+    }
+  };
+
+  return function limitTask<T>(task: () => Promise<T>) {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        active += 1;
+        void task()
+          .then(resolve, reject)
+          .finally(() => {
+            active -= 1;
+            drain();
+          });
+      };
+      queue.push(run);
+      drain();
+    });
+  };
+}
+
 function catalogEndpoint(base: string, type: string, catalogId: string, extraParams?: Record<string, string>) {
   const extras = Object.entries(extraParams ?? {})
     .filter(([, value]) => value !== undefined && value !== "")
@@ -220,6 +260,53 @@ function normalizeCatalogItem(raw: any, fallbackType: string): MediaItem | null 
   });
   if (!item.poster && !item.background) return null;
   return item;
+}
+
+function normalizeCinemetaType(type: string) {
+  return type.toLowerCase() === "movie" ? "movie" : "series";
+}
+
+function resolveCinemetaItem(
+  raw: any,
+  fallbackType: string,
+  cache: Map<string, Promise<MediaItem | null>>,
+  limitTask: <T>(task: () => Promise<T>) => Promise<T>,
+) {
+  const imdbId = String(raw?.id ?? "").trim();
+  if (!/^tt\d+$/i.test(imdbId)) return Promise.resolve(null);
+
+  const key = `${normalizeCinemetaType(fallbackType)}:${imdbId.toLowerCase()}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const pending = limitTask(async () => {
+    const type = normalizeCinemetaType(fallbackType);
+    const data = await tmdbFetch<any>(`/find/${encodeURIComponent(imdbId)}`, {
+      params: { external_source: "imdb_id", language: "es-ES" },
+    });
+    const candidates = type === "movie" ? data?.movie_results : data?.tv_results;
+    const match = Array.isArray(candidates) ? candidates[0] : null;
+    if (!match) return null;
+
+    const item = normalizeTmdbCatalogItem(match, type, "");
+    if (!item) return null;
+    return item;
+  }).catch(() => null);
+
+  cache.set(key, pending);
+  return pending;
+}
+
+async function normalizeCinemetaItems(
+  rawItems: any[],
+  fallbackType: string,
+  cache: Map<string, Promise<MediaItem | null>>,
+  limitTask: <T>(task: () => Promise<T>) => Promise<T>,
+) {
+  const resolved = await Promise.all(
+    rawItems.map(item => resolveCinemetaItem(item, fallbackType, cache, limitTask)),
+  );
+  return resolved.filter((item): item is MediaItem => item !== null);
 }
 
 function heroSignature() {
@@ -254,8 +341,11 @@ async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPat
       ?? images?.logos?.[0];
     const hasDescription = Boolean(data.overview?.trim());
     return {
-      logo: tmdbImageUrl(logo?.file_path, "w500"),
-      background: pickPreferredTmdbBackdrop(images?.backdrops, fallbackBackdropPath),
+      logo: tmdbImageUrl(logo?.file_path, "original"),
+      background: upgradeTmdbImage(
+        pickPreferredTmdbBackdrop(images?.backdrops, fallbackBackdropPath),
+        HOME_BACKGROUND_IMAGE_SIZE,
+      ),
       description: hasDescription ? data.overview : undefined,
     };
   } catch {
@@ -265,8 +355,7 @@ async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPat
 
 async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]> {
   const CONCURRENCY = 4;
-  const MAX_ITEMS = 60;
-  const capped = items.length > MAX_ITEMS ? items.slice(0, MAX_ITEMS) : items;
+  const capped = items;
   const results: MediaItem[] = new Array(capped.length);
   let nextIndex = 0;
 
@@ -279,19 +368,26 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
         results[i] = item;
         continue;
       }
-      if (item.logo && item.description) {
+      const hasTmdbLogo = Boolean(item.logo && /https:\/\/image\.tmdb\.org\/t\/p\//i.test(item.logo));
+      if (hasTmdbLogo && item.description) {
         results[i] = item;
         continue;
       }
       const tmdbType = item.type === "movie" ? "movie" : "tv";
       try {
-        let artwork = await tmdbArtwork(tmdbType, tmdbId);
+        let artwork = await tmdbArtwork(tmdbType, tmdbId, item.background);
         if (!artwork.description && tmdbType === "tv") {
-          artwork = await tmdbArtwork("movie", tmdbId);
+          const movieArtwork = await tmdbArtwork("movie", tmdbId, item.background);
+          artwork = {
+            logo: artwork.logo ?? movieArtwork.logo,
+            background: artwork.background ?? movieArtwork.background,
+            description: artwork.description ?? movieArtwork.description,
+          };
         }
         results[i] = {
           ...item,
-          logo: artwork.logo ?? item.logo,
+          logo: artwork.logo,
+          background: artwork.background ?? item.background,
           description: artwork.description ?? item.description,
         };
       } catch {
@@ -301,9 +397,6 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
   }
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, capped.length) }, worker));
-  if (capped.length < items.length) {
-    return [...results, ...items.slice(capped.length)];
-  }
   return results;
 }
 
@@ -328,7 +421,10 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
         ?? images.logos?.find((l: any) => l.iso_639_1 === "en")
         ?? images.logos?.[0];
       logo = tmdbImageUrl(logoData?.file_path, "w500");
-      background = pickPreferredTmdbBackdrop(images.backdrops, item.backdrop_path);
+      background = upgradeTmdbImage(
+        pickPreferredTmdbBackdrop(images.backdrops, item.backdrop_path),
+        HOME_BACKGROUND_IMAGE_SIZE,
+      );
     }
 
     const mins = type === "movie" ? detail.runtime : detail.episode_run_time?.[0];
@@ -363,7 +459,10 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
     type: isAnime ? "anime" : type,
     name: item.title ?? item.name ?? "Sin titulo",
     poster: tmdbImageUrl(item.poster_path, "w500"),
-    background: background ?? tmdbImageUrl(item.backdrop_path, "original"),
+    background: upgradeTmdbImage(
+      background ?? tmdbImageUrl(item.backdrop_path, "original"),
+      HOME_BACKGROUND_IMAGE_SIZE,
+    ),
     logo: sanitizeLogoUrl(logo),
     description: detail?.overview ?? item.overview,
     rating: typeof item.vote_average === "number" && item.vote_average > 0 ? item.vote_average.toFixed(1) : undefined,
@@ -404,17 +503,24 @@ function interleaveGroups(groups: MediaItem[][]) {
   return mixed;
 }
 
-function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []) {
-  const merged: MediaItem[] = [];
+function mergeHeroItems(
+  tmdbItems: MediaItem[] = [],
+  rows: CatalogRowData[] = [],
+  contentOrientation: ContentOrientation = "both",
+) {
+  const candidates: MediaItem[] = [];
   const seen = new Set<string>();
 
   const add = (item: MediaItem, group?: string) => {
     const key = `${item.type}:${item.id}`;
     if (seen.has(key)) return;
-    const background = upgradeTmdbImage(resolveDetailBackground(item.type, item.id, item.background), "original");
+    const background = upgradeTmdbImage(
+      resolveDetailBackground(item.type, item.id, item.background),
+      HOME_BACKGROUND_IMAGE_SIZE,
+    );
     if (!background || isAetherioDefaultArtwork(background)) return;
     seen.add(key);
-    merged.push({
+    candidates.push({
       ...item,
       background,
       logo: sanitizeLogoUrl(item.logo),
@@ -424,20 +530,26 @@ function mergeHeroItems(tmdbItems: MediaItem[] = [], rows: CatalogRowData[] = []
 
   const sourceRows = rows.slice(0, 6);
   for (const row of sourceRows) {
-    if (merged.length >= HERO_TOTAL_LIMIT) break;
     for (const item of row.items.slice(0, 8)) {
-      if (merged.length >= HERO_TOTAL_LIMIT) break;
       add(item, row.name);
     }
   }
 
   for (const item of tmdbItems) {
-    if (merged.length >= HERO_TOTAL_LIMIT) break;
     add(item, item.heroGroup);
   }
 
-  return merged
-    .sort((a, b) => heroRandomValue(a) - heroRandomValue(b))
+  const sorted = candidates.sort((a, b) => heroRandomValue(a) - heroRandomValue(b));
+  if (contentOrientation === "both") {
+    return [
+      ...sorted.filter(item => item.type.toLowerCase() !== "anime").slice(0, 5),
+      ...sorted.filter(item => item.type.toLowerCase() === "anime").slice(0, 5),
+    ];
+  }
+
+  const animeOnly = contentOrientation === "anime";
+  return sorted
+    .filter(item => (item.type.toLowerCase() === "anime") === animeOnly)
     .slice(0, HERO_TOTAL_LIMIT);
 }
 
@@ -447,6 +559,8 @@ function heroRandomValue(item: MediaItem) {
 
 export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const enabledAddons = addons.filter(addon => addon.enabled);
+  const cinemetaResolutionCache = new Map<string, Promise<MediaItem | null>>();
+  const limitCinemetaResolution = createPromiseLimiter(CINEMETA_RESOLVE_CONCURRENCY);
   const rowTasks = enabledAddons.flatMap(addon =>
     (addon.manifest?.catalogs ?? [])
       .filter((cat: any) => cat?.type && cat?.id)
@@ -457,8 +571,10 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
         if (!response.ok) return null;
         const data = await response.json();
         const seen = new Set<string>();
-        const items = (data.metas ?? [])
-          .map((item: any) => normalizeCatalogItem(item, request.catalog.type))
+        const normalizedItems = isCinemetaAddon(addon)
+          ? await normalizeCinemetaItems(data.metas ?? [], request.catalog.type, cinemetaResolutionCache, limitCinemetaResolution)
+          : (data.metas ?? []).map((item: any) => normalizeCatalogItem(item, request.catalog.type));
+        const items = normalizedItems
           .filter((item: MediaItem | null): item is MediaItem => {
             if (!item || seen.has(`${item.type}:${item.id}`)) return false;
             seen.add(`${item.type}:${item.id}`);
@@ -471,7 +587,7 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
           addonName: addon.name,
           catalogId: request.catalog.id,
           type: request.catalog.type,
-          name: homeRailTitle(request.title, request.catalog.type),
+          name: homeRailTitle(homeCatalogTitle(addon, request.catalog, request.title), request.catalog.type),
           subtitle: addon.name,
           extraParams: request.extraParams,
           items,
@@ -485,7 +601,10 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
 
   const rows = await Promise.all(rowTasks);
   const addonRows = rows.filter((row): row is CatalogRowData => row !== null);
-  const baseRows = addonRows.length ? addonRows : await fetchTmdbStarterRows();
+  const orientedAddonRows = addonRows.filter(row => matchesContentOrientation(row.type, contentOrientation));
+  const baseRows = orientedAddonRows.length || contentOrientation === "anime"
+    ? orientedAddonRows
+    : await fetchTmdbStarterRows();
 
   if (contentOrientation === "both") {
     const animeRows = await fetchAnimeRows();
@@ -538,6 +657,16 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     });
   }
 
+  if (contentOrientation === "movies-series") {
+    const allEnriched = await enrichAllItemsWithLogos(baseRows.flatMap(row => row.items));
+    let offset = 0;
+    return baseRows.map(row => {
+      const items = allEnriched.slice(offset, offset + row.items.length);
+      offset += row.items.length;
+      return { ...row, items };
+    });
+  }
+
   const animeRows = await fetchAnimeRows();
   const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
   const filteredAnimeRows = (animeRows.length
@@ -580,9 +709,7 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
   }
 
-  const combined = contentOrientation === "movies-series"
-    ? [...baseRows, ...validAnimeRows]
-    : validAnimeRows.length ? [...validAnimeRows, ...baseRows] : baseRows;
+  const combined = validAnimeRows.length ? [...validAnimeRows, ...baseRows] : baseRows;
 
   const allEnriched = await enrichAllItemsWithLogos(combined.flatMap(row => row.items));
   let offset = 0;
@@ -917,7 +1044,7 @@ function cachedHero(signature: string) {
   if (!home || home.heroSignature !== signature || !isFreshHomeCache(home.heroUpdatedAt)) return undefined;
   return home.heroItems.map(item => ({
     ...item,
-    background: upgradeTmdbImage(item.background, "original"),
+    background: upgradeTmdbImage(item.background, HOME_BACKGROUND_IMAGE_SIZE),
   }));
 }
 
@@ -961,7 +1088,7 @@ export async function warmHomeStartup(
   const rowsSignature = enabledAddonSignature(addons, contentOrientation);
   const rows = queryClient.getQueryData<CatalogRowData[]>(homeCatalogKeys.rows(rowsSignature)) ?? [];
   const heroSource = queryClient.getQueryData<MediaItem[]>(homeCatalogKeys.hero(heroSignature())) ?? [];
-  const heroItems = mergeHeroItems(heroSource, rows);
+  const heroItems = mergeHeroItems(heroSource, rows, contentOrientation);
 
   onImages?.();
   const urls = new Set<string>();
@@ -1077,7 +1204,10 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   }, [addons, queryClient, contentOrientation, tmdbReady]);
 
   const rows = rowsQuery.data ?? [];
-  const heroItems = useMemo(() => mergeHeroItems(heroQuery.data ?? [], rows), [heroQuery.data, rows]);
+  const heroItems = useMemo(
+    () => mergeHeroItems(heroQuery.data ?? [], rows, contentOrientation),
+    [contentOrientation, heroQuery.data, rows],
+  );
   const usingStarterRows = rows.length > 0 && rows.every(row => row.addonId === "aetherio-starter");
 
   useEffect(() => {

@@ -377,6 +377,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
   const [inLibrary, setInLibrary] = useState(() => isInLibrary(type, item.id));
   const [, setArtworkVersion] = useState(0);
+  const [logoFailed, setLogoFailed] = useState(false);
   const detailBackground = resolveDetailBackground(type, item.id, item.background);
   const ranked = typeof rank === "number";
   const effectivePosterLayout = ranked ? "vertical" : posterLayout;
@@ -386,7 +387,9 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const image = effectivePosterLayout === "vertical"
     ? cardPoster ?? cardBackground ?? ""
     : cardBackground ?? cardPoster ?? "";
-  const logo = readHomeCardArtwork("logo", type, item.id) || sanitizeLogoUrl(item.logo);
+  const customLogo = sanitizeLogoUrl(readHomeCardArtwork("logo", type, item.id));
+  const logo = customLogo || sanitizeLogoUrl(item.logo);
+  const showLogo = Boolean(logo && !logoFailed);
   const doubleDigitRank = ranked && rank >= 10;
   const rankedPosterLeft = doubleDigitRank ? RANKED_POSTER.doubleLeft : RANKED_POSTER.singleLeft;
   const cardSize = ranked
@@ -436,6 +439,10 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     window.addEventListener(HOME_CARD_ARTWORK_CHANGED_EVENT, refresh);
     return () => window.removeEventListener(HOME_CARD_ARTWORK_CHANGED_EVENT, refresh);
   }, [item.id, type]);
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [logo]);
 
   useEffect(() => {
     const refresh = () => setInLibrary(isInLibrary(type, item.id));
@@ -699,10 +706,11 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       {image ? <img src={image} alt={item.name} decoding="async" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
-        {logo ? (
+        {showLogo ? (
           <img src={logo} alt={item.name}
             decoding="async"
-            loading="lazy"
+            loading="eager"
+            onError={() => setLogoFailed(true)}
             style={{ maxHeight: 48, maxWidth: 206, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
         ) : (
           <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>

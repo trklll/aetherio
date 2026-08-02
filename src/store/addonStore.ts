@@ -34,6 +34,13 @@ const GLOBAL_ADDONS_STORAGE_KEY = "aetherio-addons";
 const TORRENTIO_ADDON_ID = ["com.stre", "mio.torrentio.addon"].join("");
 export const TORRENTIO_LATINO_MANIFEST_URL = "https://torrentio.strem.fun/language=latino/manifest.json";
 
+const CINEMETA_ADDON_ID = "com.linvo.cinemeta";
+const CINEMETA_MANIFEST_URL = "https://v3-cinemeta.strem.io/manifest.json";
+const CINEMETA_YEAR_OPTIONS = Array.from(
+  { length: 100 },
+  (_, index) => String(new Date().getUTCFullYear() - index),
+);
+
 const TORRENTIO_LATINO_ADDON: InstalledAddon = {
   id: TORRENTIO_ADDON_ID,
   name: "Torrentio",
@@ -59,6 +66,47 @@ const TORRENTIO_LATINO_ADDON: InstalledAddon = {
   enabled: true,
   installedAt: 0,
   version: "0.0.15",
+  bundled: true,
+  scope: "global",
+};
+
+const CINEMETA_ADDON: InstalledAddon = {
+  id: CINEMETA_ADDON_ID,
+  name: "Cinemeta",
+  description: "Catálogos oficiales de películas y series.",
+  url: CINEMETA_MANIFEST_URL,
+  manifest: {
+    id: CINEMETA_ADDON_ID,
+    version: "3.0.14",
+    name: "Cinemeta",
+    description: "The official addon for movie and series catalogs",
+    resources: ["catalog", "meta"],
+    types: ["movie", "series"],
+    idPrefixes: ["tt"],
+    catalogs: [
+      { type: "movie", id: "top", name: "Popular" },
+      { type: "series", id: "top", name: "Popular" },
+      {
+        type: "movie",
+        id: "year",
+        name: "New",
+        extra: [{ name: "genre", options: CINEMETA_YEAR_OPTIONS, isRequired: true }],
+        extraRequired: ["genre"],
+      },
+      {
+        type: "series",
+        id: "year",
+        name: "New",
+        extra: [{ name: "genre", options: CINEMETA_YEAR_OPTIONS, isRequired: true }],
+        extraRequired: ["genre"],
+      },
+      { type: "movie", id: "imdbRating", name: "Featured" },
+      { type: "series", id: "imdbRating", name: "Featured" },
+    ],
+  },
+  enabled: true,
+  installedAt: 0,
+  version: "3.0.14",
   bundled: true,
   scope: "global",
 };
@@ -123,10 +171,16 @@ function withBundledTorrentio(globalAddons: InstalledAddon[]) {
   return [...merged.values()];
 }
 
+function withBundledCinemeta(globalAddons: InstalledAddon[]) {
+  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
+  if (!merged.has(CINEMETA_ADDON_ID)) merged.set(CINEMETA_ADDON_ID, CINEMETA_ADDON);
+  return [...merged.values()];
+}
+
 function loadAddonScopes() {
-  if (typeof localStorage === "undefined") return [TORRENTIO_LATINO_ADDON];
+  if (typeof localStorage === "undefined") return [TORRENTIO_LATINO_ADDON, CINEMETA_ADDON];
   const storedGlobal = readPersistedAddons(GLOBAL_ADDONS_STORAGE_KEY).map(withScope);
-  const globalAddons = withBundledTorrentio(storedGlobal.filter(addon => addon.scope === "global"));
+  const globalAddons = withBundledCinemeta(withBundledTorrentio(storedGlobal.filter(addon => addon.scope === "global")));
   const profileKey = activeProfileAddonsStorageKey();
   if (!profileKey) return globalAddons;
 
@@ -145,7 +199,7 @@ function loadAddonScopes() {
 
 function persistAddonScopes(addons: InstalledAddon[]) {
   const normalized = mergeById(addons);
-  const globalAddons = withBundledTorrentio(normalized.filter(addon => addon.scope === "global"));
+  const globalAddons = withBundledCinemeta(withBundledTorrentio(normalized.filter(addon => addon.scope === "global")));
   writePersistedAddons(GLOBAL_ADDONS_STORAGE_KEY, globalAddons);
   const profileKey = activeProfileAddonsStorageKey();
   if (profileKey) {
