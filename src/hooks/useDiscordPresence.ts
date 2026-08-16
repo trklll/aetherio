@@ -68,10 +68,11 @@ function buildEpisodeLabel(query: StreamQuery | null, episodeName?: string): str
 }
 
 function buildActionButtons(query: StreamQuery | null) {
-  const target = query && query.id ? `${query.type}:${query.id}` : "app";
+  const target = query && query.id ? `${query.type}/${query.id}` : "";
+  const deepLink = target ? `aetherio://open/detail/${target}` : "aetherio://open";
   return [
-    { label: "Más detalles", customId: `details:${target}` },
-    { label: "Ver en Aetherio", customId: `open:${target}` },
+    { label: "Más detalles", url: deepLink },
+    { label: "Ver en Aetherio", url: deepLink },
   ];
 }
 

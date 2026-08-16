@@ -34,7 +34,6 @@ import {
   getCurrentDeepLinks,
   listenOpenFiles,
   listenOpenUrls,
-  listenPlatformEvent,
   listenWindowFileDrops,
   takePendingOpenFiles,
 } from "./runtime/platform.ts";
@@ -88,13 +87,6 @@ const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
 
 const MAX_CACHED_PAGES = 16;
 const TRANSIENT_PAGE_PATHS = new Set(["/", "/episode", "/streams", "/player"]);
-
-interface DiscordActionPayload {
-  /** Button action: "open" (Ver en Aetherio) or "details" (Más detalles). */
-  action: string;
-  kind?: string;
-  id?: string;
-}
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -237,6 +229,11 @@ export default function App() {
 
     const handleUrls = async (urls: string[] | null | undefined) => {
       for (const url of urls ?? []) {
+        if (isOpenUrl(url)) {
+          // Deep links de los botones del RPC de Discord: aetherio://open/detail/{type}/{id}
+          navigate(buildOpenPath(url) ?? "/home");
+          continue;
+        }
         if (isOAuthCallbackUrl(url)) {
           const oauthKey = getOAuthCallbackKey(url);
           if (oauthKey && hasProcessedOAuthCallback(oauthKey)) continue;
@@ -326,25 +323,6 @@ export default function App() {
       cleanups.forEach(cleanup => cleanup());
       window.removeEventListener("dragover", preventBrowserDrop);
       window.removeEventListener("drop", preventBrowserDrop);
-    };
-  }, [navigate]);
-
-  // Discord Rich Presence button clicks ("Más detalles" / "Ver en Aetherio")
-  // arrive as `discord-action` events from the native client, which already
-  // brought the window to the foreground. Navigate to the matching page.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenPlatformEvent<DiscordActionPayload>("discord-action", ({ payload }) => {
-      if (payload.kind && payload.id) {
-        navigate(`/detail/${encodeURIComponent(payload.kind)}/${encodeURIComponent(payload.id)}`);
-      } else {
-        navigate("/home");
-      }
-    }).then(nextUnlisten => {
-      unlisten = nextUnlisten;
-    });
-    return () => {
-      if (unlisten) unlisten();
     };
   }, [navigate]);
 
@@ -525,6 +503,33 @@ function getTraktCallbackKey(rawUrl: string) {
     return null;
   }
   return null;
+}
+
+/**
+ * Deep links de los botones del RPC de Discord ("Más detalles" /
+ * "Ver en Aetherio"): aetherio://open/detail/{type}/{id} o aetherio://open.
+ */
+function isOpenUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "aetherio:" && url.hostname === "open";
+  } catch {
+    return false;
+  }
+}
+
+function buildOpenPath(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "aetherio:" || url.hostname !== "open") return null;
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments[0] === "detail" && segments[1] && segments[2]) {
+      return `/detail/${encodeURIComponent(segments[1])}/${encodeURIComponent(segments.slice(2).join("/"))}`;
+    }
+    return "/home";
+  } catch {
+    return null;
+  }
 }
 
 function hasProcessedTraktCallback(callbackKey: string) {
