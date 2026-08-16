@@ -154,6 +154,9 @@ pub trait DiscordIpc {
     #[doc(hidden)]
     fn read(&mut self, buffer: &mut [u8]) -> Result<()>;
 
+    #[doc(hidden)]
+    fn has_pending_frame(&mut self) -> Result<bool>;
+
     /// Sets a Discord activity.
     ///
     /// This method is an abstraction of [`send`],
