@@ -46,6 +46,7 @@ function mediaToItem(media: AniListMedia): MediaItem {
     id: `anilist:${media.id}`,
     type: "anime",
     name,
+    searchAliases: [media.title.romaji, media.title.english ?? ""].filter(Boolean),
     poster,
     background: poster,
     logo: undefined,

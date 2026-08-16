@@ -10,7 +10,7 @@ use std::{
     io::{Read, Write},
     os::raw::{c_char, c_int, c_void},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     ptr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -913,6 +913,63 @@ fn run_ytdlp(app: &tauri::AppHandle, args: &[String]) -> Result<String, String> 
         .map_err(|_| String::from("yt-dlp devolvio una respuesta que no es UTF-8."))
 }
 
+fn run_ytdlp_with_timeout(
+    app: &tauri::AppHandle,
+    args: &[String],
+    timeout: Duration,
+) -> Result<String, String> {
+    let executable = ytdlp_path(app)?;
+    let mut command = Command::new(&executable);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("No se pudo ejecutar yt-dlp: {}", error))?;
+    let started = Instant::now();
+    loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("No se pudo consultar yt-dlp: {}", error))?
+        {
+            Some(_) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("No se pudo leer yt-dlp: {}", error))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let detail = stderr
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .last()
+                        .unwrap_or("yt-dlp termino sin devolver resultados");
+                    return Err(format!(
+                        "yt-dlp fallo: {}",
+                        detail.chars().take(360).collect::<String>()
+                    ));
+                }
+                return String::from_utf8(output.stdout)
+                    .map_err(|_| String::from("yt-dlp devolvio una respuesta que no es UTF-8."));
+            }
+            None if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "yt-dlp excedio el timeout de {} segundos.",
+                    timeout.as_secs()
+                ));
+            }
+            None => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
 fn valid_youtube_video_id(value: &str) -> bool {
     value.len() == 11
         && value
@@ -976,16 +1033,16 @@ async fn youtube_search(
             String::from("--playlist-end"),
             limit.to_string(),
             String::from("--socket-timeout"),
-            String::from("8"),
+            String::from("6"),
             String::from("--retries"),
-            String::from("1"),
+            String::from("0"),
             String::from("--extractor-retries"),
-            String::from("1"),
+            String::from("0"),
             String::from("--print"),
             String::from("%(.{id,title,duration,uploader,uploader_id})j"),
             target,
         ];
-        let stdout = run_ytdlp(&app, &args)?;
+        let stdout = run_ytdlp_with_timeout(&app, &args, Duration::from_secs(12))?;
         let results = stdout
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())

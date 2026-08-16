@@ -27,6 +27,11 @@ website/.wrangler/
 # Generated provider bundle (rebuilt by npm scripts)
 public/provider-runtime-deps.js
 
+# tsc build artifacts (tsconfig.node.json is composite)
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
 # MPV runtime downloaded by scripts/install-mpv.ps1
 src-tauri/bin/mpv/libmpv-2.dll
 

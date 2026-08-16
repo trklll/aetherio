@@ -14,6 +14,7 @@ import {
   fetchYouTubeClip,
   getCachedClipInfo,
   getTrailerSkipEnd,
+  prefetchYouTubeClip,
   type YouTubeClipCandidate,
 } from "../../services/youtubeClips.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
@@ -161,6 +162,15 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
     });
     return () => { cancelled = true; };
   }, [displayItem]);
+
+  useEffect(() => {
+    if (!clipCandidates.length || items.length < 2) return;
+    const nextItem = items[(activeIndex + 1) % items.length];
+    const timer = window.setTimeout(() => {
+      void prefetchYouTubeClip(nextItem);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [activeIndex, clipCandidates.length, items]);
 
   useEffect(() => {
     videoEndHandledRef.current = false;

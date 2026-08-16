@@ -17,7 +17,6 @@ import {
   runJikanSerial,
 } from "../services/jikan.ts";
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService.ts";
-import { fetchYouTubeClip } from "../services/youtubeClips.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
 import { HOME_CACHE_MAX_AGE, isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
 import type { CatalogRowData, MediaItem } from "../types/ui.ts";
@@ -32,7 +31,7 @@ const HERO_TOTAL_LIMIT = 15;
 const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v22";
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v23";
 const HOME_BACKGROUND_IMAGE_SIZE = "w1280" as const;
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
@@ -331,15 +330,16 @@ export const homeCatalogKeys = {
 
 async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPath?: string | null) {
   try {
-    const data = await tmdbFetch<any>(`/${type}/${id}`, {
-      params: { append_to_response: "images", include_image_language: "es,en,null", language: "es-ES" },
-    });
-    if (!data) return {};
-    const images = data.images;
+    const [data, imageData] = await Promise.all([
+      tmdbFetch<any>(`/${type}/${id}`, { params: { language: "es-ES" } }),
+      tmdbFetch<any>(`/${type}/${id}/images`, { params: { include_image_language: "es,en,null" } }),
+    ]);
+    if (!data && !imageData) return {};
+    const images = imageData ?? data?.images;
     const logo = images?.logos?.find((item: any) => item.iso_639_1 === "es")
       ?? images?.logos?.find((item: any) => item.iso_639_1 === "en")
       ?? images?.logos?.[0];
-    const hasDescription = Boolean(data.overview?.trim());
+    const hasDescription = Boolean(data?.overview?.trim());
     return {
       logo: tmdbImageUrl(logo?.file_path, "original"),
       background: upgradeTmdbImage(
@@ -402,10 +402,12 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
 
 async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anime", group: string): Promise<MediaItem> {
   const tmdbType = type === "movie" ? "movie" : "tv";
-  const appendTo = type === "movie" ? "images,release_dates" : "images,content_ratings";
-  const detail = await tmdbFetch<any>(`/${tmdbType}/${item.id}`, {
-    params: { append_to_response: appendTo, include_image_language: "es,en,null" },
-  });
+  const [detail, imageData] = await Promise.all([
+    tmdbFetch<any>(`/${tmdbType}/${item.id}`, {
+      params: { language: "es-ES", append_to_response: type === "movie" ? "release_dates" : "content_ratings" },
+    }),
+    tmdbFetch<any>(`/${tmdbType}/${item.id}/images`, { params: { include_image_language: "es,en,null" } }),
+  ]);
 
   let logo: string | undefined;
   let background: string | undefined;
@@ -415,7 +417,7 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
   let isAnime = false;
 
   if (detail) {
-    const images = detail.images;
+    const images = imageData ?? detail.images;
     if (images) {
       const logoData = images.logos?.find((l: any) => l.iso_639_1 === "es")
         ?? images.logos?.find((l: any) => l.iso_639_1 === "en")
@@ -458,6 +460,16 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
     id: `tmdb:${item.id}`,
     type: isAnime ? "anime" : type,
     name: item.title ?? item.name ?? "Sin titulo",
+    searchAliases: [
+      item.title,
+      item.name,
+      item.original_title,
+      item.original_name,
+      detail?.title,
+      detail?.name,
+      detail?.original_title,
+      detail?.original_name,
+    ].filter((value, index, values): value is string => typeof value === "string" && value.trim().length > 0 && values.indexOf(value) === index),
     poster: tmdbImageUrl(item.poster_path, "w500"),
     background: upgradeTmdbImage(
       background ?? tmdbImageUrl(item.backdrop_path, "original"),
@@ -1219,12 +1231,6 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
 
     void preloadStarterHomeImages(rows, heroItems);
   }, [heroItems, heroQuery.data, heroQuery.isLoading, rows, usingStarterRows]);
-
-  useEffect(() => {
-    for (const item of heroItems.slice(0, 3)) {
-      setTimeout(() => void fetchYouTubeClip(item), 0);
-    }
-  }, [heroItems]);
 
   return {
     rows,

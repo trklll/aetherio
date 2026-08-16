@@ -28,13 +28,12 @@ export default {
     const releaseResponse = await handleReleaseRequest(request, env, url);
     if (releaseResponse) return releaseResponse;
 
-    // Nunca dejes que el fallback SPA convierta una ruta API desconocida en
-    // HTML: los clientes deben recibir un error JSON y CORS consistente.
+    // La web está oculta temporalmente: la SPA no se sirve, solo la API.
     if (url.pathname.startsWith("/api/")) {
       return json({ error: "Ruta API no encontrada." }, 404);
     }
 
-    return env.ASSETS.fetch(request);
+    return maintenancePage();
   },
 
   // Revisión semanal: las dos ediciones más recientes de cada ceremonia.
@@ -56,4 +55,20 @@ function json(value: unknown, status = 200, maxAge = 0) {
       "X-Content-Type-Options": "nosniff",
     },
   });
+}
+
+function maintenancePage() {
+  return new Response(
+    "<!doctype html><html lang=\"es\"><meta charset=\"utf-8\"><title>Aetherio</title>" +
+      "<body style=\"font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0b0e14;color:#e6e9f0\">" +
+      "<main style=\"text-align:center\"><h1>Aetherio</h1><p>La web no está disponible por ahora.</p></main></body></html>",
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      },
+    },
+  );
 }

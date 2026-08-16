@@ -6,6 +6,8 @@ export interface MediaItem {
   id: string;
   type: string;
   name: string;
+  /** Alternate localized/original titles used only for robust media searches. */
+  searchAliases?: string[];
   poster?: string;
   background?: string;
   logo?: string;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaStream } from "../types/stream";
 import {
   classifyContinueWatchingEntryKind,
+  CONTINUE_WATCHING_EVENT,
   getContinueWatchingRows,
   mergeContinueWatchingEntries,
   readContinueWatchingEntries,
@@ -99,6 +100,38 @@ describe("continue watching artwork", () => {
       poster: "https://image.test/new-poster.jpg",
       episodeStill: "https://image.test/new-still.jpg",
     });
+  });
+
+  it("emits an update event after progress is persisted", () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+
+    saveContinueWatchingProgress(baseInput);
+
+    expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: CONTINUE_WATCHING_EVENT }));
+  });
+
+  it("removes a completed episode while keeping the next prompt visible", () => {
+    const completed = saveContinueWatchingProgress({
+      ...baseInput,
+      currentTime: baseInput.duration,
+    });
+    expect(completed?.completed).toBe(true);
+    expect(getContinueWatchingRows()).toHaveLength(0);
+
+    saveNextEpisodePrompt({
+      query: { type: "series", id: "tmdb:123", season: 1, episode: 3 },
+      name: baseInput.name,
+      episodeName: "Siguiente episodio",
+      background: baseInput.background,
+      episodeStill: baseInput.episodeStill,
+    });
+
+    expect(getContinueWatchingRows()).toMatchObject([{
+      episode: 3,
+      episodeName: "Siguiente episodio",
+      entryKind: "next",
+    }]);
   });
 });
 

@@ -66,6 +66,10 @@ export default function ContinueWatchingRow() {
     window.addEventListener(CONTINUE_WATCHING_EVENT, refresh);
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
+    // Home se conserva mediante React Activity. Al volver desde Player, este
+    // efecto puede reactivarse después de que el evento de progreso ya pasó;
+    // leer el storage aquí recupera la row sin recargar toda la página.
+    refresh();
     return () => {
       window.removeEventListener(CONTINUE_WATCHING_EVENT, refresh);
       window.removeEventListener("storage", refresh);
@@ -223,7 +227,7 @@ export default function ContinueWatchingRow() {
         rafRef.current = null;
       }
     };
-  }, []);
+  }, [items.length]);
 
   if (!items.length) return null;
 
