@@ -10,7 +10,15 @@ import { invokeCommand } from "../runtime/platform";
 
 export interface DiscordActivityButton {
   label: string;
-  url: string;
+  /** URL opened by a link-type button (Discord opens it in the browser). */
+  url?: string;
+  /**
+   * Custom identifier for an action-type button. Clicking it fires an
+   * `ACTIVITY_JOIN` event on the native client, which forwards it to the
+   * renderer as a `discord-action` event so the app can open itself on the
+   * matching page.
+   */
+  customId?: string;
 }
 
 export interface DiscordActivityPayload {
@@ -73,7 +81,11 @@ export async function setDiscordActivity(payload: DiscordActivityPayload): Promi
         largeImageText: payload.largeImageText ?? null,
         smallImageKey: payload.smallImageKey ?? null,
         smallImageText: payload.smallImageText ?? null,
-        buttons: payload.buttons ?? [],
+        buttons: (payload.buttons ?? []).map(button => ({
+          label: button.label ?? "",
+          url: button.url ?? "",
+          customId: button.customId ?? null,
+        })),
       },
     });
   } catch (error) {

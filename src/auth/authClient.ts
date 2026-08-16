@@ -25,9 +25,15 @@ const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
 const ANILIST_TOKEN_KEY = "aetherio-anilist-access-token-v1";
 const ANILIST_TOKEN_EXPIRES_KEY = "aetherio-anilist-token-expires-v1";
 const PASSWORD_ITERATIONS = 600_000;
+const AUTH_REQUEST_TIMEOUT_MS = 20_000;
 
 export const AETHERIO_AUTH_CHANGED_EVENT = "aetherio-auth-changed";
+export const AETHERIO_AUTH_ERROR_EVENT = "aetherio-auth-error";
 export type OAuthProvider = "google" | "anilist";
+
+export function dispatchAuthError(message: string) {
+  window.dispatchEvent(new CustomEvent<string>(AETHERIO_AUTH_ERROR_EVENT, { detail: message }));
+}
 
 export async function registerAccount(input: {
   displayName: string;
@@ -72,7 +78,12 @@ export async function loginAccount(email: string, password: string) {
 }
 
 export async function restoreAccountSession(): Promise<AetherioUser | null> {
-  const token = await getAccountToken();
+  let token: string | null = null;
+  try {
+    token = await getAccountToken();
+  } catch {
+    return null;
+  }
   if (!token) return null;
 
   try {
@@ -91,7 +102,12 @@ export async function restoreAccountSession(): Promise<AetherioUser | null> {
 }
 
 export async function logoutAccount() {
-  const token = await getAccountToken();
+  let token: string | null = null;
+  try {
+    token = await getAccountToken();
+  } catch {
+    // The credential store may be unavailable; local logout still proceeds.
+  }
   await clearStoredAuth();
   window.dispatchEvent(new CustomEvent(AETHERIO_AUTH_CHANGED_EVENT));
   if (!token) return;
@@ -109,11 +125,22 @@ export async function getOAuthProviders() {
   return authRequest<Record<OAuthProvider, boolean>>("/api/auth/providers");
 }
 
-export async function startSocialLogin(provider: OAuthProvider) {
+export async function startSocialLogin(provider: OAuthProvider, linkIntentToken?: string) {
   const startUrl = new URL(`${API_BASE}/api/auth/oauth/${provider}/start`);
   startUrl.searchParams.set("return_to", "aetherio://auth/callback");
-  startUrl.searchParams.set("request_id", crypto.randomUUID());
+  if (linkIntentToken) startUrl.searchParams.set("link_token", linkIntentToken);
   await openExternalUrl(startUrl.toString());
+}
+
+export async function requestOAuthLinkIntent(provider: OAuthProvider) {
+  const token = await getAccountToken();
+  if (!token) throw new Error("Inicia sesión en Aetherio para vincular una cuenta.");
+  const response = await authRequest<{ token: string }>("/api/auth/oauth/link-intent", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ provider }),
+  });
+  return response.token;
 }
 
 export async function connectAniListAccount() {
@@ -174,6 +201,7 @@ export async function completeOAuthAuthorization(rawUrl: string) {
       email_not_verified: "El proveedor no confirmó tu correo electrónico.",
       provider_failed: "El proveedor no pudo completar el inicio de sesión.",
       missing_code: "El proveedor no devolvió un código de acceso.",
+      account_exists: "Ya existe una cuenta con este correo. Entra con tu contraseña y vincúlala desde Ajustes.",
     };
     throw new Error(messages[providerError] ?? "No se pudo completar el inicio de sesión social.");
   }
@@ -226,6 +254,15 @@ export async function getAniListAccessToken() {
     return null;
   }
   return token;
+}
+
+export async function clearAniListAccessToken() {
+  try {
+    await deleteSecureCredential("anilist-access-token", ANILIST_TOKEN_KEY);
+  } catch {
+    // The credential store may be unavailable; local state still clears.
+  }
+  localStorage.removeItem(ANILIST_TOKEN_EXPIRES_KEY);
 }
 
 export async function authenticatedRequest<T>(path: string, init: RequestInit = {}) {
@@ -309,17 +346,25 @@ function base64ToBytes(value: string) {
 }
 
 async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
         ...init.headers,
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("La conexión tardó demasiado. Inténtalo de nuevo.");
+    }
     throw new Error("No se pudo conectar con Aetherio. Revisa tu conexión.");
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   if (!response.ok) {

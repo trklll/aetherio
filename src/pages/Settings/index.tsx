@@ -73,7 +73,17 @@ import {
   TRAKT_AUTH_CHANGED_EVENT,
   type TraktAuthEventDetail,
 } from "../../trakt";
-import { getStoredAccount, leaveLocalMode, logoutAccount } from "../../auth/authClient";
+import {
+  AETHERIO_AUTH_CHANGED_EVENT,
+  AETHERIO_AUTH_ERROR_EVENT,
+  connectAniListAccount,
+  getStoredAccount,
+  leaveLocalMode,
+  logoutAccount,
+  requestOAuthLinkIntent,
+  startSocialLogin,
+  type OAuthProvider,
+} from "../../auth/authClient";
 import { openExternalUrl } from "../../runtime/platform";
 import packageJson from "../../../package.json";
 
@@ -482,11 +492,40 @@ function AccountPanel({
   playback: PlaybackPreferences;
   onPlaybackChange: <Value extends PlaybackPreferences[keyof PlaybackPreferences]>(name: keyof PlaybackPreferences, value: Value) => void;
 }) {
-  const account = getStoredAccount();
+const [account, setAccount] = useState(() => getStoredAccount());
+  const [linkBusy, setLinkBusy] = useState<OAuthProvider | null>(null);
+  const [linkStatus, setLinkStatus] = useState("");
+  const [linkError, setLinkError] = useState("");
   const [traktAuth, setTraktAuth] = useState(() => getTraktAuthSnapshot());
   const [traktStatus, setTraktStatus] = useState("");
   const [traktError, setTraktError] = useState("");
   const [traktBusy, setTraktBusy] = useState(false);
+
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const nextAccount = getStoredAccount();
+      setAccount(nextAccount);
+      setLinkBusy(null);
+      if (event.type === AETHERIO_AUTH_CHANGED_EVENT && nextAccount) {
+        setLinkStatus("Cuenta vinculada correctamente.");
+      }
+    };
+    const onAuthError = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      if (message) {
+        setLinkError(message);
+        setLinkStatus("");
+      }
+    };
+    window.addEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
+    window.addEventListener(AETHERIO_AUTH_ERROR_EVENT, onAuthError);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(AETHERIO_AUTH_CHANGED_EVENT, refresh);
+      window.removeEventListener(AETHERIO_AUTH_ERROR_EVENT, onAuthError);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
   useEffect(() => {
     const refresh = (event: Event) => {
@@ -512,7 +551,7 @@ function AccountPanel({
     };
   }, []);
 
-  async function startTraktConnection() {
+async function startTraktConnection() {
     setTraktBusy(true);
     setTraktError("");
     setTraktStatus("");
@@ -524,6 +563,25 @@ function AccountPanel({
     } catch (error) {
       setTraktError(describeUnknownError(error, "No se pudo iniciar la conexión con Trakt."));
       setTraktBusy(false);
+    }
+  }
+
+  async function connectProvider(provider: OAuthProvider) {
+    setLinkBusy(provider);
+    setLinkError("");
+    setLinkStatus("");
+    try {
+      if (provider === "anilist") {
+        await connectAniListAccount();
+      } else {
+        const intentToken = await requestOAuthLinkIntent("google");
+        await startSocialLogin("google", intentToken);
+      }
+      setLinkStatus("Autoriza la conexión en el navegador. Volverás automáticamente a la app.");
+    } catch (error) {
+      setLinkError(describeUnknownError(error, "No se pudo iniciar la conexión."));
+    } finally {
+      setLinkBusy(null);
     }
   }
 
@@ -714,7 +772,7 @@ function AccountPanel({
     );
   }
 
-  return (
+return (
     <PanelScaffold title="Cuenta">
       <PillBlock>
         {account ? (
@@ -736,6 +794,30 @@ function AccountPanel({
             </ActionButton>
           </PillRow>
         )}
+        {account ? (
+          <>
+            <PillRow title="Google" description="Entra a tu cuenta con Google.">
+              <ActionButton
+                onClick={() => void connectProvider("google")}
+                icon={<ExternalLink size={15} />}
+                disabled={linkBusy !== null}
+              >
+                {linkBusy === "google" ? "Abriendo Google…" : "Vincular Google"}
+              </ActionButton>
+            </PillRow>
+            <PillRow title="AniList" description="Sincroniza tu biblioteca de anime y conéctala a tu cuenta.">
+              <ActionButton
+                onClick={() => void connectProvider("anilist")}
+                icon={<ExternalLink size={15} />}
+                disabled={linkBusy !== null}
+              >
+                {linkBusy === "anilist" ? "Abriendo AniList…" : "Vincular AniList"}
+              </ActionButton>
+            </PillRow>
+            {linkError ? <p className="px-4 pb-3 text-sm text-red-300">{linkError}</p> : null}
+            {linkStatus ? <p className="px-4 pb-3 text-sm text-white/54">{linkStatus}</p> : null}
+          </>
+        ) : null}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
         <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt y Discord." onClick={() => onViewChange("integrations")} />
       </PillBlock>

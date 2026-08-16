@@ -67,9 +67,12 @@ function buildEpisodeLabel(query: StreamQuery | null, episodeName?: string): str
   return label;
 }
 
-function buildDetailUrl(query: StreamQuery | null): string {
-  if (!query) return "https://github.com/trklll/aetherio";
-  return `https://www.themoviedb.org/${query.type}/${query.id}`;
+function buildActionButtons(query: StreamQuery | null) {
+  const target = query && query.id ? `${query.type}:${query.id}` : "app";
+  return [
+    { label: "Más detalles", customId: `details:${target}` },
+    { label: "Ver en Aetherio", customId: `open:${target}` },
+  ];
 }
 
 export function useDiscordPresence(input: DiscordPresenceInput) {
@@ -100,11 +103,7 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
     }
 
     const title = input.mediaName || input.stream?.name || input.stream?.title || "Reproduciendo";
-    const detailUrl = buildDetailUrl(input.query);
-    const buttons = [
-      { label: "Más detalles", url: detailUrl },
-      { label: "Ver en Aetherio", url: "https://github.com/trklll/aetherio" },
-    ];
+    const buttons = buildActionButtons(input.query);
 
     let signature: string;
     if (input.playing) {

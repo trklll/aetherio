@@ -1,4 +1,4 @@
-import { getAccountToken, getAniListAccessToken } from "../auth/authClient";
+import { clearAniListAccessToken, getAccountToken, getAniListAccessToken } from "../auth/authClient";
 import {
   CONTINUE_WATCHING_EVENT,
   readWatchedHistoryEntries,
@@ -258,6 +258,11 @@ async function aniListGraphql<T>(
     data?: T;
     errors?: Array<{ message?: string }>;
   };
+  if (response.status === 401) {
+    await clearAniListAccessToken();
+    window.dispatchEvent(new CustomEvent(ANILIST_LIBRARY_CHANGED_EVENT));
+    throw new Error("La sesión de AniList expiró. Vuelve a conectarla en Ajustes.");
+  }
   if (!response.ok || payload.errors?.length || !payload.data) {
     throw new Error(payload.errors?.[0]?.message || `AniList respondió con ${response.status}.`);
   }

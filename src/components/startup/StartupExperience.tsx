@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import aetherioLogo from "../../assets/aetheriologo.png";
 import { isAndroidRuntime, isTauriRuntime } from "../../runtime/platform";
-import { gsap } from "../../utils/motion";
+import { gsap, prefersReducedMotion } from "../../utils/motion";
 import { STARTUP_COMPLETE_EVENT, STARTUP_STATUS_EVENT } from "./startupEvents";
 import "./StartupExperience.css";
 
@@ -52,7 +52,7 @@ function NativeMainStartupCoordinator({ children, ready, status }: StartupExperi
         await mainWindow.show();
         await mainWindow.setFocus();
 
-        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        if (prefersReducedMotion()) {
           gsap.set(contentRef.current, { autoAlpha: 1, clearProps: "transform" });
           return;
         }
@@ -105,7 +105,7 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
     if (!ready || !visible) return;
     const remaining = Math.max(0, 850 - (Date.now() - startedAtRef.current));
     const timeout = window.setTimeout(() => {
-      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const reducedMotion = prefersReducedMotion();
       if (reducedMotion) {
         gsap.set(contentRef.current, { autoAlpha: 1, clearProps: "transform" });
         setVisible(false);

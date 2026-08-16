@@ -180,6 +180,7 @@ export default function CatalogPage() {
   const [items, setItems] = useState<MediaItem[]>(() => cachedItems ?? []);
   const [loading, setLoading] = useState(() => !cachedItems);
   const [error, setError] = useState("");
+  const animatedCountRef = useRef(0);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -187,16 +188,18 @@ export default function CatalogPage() {
     const els = Array.from(root.querySelectorAll<HTMLElement>(
       ":scope > div:not([data-catalog-header]) > div",
     ));
-    if (!els.length) return;
+    if (els.length <= animatedCountRef.current) return;
+    const fresh = els.slice(animatedCountRef.current);
+    animatedCountRef.current = els.length;
     const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
     timeline.fromTo(
-      els,
+      fresh,
       { opacity: 0, y: 16 },
       { opacity: 1, y: 0, duration: 0.5, stagger: 0.04, clearProps: "transform" },
     );
     return () => {
       timeline.kill();
-      gsap.set(els, { clearProps: "opacity,transform" });
+      gsap.set(fresh, { clearProps: "opacity,transform" });
     };
   }, [items, loading]);
 

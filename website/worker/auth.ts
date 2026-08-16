@@ -22,6 +22,8 @@ const PASSWORD_ITERATIONS = 600_000;
 const SESSION_DAYS = 30;
 const MAX_LOGIN_ATTEMPTS = 8;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
+const MAX_REGISTER_ATTEMPTS_PER_EMAIL = 5;
+const MAX_REGISTER_CREATIONS_PER_IP = 20;
 const encoder = new TextEncoder();
 
 export async function handleAuthRequest(request: Request, env: AuthEnv, pathname: string) {
@@ -59,10 +61,38 @@ async function register(request: Request, env: AuthEnv) {
   const body = await readCredentials(request, true);
   if (body instanceof Response) return body;
 
+  const attemptIdentifier = await registerAttemptIdentifier(request, body.email);
+  const creationIdentifier = await registerCreationIdentifier(request);
+  const cutoff = unixNow() - LOGIN_WINDOW_SECONDS;
+  await env.USERS_DB.prepare("DELETE FROM login_attempts WHERE attempted_at < ?").bind(cutoff).run();
+
+  const recentAttempts = await env.USERS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM login_attempts WHERE identifier = ? AND attempted_at >= ?",
+  )
+    .bind(attemptIdentifier, cutoff)
+    .first<{ count: number }>();
+  if ((recentAttempts?.count ?? 0) >= MAX_REGISTER_ATTEMPTS_PER_EMAIL) {
+    return authJson({ error: "Demasiados intentos. Espera 15 minutos antes de volver a intentar." }, 429);
+  }
+
+  const recentCreations = await env.USERS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM login_attempts WHERE identifier = ? AND attempted_at >= ?",
+  )
+    .bind(creationIdentifier, cutoff)
+    .first<{ count: number }>();
+  if ((recentCreations?.count ?? 0) >= MAX_REGISTER_CREATIONS_PER_IP) {
+    return authJson({ error: "Se crearon demasiadas cuentas desde esta conexión. Espera 15 minutos." }, 429);
+  }
+
   const existing = await env.USERS_DB.prepare("SELECT id FROM users WHERE email = ?")
     .bind(body.email)
     .first<{ id: string }>();
   if (existing) {
+    await env.USERS_DB.prepare(
+      "INSERT INTO login_attempts (identifier, attempted_at) VALUES (?, ?)",
+    )
+      .bind(attemptIdentifier, unixNow())
+      .run();
     return authJson({ error: "Ya existe una cuenta con ese correo." }, 409);
   }
 
@@ -70,23 +100,29 @@ async function register(request: Request, env: AuthEnv) {
   const userId = crypto.randomUUID();
   const passwordHash = await protectPasswordProof(env, body.passwordProof);
 
-  await env.USERS_DB.prepare(
-    `INSERT INTO users (
-      id, email, display_name, password_hash, password_salt,
-      password_iterations, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      userId,
-      body.email,
-      body.displayName,
-      passwordHash,
-      body.passwordSalt,
-      body.passwordIterations,
-      now,
-      now,
+  await env.USERS_DB.batch([
+    env.USERS_DB.prepare(
+      `INSERT INTO users (
+        id, email, display_name, password_hash, password_salt,
+        password_iterations, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run();
+      .bind(
+        userId,
+        body.email,
+        body.displayName,
+        passwordHash,
+        body.passwordSalt,
+        body.passwordIterations,
+        now,
+        now,
+      ),
+    env.USERS_DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(now),
+    env.USERS_DB.prepare(
+      "INSERT INTO login_attempts (identifier, attempted_at) VALUES (?, ?)",
+    )
+      .bind(creationIdentifier, now),
+  ]);
 
   const token = await createSession(env, userId, request);
   return authJson({
@@ -101,6 +137,7 @@ async function login(request: Request, env: AuthEnv) {
 
   const identifier = await loginIdentifier(request, body.email);
   const cutoff = unixNow() - LOGIN_WINDOW_SECONDS;
+  await env.USERS_DB.prepare("DELETE FROM login_attempts WHERE attempted_at < ?").bind(cutoff).run();
   const attempts = await env.USERS_DB.prepare(
     "SELECT COUNT(*) AS count FROM login_attempts WHERE identifier = ? AND attempted_at >= ?",
   )
@@ -118,6 +155,12 @@ async function login(request: Request, env: AuthEnv) {
   )
     .bind(body.email)
     .first<UserRow>();
+
+  if (user && !user.password_hash) {
+    return authJson({
+      error: "Esta cuenta se creó con Google o AniList. Entra con ese método de conexión.",
+    }, 400);
+  }
 
   const valid = user?.password_hash && user.password_salt && user.password_iterations
     ? await verifyPasswordProof(env, body.passwordProof, user.password_hash)
@@ -182,11 +225,13 @@ async function currentUser(request: Request, env: AuthEnv) {
 
   if (!user) return authJson({ error: "La sesión expiró." }, 401);
 
-  await env.USERS_DB.prepare(
-    "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?",
-  )
-    .bind(now, tokenHash)
-    .run();
+  await env.USERS_DB.batch([
+    env.USERS_DB.prepare(
+      "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?",
+    )
+      .bind(now, tokenHash),
+    env.USERS_DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(now),
+  ]);
 
   return authJson({ user: publicUser(user), expiresAt: user.expires_at });
 }
@@ -198,6 +243,7 @@ async function logout(request: Request, env: AuthEnv) {
       .bind(await sha256(token))
       .run();
   }
+  await env.USERS_DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(unixNow()).run();
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
@@ -338,6 +384,16 @@ function isEmail(email: string) {
 async function loginIdentifier(request: Request, email: string) {
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   return sha256(`${ip}:${email}`);
+}
+
+async function registerAttemptIdentifier(request: Request, email: string) {
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  return sha256(`register-attempt:${ip}:${email}`);
+}
+
+async function registerCreationIdentifier(request: Request) {
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  return sha256(`register-creation:${ip}`);
 }
 
 async function sha256(value: string) {

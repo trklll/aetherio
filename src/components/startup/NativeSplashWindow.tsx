@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import aetherioLogo from "../../assets/aetheriologo.png";
-import { gsap } from "../../utils/motion";
+import { gsap, prefersReducedMotion } from "../../utils/motion";
 import { STARTUP_COMPLETE_EVENT, STARTUP_STATUS_EVENT } from "./startupEvents";
 import "./StartupExperience.css";
 
@@ -41,7 +41,7 @@ export default function NativeSplashWindow() {
       if (closingRef.current) return;
       closingRef.current = true;
       const root = rootRef.current;
-      if (!root || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      if (!root || prefersReducedMotion()) {
         void getCurrentWindow().close();
         return;
       }

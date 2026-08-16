@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aetherio"
-version = "0.4.8"
+version = "0.4.9"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1446,14 +1446,14 @@ dependencies = [
 [[package]]
 name = "discord-rich-presence"
 version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75db747ecd252c01bfecaf709b07fcb4c634adf0edb5fed47bc9c3052e7076b"
 dependencies = [
+ "libc",
  "serde",
  "serde_derive",
  "serde_json",
  "serde_repr",
  "uuid 0.8.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

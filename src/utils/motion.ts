@@ -16,7 +16,7 @@ export const motionTimings = {
 type MotionTarget = gsap.TweenTarget;
 
 export function prefersReducedMotion() {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return false;
 }
 
 export function tweenTo(

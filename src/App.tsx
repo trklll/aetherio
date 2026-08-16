@@ -34,6 +34,7 @@ import {
   getCurrentDeepLinks,
   listenOpenFiles,
   listenOpenUrls,
+  listenPlatformEvent,
   listenWindowFileDrops,
   takePendingOpenFiles,
 } from "./runtime/platform.ts";
@@ -42,6 +43,7 @@ import StartupExperience from "./components/startup/StartupExperience.tsx";
 import {
   AETHERIO_AUTH_CHANGED_EVENT,
   completeOAuthAuthorization,
+  dispatchAuthError,
   getStoredAccount,
   isLocalModeEnabled,
   isOAuthCallbackUrl,
@@ -64,7 +66,9 @@ import {
 } from "./utils/localMedia.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
+const PROCESSED_OAUTH_CALLBACKS_KEY = "aetherio-processed-oauth-callbacks-v1";
 const processedTraktCallbacks = new Set<string>();
+const processedOAuthCallbacks = new Set<string>();
 
 const HomePage = lazy(() => import("./pages/Home"));
 const LibraryPage = lazy(() => import("./pages/Library"));
@@ -84,6 +88,13 @@ const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
 
 const MAX_CACHED_PAGES = 16;
 const TRANSIENT_PAGE_PATHS = new Set(["/", "/episode", "/streams", "/player"]);
+
+interface DiscordActionPayload {
+  /** Button action: "open" (Ver en Aetherio) or "details" (Más detalles). */
+  action: string;
+  kind?: string;
+  id?: string;
+}
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -140,8 +151,19 @@ export default function App() {
       setStartupStatus("Preparando tu perfil");
       let currentProfiles = getLocalProfiles();
       if (currentProfiles.length === 0) {
+        if (isCreatingProfile) {
+          setStartupStatus("Todo listo");
+          setStartupReady(true);
+          return;
+        }
+        if (account) {
+          setStartupStatus("Todo listo");
+          setStartupReady(true);
+          navigate("/quick-start/profile", { replace: true });
+          return;
+        }
         await createLocalProfile(
-          { name: account?.displayName?.trim() || "Usuario" },
+          { name: "Usuario" },
           { makeActive: true, adoptCurrentData: true },
         );
         currentProfiles = getLocalProfiles();
@@ -173,7 +195,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [account, authRestored, enabledAddons, localMode, navigate, profileRevision, queryClient, startupReady]);
+  }, [account, authRestored, enabledAddons, isCreatingProfile, localMode, navigate, profileRevision, queryClient, startupReady]);
 
   useEffect(() => {
     if (!account) return;
@@ -216,17 +238,22 @@ export default function App() {
     const handleUrls = async (urls: string[] | null | undefined) => {
       for (const url of urls ?? []) {
         if (isOAuthCallbackUrl(url)) {
+          const oauthKey = getOAuthCallbackKey(url);
+          if (oauthKey && hasProcessedOAuthCallback(oauthKey)) continue;
+          if (oauthKey) markProcessedOAuthCallback(oauthKey);
           try {
             const user = await completeOAuthAuthorization(url);
             if (!disposed) {
               setAccount(user);
               setLocalMode(false);
               setAuthError("");
-              navigate("/", { replace: true });
+              navigate(hasActiveLocalProfile() ? "/" : "/quick-start/profile", { replace: true });
             }
           } catch (error) {
+            const message = error instanceof Error ? error.message : "No se pudo iniciar sesión.";
             if (!disposed) {
-              setAuthError(error instanceof Error ? error.message : "No se pudo iniciar sesión.");
+              setAuthError(message);
+              dispatchAuthError(message);
             }
           }
           continue;
@@ -302,6 +329,25 @@ export default function App() {
     };
   }, [navigate]);
 
+  // Discord Rich Presence button clicks ("Más detalles" / "Ver en Aetherio")
+  // arrive as `discord-action` events from the native client, which already
+  // brought the window to the foreground. Navigate to the matching page.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenPlatformEvent<DiscordActionPayload>("discord-action", ({ payload }) => {
+      if (payload.kind && payload.id) {
+        navigate(`/detail/${encodeURIComponent(payload.kind)}/${encodeURIComponent(payload.id)}`);
+      } else {
+        navigate("/home");
+      }
+    }).then(nextUnlisten => {
+      unlisten = nextUnlisten;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [navigate]);
+
   const withStartup = (content: ReactNode) => (
     <StartupExperience ready={startupReady} status={startupStatus}>
       {content}
@@ -336,6 +382,7 @@ export default function App() {
         <QuickStart
           installedAddons={addons.length}
           activeProfile={null}
+          defaultName={account?.displayName?.trim() ?? ""}
           useFreshDefaults
           profileOnly
           onComplete={destination => {
@@ -500,6 +547,49 @@ function markTraktCallbackProcessed(callbackKey: string) {
     const stored = JSON.parse(sessionStorage.getItem(PROCESSED_TRAKT_CALLBACKS_KEY) || "[]");
     const next = Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string") : [];
     sessionStorage.setItem(PROCESSED_TRAKT_CALLBACKS_KEY, JSON.stringify([callbackKey, ...next.filter(value => value !== callbackKey)].slice(0, 12)));
+  } catch {
+    // Session storage is best-effort; the in-memory set still prevents duplicate callbacks in this run.
+  }
+}
+
+function getOAuthCallbackKey(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    if (
+      url.protocol === "aetherio:" &&
+      url.hostname === "auth" &&
+      url.pathname.replace(/\/$/, "") === "/callback"
+    ) {
+      return url.searchParams.get("code")
+        ?? url.searchParams.get("state")
+        ?? url.hash.slice(0, 64);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function hasProcessedOAuthCallback(callbackKey: string) {
+  if (processedOAuthCallbacks.has(callbackKey)) return true;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(PROCESSED_OAUTH_CALLBACKS_KEY) || "[]");
+    if (Array.isArray(stored) && stored.includes(callbackKey)) {
+      processedOAuthCallbacks.add(callbackKey);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function markProcessedOAuthCallback(callbackKey: string) {
+  processedOAuthCallbacks.add(callbackKey);
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(PROCESSED_OAUTH_CALLBACKS_KEY) || "[]");
+    const next = Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string") : [];
+    sessionStorage.setItem(PROCESSED_OAUTH_CALLBACKS_KEY, JSON.stringify([callbackKey, ...next.filter(value => value !== callbackKey)].slice(0, 12)));
   } catch {
     // Session storage is best-effort; the in-memory set still prevents duplicate callbacks in this run.
   }

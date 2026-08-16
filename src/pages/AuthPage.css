@@ -12,6 +12,24 @@
     "Helvetica Neue", Arial, sans-serif;
 }
 
+.auth-window-bar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 72px;
+  z-index: 40;
+}
+
+.auth-window-controls {
+  position: absolute;
+  top: var(--app-safe-top);
+  right: var(--app-safe-x);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .auth-ambient,
 .auth-grid {
   position: absolute;
@@ -455,11 +473,5 @@
 
   .auth-footnote {
     margin-top: 10px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .auth-submit i {
-    animation: none;
   }
 }

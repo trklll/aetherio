@@ -5,6 +5,9 @@
   "compatibility_date": "2026-07-27",
   "workers_dev": true,
   "preview_urls": true,
+  "vars": {
+    "OAUTH_CALLBACK_ORIGIN": "https://trkll.aetherio.workers.dev"
+  },
   "d1_databases": [
     {
       "binding": "USERS_DB",

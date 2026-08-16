@@ -51,16 +51,17 @@ type QuickStartStep = "profile" | "welcome" | "content" | "playback" | "apis" | 
 interface QuickStartProps {
   installedAddons: number;
   activeProfile: LocalProfile | null;
+  defaultName?: string;
   useFreshDefaults?: boolean;
   profileOnly?: boolean;
   onComplete: (destination: "/home" | "/addons") => void;
 }
 
-export default function QuickStart({ installedAddons, activeProfile, useFreshDefaults = false, profileOnly = false, onComplete }: QuickStartProps) {
+export default function QuickStart({ installedAddons, activeProfile, defaultName = "", useFreshDefaults = false, profileOnly = false, onComplete }: QuickStartProps) {
   const [includeProfileStep] = useState(() => activeProfile === null);
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<LocalProfile | null>(activeProfile);
-  const [profileName, setProfileName] = useState("");
+  const [profileName, setProfileName] = useState(defaultName);
   const [profilePin, setProfilePin] = useState("");
   const [profileAvatar, setProfileAvatar] = useState<string | undefined>();
   const [profileError, setProfileError] = useState("");

@@ -5,6 +5,7 @@ export interface OAuthEnv {
   ANILIST_CLIENT_ID?: string;
   ANILIST_CLIENT_SECRET?: string;
   OAUTH_TOKEN_ENCRYPTION_KEY?: string;
+  OAUTH_CALLBACK_ORIGIN?: string;
 }
 
 type OAuthProvider = "google" | "anilist";
@@ -43,6 +44,13 @@ const CODE_LIFETIME_SECONDS = 2 * 60;
 const SESSION_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
 const encoder = new TextEncoder();
 
+class OAuthConflictError extends Error {
+  constructor() {
+    super("The email already belongs to an existing Aetherio account.");
+    this.name = "OAuthConflictError";
+  }
+}
+
 export async function handleOAuthRequest(
   request: Request,
   env: OAuthEnv,
@@ -58,6 +66,10 @@ export async function handleOAuthRequest(
   const startMatch = /^\/api\/auth\/oauth\/(google|anilist)\/start$/.exec(pathname);
   if (startMatch && request.method === "GET") {
     return startOAuth(request, env, startMatch[1] as OAuthProvider);
+  }
+
+  if (pathname === "/api/auth/oauth/link-intent" && request.method === "POST") {
+    return createLinkIntent(request, env);
   }
 
   const callbackMatch = /^\/api\/auth\/oauth\/(google)\/callback$/.exec(pathname);
@@ -103,6 +115,25 @@ async function startOAuth(
     return oauthJson({ error: "Destino OAuth no permitido." }, 400);
   }
 
+  const linkToken = requestUrl.searchParams.get("link_token")?.trim();
+  if (linkToken) {
+    const intent = await env.USERS_DB.prepare(
+      "SELECT provider, link_user_id, expires_at FROM oauth_states WHERE state_hash = ?",
+    )
+      .bind(await sha256(linkToken))
+      .first<{ provider: string; link_user_id: string | null; expires_at: number }>();
+    await env.USERS_DB.prepare("DELETE FROM oauth_states WHERE state_hash = ?")
+      .bind(await sha256(linkToken))
+      .run();
+    if (!intent || intent.expires_at <= unixNow()) {
+      return oauthJson({ error: "El enlace de cuenta expiró. Inténtalo de nuevo desde Ajustes." }, 401);
+    }
+    if (intent.provider !== provider) {
+      return oauthJson({ error: "El enlace de cuenta no corresponde a este proveedor." }, 400);
+    }
+    linkUserId = intent.link_user_id;
+  }
+
   if (provider === "anilist") {
     const authorizationUrl = new URL(config.authorizationUrl);
     authorizationUrl.searchParams.set("client_id", config.clientId);
@@ -112,7 +143,7 @@ async function startOAuth(
 
   const now = unixNow();
   const state = randomToken(32);
-  const pkceVerifier = null;
+  const pkceVerifier = randomToken(32);
   await env.USERS_DB.batch([
     env.USERS_DB.prepare("DELETE FROM oauth_states WHERE expires_at <= ?").bind(now),
     env.USERS_DB.prepare(
@@ -130,15 +161,54 @@ async function startOAuth(
     ),
   ]);
 
-  const callbackUrl = callbackFor(requestUrl.origin, provider);
+  const callbackUrl = callbackFor(requestUrl.origin, provider, env);
   const authorizationUrl = new URL(config.authorizationUrl);
   authorizationUrl.searchParams.set("client_id", config.clientId);
   authorizationUrl.searchParams.set("redirect_uri", callbackUrl);
   authorizationUrl.searchParams.set("response_type", "code");
   if (config.scope) authorizationUrl.searchParams.set("scope", config.scope);
   authorizationUrl.searchParams.set("state", state);
-  if (provider === "google") authorizationUrl.searchParams.set("prompt", "select_account");
+  if (provider === "google") {
+    authorizationUrl.searchParams.set("prompt", "select_account");
+    authorizationUrl.searchParams.set("code_challenge", await sha256Base64Url(pkceVerifier));
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+  }
   return oauthRedirect(authorizationUrl.toString());
+}
+
+async function createLinkIntent(request: Request, env: OAuthEnv) {
+  const userId = await authenticatedUserId(request, env);
+  if (!userId) return oauthJson({ error: "Sesión requerida." }, 401);
+
+  let input: { provider?: unknown };
+  try {
+    input = await request.json<typeof input>();
+  } catch {
+    return oauthJson({ error: "Solicitud inválida." }, 400);
+  }
+  const provider = input.provider === "google" || input.provider === "anilist"
+    ? input.provider
+    : null;
+  if (!provider) return oauthJson({ error: "Proveedor inválido." }, 400);
+
+  const token = randomToken(32);
+  const now = unixNow();
+  await env.USERS_DB.prepare(
+    `INSERT INTO oauth_states (
+      state_hash, provider, return_to, created_at, expires_at, pkce_verifier, link_user_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      await sha256(token),
+      provider,
+      APP_RETURN_URL,
+      now,
+      now + STATE_LIFETIME_SECONDS,
+      null,
+      userId,
+    )
+    .run();
+  return oauthJson({ token });
 }
 
 function oauthRedirect(location: string) {
@@ -186,13 +256,21 @@ async function createAniListSession(request: Request, env: OAuthEnv) {
     emailVerified: true,
     username: viewerName,
   };
-  const user = await findOrCreateOAuthUser(
-    env,
-    "anilist",
-    profile,
-    null,
-    linkedUserId,
-  );
+  let user: UserRow;
+  try {
+    user = await findOrCreateOAuthUser(
+      env,
+      "anilist",
+      profile,
+      null,
+      linkedUserId,
+    );
+  } catch (error) {
+    if (error instanceof OAuthConflictError) {
+      return oauthJson({ error: "Ya existe una cuenta con ese correo." }, 409);
+    }
+    throw error;
+  }
   const token = await createSession(env, user.id, request);
   return oauthJson({
     token,
@@ -261,6 +339,9 @@ async function finishOAuth(request: Request, env: OAuthEnv, provider: OAuthProvi
     return redirectToApp(stored.return_to, { code: appCode });
   } catch (error) {
     console.error("[AETHERIO:OAUTH]", provider, error);
+    if (error instanceof OAuthConflictError) {
+      return redirectToApp(stored.return_to, { error: "account_exists" });
+    }
     return redirectToApp(stored.return_to, { error: "provider_failed" });
   }
 }
@@ -316,7 +397,7 @@ async function fetchOAuthProfile(
   const config = providerConfig(env, provider);
   if (!config) throw new Error("OAuth provider is not configured.");
 
-  const callbackUrl = callbackFor(new URL(request.url).origin, provider);
+  const callbackUrl = callbackFor(new URL(request.url).origin, provider, env);
   const tokenInput = {
     client_id: config.clientId,
     client_secret: config.clientSecret ?? "",
@@ -324,6 +405,9 @@ async function fetchOAuthProfile(
     code,
     redirect_uri: callbackUrl,
   };
+  if (_pkceVerifier) {
+    (tokenInput as Record<string, string>).code_verifier = _pkceVerifier;
+  }
   const tokenResponse = await fetch(config.tokenUrl, {
     method: "POST",
     headers: {
@@ -432,6 +516,9 @@ async function findOrCreateOAuthUser(
     .bind(linkUserId ?? profile.email)
     .first<UserRow>();
   if (linkUserId && !existing) throw new Error("Aetherio account to link no longer exists.");
+  if (!linkUserId && existing) {
+    throw new OAuthConflictError();
+  }
 
   const now = unixNow();
   const user = existing ?? {
@@ -826,8 +913,9 @@ function providerConfigured(env: OAuthEnv, provider: OAuthProvider) {
   return providerConfig(env, provider) !== null;
 }
 
-function callbackFor(origin: string, provider: OAuthProvider) {
-  return `${origin}/api/auth/oauth/${provider}/callback`;
+function callbackFor(origin: string, provider: OAuthProvider, env?: OAuthEnv) {
+  const base = env?.OAUTH_CALLBACK_ORIGIN?.replace(/\/$/, "") || origin;
+  return `${base}/api/auth/oauth/${provider}/callback`;
 }
 
 function providerLabel(provider: OAuthProvider) {
@@ -858,6 +946,11 @@ function randomToken(length: number) {
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Base64Url(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return bytesToBase64Url(new Uint8Array(digest));
 }
 
 function unixNow() {

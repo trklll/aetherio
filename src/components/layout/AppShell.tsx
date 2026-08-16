@@ -1,10 +1,9 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import BackButton from "./BackButton";
-import FloatingActionButton from "./FloatingActionButton";
 import TopNav from "./TopNav";
-import { Maximize, Minus, X } from "lucide-react";
-import { toggleWindowFullscreen, minimizeWindow, closeWindow } from "../../utils/windowControls";
+import WindowControls from "./WindowControls";
+import { toggleWindowFullscreen } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
 import { gsap, installInertialScroll, tweenTo, prefersReducedMotion, stopInertialScroll } from "../../utils/motion";
@@ -363,24 +362,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           }}
         >
           {!androidRuntime && (!isPlayer || showBack) && (
-            <>
-              <FloatingActionButton
-                onClick={() => void minimizeWindow()}
-                title="Minimizar"
-                icon={<Minus size={18} />}
-              />
-              <FloatingActionButton
-                onClick={toggleWindowFullscreen}
-                title="Pantalla completa"
-                icon={<Maximize size={18} />}
-                animateOnClick
-              />
-              <FloatingActionButton
-                onClick={() => void closeWindow()}
-                title="Cerrar"
-                icon={<X size={18} />}
-              />
-            </>
+            <WindowControls />
           )}
         </div>
       </div>

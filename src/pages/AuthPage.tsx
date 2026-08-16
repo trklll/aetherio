@@ -3,8 +3,11 @@ import { ArrowRight, Eye, EyeOff, HardDrive, LockKeyhole, Mail, UserRound } from
 import aetherioLogo from "../assets/aetheriologo.png";
 import aniListLogo from "../assets/logoauth/anilist_logo_icon_247617.png";
 import googleLogo from "../assets/logoauth/Google__G__logo.svg.png";
+import WindowControls from "../components/layout/WindowControls";
 import { gsap } from "../utils/motion";
 import {
+  AETHERIO_AUTH_CHANGED_EVENT,
+  AETHERIO_AUTH_ERROR_EVENT,
   continueLocally,
   getOAuthProviders,
   loginAccount,
@@ -13,6 +16,7 @@ import {
   type AetherioUser,
   type OAuthProvider,
 } from "../auth/authClient";
+import { useSocialLoginCancellation } from "../auth/useSocialLoginCancellation";
 import "./AuthPage.css";
 
 export default function AuthPage({
@@ -37,13 +41,34 @@ export default function AuthPage({
 
   useEffect(() => {
     setError(initialError);
+    setSocialBusy(null);
   }, [initialError]);
+
+  useEffect(() => {
+    const onAuthChanged = () => setSocialBusy(null);
+    const onAuthError = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      if (message) setError(message);
+      setSocialBusy(null);
+    };
+    window.addEventListener(AETHERIO_AUTH_CHANGED_EVENT, onAuthChanged);
+    window.addEventListener(AETHERIO_AUTH_ERROR_EVENT, onAuthError);
+    return () => {
+      window.removeEventListener(AETHERIO_AUTH_CHANGED_EVENT, onAuthChanged);
+      window.removeEventListener(AETHERIO_AUTH_ERROR_EVENT, onAuthError);
+    };
+  }, []);
 
   useEffect(() => {
     void getOAuthProviders()
       .then(setProviders)
       .catch(() => setProviders(null));
   }, []);
+
+  useSocialLoginCancellation(socialBusy !== null, message => {
+    setSocialBusy(null);
+    setError(message);
+  });
 
   useLayoutEffect(() => {
     if (!rootRef.current) return;
@@ -97,7 +122,10 @@ export default function AuthPage({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo iniciar sesión.");
       requestAnimationFrame(() => {
-        gsap.fromTo(".auth-error", { x: -8 }, { x: 0, duration: 0.35, ease: "elastic.out(1, 0.45)" });
+        const node = rootRef.current?.querySelector(".auth-error");
+        if (node) {
+          gsap.fromTo(node, { x: -8 }, { x: 0, duration: 0.35, ease: "elastic.out(1, 0.45)" });
+        }
       });
     } finally {
       setBusy(false);
@@ -130,6 +158,10 @@ export default function AuthPage({
     }
   }
 
+  function providerEnabled(provider: OAuthProvider) {
+    return providers !== null && providers[provider] === true;
+  }
+
   async function enterLocalMode() {
     await continueLocally();
     onContinueLocal();
@@ -137,6 +169,12 @@ export default function AuthPage({
 
   return (
     <main ref={rootRef} className="auth-page">
+      <div className="auth-window-bar" data-tauri-drag-region>
+        <div className="auth-window-controls">
+          <WindowControls />
+        </div>
+      </div>
+
       <div className="auth-ambient" aria-hidden="true">
         <div className="auth-orb auth-orb--one" />
         <div className="auth-orb auth-orb--two" />
@@ -172,11 +210,19 @@ export default function AuthPage({
         </div>
 
         <div className="auth-social auth-reveal">
-          <button type="button" onClick={() => void startSocial("google")} disabled={socialBusy !== null}>
+          <button
+            type="button"
+            onClick={() => void startSocial("google")}
+            disabled={socialBusy !== null || !providerEnabled("google")}
+          >
             <img className="auth-provider-logo" src={googleLogo} alt="" aria-hidden="true" />
             <span>{socialBusy === "google" ? "Abriendo Google…" : "Continuar con Google"}</span>
           </button>
-          <button type="button" onClick={() => void startSocial("anilist")} disabled={socialBusy !== null}>
+          <button
+            type="button"
+            onClick={() => void startSocial("anilist")}
+            disabled={socialBusy !== null || !providerEnabled("anilist")}
+          >
             <img
               className="auth-provider-logo auth-provider-logo--anilist"
               src={aniListLogo}
@@ -185,6 +231,9 @@ export default function AuthPage({
             />
             <span>{socialBusy === "anilist" ? "Abriendo AniList…" : "Continuar con AniList"}</span>
           </button>
+          {providers === null ? (
+            <p className="auth-error" role="alert">No se pudieron cargar las opciones de conexión. Revisa tu conexión.</p>
+          ) : null}
         </div>
 
         <div className="auth-divider auth-reveal"><span>o usa tu correo</span></div>
