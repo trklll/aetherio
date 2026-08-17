@@ -275,6 +275,163 @@ fn fetch_mdblist_ratings(
         .map_err(|error| format!("No se pudo leer respuesta MDBList: {}", error))
 }
 
+const SUBTITLE_DOWNLOAD_MAX_ATTEMPTS: usize = 3;
+const SUBTITLE_DOWNLOAD_RETRY_DELAY_MS: u64 = 350;
+const SUBTITLE_DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 12;
+const SUBTITLE_DOWNLOAD_TOTAL_TIMEOUT_SECS: u64 = 25;
+
+#[tauri::command]
+async fn fetch_subtitle_text(
+    url: String,
+    stream_url: Option<String>,
+    headers: Option<HashMap<String, String>>,
+) -> Result<String, String> {
+    let url = url.trim().to_string();
+    if url.is_empty()
+        || url.len() > 4096
+        || !(url.starts_with("http://") || url.starts_with("https://"))
+    {
+        return Err(String::from("URL de subtitulo invalida."));
+    }
+    if url.contains(['\r', '\n']) {
+        return Err(String::from("URL de subtitulo invalida."));
+    }
+
+    let subtitle_host = extract_uri_host(&url);
+    let stream_host = stream_url.as_deref().and_then(extract_uri_host);
+    let same_host = match (subtitle_host, stream_host) {
+        (Some(subtitle), Some(stream)) => subtitle.eq_ignore_ascii_case(&stream),
+        _ => false,
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut last_error: Option<String> = None;
+        for attempt in 0..SUBTITLE_DOWNLOAD_MAX_ATTEMPTS {
+            match execute_subtitle_download(&url, same_host, headers.as_ref()) {
+                Ok(body) => return Ok(body),
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt + 1 < SUBTITLE_DOWNLOAD_MAX_ATTEMPTS {
+                        thread::sleep(Duration::from_millis(
+                            SUBTITLE_DOWNLOAD_RETRY_DELAY_MS * (attempt as u64 + 1),
+                        ));
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            String::from("No se pudo descargar el subtitulo despues de varios intentos.")
+        }))
+    })
+    .await
+    .map_err(|error| format!("Fallo la tarea de descarga de subtitulos: {}", error))?
+}
+
+fn extract_uri_host(raw: &str) -> Option<String> {
+    let without_scheme = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))?;
+    let authority = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if authority.is_empty() {
+        return None;
+    }
+    let host = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(&authority)
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim_matches(['[', ']'])
+        .to_string();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+fn execute_subtitle_download(
+    url: &str,
+    same_host: bool,
+    headers: Option<&HashMap<String, String>>,
+) -> Result<String, String> {
+    let mut request = Client::builder()
+        .connect_timeout(Duration::from_secs(SUBTITLE_DOWNLOAD_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(SUBTITLE_DOWNLOAD_TOTAL_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| format!("No se pudo crear el cliente HTTP: {}", error))?
+        .get(url);
+
+    if same_host {
+        for (key, value) in headers.unwrap_or(&HashMap::new()) {
+            let lower = key.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "range" | "host" | "connection" | "transfer-encoding"
+            ) {
+                continue;
+            }
+            request = request.header(key, value);
+        }
+    }
+    request = request
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+        .header("Accept", "text/plain, text/vtt, application/x-subrip, */*");
+
+    let response = request
+        .send()
+        .map_err(|error| format!("No se pudo descargar el subtitulo: {}", error))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "No se pudo descargar el subtitulo (HTTP {}).",
+            response.status().as_u16()
+        ));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|error| format!("No se pudo leer el subtitulo: {}", error))?;
+    if bytes.is_empty() {
+        return Err(String::from("El subtitulo descargado esta vacio."));
+    }
+    let body = decode_subtitle_body(&bytes);
+    if body.trim().is_empty() {
+        return Err(String::from("El subtitulo descargado esta vacio."));
+    }
+    Ok(body)
+}
+
+fn decode_subtitle_body(bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+    // Fallback pragmatico a Windows-1252 / Latin-1 para archivos SRT/VTT legacy.
+    const CP1252_HIGH: [char; 32] = [
+        '\u{20AC}', '\u{0081}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}',
+        '\u{2021}', '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{008D}',
+        '\u{017D}', '\u{008F}', '\u{0090}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}',
+        '\u{2022}', '\u{2013}', '\u{2014}', '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}',
+        '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
+    ];
+    bytes
+        .iter()
+        .map(|&byte| {
+            if (0x80..=0x9F).contains(&byte) {
+                CP1252_HIGH[(byte - 0x80) as usize]
+            } else {
+                byte as char
+            }
+        })
+        .collect()
+}
+
 fn normalize_mdblist_media_type(raw: &str) -> &'static str {
     match raw.trim().to_ascii_lowercase().as_str() {
         "movie" | "film" => "movie",
@@ -2476,7 +2633,7 @@ fn invalidate_p2p_server(state: &P2pState, expected_base_url: &str, reason: &str
 }
 
 #[cfg(not(target_os = "android"))]
-fn clear_stale_p2p_cache(cache_root: &Path) -> Result<(), String> {
+fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration) -> Result<(), String> {
     if cache_root.file_name().and_then(|value| value.to_str()) != Some("p2p") {
         return Err(String::from("Se rechazo limpiar una ruta P2P inesperada."));
     }
@@ -2485,11 +2642,20 @@ fn clear_stale_p2p_cache(cache_root: &Path) -> Result<(), String> {
     }
 
     let mut removed = 0usize;
+    let mut kept = 0usize;
     for entry in fs::read_dir(cache_root)
         .map_err(|error| format!("No se pudo revisar cache P2P anterior: {}", error))?
     {
         let entry = entry.map_err(|error| format!("Entrada P2P invalida: {}", error))?;
         let path = entry.path();
+        let age = fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok());
+        if age.map(|age| age <= max_age).unwrap_or(true) {
+            kept += 1;
+            continue;
+        }
         let result = if path.is_dir() {
             fs::remove_dir_all(&path)
         } else {
@@ -2499,8 +2665,13 @@ fn clear_stale_p2p_cache(cache_root: &Path) -> Result<(), String> {
         removed += 1;
     }
     p2p_log(
-        "stale_cache_cleared",
-        serde_json::json!({ "cacheRoot": cache_root, "entries": removed }),
+        "cache_swept",
+        serde_json::json!({
+            "cacheRoot": cache_root,
+            "removed": removed,
+            "kept": kept,
+            "olderThanHours": max_age.as_secs() / 3600,
+        }),
     );
     Ok(())
 }
@@ -2529,7 +2700,9 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         .map_err(|error| format!("No se pudo ubicar cache P2P: {}", error))?
         .join("p2p");
     let dht_config_path = cache_root.with_file_name("p2p-dht.json");
-    clear_stale_p2p_cache(&cache_root)?;
+    // Conserva datos parciales y bitfields de fastresume recientes para que la
+    // reanudacion de descargas sea inmediata; solo limpia sobrantes viejos.
+    sweep_stale_p2p_cache(&cache_root, Duration::from_secs(48 * 60 * 60))?;
     fs::create_dir_all(&cache_root)
         .map_err(|error| format!("No se pudo crear cache P2P: {}", error))?;
     p2p_log(
@@ -5079,6 +5252,7 @@ pub fn run() {
             youtube_resolve_stream,
             fetch_introdb_segments,
             fetch_mdblist_ratings,
+            fetch_subtitle_text,
             android_player_open,
             android_player_stop,
             android_player_command,

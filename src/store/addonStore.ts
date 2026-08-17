@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { getActiveProfileId } from "../utils/localProfiles.ts";
+import { ANIMES_MANIFEST } from "./animesManifest.ts";
 
 export type AddonScope = "global" | "profile";
 
@@ -35,7 +36,9 @@ const TORRENTIO_ADDON_ID = ["com.stre", "mio.torrentio.addon"].join("");
 export const TORRENTIO_LATINO_MANIFEST_URL = "https://torrentio.strem.fun/language=latino/manifest.json";
 
 const CINEMETA_ADDON_ID = "com.linvo.cinemeta";
-const CINEMETA_MANIFEST_URL = "https://v3-cinemeta.strem.io/manifest.json";
+const ANIMES_ADDON_ID = "com.animeflv.stremio.addon";
+const ANIMES_MANIFEST_URL =
+  "https://pigamer37.alwaysdata.net/onAirCatalogs=animeflv%2Canimeav1%2Chenaojara%2Ctioanime%2Canimejara%2Cjkanime/manifest.json";const CINEMETA_MANIFEST_URL = "https://v3-cinemeta.strem.io/manifest.json";
 const CINEMETA_YEAR_OPTIONS = Array.from(
   { length: 100 },
   (_, index) => String(new Date().getUTCFullYear() - index),
@@ -111,6 +114,20 @@ const CINEMETA_ADDON: InstalledAddon = {
   scope: "global",
 };
 
+const ANIMES_ADDON: InstalledAddon = {
+  id: ANIMES_ADDON_ID,
+  name: "AnimES",
+  description: "Catálogos y streams de AnimeFLV, AnimeAV1, Henaojara, TioAnime, AnimeJara y JKAnime.",
+  logo: "https://raw.githubusercontent.com/Pigamer37/animeflv-stremio-addon/refs/heads/main/views/AnimES.png",
+  url: ANIMES_MANIFEST_URL,
+  manifest: ANIMES_MANIFEST,
+  enabled: true,
+  installedAt: 0,
+  version: "1.4.2",
+  bundled: true,
+  scope: "global",
+};
+
 function isInstalledAddon(value: unknown): value is InstalledAddon {
   if (!value || typeof value !== "object") return false;
   const addon = value as Partial<InstalledAddon>;
@@ -171,6 +188,17 @@ function withBundledTorrentio(globalAddons: InstalledAddon[]) {
   return [...merged.values()];
 }
 
+function withBundledAnimes(globalAddons: InstalledAddon[]) {
+  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
+  const existing = merged.get(ANIMES_ADDON.id);
+  merged.set(ANIMES_ADDON.id, {
+    ...existing,
+    ...ANIMES_ADDON,
+    enabled: existing?.enabled ?? true,
+  });
+  return [...merged.values()];
+}
+
 function withBundledCinemeta(globalAddons: InstalledAddon[]) {
   const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
   if (!merged.has(CINEMETA_ADDON_ID)) merged.set(CINEMETA_ADDON_ID, CINEMETA_ADDON);
@@ -178,9 +206,11 @@ function withBundledCinemeta(globalAddons: InstalledAddon[]) {
 }
 
 function loadAddonScopes() {
-  if (typeof localStorage === "undefined") return [TORRENTIO_LATINO_ADDON, CINEMETA_ADDON];
+  if (typeof localStorage === "undefined") return [TORRENTIO_LATINO_ADDON, CINEMETA_ADDON, ANIMES_ADDON];
   const storedGlobal = readPersistedAddons(GLOBAL_ADDONS_STORAGE_KEY).map(withScope);
-  const globalAddons = withBundledCinemeta(withBundledTorrentio(storedGlobal.filter(addon => addon.scope === "global")));
+  const globalAddons = withBundledCinemeta(
+    withBundledTorrentio(withBundledAnimes(storedGlobal.filter(addon => addon.scope === "global"))),
+  );
   const profileKey = activeProfileAddonsStorageKey();
   if (!profileKey) return globalAddons;
 
@@ -199,7 +229,9 @@ function loadAddonScopes() {
 
 function persistAddonScopes(addons: InstalledAddon[]) {
   const normalized = mergeById(addons);
-  const globalAddons = withBundledCinemeta(withBundledTorrentio(normalized.filter(addon => addon.scope === "global")));
+  const globalAddons = withBundledCinemeta(
+    withBundledTorrentio(withBundledAnimes(normalized.filter(addon => addon.scope === "global"))),
+  );
   writePersistedAddons(GLOBAL_ADDONS_STORAGE_KEY, globalAddons);
   const profileKey = activeProfileAddonsStorageKey();
   if (profileKey) {

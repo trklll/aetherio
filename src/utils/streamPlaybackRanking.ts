@@ -8,7 +8,9 @@ interface StreamPlaybackRankingOptions {
 }
 
 const ANIME_SOURCE_ORDER = [
+  "animes",
   "animeav1",
+  "torrentio",
   "nyaasi",
   "seadex",
   "animetosho",
@@ -51,7 +53,9 @@ function normalizeSourceToken(value: unknown): string {
 
 export function animeSourcePriority(sourceName: string): number {
   const token = normalizeSourceToken(sourceName);
-  const index = ANIME_SOURCE_ORDER.findIndex(source => token.includes(source));
+  const exactIndex = ANIME_SOURCE_ORDER.findIndex(source => token === source);
+  if (exactIndex !== -1) return exactIndex;
+  const index = ANIME_SOURCE_ORDER.findIndex(source => source !== "animes" && token.includes(source));
   return index === -1 ? ANIME_SOURCE_ORDER.length : index;
 }
 

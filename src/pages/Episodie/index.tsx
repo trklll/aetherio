@@ -91,7 +91,7 @@ const AUTO_OPTION = "auto";
 const NO_SUBTITLES_OPTION = "none";
 const PLAYER_HANDOFF_DELAY_MS = 90;
 const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
-const PRIORITY_ANIME_SOURCES = ["AnimeAV1", "Nyaa.si", "SeaDex", "AnimeTosho"] as const;
+const PRIORITY_ANIME_SOURCES = ["AnimES", "AnimeAV1", "Torrentio", "Nyaa.si", "SeaDex", "AnimeTosho"] as const;
 
 function numberValue(value: unknown) {
   const next = Number(value);

@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aetherio"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3024,8 +3024,6 @@ dependencies = [
 [[package]]
 name = "librqbit"
 version = "8.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dadca8f521242010a4c846ef5f224c217009c92e272709cdc08ba9cdabe62983"
 dependencies = [
  "anyhow",
  "arc-swap",
