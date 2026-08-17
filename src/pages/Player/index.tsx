@@ -28,6 +28,7 @@ import { isPlayableMediaStream } from "../../utils/playableMedia";
 import { readDetailMediaMeta, resolveDetailBackground } from "../../utils/mediaMetadata";
 import { sendTraktScrobble, syncTraktProgressEntry } from "../../trakt";
 import {
+  getNativePlaybackStatus,
   getPlaybackCapabilities,
   isAndroidRuntime,
   openExternalUrl,
@@ -47,6 +48,14 @@ import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
 import { useMpvStatus } from "./useMpvStatus";
 import { useSkipIntro } from "./useSkipIntro";
+import SubtitleSyncDialog from "./SubtitleSyncDialog";
+import {
+  SUBTITLE_DELAY_MAX_MS,
+  SUBTITLE_DELAY_MIN_MS,
+} from "./subtitleSync/config";
+import { formatAutoSyncDelay } from "./subtitleSync/parser";
+import { getSavedSubtitleDelayMs, saveSubtitleDelayMs } from "./subtitleSync/storage";
+import { useSubtitleSync } from "./subtitleSync/useSubtitleSync";
 import {
   VIDEO_ENHANCEMENT_OPTIONS,
   readVideoEnhancementProfile,
@@ -231,6 +240,8 @@ export default function PlayerPage() {
   const [seekBuffering, setSeekBuffering] = useState(false);
   const [fileDropNotice, setFileDropNotice] = useState("");
   const fileDropNoticeTimerRef = useRef<number | null>(null);
+  const [subtitleSyncNotice, setSubtitleSyncNotice] = useState("");
+  const subtitleSyncNoticeTimerRef = useRef<number | null>(null);
   const localPlaybackKey = params.get("local");
 
   const query = useMemo(() => buildQuery(params), [
@@ -256,6 +267,12 @@ export default function PlayerPage() {
     safeStream,
     selectedPlaybackOverrides?.selectedSubtitle ?? resumeEntry?.selectedSubtitle ?? "",
   );
+
+  useEffect(() => {
+    if (!query) return;
+    setSubtitleDelayMs(getSavedSubtitleDelayMs(query));
+  }, [query]);
+
   const hasMpvError = !isLeavingPlayer && !androidPlayback && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
   const nativeSurfaceVisible = !androidPlayback && !isIframeStream && Boolean(stream && playbackStarted && !hasMpvError);
 
@@ -474,6 +491,13 @@ export default function PlayerPage() {
         if (desiredSubtitleSelectionSetRef.current && desired.startsWith("ext:") && nextValue.startsWith("track:")) {
           return prev === desired ? prev : desired;
         }
+        if (nextValue.startsWith("track:") && prev.startsWith("ext:")) {
+          const trackId = Number(nextValue.slice(6));
+          const matchedTrack = mpvTracks.find(track => Number(track.id) === trackId);
+          if (matchedTrack && subtitleTrackMatchesUrl(String(matchedTrack.title ?? ""), prev.slice(4))) {
+            return prev;
+          }
+        }
         return prev === nextValue ? prev : nextValue;
       });
     },
@@ -556,6 +580,34 @@ export default function PlayerPage() {
     void sendMpvCommand(["set_property", "sub-pos", subPos]);
     void sendMpvCommand(["set_property", "sub-use-margins", true]);
   }, [mpvFileLoaded, mpvReadyForCommands, subtitleDelayMs, subtitleScalePercent, subtitleVerticalPercent]);
+
+  const applyExternalSubtitle = useCallback((url: string) => {
+    const existing = mpvTracks.find(track => {
+      const kind = String(track.type ?? "").toLowerCase();
+      if (!(kind === "sub" || kind === "subtitle" || kind.includes("sub"))) return false;
+      return subtitleTrackMatchesUrl(String(track.title ?? ""), url);
+    });
+    if (existing) {
+      void sendMpvCommand(["set_property", "sid", Number(existing.id)]);
+      return;
+    }
+    void sendMpvCommand(["sub-add", url, "select"]);
+    window.setTimeout(() => applySubtitleSettings(), 160);
+  }, [applySubtitleSettings, mpvTracks]);
+
+  const handleSubtitleSyncApply = useCallback((delayMs: number) => {
+    setSubtitleDelayMs(delayMs);
+    applySubtitleSettings({ delayMs });
+    saveSubtitleDelayMs(query, delayMs);
+    setSubtitleSyncNotice(`Sync aplicado: ${formatAutoSyncDelay(delayMs)}`);
+    if (subtitleSyncNoticeTimerRef.current !== null) {
+      window.clearTimeout(subtitleSyncNoticeTimerRef.current);
+    }
+    subtitleSyncNoticeTimerRef.current = window.setTimeout(() => {
+      subtitleSyncNoticeTimerRef.current = null;
+      setSubtitleSyncNotice("");
+    }, 2400);
+  }, [applySubtitleSettings, query]);
 
   useEffect(() => {
     if (!mpvFileLoaded) return;
@@ -810,15 +862,28 @@ export default function PlayerPage() {
         kind: String(track.type ?? "").toLowerCase(),
       }))
       .filter(track => Number.isFinite(track.parsedId) && (track.kind === "sub" || track.kind === "subtitle" || track.kind.includes("sub")))
-      .map(track => {
-        const languageKey = normalizeSubtitleLanguageKey(track.lang ?? track.title ?? "");
-        return {
+      .flatMap(track => {
+        const title = String(track.title ?? "");
+        const externalMatch = allSubtitles.find(subtitle => subtitleTrackMatchesUrl(title, subtitle.url));
+        if (externalMatch) return [];
+        const languageKey = normalizeSubtitleLanguageKey(track.lang ?? title);
+        if (looksLikeSubtitleUrl(title)) {
+          const languageLabel = formatSubtitleLanguageLabel(languageKey, String(track.lang ?? ""));
+          return [{
+            value: `track:${track.parsedId}`,
+            label: languageLabel,
+            languageKey,
+            languageLabel,
+            sourceLabel: "Externo",
+          }];
+        }
+        return [{
           value: `track:${track.parsedId}`,
           label: track.title && track.lang ? `${track.lang} - ${track.title}` : track.title ?? track.lang ?? `Subtítulo ${track.parsedId}`,
           languageKey,
           languageLabel: formatSubtitleLanguageLabel(languageKey, String(track.lang ?? "")),
           sourceLabel: "Embebido",
-        };
+        }];
       });
     const external = allSubtitles.map(subtitle => {
       const languageKey = normalizeSubtitleLanguageKey(subtitle.lang || subtitle.label);
@@ -832,6 +897,27 @@ export default function PlayerPage() {
     });
     return [...internal, ...external];
   }, [allSubtitles, mpvTracks]);
+
+  const subtitleSync = useSubtitleSync({
+    selectedSubtitleValue: selectedMpvSubtitle,
+    streamUrl: stream?.url ?? null,
+    streamHeaders: stream?.behaviorHints?.headers as Record<string, string> | undefined,
+    getPositionMs: async () => {
+      try {
+        const status = await getNativePlaybackStatus();
+        return Number(status.timePos ?? 0) * 1000;
+      } catch {
+        return 0;
+      }
+    },
+    onApplyDelay: handleSubtitleSyncApply,
+  });
+
+  useEffect(() => {
+    if (!subtitleSync.open) return;
+    holdControls();
+    return () => releaseControls(1);
+  }, [subtitleSync.open, holdControls, releaseControls]);
 
   const audioSelectionMeta = (value: string) => {
     const track = findMpvTrackByValue(value, mpvTracks);
@@ -1462,8 +1548,7 @@ export default function PlayerPage() {
     if (targetSubtitle.startsWith("track:")) {
       void sendMpvCommand(["set_property", "sid", Number(targetSubtitle.slice(6))]);
     } else if (targetSubtitle.startsWith("ext:")) {
-      void sendMpvCommand(["sub-add", targetSubtitle.slice(4), "select"]);
-      window.setTimeout(() => applySubtitleSettings(), 160);
+      applyExternalSubtitle(targetSubtitle.slice(4));
     }
     if (autoSubtitleTimerRef.current) window.clearTimeout(autoSubtitleTimerRef.current);
     autoSubtitleTimerRef.current = window.setTimeout(() => {
@@ -1479,8 +1564,7 @@ export default function PlayerPage() {
       if (targetSubtitle.startsWith("track:")) {
         void sendMpvCommand(["set_property", "sid", Number(targetSubtitle.slice(6))]);
       } else if (targetSubtitle.startsWith("ext:")) {
-        void sendMpvCommand(["sub-add", targetSubtitle.slice(4), "select"]);
-        window.setTimeout(() => applySubtitleSettings(), 160);
+        applyExternalSubtitle(targetSubtitle.slice(4));
       }
     }, 380);
   }, [
@@ -1496,6 +1580,7 @@ export default function PlayerPage() {
     subtitleOptions,
     subtitlesReady,
     applySubtitleSettings,
+    applyExternalSubtitle,
   ]);
 
   useEffect(() => {
@@ -1754,7 +1839,7 @@ export default function PlayerPage() {
         void sendMpvCommand(["set_property", "sid", Number(targetSubtitle.slice(6))]);
       } else if (targetSubtitle.startsWith("ext:")) {
         setSelectedMpvSubtitle(targetSubtitle);
-        void sendMpvCommand(["sub-add", targetSubtitle.slice(4), "select"]);
+        applyExternalSubtitle(targetSubtitle.slice(4));
       }
     }
 
@@ -1816,6 +1901,7 @@ export default function PlayerPage() {
     subtitleOptions,
     subtitlesReady,
     startupGateTimeoutMs,
+    applyExternalSubtitle,
   ]);
 
   useEffect(() => {
@@ -2322,6 +2408,27 @@ if (!stream) {
           {fileDropNotice}
         </div>
       ) : null}
+      {subtitleSyncNotice ? (
+        <div
+          data-player-interactive
+          className="pointer-events-none absolute left-1/2 top-6 z-50 -translate-x-1/2 rounded-full border border-white/14 bg-black/76 px-4 py-2 text-sm font-semibold text-white shadow-2xl"
+        >
+          {subtitleSyncNotice}
+        </div>
+      ) : null}
+
+      <SubtitleSyncDialog
+        open={subtitleSync.open}
+        loading={subtitleSync.loading}
+        error={subtitleSync.error}
+        stage={subtitleSync.stage}
+        cues={subtitleSync.visibleCues}
+        capturedVideoMs={subtitleSync.capturedVideoMs}
+        trackLabel={subtitleOptions.find(option => option.value === selectedMpvSubtitle)?.label ?? ""}
+        onClose={subtitleSync.closeSync}
+        onCapture={() => void subtitleSync.capture()}
+        onApplyCue={subtitleSync.applyCue}
+      />
 
       {!androidPlayback && playbackPreferences.skipSegmentsEnabled && activeSkipSegment && mpvReadyForCommands && playbackStarted ? (
         <button
@@ -2385,6 +2492,7 @@ if (!stream) {
         subtitleDelayMs={subtitleDelayMs}
         subtitleScalePercent={subtitleScalePercent}
         subtitleVerticalPercent={subtitleVerticalPercent}
+        subtitleSyncOpen={subtitleSync.open}
         showPanelToggle={showPanelToggle}
         activeSidePanel={activeSidePanel}
         hasEpisodeOptions={episodeOptions.length > 0}
@@ -2441,14 +2549,14 @@ if (!stream) {
             return;
           }
           if (value.startsWith("ext:")) {
-            void sendMpvCommand(["sub-add", value.slice(4), "select"]);
-            window.setTimeout(() => applySubtitleSettings(), 160);
+            applyExternalSubtitle(value.slice(4));
           }
         }}
         onSubtitleDelayChange={next => {
-          const value = Math.max(-5000, Math.min(5000, next));
+          const value = Math.max(SUBTITLE_DELAY_MIN_MS, Math.min(SUBTITLE_DELAY_MAX_MS, next));
           setSubtitleDelayMs(value);
           applySubtitleSettings({ delayMs: value });
+          saveSubtitleDelayMs(query, value);
         }}
         onSubtitleScaleChange={next => {
           const value = Math.max(50, Math.min(200, next));
@@ -2460,6 +2568,7 @@ if (!stream) {
           setSubtitleVerticalPercent(value);
           applySubtitleSettings({ verticalPercent: value });
         }}
+        onOpenSubtitleSync={subtitleSync.openSync}
         onSpeedChange={value => {
           setSelectedSpeed(value);
           void sendMpvCommand(["set_property", "speed", Number(value)]);
@@ -2488,6 +2597,25 @@ function pickInitialTrackOption(options: { value: string; label: string; languag
     options[0] ??
     null
   );
+}
+
+function looksLikeSubtitleUrl(value: string) {
+  if (!value) return false;
+  if (value.includes("://")) return true;
+  if (value.startsWith("?")) return true;
+  return /(?:^|[?&])(?:lang|lang_code|language|sub_id)=/i.test(value);
+}
+
+function subtitleTrackMatchesUrl(title: string, url: string) {
+  if (!title || !url) return false;
+  if (title === url) return true;
+  if (url.endsWith(title) || title.endsWith(url)) return true;
+  const titleQueryIndex = title.indexOf("?");
+  const urlQueryIndex = url.indexOf("?");
+  if (titleQueryIndex >= 0 && urlQueryIndex >= 0) {
+    return title.slice(titleQueryIndex) === url.slice(urlQueryIndex);
+  }
+  return false;
 }
 
 function pickInitialTrackOptionFromLanguages(options: { value: string; label: string; languageKey?: string }[], preferredLanguages: string[]) {

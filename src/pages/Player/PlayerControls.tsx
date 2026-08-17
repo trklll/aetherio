@@ -26,6 +26,7 @@ import ContextMenu from "../../components/ui/ContextMenu";
 import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
 import { tweenTo } from "../../utils/motion";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
+import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
 
 type MpvBlurGeometry = {
   left: number;
@@ -72,6 +73,7 @@ interface PlayerControlsProps {
   subtitleDelayMs: number;
   subtitleScalePercent: number;
   subtitleVerticalPercent: number;
+  subtitleSyncOpen: boolean;
   showPanelToggle: boolean;
   activeSidePanel: "episodes" | "sources" | null;
   hasEpisodeOptions: boolean;
@@ -91,6 +93,7 @@ interface PlayerControlsProps {
   onSubtitleDelayChange: (next: number) => void;
   onSubtitleScaleChange: (next: number) => void;
   onSubtitleVerticalChange: (next: number) => void;
+  onOpenSubtitleSync: () => void;
   onSpeedChange: (value: string) => void;
   onVideoProfileChange: (value: string) => void;
   onToggleVideoScale: () => void;
@@ -120,6 +123,7 @@ export default function PlayerControls({
   subtitleDelayMs,
   subtitleScalePercent,
   subtitleVerticalPercent,
+  subtitleSyncOpen,
   showPanelToggle,
   activeSidePanel,
   hasEpisodeOptions,
@@ -139,6 +143,7 @@ export default function PlayerControls({
   onSubtitleDelayChange,
   onSubtitleScaleChange,
   onSubtitleVerticalChange,
+  onOpenSubtitleSync,
   onSpeedChange,
   onVideoProfileChange,
   onToggleVideoScale,
@@ -284,7 +289,7 @@ export default function PlayerControls({
       lastBlurGeometryRef.current = "";
       queueBlurCommand(false);
     };
-    if (!active || controlsLocked) {
+    if ((!active && !subtitleSyncOpen) || controlsLocked) {
       disableBlur();
       return;
     }
@@ -304,6 +309,10 @@ export default function PlayerControls({
           ? document.querySelector<HTMLElement>("[data-player-floating-panel-glass]")
           : null;
         const subtitleRect = subtitlePanel?.getBoundingClientRect();
+        const syncDialogPanel = subtitleSyncOpen
+          ? document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]")
+          : null;
+        const syncDialogRect = syncDialogPanel?.getBoundingClientRect();
         const scale = window.devicePixelRatio || 1;
         const geometry = {
           left: rect.left * scale,
@@ -322,15 +331,23 @@ export default function PlayerControls({
                 cornerRadius: 28 * scale,
               }
             : undefined,
-          subtitlePanel: subtitleRect
+          subtitlePanel: syncDialogRect
             ? {
-                left: subtitleRect.left * scale,
-                top: subtitleRect.top * scale,
-                right: subtitleRect.right * scale,
-                bottom: subtitleRect.bottom * scale,
+                left: syncDialogRect.left * scale,
+                top: syncDialogRect.top * scale,
+                right: syncDialogRect.right * scale,
+                bottom: syncDialogRect.bottom * scale,
                 cornerRadius: 24 * scale,
               }
-            : undefined,
+            : subtitleRect
+              ? {
+                  left: subtitleRect.left * scale,
+                  top: subtitleRect.top * scale,
+                  right: subtitleRect.right * scale,
+                  bottom: subtitleRect.bottom * scale,
+                  cornerRadius: 24 * scale,
+                }
+              : undefined,
         };
         const geometryKey = JSON.stringify(geometry);
         if (geometryKey === lastBlurGeometryRef.current) return;
@@ -362,6 +379,10 @@ export default function PlayerControls({
     if (episodePanel) observer.observe(episodePanel);
     const subtitlePanel = document.querySelector<HTMLElement>("[data-player-floating-panel-glass]");
     if (subtitlePanel) observer.observe(subtitlePanel);
+    const syncDialogPanel = subtitleSyncOpen
+      ? document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]")
+      : null;
+    if (syncDialogPanel) observer.observe(syncDialogPanel);
     observer.observe(document.documentElement);
     window.addEventListener("resize", syncBlurAfterResize);
     window.visualViewport?.addEventListener("resize", syncBlurAfterResize);
@@ -374,7 +395,7 @@ export default function PlayerControls({
       resizeSettleTimers.forEach(timer => window.clearTimeout(timer));
       subtitleRefreshTimers.forEach(timer => window.clearTimeout(timer));
     };
-  }, [active, activeSidePanel, controlsLocked, openMenu, subtitleBlurRefreshKey]);
+  }, [active, activeSidePanel, controlsLocked, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
 
   function runControlAction(action: () => void) {
     setOpenMenu(null);
@@ -493,6 +514,7 @@ export default function PlayerControls({
               onSubtitleDelayChange={onSubtitleDelayChange}
               onSubtitleScaleChange={onSubtitleScaleChange}
               onSubtitleVerticalChange={onSubtitleVerticalChange}
+              onOpenSubtitleSync={onOpenSubtitleSync}
             />
             <IconMenu
               id="speed"
@@ -592,6 +614,7 @@ function SubtitleMenu({
   onSubtitleDelayChange,
   onSubtitleScaleChange,
   onSubtitleVerticalChange,
+  onOpenSubtitleSync,
 }: {
   label: string;
   selectedSubtitleValue: string;
@@ -607,6 +630,7 @@ function SubtitleMenu({
   onSubtitleDelayChange: (next: number) => void;
   onSubtitleScaleChange: (next: number) => void;
   onSubtitleVerticalChange: (next: number) => void;
+  onOpenSubtitleSync: () => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -681,7 +705,7 @@ function SubtitleMenu({
           data-player-floating-panel-glass
           role="dialog"
           aria-label="Subtítulos"
-          className="fixed left-1/2 z-[45] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white"
+          className="fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white"
           style={{
             ...CONTEXT_GLASS_STYLE,
             bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
@@ -773,8 +797,8 @@ function SubtitleMenu({
                   <SubtitleStepper
                     label="Atraso"
                     value={formatDelay(subtitleDelayMs)}
-                    onDecrease={() => onSubtitleDelayChange(subtitleDelayMs - 250)}
-                    onIncrease={() => onSubtitleDelayChange(subtitleDelayMs + 250)}
+                    onDecrease={() => onSubtitleDelayChange(subtitleDelayMs - SUBTITLE_DELAY_STEP_MS)}
+                    onIncrease={() => onSubtitleDelayChange(subtitleDelayMs + SUBTITLE_DELAY_STEP_MS)}
                   />
                   <SubtitleStepper
                     label="Tamaño"
@@ -789,6 +813,17 @@ function SubtitleMenu({
                     onIncrease={() => onSubtitleVerticalChange(subtitleVerticalPercent + 5)}
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenSubtitleSync();
+                  }}
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs font-semibold text-white/84 gsap-transition hover:bg-white/[0.1] hover:text-white"
+                >
+                  <TimerReset size={13} />
+                  Sincronizar línea
+                </button>
               </div>
             </section>
           </div>
