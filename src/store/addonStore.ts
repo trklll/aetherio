@@ -39,6 +39,8 @@ const CINEMETA_ADDON_ID = "com.linvo.cinemeta";
 const ANIMES_ADDON_ID = "com.animeflv.stremio.addon";
 const ANIMES_MANIFEST_URL =
   "https://pigamer37.alwaysdata.net/onAirCatalogs=animeflv%2Canimeav1%2Chenaojara%2Ctioanime%2Canimejara%2Cjkanime/manifest.json";const CINEMETA_MANIFEST_URL = "https://v3-cinemeta.strem.io/manifest.json";
+const HDHUB_ADDON_ID = "com.stremio.HdHub";
+export const HDHUB_MANIFEST_URL = "https://hdhub.thevolecitor.qzz.io/eyJ0b3Jib3giOiJ1bnNldCIsInF1YWxpdGllcyI6IjIxNjBwLDEwODBwLDcyMHAiLCJzb3J0IjoiZGVzYyIsImNvbnRlbnQiOiJsYXRpbiIsImNhdGFsb2dzIjoiIn0/manifest.json";
 const CINEMETA_YEAR_OPTIONS = Array.from(
   { length: 100 },
   (_, index) => String(new Date().getUTCFullYear() - index),
@@ -128,6 +130,32 @@ const ANIMES_ADDON: InstalledAddon = {
   scope: "global",
 };
 
+const HDHUB_ADDON: InstalledAddon = {
+  id: HDHUB_ADDON_ID,
+  name: "HdHub",
+  description: "Watch movies and series from HdHub.",
+  logo: "http://hdhub.thevolecitor.qzz.io/logo.png",
+  url: HDHUB_MANIFEST_URL,
+  manifest: {
+    id: HDHUB_ADDON_ID,
+    version: "1.0.7",
+    name: "HdHub",
+    description: "Watch movies and series from HdHub.",
+    resources: ["stream", "catalog"],
+    types: ["movie", "series", "HdHub"],
+    idPrefixes: ["tt", "tmdb:", "kitsu:"],
+    catalogs: [],
+    logo: "http://hdhub.thevolecitor.qzz.io/logo.png",
+    background: "http://hdhub.thevolecitor.qzz.io/logo.png",
+    behaviorHints: { configurable: true },
+  },
+  enabled: true,
+  installedAt: 0,
+  version: "1.0.7",
+  bundled: true,
+  scope: "global",
+};
+
 function isInstalledAddon(value: unknown): value is InstalledAddon {
   if (!value || typeof value !== "object") return false;
   const addon = value as Partial<InstalledAddon>;
@@ -205,12 +233,23 @@ function withBundledCinemeta(globalAddons: InstalledAddon[]) {
   return [...merged.values()];
 }
 
+function withBundledHdhub(globalAddons: InstalledAddon[]) {
+  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
+  const existing = merged.get(HDHUB_ADDON_ID);
+  merged.set(HDHUB_ADDON_ID, {
+    ...existing,
+    ...HDHUB_ADDON,
+    enabled: existing?.enabled ?? true,
+  });
+  return [...merged.values()];
+}
+
 function loadAddonScopes() {
-  if (typeof localStorage === "undefined") return [TORRENTIO_LATINO_ADDON, CINEMETA_ADDON, ANIMES_ADDON];
+  if (typeof localStorage === "undefined") return [TORRENTIO_LATINO_ADDON, CINEMETA_ADDON, ANIMES_ADDON, HDHUB_ADDON];
   const storedGlobal = readPersistedAddons(GLOBAL_ADDONS_STORAGE_KEY).map(withScope);
-  const globalAddons = withBundledCinemeta(
+  const globalAddons = withBundledHdhub(withBundledCinemeta(
     withBundledTorrentio(withBundledAnimes(storedGlobal.filter(addon => addon.scope === "global"))),
-  );
+  ));
   const profileKey = activeProfileAddonsStorageKey();
   if (!profileKey) return globalAddons;
 
@@ -229,9 +268,9 @@ function loadAddonScopes() {
 
 function persistAddonScopes(addons: InstalledAddon[]) {
   const normalized = mergeById(addons);
-  const globalAddons = withBundledCinemeta(
+  const globalAddons = withBundledHdhub(withBundledCinemeta(
     withBundledTorrentio(withBundledAnimes(normalized.filter(addon => addon.scope === "global"))),
-  );
+  ));
   writePersistedAddons(GLOBAL_ADDONS_STORAGE_KEY, globalAddons);
   const profileKey = activeProfileAddonsStorageKey();
   if (profileKey) {

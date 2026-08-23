@@ -36,7 +36,7 @@ import { getStreamFormatBadges, type StreamFormatBadge } from "../../utils/strea
 import { inspectStreamManifest, shouldInspectStreamManifest } from "../../utils/streamManifestMetadata.ts";
 import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
-import { getSourceLogo } from "../../utils/sourceLogos.ts";
+import { getSourceLogo, getStreamAddonLogo } from "../../utils/sourceLogos.ts";
 import { pickBestMatchingSource, type AutoNextSourceHint } from "../../utils/autoNextSource.ts";
 import {
   AVAILABLE_STREAMS_KEY,
@@ -1030,6 +1030,13 @@ const StreamItemButton = memo(function StreamItemButton({
   const fileName = useMemo(() => extractSourceFileName(stream), [stream]);
   const summary = useMemo(() => formatSourceSummary(stream), [stream]);
   const metadata = useMemo(() => formatSourceCardMetadata(stream), [stream]);
+  const addonLogo = useMemo(() => {
+    const direct = getStreamAddonLogo(stream);
+    if (direct) return direct;
+    const sourceName = extractSourceName(stream);
+    if (sourceName) return getSourceLogo(sourceName);
+    return getSourceLogo(stream.addonName ?? "");
+  }, [stream]);
 
   useEffect(() => {
     if (!shouldInspectStreamManifest(stream)) return;
@@ -1070,8 +1077,22 @@ const StreamItemButton = memo(function StreamItemButton({
       }`}
       aria-pressed={selected}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+      <div className="flex items-start gap-3">
+        {addonLogo ? (
+          <img
+            src={addonLogo}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="mt-0.5 h-9 w-9 shrink-0 rounded-lg object-contain bg-black/30 p-1"
+            onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+        ) : (
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-white/40">
+            <Film size={16} />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
           <p className="line-clamp-2 break-words text-[16px] font-bold leading-6 text-white [overflow-wrap:anywhere]">
             {priority ? (
               <span className="inline-flex items-center gap-1.5">

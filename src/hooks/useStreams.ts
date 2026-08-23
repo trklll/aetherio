@@ -106,20 +106,36 @@ function addonStreamIdPrefixes(addon: any, type: string) {
 async function resolveAddonStreamId(addon: any, query: StreamQuery, requestType: string, fallbackStreamId: string) {
   const prefixes = addonStreamIdPrefixes(addon, requestType);
   const directImdb = query.id.replace(/^imdb:/i, "");
-  if (/^tt\d+$/i.test(directImdb) && prefixes.includes("tt")) {
+  if (/^tt\d+$/i.test(directImdb) && (prefixes.length === 0 || prefixes.includes("tt"))) {
     return buildStreamIdFromMediaId(query, directImdb);
   }
   const tmdbMatch = query.id.match(/^tmdb:(\d+)$/i);
-  if (!tmdbMatch || !prefixes.includes("tt") || prefixes.includes("tmdb")) return fallbackStreamId;
+  if (!tmdbMatch) return fallbackStreamId;
+  if (prefixes.length > 0 && !prefixes.includes("tt") && !prefixes.includes("tmdb")) return fallbackStreamId;
+
   const cacheKey = `${query.type}:${tmdbMatch[1]}`;
   let pending = IMDB_ID_CACHE.get(cacheKey);
   if (!pending) {
-    pending = tmdbFetch<any>(`/${query.type === "movie" ? "movie" : "tv"}/${tmdbMatch[1]}`, {
-      params: { append_to_response: "external_ids" },
-    }).then(details => {
-      const imdbId = details?.external_ids?.imdb_id ?? details?.imdb_id;
-      return typeof imdbId === "string" && /^tt\d+$/i.test(imdbId) ? imdbId : null;
-    }).catch(() => null);
+    pending = (async () => {
+      try {
+        const details = await tmdbFetch<any>(`/${query.type === "movie" ? "movie" : "tv"}/${tmdbMatch[1]}`, {
+          params: { append_to_response: "external_ids" },
+        });
+        const imdbId = details?.external_ids?.imdb_id ?? details?.imdb_id;
+        if (typeof imdbId === "string" && /^tt\d+$/i.test(imdbId)) return imdbId;
+      } catch {}
+
+      try {
+        const cinemetaRes = await fetch(`https://v3-cinemeta.strem.io/meta/${query.type}/tmdb:${tmdbMatch[1]}.json`);
+        if (cinemetaRes.ok) {
+          const cinemetaJson = await cinemetaRes.json();
+          const imdbId = cinemetaJson?.meta?.imdb_id;
+          if (typeof imdbId === "string" && /^tt\d+$/i.test(imdbId)) return imdbId;
+        }
+      } catch {}
+
+      return null;
+    })();
     IMDB_ID_CACHE.set(cacheKey, pending);
   }
   const imdbId = await pending;
@@ -141,24 +157,29 @@ function addonSupportsType(addon: any, type: string) {
 
 function streamRequestTypes(addon: any, queryType: string) {
   const candidates = queryType === "anime"
-    ? ["anime", "series", "tv"]
+    ? ["anime", "series", "tv", "movie"]
     : queryType === "tv" || queryType === "series"
-      ? ["series", "tv"]
-      : [queryType];
+      ? ["series", "tv", "anime", "movie"]
+      : [queryType, "movie", "series", "anime"];
   return candidates.filter((type, index) => candidates.indexOf(type) === index && addonSupportsType(addon, type));
 }
 
-async function fetchStreamPayload(url: string, attempts = 2) {
+async function fetchStreamPayload(url: string, attempts = 3) {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 6000);
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal });
+      window.clearTimeout(timer);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return { json: await response.json(), status: response.status };
+      const json = await response.json();
+      return { json, status: response.status };
     } catch (error) {
+      window.clearTimeout(timer);
       lastError = error;
       if (attempt < attempts) {
-        await new Promise(resolve => window.setTimeout(resolve, 450 * attempt));
+        await new Promise(resolve => window.setTimeout(resolve, 500 * attempt));
       }
     }
   }
@@ -372,7 +393,13 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
           .then(({ json, status }) => {
             if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] response", { addonId: addon.id, type, status, ok: true });
             if (cancelled) return;
-            const rawStreams = Array.isArray(json.streams) ? json.streams : [];
+            const rawStreams = Array.isArray(json)
+              ? json
+              : Array.isArray(json?.streams)
+                ? json.streams
+                : Array.isArray(json?.addonStreams)
+                  ? json.addonStreams
+                  : [];
             const fresh = rawStreams
               .map((s: any, i: number) => normalizeStream(s, addon.id, addon.name, i))
               .filter(Boolean) as MediaStream[];
@@ -395,7 +422,9 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
             if (!fresh.length) return;
             // Merge + dedup incremental
             accRef.current = sortStreamsForPlayback(dedupeStreams([...accRef.current, ...fresh]));
-            STREAM_CACHE.set(cacheKey, { streams: [...accRef.current], updatedAt: Date.now() });
+            if (accRef.current.length > 0) {
+              STREAM_CACHE.set(cacheKey, { streams: [...accRef.current], updatedAt: Date.now() });
+            }
             setStreams([...accRef.current]);
           })
           .catch(error => {

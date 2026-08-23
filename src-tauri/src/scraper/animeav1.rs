@@ -97,6 +97,236 @@ fn extract_first_slug_from_search(json_text: &str) -> Option<String> {
     best
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct SearchResult {
+    title: String,
+    slug: String,
+}
+
+/// Parses every media result of the search node. Each result has the shape:
+/// `{"id":N,"title":M,"synopsis":K,"categoryId":P,"slug":Q,"category":R},"<id>","<title>","<synopsis>","<slug>"`
+/// The `categoryId` literal is emitted only once per distinct value (Remix
+/// dedup), so it must be treated as optional and is not used for ranking.
+fn extract_search_results(json_text: &str) -> Vec<SearchResult> {
+    let search_node = match json_text.split(r#""results""#).nth(1) {
+        Some(node) => node,
+        None => return Vec::new(),
+    };
+    let body = match search_node.find(r#""uses""#) {
+        Some(end) => &search_node[..end],
+        None => search_node,
+    };
+
+    let result_re = Regex::new(
+        r#"\{"id":\d+,"title":\d+,"synopsis":\d+,"categoryId":\d+,"slug":\d+,"category":\d+\},"\d+","((?:[^"\\]|\\.)*)",(?:"(?:[^"\\]|\\.)*"|null)(?:,\d+|,null)?,"([a-z0-9][a-z0-9\-]*)"#,
+    )
+    .unwrap();
+
+    let mut results = Vec::new();
+    for cap in result_re.captures_iter(body) {
+        let Some(title) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(slug) = cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        if title.is_empty() || slug.len() < 2 {
+            continue;
+        }
+        results.push(SearchResult {
+            title: title.to_string(),
+            slug: slug.to_string(),
+        });
+    }
+    results
+}
+
+fn normalize_title(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Extracts an explicit season number from a title like "Sousou no Frieren
+/// 2nd Season", "Mushoku Tensei II: ...", "Mob Psycho 100 II" or "One Punch
+/// Man 3". Only explicit series-season markers are recognized.
+fn title_season_number(title: &str) -> Option<u32> {
+    let lower = title.to_lowercase();
+    // "2nd Season", "Season 2", "Temporada 3", "2ª Temporada", "Cour 2".
+    let numeric_re = Regex::new(
+        r"(?i)(\d+)\s*(?:st|nd|rd|th|ª|a|o)?\s*(?:season|temporada|cour)|\b(?:season|temporada|cour)\s+(\d+)",
+    )
+    .ok()?;
+    if let Some(cap) = numeric_re.captures(&lower) {
+        if let Some(value) = cap.get(1).or_else(|| cap.get(2)) {
+            if let Ok(season) = value.as_str().parse::<u32>() {
+                if (1..=99).contains(&season) {
+                    return Some(season);
+                }
+            }
+        }
+    }
+    // Roman numeral I..V as a standalone token before ":" ("Mushoku Tensei
+    // II: ...") or at the end of the title ("Mob Psycho 100 II"). Requires a
+    // word boundary so "XII" or "DxD" never match.
+    let roman_re = Regex::new(r"(?i)(?:^|\s)(iv|v|iii|ii|i)(?:\s*:|$)").ok()?;
+    if let Some(cap) = roman_re.captures(&lower) {
+        let token = cap.get(1)?.as_str().to_lowercase();
+        let season = match token.as_str() {
+            "i" => 1,
+            "ii" => 2,
+            "iii" => 3,
+            "iv" => 4,
+            "v" => 5,
+            _ => return None,
+        };
+        return Some(season);
+    }
+    // Trailing number ("One Punch Man 3"). Kept small to avoid year-like
+    // values and standalone numbers inside other titles. "Part 2" style
+    // suffixes are part-of-season markers, not season numbers, and "Movie N"
+    // trailers are movie numbering, not seasons.
+    let part_re = Regex::new(r"(?i)\b(?:part|parte)\s+\d{1,2}\s*$").ok()?;
+    if part_re.is_match(&lower) {
+        return None;
+    }
+    let trailing_re = Regex::new(r"(?i)(\d{1,2})\s*$").ok()?;
+    if let Some(cap) = trailing_re.captures(&lower) {
+        if let Ok(season) = cap.get(1)?.as_str().parse::<u32>() {
+            if (1..=50).contains(&season) && !has_movie_like_word(title) {
+                return Some(season);
+            }
+        }
+    }
+    None
+}
+
+fn has_movie_like_word(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    let word_re = Regex::new(r"(?i)\b(movie|film|pelicula|película|ova|special|especial|specials)\b").unwrap();
+    word_re.is_match(&lower)
+}
+
+/// True when the title names a specific arc/late season rather than the base
+/// series ("...Kanketsu-hen", "...Hashira Geiko-hen", "The Final Season").
+fn has_arc_suffix(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    let suffix_re = Regex::new(r"(?i)(?:-hen|final season)\s*$").unwrap();
+    suffix_re.is_match(&lower)
+}
+
+/// True when any result shares a strong textual match with the query, meaning
+/// the site's titles use the same language as the query. Otherwise the search
+/// matched an English alias while the titles stay in Japanese (e.g. "Demon
+/// Slayer" vs "Kimetsu no Yaiba") and a second search with the top result's
+/// title is needed to isolate the right series family.
+fn has_strong_title_match(results: &[SearchResult], query: &str) -> bool {
+    let normalized_query = normalize_title(query);
+    results.iter().any(|result| {
+        let normalized_title = normalize_title(&result.title);
+        normalized_title == normalized_query
+            || normalized_title.starts_with(&normalized_query)
+            || normalized_title.contains(&normalized_query)
+            || normalized_query.contains(&normalized_title)
+    })
+}
+
+/// Ranks all search results and returns the slug of the best match for the
+/// given query. The search endpoint orders results by relevance to the query's
+/// English alias, so the first hit is often a movie or the latest season
+/// rather than the base series. We score by title similarity first; when the
+/// query has no strong textual match (the site often uses the English alias
+/// while titles stay in Japanese), we fall back to the backend's own ordering
+/// and only apply season/movie adjustments on top of it.
+fn pick_best_slug(results: &[SearchResult], query: &str, season: Option<u32>) -> Option<String> {
+    if results.is_empty() {
+        return None;
+    }
+    let normalized_query = normalize_title(query);
+    let query_tokens: Vec<&str> = normalized_query.split_whitespace().collect();
+    let query_is_movie_like = has_movie_like_word(query);
+    let wanted = season.unwrap_or(1);
+    let count = results.len();
+
+    let mut best: Option<(&SearchResult, i64)> = None;
+    for (index, result) in results.iter().enumerate() {
+        let normalized_title = normalize_title(&result.title);
+        // Backend relevance order decides ties between weak matches. For the
+        // base season (1) the backend ranks the newest arc first, which is the
+        // wrong pick for season 1, so the position signal is dropped there and
+        // the base series wins via the shorter-title tie-break instead.
+        let position_step = if wanted == 1 { 1 } else { 10_000 };
+        let mut score: i64 = (count - index) as i64 * position_step;
+
+        let strong = normalized_title == normalized_query
+            || normalized_title.starts_with(&normalized_query)
+            || normalized_title.contains(&normalized_query)
+            || normalized_query.contains(&normalized_title);
+
+        if strong {
+            if normalized_title == normalized_query {
+                score += 1_000_000;
+            } else if normalized_title.starts_with(&normalized_query) {
+                score += 500_000;
+            } else if normalized_title.contains(&normalized_query) {
+                score += 300_000;
+            } else {
+                score += 100_000;
+            }
+            let title_tokens: Vec<&str> = normalized_title.split_whitespace().collect();
+            let contained = query_tokens
+                .iter()
+                .filter(|token| title_tokens.contains(token))
+                .count();
+            let ratio = contained as f64 / query_tokens.len().max(1) as f64;
+            score += (ratio * 100_000.0) as i64;
+        }
+
+        // Series preference: penalize movie/special entries unless the query
+        // itself asks for one.
+        if !query_is_movie_like && has_movie_like_word(&result.title) {
+            score -= 200_000;
+        }
+
+        // For the base season, arc entries ("Kanketsu-hen", "The Final
+        // Season") are never the right pick, regardless of how well the arc
+        // title matches the search term.
+        if wanted == 1 && has_arc_suffix(&result.title) {
+            score -= 1_000_000;
+        }
+
+        // Season disambiguation: prefer the entry matching the requested
+        // season; without a season (or for season 1) prefer the base entry.
+        // Explicit season markers are decisive for strong matches; for weak
+        // matches the marker signal is kept small so the backend ordering
+        // still decides between unnamed arc entries ("Hashira Geiko-hen").
+        match title_season_number(&result.title) {
+            Some(parsed) if parsed == wanted => {
+                score += if strong { 1_000_000 } else { 200_000 };
+            }
+            Some(_) => {
+                score -= if strong { 1_000_000 } else { 200_000 };
+            }
+            None if wanted == 1 => {
+                score += 200_000;
+            }
+            None => {}
+        }
+
+        // Tie-break: shorter titles are the base series entries.
+        score -= normalized_title.chars().count() as i64;
+
+        if best.as_ref().is_none_or(|(_, best_score)| score > *best_score) {
+            best = Some((result, score));
+        }
+    }
+
+    best.map(|(result, _)| result.slug.clone())
+}
+
 /// Extracts the media title from the episode __data.json payload.
 ///
 /// The Remix devalued format puts the media object inside data[1] with fields
@@ -367,7 +597,7 @@ fn build_episode_title(media_title: &str, episode_number: u32) -> String {
 pub async fn search_and_resolve(
     client: &Client,
     query: &str,
-    _season: Option<u32>,
+    season: Option<u32>,
     episode: Option<u32>,
 ) -> Result<(Vec<StreamCandidate>, Option<String>), String> {
     let encoded_query = urlencoding::encode(query);
@@ -384,8 +614,41 @@ pub async fn search_and_resolve(
         .await
         .map_err(|e| format!("AnimeAV1 search text read failed: {e}"))?;
 
-    let slug = extract_first_slug_from_search(&search_text)
-        .ok_or_else(|| "AnimeAV1: no search results found".to_string())?;
+    let first_results = extract_search_results(&search_text);
+
+    let mut slug = if has_strong_title_match(&first_results, query) {
+        pick_best_slug(&first_results, query, season)
+    } else if let Some(top) = first_results
+        .iter()
+        .find(|result| !has_movie_like_word(&result.title))
+    {
+        // The site matched an English alias while titles stay in Japanese.
+        // Re-search with the top series result's own title to isolate the
+        // series family, then rank within it. Movie/special entries are
+        // skipped so their titles never anchor the second search.
+        let second_query = urlencoding::encode(&top.title);
+        let second_url = format!(
+            "{ANIMEAV1_BASE}/catalogo/__data.json?page=1&search={second_query}"
+        );
+        let second_text = async {
+            let response = client.get(&second_url).send().await.ok()?;
+            let response = response.error_for_status().ok()?;
+            response.text().await.ok()
+        }
+        .await;
+        second_text
+            .as_deref()
+            .map(extract_search_results)
+            .and_then(|results| pick_best_slug(&results, &top.title, season))
+    } else {
+        None
+    };
+
+    if slug.is_none() {
+        slug = pick_best_slug(&first_results, query, season)
+            .or_else(|| extract_first_slug_from_search(&search_text));
+    }
+    let slug = slug.ok_or_else(|| "AnimeAV1: no search results found".to_string())?;
 
     let target_episode_num = episode.unwrap_or(1);
     let ep_data_url = format!(
@@ -502,6 +765,149 @@ mod tests {
     }
 
     #[test]
+    fn extract_search_results_parses_all_results() {
+        // Real payload node for "Naruto" (truncated to first results).
+        // Note: the categoryId literal (1) is emitted only for the first
+        // result — Remix dedups repeated values in the data array.
+        let json = r#""results":1,"total":101},[2,11,16],{"id":3,"title":4,"synopsis":5,"categoryId":6,"slug":7,"category":8},"190","Naruto","Sinopsis del ninja.",1,"naruto",{"id":6,"name":9,"slug":10,"malId":6},"TV Anime","tv-anime",{"id":12,"title":13,"synopsis":14,"categoryId":6,"slug":15,"category":8},"957","The Last: Naruto the Movie","Una pelicula.","the-last-naruto-the-movie",{"id":17,"title":18,"synopsis":19,"categoryId":6,"slug":20,"category":8},"964","Naruto: Shippuuden - Sunny Side Battle","Un especial.","naruto-shippuuden-sunny-side-battle","uses":{"search_params":["page"]}}"#;
+        let results = extract_search_results(json);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].title, "Naruto");
+        assert_eq!(results[0].slug, "naruto");
+        assert_eq!(results[1].title, "The Last: Naruto the Movie");
+        assert_eq!(results[1].slug, "the-last-naruto-the-movie");
+        assert_eq!(results[2].title, "Naruto: Shippuuden - Sunny Side Battle");
+        assert_eq!(results[2].slug, "naruto-shippuuden-sunny-side-battle");
+    }
+
+    #[test]
+    fn pick_best_slug_prefers_exact_series_match() {
+        let results = vec![
+            SearchResult {
+                title: "The Last: Naruto the Movie".into(),
+                slug: "the-last-naruto-the-movie".into(),
+            },
+            SearchResult {
+                title: "Naruto".into(),
+                slug: "naruto".into(),
+            },
+            SearchResult {
+                title: "Naruto: Shippuuden - Sunny Side Battle".into(),
+                slug: "naruto-shippuuden-sunny-side-battle".into(),
+            },
+        ];
+        let slug = pick_best_slug(&results, "Naruto", Some(1));
+        assert_eq!(slug, Some("naruto".to_string()));
+    }
+
+    #[test]
+    fn pick_best_slug_skips_movies_for_series_query() {
+        let results = vec![
+            SearchResult {
+                title: "Shingeki no Kyojin Movie: Kanketsu-hen - The Last Attack".into(),
+                slug: "shingeki-no-kyojin-movie-kanketsu-hen-the-last-attack".into(),
+            },
+            SearchResult {
+                title: "Shingeki no Kyojin".into(),
+                slug: "shingeki-no-kyojin".into(),
+            },
+            SearchResult {
+                title: "Shingeki no Kyojin OVA".into(),
+                slug: "shingeki-no-kyojin-ova".into(),
+            },
+        ];
+        // Zero title overlap: the plain series must win over the movie and OVA.
+        let slug = pick_best_slug(&results, "Attack on Titan", Some(1));
+        assert_eq!(slug, Some("shingeki-no-kyojin".to_string()));
+    }
+
+    #[test]
+    fn pick_best_slug_matches_requested_season() {
+        let results = vec![
+            SearchResult {
+                title: "Sousou no Frieren".into(),
+                slug: "sousou-no-frieren".into(),
+            },
+            SearchResult {
+                title: "Sousou no Frieren 2nd Season".into(),
+                slug: "sousou-no-frieren-2nd-season".into(),
+            },
+        ];
+        assert_eq!(
+            pick_best_slug(&results, "Frieren", Some(2)),
+            Some("sousou-no-frieren-2nd-season".to_string())
+        );
+        assert_eq!(
+            pick_best_slug(&results, "Frieren", Some(1)),
+            Some("sousou-no-frieren".to_string())
+        );
+        assert_eq!(
+            pick_best_slug(&results, "Frieren", None),
+            Some("sousou-no-frieren".to_string())
+        );
+    }
+
+    #[test]
+    fn pick_best_slug_handles_roman_numeral_seasons() {
+        let results = vec![
+            SearchResult {
+                title: "Mushoku Tensei: Isekai Ittara Honki Dasu".into(),
+                slug: "mushoku-tensei-isekai-ittara-honki-dasu".into(),
+            },
+            SearchResult {
+                title: "Mushoku Tensei II: Isekai Ittara Honki Dasu".into(),
+                slug: "mushoku-tensei-ii-isekai-ittara-honki-dasu".into(),
+            },
+            SearchResult {
+                title: "Mushoku Tensei III: Isekai Ittara Honki Dasu".into(),
+                slug: "mushoku-tensei-iii-isekai-ittara-honki-dasu".into(),
+            },
+        ];
+        assert_eq!(
+            pick_best_slug(&results, "Mushoku Tensei", Some(2)),
+            Some("mushoku-tensei-ii-isekai-ittara-honki-dasu".to_string())
+        );
+        assert_eq!(
+            pick_best_slug(&results, "Mushoku Tensei", Some(1)),
+            Some("mushoku-tensei-isekai-ittara-honki-dasu".to_string())
+        );
+    }
+
+    #[test]
+    fn pick_best_slug_matches_trailing_number_seasons() {
+        let results = vec![
+            SearchResult {
+                title: "One Punch Man".into(),
+                slug: "one-punch-man".into(),
+            },
+            SearchResult {
+                title: "One Punch Man 3".into(),
+                slug: "one-punch-man-3".into(),
+            },
+        ];
+        assert_eq!(
+            pick_best_slug(&results, "One Punch Man", Some(3)),
+            Some("one-punch-man-3".to_string())
+        );
+        assert_eq!(
+            pick_best_slug(&results, "One Punch Man", Some(1)),
+            Some("one-punch-man".to_string())
+        );
+    }
+
+    #[test]
+    fn title_season_number_recognizes_markers() {
+        assert_eq!(title_season_number("Sousou no Frieren 2nd Season"), Some(2));
+        assert_eq!(title_season_number("Mushoku Tensei II: Isekai"), Some(2));
+        assert_eq!(title_season_number("Mob Psycho 100 II"), Some(2));
+        assert_eq!(title_season_number("One Punch Man 3"), Some(3));
+        assert_eq!(title_season_number("One Punch Man"), None);
+        assert_eq!(title_season_number("Attack on Titan"), None);
+        assert_eq!(title_season_number("Shingeki no Kyojin: The Final Season Part 2"), None);
+        assert_eq!(title_season_number("86 Eighty-Six"), None);
+    }
+
+    #[test]
     fn extract_media_title_finds_real_title() {
         // Mirrors the real episode __data.json structure: title is referenced
         // by index and its literal appears right after `"aka"` (locale map).
@@ -613,6 +1019,109 @@ mod tests {
         // Language labels set correctly.
         assert_eq!(embeds[0].variant.language_label(), "Sub: Castellano");
         assert_eq!(embeds[4].variant.language_label(), "Audio Español");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the live AnimeAV1 provider"]
+    async fn live_probe_hls_headers() {
+        let client = crate::scraper::http::build_scraper_client().unwrap();
+        let cases = [
+            ("Naruto", Some(1), Some(1)),
+            ("One Piece", Some(1), Some(1)),
+            ("Attack on Titan", Some(1), Some(5)),
+            ("Frieren", Some(1), Some(1)),
+            ("Jujutsu Kaisen", Some(2), Some(3)),
+            ("One Punch Man", Some(3), Some(1)),
+            ("Steins;Gate", Some(1), Some(1)),
+            ("Death Note", Some(1), Some(1)),
+            ("Vinland Saga", Some(2), Some(2)),
+            ("Fullmetal Alchemist", Some(1), Some(10)),
+        ];
+        for (query, season, episode) in cases {
+            let Ok((candidates, _)) = search_and_resolve(&client, query, season, episode).await
+            else {
+                eprintln!("SEG-PROBE {query}: resolve failed");
+                continue;
+            };
+            let Some(hls) = candidates.iter().find(|s| s.url.contains("m3u8")) else {
+                eprintln!("SEG-PROBE {query}: no hls");
+                continue;
+            };
+            let text = client
+                .get(&hls.url)
+                .header("Referer", ZILLA_REFERER)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            let Some(seg) = text.lines().find(|l| !l.starts_with('#')) else {
+                eprintln!("SEG-PROBE {query}: no segment line");
+                continue;
+            };
+            let seg_url = if seg.starts_with("http") {
+                seg.to_string()
+            } else {
+                let base = hls.url.rsplit_once('/').map(|(b, _)| b.to_string()).unwrap();
+                format!("{base}/{seg}")
+            };
+            let status = client
+                .get(&seg_url)
+                .header("Referer", ZILLA_REFERER)
+                .send()
+                .await
+                .map(|r| r.status().as_u16())
+                .unwrap_or(0);
+            eprintln!("SEG-PROBE {query:24} {status} {seg_url}");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the live AnimeAV1 provider"]
+    async fn live_probe_many_titles() {
+        let client = crate::scraper::http::build_scraper_client().unwrap();
+        let cases: &[(&str, Option<u32>, u32)] = &[
+            ("Frieren", Some(1), 1),
+            ("Naruto", Some(1), 1),
+            ("One Piece", Some(1), 1),
+            ("Jujutsu Kaisen", Some(2), 3),
+            ("Attack on Titan", Some(1), 5),
+            ("Demon Slayer", Some(1), 2),
+            ("Mushoku Tensei", Some(2), 4),
+            ("One Punch Man", Some(3), 1),
+            ("Boku no Hero Academia", Some(2), 2),
+            ("Tokyo Ghoul", Some(1), 1),
+            ("Death Note", Some(1), 1),
+            ("Sousou no Frieren", Some(2), 2),
+            ("Spy x Family", Some(1), 3),
+            ("Vinland Saga", Some(2), 2),
+            ("Steins;Gate", Some(1), 1),
+            ("Fullmetal Alchemist", Some(1), 10),
+        ];
+        for (q, season, ep) in cases {
+            match search_and_resolve(&client, q, *season, Some(*ep)).await {
+                Ok((streams, title)) => {
+                    let hls = streams.iter().filter(|s| s.url.contains("m3u8")).count();
+                    eprintln!(
+                        "OK  {:<28} s={:<2} ep={:<3} streams={:<3} hls={} title={:?}",
+                        q,
+                        season.map(|s| s.to_string()).unwrap_or_else(|| "-".into()),
+                        ep,
+                        streams.len(),
+                        hls,
+                        title
+                    );
+                }
+                Err(e) => eprintln!(
+                    "ERR {:<28} s={:<2} ep={:<3} {}",
+                    q,
+                    season.map(|s| s.to_string()).unwrap_or_else(|| "-".into()),
+                    ep,
+                    e
+                ),
+            }
+        }
     }
 
     #[tokio::test]
