@@ -190,14 +190,16 @@ fn android_player_status<R: Runtime>(
 #[tauri::command]
 fn fetch_introdb_segments(
     imdb_id: String,
-    season: u32,
-    episode: u32,
+    season: Option<u32>,
+    episode: Option<u32>,
 ) -> Result<serde_json::Value, String> {
     if !imdb_id.starts_with("tt") {
         return Err(String::from("IMDb id invalido."));
     }
-    if season == 0 || episode == 0 {
-        return Err(String::from("Season/episode invalidos."));
+    // Las series requieren season y episode juntos; las películas no llevan ninguno.
+    match (season, episode) {
+        (Some(_), None) | (None, Some(_)) => return Err(String::from("Season/episode incompletos.")),
+        _ => {}
     }
 
     let client = Client::builder()
@@ -205,13 +207,17 @@ fn fetch_introdb_segments(
         .build()
         .map_err(|error| format!("No se pudo crear cliente HTTP: {}", error))?;
 
+    let mut query_params: Vec<(String, String)> = vec![("imdb_id".to_string(), imdb_id)];
+    if let Some(season) = season {
+        query_params.push(("season".to_string(), season.to_string()));
+    }
+    if let Some(episode) = episode {
+        query_params.push(("episode".to_string(), episode.to_string()));
+    }
+
     let response = client
         .get("https://api.introdb.app/segments")
-        .query(&[
-            ("imdb_id", imdb_id.as_str()),
-            ("season", &season.to_string()),
-            ("episode", &episode.to_string()),
-        ])
+        .query(&query_params)
         .send()
         .map_err(|error| format!("IntroDB request error: {}", error))?;
 
@@ -1390,6 +1396,44 @@ fn prepare_libmpv_dll_search_path(runtime_dir: &Path) {
 #[cfg(not(target_os = "windows"))]
 fn prepare_libmpv_dll_search_path(_runtime_dir: &Path) {}
 
+const BUNDLED_SUBTITLE_FONT_FILE: &str = "Inter-Regular.ttf";
+
+#[cfg(target_os = "windows")]
+static BUNDLED_FONT_REGISTERED: std::sync::Once = std::sync::Once::new();
+
+/// Registra la fuente de subtítulos empaquetada (Inter) en la tabla de fuentes
+/// de la sesión para que mpv/DirectWrite pueda resolverla por nombre. Se ejecuta
+/// una única vez por proceso; el registro es temporal y se revierte al salir.
+#[cfg(target_os = "windows")]
+fn register_bundled_subtitle_font(runtime_dir: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Graphics::Gdi::AddFontResourceW;
+
+    BUNDLED_FONT_REGISTERED.call_once(|| {
+        let font_path = runtime_dir.join(BUNDLED_SUBTITLE_FONT_FILE);
+        if !font_path.exists() {
+            mpv_bridge_log(
+                "bundled_font_missing",
+                serde_json::json!({ "expected": font_path.display().to_string() }),
+            );
+            return;
+        }
+        let mut wide: Vec<u16> = font_path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        let added = unsafe { AddFontResourceW(wide.as_ptr()) };
+        mpv_bridge_log(
+            "bundled_font_registered",
+            serde_json::json!({
+                "path": font_path.display().to_string(),
+                "added": added,
+            }),
+        );
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn register_bundled_subtitle_font(_runtime_dir: &Path) {}
+
 unsafe fn load_mpv_symbol<T: Copy>(library: &Library, symbol: &'static [u8]) -> Result<T, String> {
     let loaded: libloading::Symbol<'_, T> = library
         .get(symbol)
@@ -1705,6 +1749,8 @@ fn update_cached_mpv_status(app: &tauri::AppHandle, event_id: c_int, payload: &s
         "chapter" => "chapter",
         "chapter-list" => "chapterList",
         "track-list" => "tracks",
+        "video-params/w" => "videoWidth",
+        "video-params/h" => "videoHeight",
         _ => return,
     };
     status[key] = property
@@ -1727,6 +1773,8 @@ fn observe_mpv_properties(client: &Arc<MpvClient>) {
         "chapter",
         "chapter-list",
         "track-list",
+        "video-params/w",
+        "video-params/h",
     ]
     .iter()
     .enumerate()
@@ -3977,6 +4025,9 @@ const ALLOWED_MPV_PROPERTIES: &[&str] = &[
     "loop",
     "video-align-x",
     "video-align-y",
+    "video-pan-x",
+    "video-pan-y",
+    "video-recenter",
 ];
 
 const ANIME4K_MODE_A_FAST: &[&str] = &[
@@ -4260,6 +4311,7 @@ async fn open_mpv(
     let runtime_dir = find_mpv_runtime_dir(&app).ok_or_else(|| {
         String::from("libmpv interno no esta instalado. Coloca libmpv-2.dll y sus DLLs en src-tauri/bin/mpv antes de empaquetar.")
     })?;
+    register_bundled_subtitle_font(&runtime_dir);
     let ytdlp_path = runtime_dir.join("yt-dlp.exe");
     let resolver_app = app.clone();
     let resolver_target = target.clone();
@@ -4375,6 +4427,7 @@ async fn open_mpv(
         ("audio-channels", "auto-safe"),
         ("sub-auto", "fuzzy"),
         ("blend-subtitles", "video"),
+        ("sub-font", "Inter"),
         ("cookies", "yes"),
         ("demuxer-max-bytes", "512MiB"),
         ("demuxer-max-back-bytes", "128MiB"),
@@ -4566,6 +4619,9 @@ fn update_mpv_controls_blur(
     subtitle_panel_right: f64,
     subtitle_panel_bottom: f64,
     subtitle_panel_corner_radius: f64,
+    blur_alpha: f64,
+    episode_blur_alpha: f64,
+    subtitle_blur_alpha: f64,
 ) -> Result<(), String> {
     if !enabled {
         return mpv_command_value_async(
@@ -4578,6 +4634,9 @@ fn update_mpv_controls_blur(
         );
     }
 
+    let blur_alpha = blur_alpha.clamp(0.0, 1.0);
+    let episode_blur_alpha = episode_blur_alpha.clamp(0.0, 1.0);
+    let subtitle_blur_alpha = subtitle_blur_alpha.clamp(0.0, 1.0);
     let coordinates = [
         left,
         top,
@@ -4596,6 +4655,9 @@ fn update_mpv_controls_blur(
         subtitle_panel_right,
         subtitle_panel_bottom,
         subtitle_panel_corner_radius,
+        blur_alpha,
+        episode_blur_alpha,
+        subtitle_blur_alpha,
     ];
     if coordinates.iter().any(|value| !value.is_finite())
         || left < 0.0
@@ -4627,7 +4689,7 @@ fn update_mpv_controls_blur(
     }
 
     let shader_options = format!(
-        "aetherio_blur_left={:.3},aetherio_blur_top={:.3},aetherio_blur_right={:.3},aetherio_blur_bottom={:.3},aetherio_blur_radius={:.3},aetherio_blur_viewport_width={:.3},aetherio_blur_viewport_height={:.3},aetherio_episode_blur_enabled={},aetherio_episode_blur_left={:.3},aetherio_episode_blur_top={:.3},aetherio_episode_blur_right={:.3},aetherio_episode_blur_bottom={:.3},aetherio_episode_blur_radius={:.3},aetherio_subtitle_blur_enabled={},aetherio_subtitle_blur_left={:.3},aetherio_subtitle_blur_top={:.3},aetherio_subtitle_blur_right={:.3},aetherio_subtitle_blur_bottom={:.3},aetherio_subtitle_blur_radius={:.3},aetherio_blur_enabled=1",
+        "aetherio_blur_left={:.3},aetherio_blur_top={:.3},aetherio_blur_right={:.3},aetherio_blur_bottom={:.3},aetherio_blur_radius={:.3},aetherio_blur_viewport_width={:.3},aetherio_blur_viewport_height={:.3},aetherio_episode_blur_enabled={},aetherio_episode_blur_left={:.3},aetherio_episode_blur_top={:.3},aetherio_episode_blur_right={:.3},aetherio_episode_blur_bottom={:.3},aetherio_episode_blur_radius={:.3},aetherio_subtitle_blur_enabled={},aetherio_subtitle_blur_left={:.3},aetherio_subtitle_blur_top={:.3},aetherio_subtitle_blur_right={:.3},aetherio_subtitle_blur_bottom={:.3},aetherio_subtitle_blur_radius={:.3},aetherio_blur_alpha={:.3},aetherio_episode_blur_alpha={:.3},aetherio_subtitle_blur_alpha={:.3},aetherio_blur_enabled=1",
         left,
         top,
         right,
@@ -4647,6 +4709,9 @@ fn update_mpv_controls_blur(
         subtitle_panel_right,
         subtitle_panel_bottom,
         subtitle_panel_corner_radius.clamp(0.0, 256.0),
+        blur_alpha,
+        episode_blur_alpha,
+        subtitle_blur_alpha,
     );
     mpv_command_value_async(
         client,
@@ -4677,11 +4742,17 @@ async fn set_mpv_controls_blur(
     subtitle_panel_right: f64,
     subtitle_panel_bottom: f64,
     subtitle_panel_corner_radius: f64,
+    blur_alpha: Option<f64>,
+    episode_blur_alpha: Option<f64>,
+    subtitle_blur_alpha: Option<f64>,
 ) -> Result<(), String> {
     let client = {
         let state = app.state::<MpvState>();
         current_mpv_client(&state)?
     };
+    let blur_alpha = blur_alpha.unwrap_or(if enabled { 1.0 } else { 0.0 });
+    let episode_blur_alpha = episode_blur_alpha.unwrap_or(if episode_enabled { 1.0 } else { 0.0 });
+    let subtitle_blur_alpha = subtitle_blur_alpha.unwrap_or(if subtitle_panel_enabled { 1.0 } else { 0.0 });
     tauri::async_runtime::spawn_blocking(move || {
         let result = update_mpv_controls_blur(
             &client,
@@ -4705,6 +4776,9 @@ async fn set_mpv_controls_blur(
             subtitle_panel_right,
             subtitle_panel_bottom,
             subtitle_panel_corner_radius,
+            blur_alpha,
+            episode_blur_alpha,
+            subtitle_blur_alpha,
         );
         if result.is_ok() {
             mpv_bridge_log(
@@ -4730,6 +4804,9 @@ async fn set_mpv_controls_blur(
                     "subtitlePanelRight": subtitle_panel_right,
                     "subtitlePanelBottom": subtitle_panel_bottom,
                     "subtitlePanelCornerRadius": subtitle_panel_corner_radius,
+                    "blurAlpha": blur_alpha,
+                    "episodeBlurAlpha": episode_blur_alpha,
+                    "subtitleBlurAlpha": subtitle_blur_alpha,
                 }),
             );
         }

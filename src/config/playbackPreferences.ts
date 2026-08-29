@@ -28,6 +28,8 @@ export interface PlaybackPreferences {
   addonSubtitleLoadMode: AddonSubtitleLoadMode;
   /** When true, the desktop runtime advertises what is being watched to Discord. */
   enableDiscordRichPresence: boolean;
+  /** Cuando termina la película/serie, muestra la página "Up Next" con recomendación y mini reproductor. */
+  upNextEnabled: boolean;
 }
 
 interface CachedLastLink {
@@ -59,6 +61,7 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   preferredSubtitleLanguage: "spa",
   addonSubtitleLoadMode: "preferred",
   enableDiscordRichPresence: true,
+  upNextEnabled: true,
 };
 
 export const LANGUAGE_OPTIONS = [
@@ -236,6 +239,7 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
     preferredSubtitleLanguage: normalizeLanguage(preferences.preferredSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.preferredSubtitleLanguage),
     addonSubtitleLoadMode: preferences.addonSubtitleLoadMode === "all" ? "all" : "preferred",
     enableDiscordRichPresence: typeof preferences.enableDiscordRichPresence === "boolean" ? preferences.enableDiscordRichPresence : DEFAULT_PLAYBACK_PREFERENCES.enableDiscordRichPresence,
+    upNextEnabled: typeof preferences.upNextEnabled === "boolean" ? preferences.upNextEnabled : DEFAULT_PLAYBACK_PREFERENCES.upNextEnabled,
   };
 }
 

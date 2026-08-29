@@ -16,6 +16,10 @@ export interface MpvTrack {
   title?: string;
   lang?: string;
   selected?: boolean;
+  /** Video track native width (from demux-w) */
+  demuxW?: number;
+  /** Video track native height (from demux-h) */
+  demuxH?: number;
 }
 
 export interface MpvStatusSnapshot {
@@ -31,6 +35,8 @@ export interface MpvStatusSnapshot {
   chapter?: number | null;
   chapterList?: { title?: string; time?: number }[] | null;
   tracks?: MpvTrack[] | null;
+  videoWidth?: number | null;
+  videoHeight?: number | null;
 }
 
 export interface MpvEventPayload {

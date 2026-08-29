@@ -6,7 +6,7 @@ import WindowControls from "./WindowControls";
 import { toggleWindowFullscreen } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
-import { gsap, installInertialScroll, tweenTo, prefersReducedMotion, stopInertialScroll } from "../../utils/motion";
+import { gsap, installInertialScroll, tweenTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -39,15 +39,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
-    const els = [backChromeRef.current].filter(Boolean);
-    gsap.set(els, { opacity: backVisible ? 1 : 0 });
-    tweenTo(els, { opacity: backVisible ? 1 : 0 }, 0.3);
+    const el = backChromeRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    if (backVisible) {
+      gsap.set(el, { y: -8, scale: 0.96, filter: "blur(6px)" });
+      tweenTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }, motionTimings.chromeIn);
+    } else {
+      tweenTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" }, motionTimings.chromeOut);
+    }
   }, [backVisible]);
 
   useEffect(() => {
-    const els = [actionChromeRef.current].filter(Boolean);
-    gsap.set(els, { opacity: controlsVisible ? 1 : 0 });
-    tweenTo(els, { opacity: controlsVisible ? 1 : 0 }, 0.3);
+    const el = actionChromeRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    if (controlsVisible) {
+      gsap.set(el, { y: -8, scale: 0.96, filter: "blur(6px)" });
+      tweenTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }, motionTimings.chromeIn);
+    } else {
+      tweenTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" }, motionTimings.chromeOut);
+    }
   }, [controlsVisible]);
 
   useEffect(() => {

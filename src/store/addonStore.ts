@@ -122,7 +122,13 @@ const ANIMES_ADDON: InstalledAddon = {
   description: "Catálogos y streams de AnimeFLV, AnimeAV1, Henaojara, TioAnime, AnimeJara y JKAnime.",
   logo: "https://raw.githubusercontent.com/Pigamer37/animeflv-stremio-addon/refs/heads/main/views/AnimES.png",
   url: ANIMES_MANIFEST_URL,
-  manifest: ANIMES_MANIFEST,
+  manifest: {
+    ...ANIMES_MANIFEST,
+    catalogs: (ANIMES_MANIFEST.catalogs as unknown as any[]).filter(catalog =>
+      Array.isArray(catalog?.extra) &&
+      catalog.extra.some((extra: any) => String(extra?.name ?? "").toLowerCase() === "search"),
+    ),
+  },
   enabled: true,
   installedAt: 0,
   version: "1.4.2",

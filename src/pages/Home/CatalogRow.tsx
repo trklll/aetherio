@@ -21,12 +21,12 @@ import { captureCardRect, setSharedElementName } from "../../utils/sharedElement
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
 import CardArtworkPicker from "./CardArtworkPicker";
 
-const HORIZONTAL_CARD = { width: 302, height: 196 };
+const HORIZONTAL_CARD = { width: 336, height: 196 };
 const VERTICAL_CARD = { width: 180, height: 271 };
 const RANKED_CARD = { width: 248, height: 252 };
 const RANKED_DOUBLE_CARD = { width: 298, height: 252 };
 const RANKED_POSTER = { width: 168, height: 252, singleLeft: 80, doubleLeft: 130 };
-const HORIZONTAL_GAP = 22;
+const HORIZONTAL_GAP = 18;
 const RANKED_GAP = 10;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
@@ -671,14 +671,12 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       ref={cardRef}
       onClick={openDetail}
       onContextMenu={openArtworkMenu}
-      style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, borderRadius: 10, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", boxShadow: "0 12px 28px rgba(0,0,0,0.28)", willChange: "transform" }}
+      style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, borderRadius: 12, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", border: "1px solid rgba(225,230,238,0.10)", willChange: "transform" }}
       onMouseEnter={e => {
-        tweenTo(e.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
-        gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+        tweenTo(e.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
       }}
       onMouseLeave={e => {
-        tweenTo(e.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
-        gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+        tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
       }}
     >
       {effectiveWatched ? (

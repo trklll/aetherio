@@ -383,7 +383,7 @@ export default function ContinueWatchingRow() {
           {visibleItems.map((entry, offset) => {
             const index = virtualWindow.start + offset;
             return (
-              <div key={entry.key} style={{ flex: "0 0 auto", marginRight: index === items.length - 1 ? 0 : GAP }}>
+              <div key={entry.key} style={{ flex: "0 0 auto", paddingLeft: index === 0 ? 10 : 0, marginRight: index === items.length - 1 ? 0 : GAP }}>
                 <ContinueCard
                   entry={entry}
                   removing={removingKeys.has(entry.key)}

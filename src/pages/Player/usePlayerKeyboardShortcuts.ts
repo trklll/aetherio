@@ -8,6 +8,7 @@ interface KeyboardShortcutHandlers {
   startSpaceAcceleration: () => boolean;
   stopSpaceAcceleration: () => void;
   volume: number;
+  enabled?: boolean;
 }
 
 export function usePlayerKeyboardShortcuts({
@@ -18,6 +19,7 @@ export function usePlayerKeyboardShortcuts({
   startSpaceAcceleration,
   stopSpaceAcceleration,
   volume,
+  enabled = true,
 }: KeyboardShortcutHandlers) {
   const handlersRef = useRef({
     togglePlay,
@@ -42,6 +44,7 @@ export function usePlayerKeyboardShortcuts({
   const spaceTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target) {
@@ -122,5 +125,5 @@ export function usePlayerKeyboardShortcuts({
       window.removeEventListener("blur", onBlur);
       releaseSpace(false);
     };
-  }, []);
+  }, [enabled]);
 }

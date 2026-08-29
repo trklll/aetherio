@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { tweenTo } from "../../utils/motion";
+import { gsap, tweenTo } from "../../utils/motion";
 import { CONTEXT_GLASS_STYLE } from "./glassSurface";
 
 export interface ContextMenuItem {
@@ -35,6 +35,7 @@ export default function ContextMenu({
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: -9999, top: -9999 });
+  const [mounted, setMounted] = useState(open);
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +51,7 @@ export default function ContextMenu({
   }, [anchorRef, onClose, open]);
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!mounted) return;
 
     function updatePosition() {
       const anchor = anchorRef.current;
@@ -109,9 +110,58 @@ export default function ContextMenu({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [anchorRef, avoidRef, items.length, open, placement, width]);
+  }, [anchorRef, avoidRef, items.length, mounted, open, placement, width]);
 
-  if (!open) return null;
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const el = menuRef.current;
+    if (!el) {
+      setMounted(false);
+      return;
+    }
+    gsap.killTweensOf(el);
+    gsap.to(el, {
+      opacity: 0,
+      y: 6,
+      scale: 0.98,
+      filter: "blur(6px)",
+      duration: 0.26,
+      ease: "expo.in",
+      overwrite: "auto",
+      onComplete: () => setMounted(false),
+    });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !mounted || !menuRef.current) return;
+    const el = menuRef.current;
+    gsap.killTweensOf(el);
+    gsap.set(el, { opacity: 0, y: 6, scale: 0.98, filter: "blur(6px)" });
+    gsap.to(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.36, ease: "expo.out", overwrite: "auto" });
+  }, [open, mounted]);
+
+  if (!mounted) return null;
+
+  const sanitizedItems = items
+    .map(item => {
+      const cleanLabel = item.label
+        .replace(/\b(captura|capture)\b/gi, "")
+        .replace(/\bTO\s*AI\b/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      // oculta entradas que eran solo "captura" o quedaron vacías tras saneo
+      if (!cleanLabel) return null;
+      if (/^\s*TO\s*AI\s*$/i.test(item.label)) return null;
+      if (/captura/i.test(item.label) && cleanLabel.length < 3) return null;
+      return { ...item, label: cleanLabel || item.label };
+    })
+    .filter((item): item is ContextMenuItem => Boolean(item));
+
+  // Si tras filtrar no queda nada, no renderiza el menú vacío que provocaba el artefacto "TO AI"
+  if (!sanitizedItems.length) return null;
 
   return createPortal(
     <div
@@ -134,7 +184,7 @@ export default function ContextMenu({
       }}
       onClick={event => event.stopPropagation()}
     >
-      {items.map((item, index) => (
+      {sanitizedItems.map((item, index) => (
         <button
           key={`${item.label}-${index}`}
           type="button"

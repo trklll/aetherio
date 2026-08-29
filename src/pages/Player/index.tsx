@@ -43,12 +43,16 @@ import EpisodePanel from "./EpisodePanel";
 import SourcePanel from "./SourcePanel";
 import PlayerControls from "./PlayerControls";
 import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
+import UpNext from "../../components/upnext/UpNext";
+import { useRelatedRecommendation } from "../../hooks/useRelatedRecommendation";
 import { useControlsVisibility } from "./useControlsVisibility";
 import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
 import { useMpvStatus } from "./useMpvStatus";
 import { useSkipIntro } from "./useSkipIntro";
 import SubtitleSyncDialog from "./SubtitleSyncDialog";
+import { gsap } from "../../utils/motion";
+import { getUpNextMiniRect } from "../../utils/upnextMiniRect";
 import {
   SUBTITLE_DELAY_MAX_MS,
   SUBTITLE_DELAY_MIN_MS,
@@ -218,10 +222,14 @@ export default function PlayerPage() {
   const [mpvStatus, setMpvStatus] = useState<string | null>(null);
   const [mpvBundled, setMpvBundled] = useState<boolean | null>(null);
   const [mpvTracks, setMpvTracks] = useState<MpvTrack[]>([]);
+  const [mpvVideoWidth, setMpvVideoWidth] = useState<number | null>(null);
+  const [mpvVideoHeight, setMpvVideoHeight] = useState<number | null>(null);
   const [chapterIndex, setChapterIndex] = useState<number | null>(null);
   const [chapterOptions, setChapterOptions] = useState<ChapterOption[]>([]);
   const [activeSidePanel, setActiveSidePanel] = useState<"episodes" | "sources" | null>(null);
   const [availableStreams, setAvailableStreams] = useState<MediaStream[]>([]);
+  const [showUpNext, setShowUpNext] = useState(false);
+  const upNextShownKeyRef = useRef("");
   const [playbackStarted, setPlaybackStarted] = useState(false);
   const [mpvReadyForCommands, setMpvReadyForCommands] = useState(false);
   const [mpvFileLoaded, setMpvFileLoaded] = useState(false);
@@ -242,6 +250,8 @@ export default function PlayerPage() {
   const fileDropNoticeTimerRef = useRef<number | null>(null);
   const [subtitleSyncNotice, setSubtitleSyncNotice] = useState("");
   const subtitleSyncNoticeTimerRef = useRef<number | null>(null);
+  const [videoFilterNotice, setVideoFilterNotice] = useState("");
+  const videoFilterNoticeTimerRef = useRef<number | null>(null);
   const localPlaybackKey = params.get("local");
 
   const query = useMemo(() => buildQuery(params), [
@@ -267,6 +277,8 @@ export default function PlayerPage() {
     safeStream,
     selectedPlaybackOverrides?.selectedSubtitle ?? resumeEntry?.selectedSubtitle ?? "",
   );
+  const { recommendation: relatedRecommendation } = useRelatedRecommendation(query);
+  const related = { recommendation: relatedRecommendation };
 
   useEffect(() => {
     if (!query) return;
@@ -484,6 +496,8 @@ export default function PlayerPage() {
     setMpvPausedForCache,
     setMpvCacheBuffering,
     setMpvTracks,
+    setMpvVideoWidth,
+    setMpvVideoHeight,
     setSelectedMpvSubtitle: next => {
       setSelectedMpvSubtitle(prev => {
         const nextValue = typeof next === "function" ? next(prev) : next;
@@ -651,6 +665,12 @@ export default function PlayerPage() {
   useEffect(() => () => {
     if (fileDropNoticeTimerRef.current !== null) {
       window.clearTimeout(fileDropNoticeTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (videoFilterNoticeTimerRef.current !== null) {
+      window.clearTimeout(videoFilterNoticeTimerRef.current);
     }
   }, []);
 
@@ -994,6 +1014,7 @@ export default function PlayerPage() {
   }, [params]);
 
   function togglePlay() {
+    if (showUpNext) return;
     if (startupGateActiveRef.current) {
       startupGateActiveRef.current = false;
       startupGatePausedRef.current = false;
@@ -1029,6 +1050,7 @@ export default function PlayerPage() {
   }
 
   function seek(value: number) {
+    if (showUpNext) return;
     debugLog("seek() called", { value });
     seekBufferingRef.current = true;
     seekStartedAtRef.current = Date.now();
@@ -1044,11 +1066,13 @@ export default function PlayerPage() {
   }
 
   function jump(offset: number) {
+    if (showUpNext) return;
     debugLog("jump() called", { offset });
     void sendMpvCommand(["seek", offset, "relative"]);
   }
 
   function applyVolume(nextVolume: number) {
+    if (showUpNext) return;
     const clamped = Math.min(2, Math.max(0, nextVolume));
     if (clamped > 0) lastAudibleVolumeRef.current = clamped;
     setVolume(clamped);
@@ -1068,6 +1092,9 @@ export default function PlayerPage() {
         void sendMpvCommand(["set_property", "video-zoom", 0]);
         void sendMpvCommand(["set_property", "video-align-x", 0]);
         void sendMpvCommand(["set_property", "video-align-y", 0]);
+        void sendMpvCommand(["set_property", "video-pan-x", 0]);
+        void sendMpvCommand(["set_property", "video-pan-y", 0]);
+        void sendMpvCommand(["set_property", "video-recenter", true]);
         if (!isCrop) {
           void sendMpvCommand(["set_property", "panscan", 0]);
           void sendMpvCommand(["set_property", "video-crop", ""]);
@@ -1087,6 +1114,9 @@ export default function PlayerPage() {
         void sendMpvCommand(["set_property", "video-zoom", 0]);
         void sendMpvCommand(["set_property", "video-align-x", 0]);
         void sendMpvCommand(["set_property", "video-align-y", 0]);
+        void sendMpvCommand(["set_property", "video-pan-x", 0]);
+        void sendMpvCommand(["set_property", "video-pan-y", 0]);
+        void sendMpvCommand(["set_property", "video-recenter", true]);
       });
   }
 
@@ -1099,16 +1129,32 @@ export default function PlayerPage() {
   function applyVideoProfile(profile: string) {
     const normalized = saveVideoEnhancementProfile(profile);
     setSelectedVideoProfile(normalized);
-    if (!mpvFileLoaded) return;
-    console.info("[AETHERIO:VIDEO-FILTER] applying", { profile: normalized });
+    const label = VIDEO_ENHANCEMENT_OPTIONS.find(opt => opt.value === normalized)?.label ?? normalized;
+    const showNotice = (text: string) => {
+      setVideoFilterNotice(text);
+      if (videoFilterNoticeTimerRef.current !== null) window.clearTimeout(videoFilterNoticeTimerRef.current);
+      videoFilterNoticeTimerRef.current = window.setTimeout(() => {
+        videoFilterNoticeTimerRef.current = null;
+        setVideoFilterNotice("");
+      }, 2600);
+    };
+    if (!mpvFileLoaded) {
+      showNotice(`Mejora guardada: ${label} (se aplicará al cargar)`);
+      return;
+    }
+    console.info("[AETHERIO:VIDEO-FILTER] applying", { profile: normalized, label });
+    setMpvStatus(`Aplicando mejora: ${label}...`);
     void setNativeMpvVideoProfile(normalized)
       .then(result => {
         console.info("[AETHERIO:VIDEO-FILTER] verified", result);
         setMpvStatus(null);
+        const verified = (result as { verified?: boolean })?.verified !== false;
+        showNotice(verified ? `Mejora activa: ${label}` : `Mejora aplicada con advertencia: ${label}`);
       })
       .catch(error => {
         console.error("[AETHERIO:VIDEO-FILTER] failed", { profile: normalized, error });
         setMpvStatus(`Mejoras de vídeo: ${String(error)}`);
+        showNotice(`Error mejora: ${String(error).slice(0, 80)}`);
       });
   }
 
@@ -1191,7 +1237,9 @@ export default function PlayerPage() {
     leavingPlayerRef.current = true;
     setIsLeavingPlayer(true);
     setMpvStatus(null);
-    const detailPath = (trailerRequested || isTrailerStream) ? getDetailPath() : null;
+    // Atrás SIEMPRE lleva a la page detail del medio que se estaba viendo
+    // (no a pickstreams), tal como pide la UX.
+    const detailPath = getDetailPath();
     const streamsPath = getStreamsPath();
     saveCurrentProgressNow("goBack");
     sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
@@ -1274,6 +1322,7 @@ export default function PlayerPage() {
   }
 
   function handleScreenClick(event: MouseEvent<HTMLDivElement>) {
+    if (showUpNext) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest("[data-player-interactive]")) return;
     if (ignoreNextScreenClickRef.current) {
@@ -1288,6 +1337,7 @@ export default function PlayerPage() {
   }
 
   function startHoldToAccelerate(event: PointerEvent<HTMLDivElement>) {
+    if (showUpNext) return;
     wakeControls();
     const target = event.target as HTMLElement | null;
     if (target?.closest("[data-player-interactive]")) return;
@@ -1925,6 +1975,7 @@ export default function PlayerPage() {
     startSpaceAcceleration,
     stopSpaceAcceleration,
     volume,
+    enabled: !showUpNext,
   });
   const controlsActive = controlsVisible || activeSidePanel !== null;
 
@@ -1936,7 +1987,7 @@ export default function PlayerPage() {
   }, [controlsActive]);
 
 const mediaTitle = selectedMediaName || resumeEntry?.name || query?.id || "Reproducción";
-const { activeSegment: activeSkipSegment } = useSkipIntro(query, mediaTitle, currentTime, {
+const { activeSegment: activeSkipSegment, creditsSegment: upNextCreditsSegment } = useSkipIntro(query, mediaTitle, currentTime, {
   enabled: playbackPreferences.skipSegmentsEnabled,
   animeSkipEnabled: playbackPreferences.animeSkipEnabled,
 });
@@ -2222,6 +2273,251 @@ useEffect(() => {
   query?.type,
 ]);
 
+useEffect(() => {
+  // Se dispara al TERMINAR una pelicula o el ultimo episodio de una serie
+  // (no al llegar al siguiente episodio). Muestra una recomendacion.
+  // Umbral: 98% del titulo o menos de 5s restantes. Desactivable desde ajustes.
+  if (!playbackPreferences.upNextEnabled) return;
+  if (duration < 60 || currentTime <= 0) return;
+  const progress = (currentTime / duration) * 100;
+  // Si hay un timestamp de créditos (TheIntroDB), se usa como referencia exacta;
+  // si no, el umbral del 98% como respaldo.
+  const hasCredits = upNextCreditsSegment && Number.isFinite(upNextCreditsSegment.start) && upNextCreditsSegment.start > 0;
+  const finished = (hasCredits ? currentTime >= upNextCreditsSegment!.start : progress >= 98) || duration - currentTime <= 5;
+  if (!finished) {
+    // si el usuario retrocede por debajo del umbral, permite volver a mostrar
+    if (progress < 93 && duration - currentTime > 10) {
+      const key = `${query?.type ?? ""}:${query?.id ?? ""}:${query?.season ?? ""}:${query?.episode ?? ""}`;
+      if (upNextShownKeyRef.current === key) upNextShownKeyRef.current = "";
+      if (showUpNext) setShowUpNext(false);
+    }
+    return;
+  }
+  if (!isMovie && canGoNextEpisode) return; // series con episodio siguiente: no aqui
+  if (!related.recommendation) return; // esperar a tener recomendacion real, evita page vacia
+  if (showUpNext) return;
+  const key = `${query?.type ?? ""}:${query?.id ?? ""}:${query?.season ?? ""}:${query?.episode ?? ""}`;
+  if (upNextShownKeyRef.current === key) return;
+  upNextShownKeyRef.current = key;
+  console.info("[UPNEXT] Up Next disparado", {
+    viaCredits: hasCredits,
+    creditsStart: hasCredits ? upNextCreditsSegment!.start : null,
+    progressPct: Number(progress.toFixed(1)),
+    currentTime,
+    duration,
+  });
+  setShowUpNext(true);
+  // NO pausar: el video sigue reproduciendose mientras se achica
+}, [
+  currentTime,
+  duration,
+  isMovie,
+  canGoNextEpisode,
+  query?.episode,
+  query?.id,
+  query?.season,
+  query?.type,
+  related.recommendation,
+  showUpNext,
+  playbackPreferences.upNextEnabled,
+  upNextCreditsSegment,
+]);
+
+// UpNext achica el video nativo MPV de verdad.
+// - Fuente única de verdad: getUpNextMiniRect() (src/utils/upnextMiniRect.ts).
+//   Tanto este cálculo de MPV como el hueco del backdrop en UpNext.tsx la usan,
+//   por lo que nunca pueden desalinearse.
+// - El zoom se calcula relativo al FIT de mpv (mpv escala el video para llenar la
+//   ventana con video-unscaled=no y video-zoom multiplica sobre ese fit).
+// - Se re-sincroniza al cambiar tamaño de ventana / DPR mientras UpNext está visible.
+function computeMpvShrinkParams(
+  videoW: number,
+  videoH: number,
+  windowW: number,
+  windowH: number,
+  targetX: number,
+  targetY: number,
+  targetW: number,
+  targetH: number,
+) {
+  const dpr = window.devicePixelRatio || 1;
+  // Todo en píxeles físicos (mpv opera sobre el HWND en px físicos)
+  const winW = windowW * dpr;
+  const winH = windowH * dpr;
+  const tX = targetX * dpr;
+  const tY = targetY * dpr;
+  const tW = targetW * dpr;
+  const tH = targetH * dpr;
+  // Escala de fit de mpv: llena la ventana sin deformar (contain)
+  const fitScale = Math.max(0.0001, Math.min(winW / videoW, winH / videoH));
+  const fitW = videoW * fitScale;
+  const fitH = videoH * fitScale;
+  // Cover sobre la caja mini. Un buen overscan hace que el video llene la caja
+  // con margen a su alrededor, así la superficie negra de mpv NUNCA asoma en los
+  // bordes del hueco (la "grieta"). Cubre cualquier pequeño desvío de posicion.
+  const scale = Math.max(tW / fitW, tH / fitH) * 1.2;
+  const zoom = Math.log2(scale);
+  const dw = fitW * scale;
+  const dh = fitH * scale;
+  // Centrar el crop dentro de la caja mini
+  const left = tX + (tW - dw) / 2;
+  const top = tY + (tH - dh) / 2;
+  const freeW = winW - dw;
+  const freeH = winH - dh;
+  const ax = freeW > 1 ? (2 * left) / freeW - 1 : -1;
+  const ay = freeH > 1 ? (2 * top) / freeH - 1 : -1;
+  return { zoom, ax: Math.max(-1, Math.min(1, ax)), ay: Math.max(-1, Math.min(1, ay)) };
+}
+
+const mpvTweenRef = useRef<gsap.core.Tween | null>(null);
+// Solo se anima la vuelta a fullscreen si el video realmente estaba achicado.
+const upNextShrunkRef = useRef(false);
+useEffect(() => {
+  if (androidPlayback || isIframeStream) return;
+  if (!mpvReadyForCommands || !mpvFileLoaded) return;
+
+  const videoTrack = mpvTracks.find(t => String(t.type ?? "").toLowerCase() === "video");
+  const vidW = mpvVideoWidth ?? (videoTrack as any)?.["demux-w"] ?? (videoTrack as any)?.demuxW ?? 1920;
+  const vidH = mpvVideoHeight ?? (videoTrack as any)?.["demux-h"] ?? (videoTrack as any)?.demuxH ?? 1080;
+
+  function setProp(name: string, value: number | boolean) {
+    void sendMpvCommand(["set_property", name, value]);
+  }
+
+  // Fija el video instantáneamente en la caja mini (para resize/DPR, sin animar).
+  function snapToMini() {
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    const mini = getUpNextMiniRect();
+    const s = computeMpvShrinkParams(vidW, vidH, winW, winH, mini.x, mini.y, mini.w, mini.h);
+    setProp("video-zoom", s.zoom);
+    setProp("video-align-x", s.ax);
+    setProp("video-align-y", s.ay);
+  }
+
+  function resetFullscreen() {
+    setProp("video-zoom", 0);
+    setProp("video-align-x", 0);
+    setProp("video-align-y", 0);
+    setProp("video-pan-x", 0);
+    setProp("video-pan-y", 0);
+    setProp("video-recenter", true);
+    applyVideoScale(videoScaleMode);
+  }
+
+  if (mpvTweenRef.current) {
+    mpvTweenRef.current.kill();
+    mpvTweenRef.current = null;
+  }
+
+  if (showUpNext) {
+    upNextShrunkRef.current = true;
+    // Asegurar play + desactivar recentrado/crop para que el achique quede limpio.
+    void sendMpvCommand(["set_property", "pause", false]);
+    void sendMpvCommand(["set_property", "panscan", 0]);
+    void sendMpvCommand(["set_property", "video-crop", ""]);
+    void sendMpvCommand(["set_property", "video-pan-x", 0]);
+    void sendMpvCommand(["set_property", "video-pan-y", 0]);
+    void sendMpvCommand(["set_property", "video-recenter", false]);
+
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    const mini = getUpNextMiniRect();
+    const shrink = computeMpvShrinkParams(vidW, vidH, winW, winH, mini.x, mini.y, mini.w, mini.h);
+
+    const anim = { zoom: 0, ax: 0, ay: 0 };
+    mpvTweenRef.current = gsap.to(anim, {
+      zoom: shrink.zoom,
+      ax: shrink.ax,
+      ay: shrink.ay,
+      duration: 0.75,
+      ease: "expo.inOut",
+      onUpdate: () => {
+        setProp("video-zoom", anim.zoom);
+        setProp("video-align-x", anim.ax);
+        setProp("video-align-y", anim.ay);
+      },
+      onComplete: () => {
+        setProp("video-zoom", shrink.zoom);
+        setProp("video-align-x", shrink.ax);
+        setProp("video-align-y", shrink.ay);
+      },
+    });
+
+    // Re-sincronizar si cambia el tamaño de ventana / DPR mientras UpNext está visible
+    const onResize = () => snapToMini();
+    window.addEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+      if (mpvTweenRef.current) {
+        mpvTweenRef.current.kill();
+        mpvTweenRef.current = null;
+      }
+    };
+  }
+
+  // Vuelta a pantalla completa. Solo se anima si realmente hubo un achique previo
+  // (p. ej. al dismiss). En primera carga/otros casos se restaura directo, sin tween.
+  if (!upNextShrunkRef.current) {
+    resetFullscreen();
+    if (!manualPausedRef.current) {
+      void sendMpvCommand(["set_property", "pause", false]);
+    }
+    return () => {
+      if (mpvTweenRef.current) {
+        mpvTweenRef.current.kill();
+        mpvTweenRef.current = null;
+      }
+    };
+  }
+  upNextShrunkRef.current = false;
+
+  const winW = window.innerWidth;
+  const winH = window.innerHeight;
+  const mini = getUpNextMiniRect();
+  const shrink = computeMpvShrinkParams(vidW, vidH, winW, winH, mini.x, mini.y, mini.w, mini.h);
+  const anim = { zoom: shrink.zoom, ax: shrink.ax, ay: shrink.ay };
+  mpvTweenRef.current = gsap.to(anim, {
+    zoom: 0,
+    ax: 0,
+    ay: 0,
+    duration: 0.65,
+    ease: "expo.inOut",
+    onUpdate: () => {
+      setProp("video-zoom", anim.zoom);
+      setProp("video-align-x", anim.ax);
+      setProp("video-align-y", anim.ay);
+    },
+    onComplete: () => {
+      resetFullscreen();
+      if (!manualPausedRef.current) {
+        void sendMpvCommand(["set_property", "pause", false]);
+      }
+    },
+  });
+
+  return () => {
+    if (mpvTweenRef.current) {
+      mpvTweenRef.current.kill();
+      mpvTweenRef.current = null;
+    }
+  };
+}, [showUpNext, androidPlayback, isIframeStream, mpvReadyForCommands, mpvFileLoaded, videoScaleMode, mpvTracks, mpvVideoWidth, mpvVideoHeight]);
+
+// Estado de salida de UpNext: primero se desvanece (exit animation) y luego desmonta.
+const [upNextExiting, setUpNextExiting] = useState(false);
+function dismissUpNext() {
+  if (upNextExiting) return;
+  setUpNextExiting(true);
+}
+function completeUpNextExit() {
+  setShowUpNext(false);
+  setUpNextExiting(false);
+}
+
 const mpvError = hasMpvError;
 const showFallbackPanel = Boolean(mpvError) && !isLeavingPlayer;
 const playerVisuallyReady = playbackStarted || (mpvReadyForCommands && mpvFileLoaded && playing);
@@ -2322,11 +2618,13 @@ if (!stream) {
     || null;
   const resumeBackground = resumeEntry?.background || resumeEntry?.poster || "";
   const backgroundArtwork = ensureOriginalTmdbImage(
-    selectedMediaBackground
-    || resumeBackground
-    || behaviorBackground
-    || behaviorPoster
-    || "",
+    !isMovie
+      ? currentEpisode?.still || ""
+      : selectedMediaBackground
+        || resumeBackground
+        || behaviorBackground
+        || behaviorPoster
+        || "",
   );
   const controlsReady = !androidPlayback && (playbackStarted || (mpvReadyForCommands && mpvFileLoaded));
   const playerCursor = !androidPlayback && playbackStarted && !controlsActive ? "none" : "default";
@@ -2416,6 +2714,14 @@ if (!stream) {
           {subtitleSyncNotice}
         </div>
       ) : null}
+      {videoFilterNotice ? (
+        <div
+          data-player-interactive
+          className="pointer-events-none absolute left-1/2 top-[68px] z-50 -translate-x-1/2 rounded-full border border-white/14 bg-black/76 px-4 py-2 text-sm font-semibold text-white shadow-2xl"
+        >
+          {videoFilterNotice}
+        </div>
+      ) : null}
 
       <SubtitleSyncDialog
         open={subtitleSync.open}
@@ -2472,7 +2778,7 @@ if (!stream) {
       />
 
       <PlayerControls
-        active={controlsReady && controlsActive}
+        active={controlsReady && controlsActive && !showUpNext}
         currentMetaTitle={currentMetaTitle}
         title={title}
         currentTime={currentTime}
@@ -2579,6 +2885,38 @@ if (!stream) {
         onToggleEpisodePanel={() => setActiveSidePanel(value => value === "episodes" ? null : "episodes")}
         onNavigateEpisode={navigateEpisode}
       />
+
+      {(showUpNext || upNextExiting) && related.recommendation && (isMovie || !canGoNextEpisode) ? (
+        <UpNext
+          exiting={upNextExiting}
+          onExitComplete={completeUpNextExit}
+          recommendation={{
+            title: related.recommendation.title,
+            logoUrl: related.recommendation.logoUrl,
+            backdropUrl: related.recommendation.backdropUrl,
+            posterUrl: related.recommendation.posterUrl,
+            overview: related.recommendation.overview,
+            year: related.recommendation.year,
+            rating: related.recommendation.rating,
+            voteCount: related.recommendation.voteCount,
+            runtime: related.recommendation.runtime,
+            genres: related.recommendation.genres,
+            mediaTypeLabel: related.recommendation.mediaTypeLabel,
+            }}
+            countdownSeconds={12}
+            onPlay={() => {
+            dismissUpNext();
+            const rec = related.recommendation;
+            if (rec) navigate(`/episode?type=${rec.type}&id=tmdb:${rec.tmdbId}`);
+            }}
+            onCountdownEnd={() => {
+            dismissUpNext();
+            const rec = related.recommendation;
+            if (rec) navigate(`/episode?type=${rec.type}&id=tmdb:${rec.tmdbId}`);
+            }}
+            onMiniClick={dismissUpNext}
+            />
+      ) : null}
     </div>
   );
 }

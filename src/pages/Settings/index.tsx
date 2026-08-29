@@ -88,7 +88,7 @@ import { openExternalUrl } from "../../runtime/platform";
 import packageJson from "../../../package.json";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "trakt" | "mdblist" | "discord";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "trakt" | "mdblist" | "discord";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 type SavedSections = {
   profile: boolean;
@@ -653,6 +653,7 @@ async function startTraktConnection() {
         <PillBlock>
           <NavRow title="MDBList" description="Configura ratings externos para la pantalla de detalle." onClick={() => onViewChange("mdblist")} />
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
+          <NavRow title="TheIntroDB" description="Timestamps de créditos (outros) para disparar Up Next en películas y series." onClick={() => onViewChange("theintrodb")} />
           <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
           <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estás viendo en Aetherio." onClick={() => onViewChange("discord")} />
         </PillBlock>
@@ -760,6 +761,31 @@ async function startTraktConnection() {
               value={keys[details.key]}
               onChange={event => onKeyChange(details.key, event.target.value)}
               placeholder={details.placeholder}
+              className="w-full rounded-full border border-white/18 bg-white px-4 py-2.5 text-sm text-black outline-none gsap-transition placeholder:text-black/45 focus:border-white/34"
+            />
+          </PillRow>
+        </PillBlock>
+<div className="mt-5 flex items-center gap-3">
+          <ActionButton onClick={onSaveIntegrations} icon={<Save size={15} />}>Guardar integración</ActionButton>
+          {saved.integrations ? <span className="text-sm text-white/54">Guardado.</span> : null}
+        </div>
+      </PanelScaffold>
+    );
+  }
+
+  if (view === "theintrodb") {
+    return (
+      <PanelScaffold title="TheIntroDB" onBack={() => onViewChange("integrations")}>
+        <PillBlock>
+          <PillRow
+            title="Token de TheIntroDB"
+            description="Proporciona timestamps exactos de créditos (outros) para películas y series. Aetherio los usa para mostrar Up Next justo cuando empiezan los créditos; si no hay dato, se usa el umbral por porcentaje."
+          >
+            <input
+              type="password"
+              value={keys.introDbApiKey}
+              onChange={event => onKeyChange("introDbApiKey", event.target.value)}
+              placeholder="Pega aquí tu token de theintrodb.org"
               className="w-full rounded-full border border-white/18 bg-white px-4 py-2.5 text-sm text-black outline-none gsap-transition placeholder:text-black/45 focus:border-white/34"
             />
           </PillRow>
@@ -1366,7 +1392,7 @@ function PlaybackPanel({
             checked={playback.preferBingeGroup}
             onChange={checked => onPlaybackChange("preferBingeGroup", checked)}
           />
-          <RangeRow
+<RangeRow
             title="Porcentaje de umbral"
             description="Pasar automáticamente al siguiente episodio cuando la reproducción alcance este porcentaje."
             value={playback.nextEpisodeThresholdPercent}
@@ -1374,6 +1400,15 @@ function PlaybackPanel({
             max={100}
             suffix="%"
             onChange={value => onPlaybackChange("nextEpisodeThresholdPercent", value)}
+          />
+        </PillBlock>
+
+        <PillBlock title="UP NEXT">
+          <ToggleRow
+            title="Recomendación al terminar"
+            description="Al terminar una película o el último episodio, mostrar una recomendación relacionada con mini reproductor (el video sigue sonando achicado)."
+            checked={playback.upNextEnabled}
+            onChange={checked => onPlaybackChange("upNextEnabled", checked)}
           />
         </PillBlock>
 

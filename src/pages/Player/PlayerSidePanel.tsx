@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
+import { gsap, tweenTo } from "../../utils/motion";
 
 interface PlayerSidePanelProps {
   visible: boolean;
@@ -20,6 +21,31 @@ export default function PlayerSidePanel({
   onClose,
 }: PlayerSidePanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(visible);
+
+  useEffect(() => {
+    if (visible) setMounted(true);
+    else if (innerRef.current) {
+      const el = innerRef.current;
+      gsap.killTweensOf(el);
+      // Solo opacidad: el vidrio es seguido por la máscara episodePanel del
+      // shader de blur GPU; transformar desincroniza la máscara unos frames.
+      tweenTo(el, { opacity: 0 }, 0.28);
+      window.setTimeout(() => setMounted(false), 300);
+    } else {
+      setMounted(false);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !mounted) return;
+    const el = innerRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    gsap.set(el, { opacity: 0 });
+    tweenTo(el, { opacity: 1 }, 0.34);
+  }, [mounted, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -40,7 +66,7 @@ export default function PlayerSidePanel({
     };
   }, [onClose, visible]);
 
-  if (!visible) return null;
+  if (!mounted) return null;
 
   return (
     <aside
@@ -55,9 +81,10 @@ export default function PlayerSidePanel({
       aria-label={title}
     >
       <div
+        ref={innerRef}
         data-player-episode-panel-glass
-        className="flex h-full flex-col overflow-hidden rounded-[28px] p-5"
-        style={CONTEXT_GLASS_STYLE}
+        className="flex h-full flex-col overflow-hidden rounded-[28px] p-5 will-change-transform"
+        style={{ ...CONTEXT_GLASS_STYLE, willChange: "transform, opacity, filter", transform: "translateZ(0)" }}
       >
         <header className="mb-4 flex shrink-0 items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">

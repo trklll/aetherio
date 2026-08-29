@@ -40,7 +40,8 @@ export default function SubtitleSyncDialog({
   useEffect(() => {
     if (!open) return;
     if (panelRef.current) {
-      tweenTo(panelRef.current, { opacity: 1, y: 0, scale: 1 }, 0.3);
+      // Solo opacidad: panel seguido por la máscara de blur GPU de MPV.
+      tweenTo(panelRef.current, { opacity: 1 }, 0.26);
     }
     const onEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -121,7 +122,7 @@ export default function SubtitleSyncDialog({
         aria-label="Sincronizar subtítulos"
         data-player-sync-dialog-glass
         className="relative flex max-h-[calc(100vh-48px)] w-[min(500px,calc(100vw-32px))] flex-col overflow-hidden rounded-[24px] text-white"
-        style={{ ...CONTEXT_GLASS_STYLE, opacity: 0, transform: "translateY(10px) scale(0.985)" }}
+        style={{ ...CONTEXT_GLASS_STYLE, opacity: 0 }}
       >
         <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
           <div className="flex min-w-0 items-center gap-2.5">

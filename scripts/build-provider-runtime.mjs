@@ -13,6 +13,9 @@ await build({
       import axios from "axios";
       import * as cheerio from "cheerio";
       import CryptoJS from "crypto-js";
+      if (typeof globalThis.Buffer === "undefined") {
+        globalThis.Buffer = { isBuffer: () => false };
+      }
       self.__PROVIDER_RUNTIME_DEPS__ = { axios, cheerio, CryptoJS };
     `,
     resolveDir: root,
@@ -25,7 +28,7 @@ await build({
   target: "es2020",
   minify: true,
   legalComments: "none",
-  banner: { js: "var window = globalThis; var global = globalThis;" },
+  banner: { js: "var window = globalThis; var global = globalThis; var Buffer = globalThis.Buffer || { isBuffer: () => false }; globalThis.Buffer = Buffer;" },
   define: {
     "process.env.NODE_ENV": '"production"',
     global: "globalThis",

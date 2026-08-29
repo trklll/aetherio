@@ -103,7 +103,8 @@ export default function SourcePanel({
             const active = stream.id === currentStreamId;
             const provider = streamProviderName(stream);
             const providerLogo = getSourceLogo(provider);
-            const title = stream.title || stream.name || provider;
+            const rawTitle = stream.title || stream.name || provider;
+            const title = sanitizeDisplayText(rawTitle) || provider;
             const quality = readBehaviorText(stream, "quality");
             const language = stream.languages?.join(" · ") || readBehaviorText(stream, "language") || readBehaviorText(stream, "audio");
             const kind = getStreamKind(stream);
@@ -195,8 +196,17 @@ function ProviderFilterButton({
   );
 }
 
+function sanitizeDisplayText(value: string) {
+  return value
+    .replace(/\b(captura|capture|TO\s*AI)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[·\-–—\s]+|[·\-–—\s]+$/g, "")
+    .trim();
+}
+
 function streamProviderName(stream: MediaStream) {
-  return stream.addonName || readBehaviorText(stream, "providerName") || stream.name || "Fuente";
+  const raw = stream.addonName || readBehaviorText(stream, "providerName") || stream.name || "Fuente";
+  return sanitizeDisplayText(raw) || "Fuente";
 }
 
 function normalizeProviderName(value: string) {

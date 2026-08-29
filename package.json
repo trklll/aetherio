@@ -1,7 +1,7 @@
 {
-  "name": "aetherio",
+"name": "aetherio",
   "private": true,
-  "version": "0.4.13",
+  "version": "0.4.14",
   "type": "module",
   "scripts": {
     "predev": "npm run anime4k:sync && npm run providers:build",

@@ -118,6 +118,24 @@
 //!MAXIMUM 256.0
 8.0
 
+//!PARAM aetherio_blur_alpha
+//!TYPE DYNAMIC float
+//!MINIMUM 0.0
+//!MAXIMUM 1.0
+1.0
+
+//!PARAM aetherio_episode_blur_alpha
+//!TYPE DYNAMIC float
+//!MINIMUM 0.0
+//!MAXIMUM 1.0
+1.0
+
+//!PARAM aetherio_subtitle_blur_alpha
+//!TYPE DYNAMIC float
+//!MINIMUM 0.0
+//!MAXIMUM 1.0
+1.0
+
 //!HOOK OUTPUT
 //!BIND HOOKED
 //!SAVE AETHERIO_BLUR_HORIZONTAL
@@ -185,6 +203,10 @@ vec4 hook() {
     vec4 original = HOOKED_texOff(vec2(0.0));
     vec2 pixel = aetherio_window_pixel(HOOKED_pos);
     if (!aetherio_inside_blur_source(pixel)) {
+        return original;
+    }
+    float maxAlpha = max(aetherio_blur_alpha, max(aetherio_episode_blur_alpha, aetherio_subtitle_blur_alpha));
+    if (maxAlpha <= 0.01) {
         return original;
     }
 
@@ -298,7 +320,18 @@ bool aetherio_inside_glass(vec2 pixel) {
 vec4 hook() {
     vec4 original = HOOKED_texOff(vec2(0.0));
     vec2 pixel = aetherio_window_pixel(HOOKED_pos);
-    if (!aetherio_inside_glass(pixel)) {
+
+    float maskAlpha = 0.0;
+    if (aetherio_inside_rounded_rect(pixel, aetherio_blur_left, aetherio_blur_top, aetherio_blur_right, aetherio_blur_bottom, aetherio_blur_radius)) {
+        maskAlpha = max(maskAlpha, aetherio_blur_alpha);
+    }
+    if (aetherio_episode_blur_enabled > 0.5 && aetherio_inside_rounded_rect(pixel, aetherio_episode_blur_left, aetherio_episode_blur_top, aetherio_episode_blur_right, aetherio_episode_blur_bottom, aetherio_episode_blur_radius)) {
+        maskAlpha = max(maskAlpha, aetherio_episode_blur_alpha);
+    }
+    if (aetherio_subtitle_blur_enabled > 0.5 && aetherio_inside_rounded_rect(pixel, aetherio_subtitle_blur_left, aetherio_subtitle_blur_top, aetherio_subtitle_blur_right, aetherio_subtitle_blur_bottom, aetherio_subtitle_blur_radius)) {
+        maskAlpha = max(maskAlpha, aetherio_subtitle_blur_alpha);
+    }
+    if (maskAlpha <= 0.01) {
         return original;
     }
 
@@ -326,5 +359,5 @@ vec4 hook() {
     float luminance = dot(blurred.rgb, vec3(0.2126, 0.7152, 0.0722));
     blurred.rgb = mix(vec3(luminance), blurred.rgb, 1.35);
     blurred.a = original.a;
-    return blurred;
+    return mix(original, blurred, clamp(maskAlpha, 0.0, 1.0));
 }

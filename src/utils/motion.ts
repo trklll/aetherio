@@ -5,12 +5,18 @@ export { gsap };
 
 export const appleEase = "power3.out";
 export const quickEase = "power2.out";
+export const elegantEase = "expo.out";
+export const elegantInEase = "expo.in";
 
 export const motionTimings = {
   hover: 0.18,
   row: 0.22,
   page: 0.52,
   hero: 0.64,
+  chromeIn: 0.48,
+  chromeOut: 0.36,
+  playerBarIn: 0.52,
+  playerBarOut: 0.42,
 } as const;
 
 type MotionTarget = gsap.TweenTarget;

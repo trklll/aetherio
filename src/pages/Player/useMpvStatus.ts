@@ -22,6 +22,8 @@ interface UseMpvStatusArgs {
   setMpvPausedForCache: Dispatch<SetStateAction<boolean>>;
   setMpvCacheBuffering: Dispatch<SetStateAction<number>>;
   setMpvTracks: Dispatch<SetStateAction<MpvTrack[]>>;
+  setMpvVideoWidth?: Dispatch<SetStateAction<number | null>>;
+  setMpvVideoHeight?: Dispatch<SetStateAction<number | null>>;
   setSelectedMpvSubtitle: Dispatch<SetStateAction<string>>;
   setSelectedMpvAudio: Dispatch<SetStateAction<string>>;
   setSelectedSpeed: Dispatch<SetStateAction<string>>;
@@ -45,6 +47,8 @@ export function useMpvStatus({
   setMpvPausedForCache,
   setMpvCacheBuffering,
   setMpvTracks,
+  setMpvVideoWidth,
+  setMpvVideoHeight,
   setSelectedMpvSubtitle,
   setSelectedMpvAudio,
   setSelectedSpeed,
@@ -99,6 +103,14 @@ export function useMpvStatus({
 
       const nextTracks = status.tracks ?? [];
       setMpvTracks(prev => JSON.stringify(prev) === JSON.stringify(nextTracks) ? prev : nextTracks);
+      if (setMpvVideoWidth) {
+        const w = typeof status.videoWidth === "number" && Number.isFinite(status.videoWidth) ? status.videoWidth : null;
+        setMpvVideoWidth(prev => (prev === w ? prev : w));
+      }
+      if (setMpvVideoHeight) {
+        const h = typeof status.videoHeight === "number" && Number.isFinite(status.videoHeight) ? status.videoHeight : null;
+        setMpvVideoHeight(prev => (prev === h ? prev : h));
+      }
 
       const selectedSubtitleTrack = (status.tracks ?? []).find(track => {
         const kind = String(track.type ?? "").toLowerCase();
@@ -144,6 +156,8 @@ export function useMpvStatus({
 
     function resetMpvState() {
       setMpvTracks([]);
+      setMpvVideoWidth?.(null);
+      setMpvVideoHeight?.(null);
       setChapterOptions([]);
       setMpvFileLoaded(false);
       setMpvPausedForCache(false);

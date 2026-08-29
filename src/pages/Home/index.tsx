@@ -284,9 +284,9 @@ function Skeleton() {
       </div>
       <div style={{ padding:"8px var(--app-safe-x) 32px" }}>
         <div className="skeleton" style={{ width:170,height:18,borderRadius:999,marginBottom:16 }} />
-        <div style={{ display:"flex",gap:12,overflow:"hidden" }}>
+        <div style={{ display:"flex",gap:18,overflow:"hidden" }}>
           {[0,1,2,3,4].map(item => (
-            <div key={item} className="skeleton" style={{ width:300,height:170,borderRadius:14,flexShrink:0 }} />
+            <div key={item} className="skeleton" style={{ width:336,height:196,borderRadius:12,flexShrink:0 }} />
           ))}
         </div>
       </div>

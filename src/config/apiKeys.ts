@@ -64,6 +64,20 @@ export const EMPTY_API_KEYS: ApiKeys = {
   omdbApiKey: "",
 };
 
+// Token de TheIntroDB (theintrodb.org) para créditos de películas/series.
+// El valor que se envía como Bearer es la parte tras "theintrodb:".
+const THEINTRODB_DEFAULT_TOKEN = "theintrodb:user_3IVP8IjpQEUwPHgWTSztNipKNTf:QnCoTl08452s1q8q03apXL60EHNUiGLQ0-mvkkNP-bQ";
+
+export function getTheIntroDbToken(): string {
+  const stored = getApiKeys().introDbApiKey;
+  if (stored) return stored;
+  // Semilla por defecto (la parte tras "theintrodb:") para que funcione sin configurar.
+  const seeded = THEINTRODB_DEFAULT_TOKEN.startsWith("theintrodb:")
+    ? THEINTRODB_DEFAULT_TOKEN.slice("theintrodb:".length)
+    : THEINTRODB_DEFAULT_TOKEN;
+  return seeded;
+}
+
 export function getApiKeys(): ApiKeys {
   try {
     const raw = localStorage.getItem(getApiKeysStorageKey());

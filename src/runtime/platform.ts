@@ -351,6 +351,11 @@ export async function setNativeMpvControlsBlur(
       cornerRadius: number;
     };
   },
+  alpha?: {
+    blurAlpha?: number;
+    episodeBlurAlpha?: number;
+    subtitleBlurAlpha?: number;
+  },
 ) {
   if (!isTauriRuntime() || isAndroidRuntime()) return;
   await invokeCommand("set_mpv_controls_blur", {
@@ -374,5 +379,8 @@ export async function setNativeMpvControlsBlur(
     subtitlePanelRight: rect?.subtitlePanel?.right ?? 0,
     subtitlePanelBottom: rect?.subtitlePanel?.bottom ?? 0,
     subtitlePanelCornerRadius: rect?.subtitlePanel?.cornerRadius ?? 0,
+    blurAlpha: alpha?.blurAlpha ?? (enabled ? 1 : 0),
+    episodeBlurAlpha: alpha?.episodeBlurAlpha ?? (rect?.episodePanel ? 1 : 0),
+    subtitleBlurAlpha: alpha?.subtitleBlurAlpha ?? (rect?.subtitlePanel ? 1 : 0),
   });
 }

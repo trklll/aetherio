@@ -18,7 +18,7 @@ export const HOME_PREFERENCES_CHANGED_EVENT = "aetherio-home-preferences-changed
 
 export const DEFAULT_HOME_PREFERENCES: HomePreferences = {
   contentOrientation: "both",
-  posterLayout: "horizontal",
+  posterLayout: "vertical",
   catalogOrder: [],
   hiddenCatalogKeys: [],
   allowTmdbArtworkFallback: false,
@@ -132,7 +132,7 @@ function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePr
 
   return {
     contentOrientation: normalizeContentOrientation(preferences.contentOrientation),
-    posterLayout: preferences.posterLayout === "vertical" ? "vertical" : "horizontal",
+    posterLayout: preferences.posterLayout === "horizontal" ? "horizontal" : "vertical",
     catalogOrder,
     hiddenCatalogKeys,
     allowTmdbArtworkFallback: typeof preferences.allowTmdbArtworkFallback === "boolean"

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   AudioLines,
   Captions,
@@ -24,7 +25,7 @@ import type { SelectOption, VideoScaleMode } from "./types";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
 import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
-import { tweenTo } from "../../utils/motion";
+import { gsap } from "../../utils/motion";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
 import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
 
@@ -156,18 +157,36 @@ export default function PlayerControls({
   const lastBlurGeometryRef = useRef("");
   const blurErrorLoggedRef = useRef(false);
   const blurCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const pendingBlurCommandRef = useRef<{ enabled: boolean; rect?: MpvBlurGeometry } | null>(null);
+  const pendingBlurCommandRef = useRef<{ enabled: boolean; rect?: MpvBlurGeometry; alpha?: { blurAlpha?: number; episodeBlurAlpha?: number; subtitleBlurAlpha?: number } } | null>(null);
   const blurCommandInFlightRef = useRef(false);
   const subtitlePositionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastSubtitlePositionRef = useRef<number | null>(null);
+  const blurHideTimerRef = useRef<number | null>(null);
+  const blurSyncTimerRef = useRef<number | null>(null);
+  const barAlphaRef = useRef({ v: 0 });
+  const episodeAlphaRef = useRef({ v: 0 });
+  const subtitleAlphaRef = useRef({ v: 0 });
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const subtitleBlurRefreshKey = useMemo(
     () => `${selectedSubtitleValue}|${subtitlesLoading ? "loading" : "ready"}|${subtitleOptions.map(option => option.value).join("\u0000")}`,
     [selectedSubtitleValue, subtitleOptions, subtitlesLoading],
   );
 
+  // Barra con animación suave (menos exagerada) y blur sincronizado vía barAlpha
   useEffect(() => {
-    tweenTo(controlsRef.current, { opacity: active ? 1 : 0 }, 0.3);
+    const el = controlsRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    if (active) {
+      el.style.pointerEvents = "auto";
+      gsap.set(el, { opacity: 0, y: 14, scale: 0.97, filter: "blur(8px)" });
+      gsap.to(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.45, ease: "expo.out", overwrite: "auto" });
+    } else {
+      gsap.to(el, { opacity: 0, y: 8, scale: 0.985, filter: "blur(6px)", duration: 0.32, ease: "expo.in", overwrite: "auto" });
+      window.setTimeout(() => {
+        if (el && !active) el.style.pointerEvents = "none";
+      }, 320);
+    }
   }, [active]);
 
   useEffect(() => {
@@ -244,11 +263,13 @@ export default function PlayerControls({
     };
   }, [active, subtitleVerticalPercent]);
 
+  // Blur con alpha animado solo para la barra principal: el shader mezcla
+  // original↔blur según aetherio_blur_alpha, por eso el blur desvanece
+  // exactamente junto a la opacidad de la barra y no se queda flotando.
+  // Paneles laterales/menús mantienen blur binario (menos notorio al ser pequeños).
   useEffect(() => {
     let disposed = false;
     let animationFrame = 0;
-    let resizeSettleTimers: number[] = [];
-    const subtitleRefreshTimers: number[] = [];
 
     const flushLatestBlurCommand = () => {
       const command = pendingBlurCommandRef.current;
@@ -259,7 +280,7 @@ export default function PlayerControls({
       pendingBlurCommandRef.current = null;
       const next = blurCommandQueueRef.current
         .catch(() => undefined)
-        .then(() => setNativeMpvControlsBlur(command.enabled, command.rect));
+        .then(() => setNativeMpvControlsBlur(command.enabled, command.rect, command.alpha));
       blurCommandQueueRef.current = next;
       void next.then(
         () => {
@@ -279,121 +300,168 @@ export default function PlayerControls({
     const queueBlurCommand = (
       enabled: boolean,
       rect?: MpvBlurGeometry,
+      alpha?: { blurAlpha?: number; episodeBlurAlpha?: number; subtitleBlurAlpha?: number },
     ) => {
-      pendingBlurCommandRef.current = { enabled, rect };
+      pendingBlurCommandRef.current = { enabled, rect, alpha };
       if (blurCommandInFlightRef.current) return;
       blurCommandInFlightRef.current = true;
       flushLatestBlurCommand();
     };
-    const disableBlur = () => {
-      lastBlurGeometryRef.current = "";
-      queueBlurCommand(false);
-    };
-    if ((!active && !subtitleSyncOpen) || controlsLocked) {
-      disableBlur();
-      return;
-    }
 
-    const syncBlurGeometry = () => {
-      window.cancelAnimationFrame(animationFrame);
-      animationFrame = window.requestAnimationFrame(() => {
-        if (disposed) return;
-        const glass = controlsGlassRef.current;
-        if (!glass) return;
-        const rect = glass.getBoundingClientRect();
-        const episodePanel = activeSidePanel
-          ? document.querySelector<HTMLElement>("[data-player-episode-panel-glass]")
-          : null;
-        const episodeRect = episodePanel?.getBoundingClientRect();
-        const subtitlePanel = openMenu
-          ? document.querySelector<HTMLElement>("[data-player-floating-panel-glass]")
-          : null;
-        const subtitleRect = subtitlePanel?.getBoundingClientRect();
-        const syncDialogPanel = subtitleSyncOpen
-          ? document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]")
-          : null;
-        const syncDialogRect = syncDialogPanel?.getBoundingClientRect();
-        const scale = window.devicePixelRatio || 1;
-        const geometry = {
-          left: rect.left * scale,
-          top: rect.top * scale,
-          right: rect.right * scale,
-          bottom: rect.bottom * scale,
-          cornerRadius: 26 * scale,
-          viewportWidth: window.innerWidth * scale,
-          viewportHeight: window.innerHeight * scale,
-          episodePanel: episodeRect
-            ? {
-                left: episodeRect.left * scale,
-                top: episodeRect.top * scale,
-                right: episodeRect.right * scale,
-                bottom: episodeRect.bottom * scale,
-                cornerRadius: 28 * scale,
-              }
-            : undefined,
-          subtitlePanel: syncDialogRect
-            ? {
-                left: syncDialogRect.left * scale,
-                top: syncDialogRect.top * scale,
-                right: syncDialogRect.right * scale,
-                bottom: syncDialogRect.bottom * scale,
-                cornerRadius: 24 * scale,
-              }
-            : subtitleRect
-              ? {
-                  left: subtitleRect.left * scale,
-                  top: subtitleRect.top * scale,
-                  right: subtitleRect.right * scale,
-                  bottom: subtitleRect.bottom * scale,
-                  cornerRadius: 24 * scale,
-                }
-              : undefined,
-        };
-        const geometryKey = JSON.stringify(geometry);
-        if (geometryKey === lastBlurGeometryRef.current) return;
-        lastBlurGeometryRef.current = geometryKey;
-        queueBlurCommand(true, geometry);
-      });
+    const buildGeometry = (): MpvBlurGeometry | null => {
+      const glass = controlsGlassRef.current;
+      if (!glass) return null;
+      const rect = glass.getBoundingClientRect();
+      const episodePanel = activeSidePanel
+        ? document.querySelector<HTMLElement>("[data-player-episode-panel-glass]")
+        : null;
+      const episodeRect = episodePanel?.getBoundingClientRect();
+      const floatingPanel = openMenu || subtitleSyncOpen
+        ? (document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]") ??
+           document.querySelector<HTMLElement>("[data-player-floating-panel-glass]"))
+        : null;
+      const floatingRect = floatingPanel?.getBoundingClientRect();
+      if ((openMenu || subtitleSyncOpen) && !floatingPanel) return null;
+      const scale = window.devicePixelRatio || 1;
+      const r = (v: number) => Math.round(v * scale);
+      return {
+        left: r(rect.left),
+        top: r(rect.top),
+        right: r(rect.right),
+        bottom: r(rect.bottom),
+        cornerRadius: Math.round(26 * scale),
+        viewportWidth: r(window.innerWidth),
+        viewportHeight: r(window.innerHeight),
+        episodePanel: episodeRect
+          ? {
+              left: r(episodeRect.left),
+              top: r(episodeRect.top),
+              right: r(episodeRect.right),
+              bottom: r(episodeRect.bottom),
+              cornerRadius: Math.round(28 * scale),
+            }
+          : undefined,
+        subtitlePanel: floatingRect
+          ? {
+              left: r(floatingRect.left),
+              top: r(floatingRect.top),
+              right: r(floatingRect.right),
+              bottom: r(floatingRect.bottom),
+              cornerRadius: Math.round(24 * scale),
+            }
+          : undefined,
+      };
     };
-    const syncBlurAfterResize = () => {
-      resizeSettleTimers.forEach(timer => window.clearTimeout(timer));
-      resizeSettleTimers = [];
-      syncBlurGeometry();
-      for (const delay of [50, 120, 250, 500]) {
-        resizeSettleTimers.push(window.setTimeout(syncBlurGeometry, delay));
+
+    const commitBlur = () => {
+      if (disposed) return;
+      const geometry = buildGeometry();
+      if (!geometry) {
+        window.setTimeout(commitBlur, 32);
+        return;
+      }
+      const alpha = {
+        blurAlpha: barAlphaRef.current.v,
+        episodeBlurAlpha: episodeAlphaRef.current.v,
+        subtitleBlurAlpha: subtitleAlphaRef.current.v,
+      };
+      const key = JSON.stringify({ geometry, alpha });
+      if (key === lastBlurGeometryRef.current) return;
+      lastBlurGeometryRef.current = key;
+      const shouldBeEnabled =
+        alpha.blurAlpha > 0.01 ||
+        alpha.episodeBlurAlpha > 0.01 ||
+        alpha.subtitleBlurAlpha > 0.01 ||
+        active ||
+        !!activeSidePanel ||
+        !!openMenu ||
+        !!subtitleSyncOpen;
+      queueBlurCommand(shouldBeEnabled, geometry, alpha);
+      if (!shouldBeEnabled) {
+        window.setTimeout(() => {
+          lastBlurGeometryRef.current = "";
+          queueBlurCommand(false);
+        }, 80);
       }
     };
 
-    const forceBlurGeometryRefresh = () => {
-      lastBlurGeometryRef.current = "";
-      syncBlurGeometry();
+    const syncBlurGeometry = () => {
+      if (blurSyncTimerRef.current !== null) window.clearTimeout(blurSyncTimerRef.current);
+      blurSyncTimerRef.current = window.setTimeout(() => {
+        blurSyncTimerRef.current = null;
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = window.requestAnimationFrame(commitBlur);
+      }, 16);
     };
 
-    forceBlurGeometryRefresh();
-    for (const delay of [100, 300, 750, 1500, 3000]) {
-      subtitleRefreshTimers.push(window.setTimeout(forceBlurGeometryRefresh, delay));
-    }
-    const observer = new ResizeObserver(syncBlurAfterResize);
+    // Barra exagerada (0.62/0.44) y menús con misma elegancia que nav (0.48/0.36)
+    const targetBar = active && !controlsLocked ? 1 : 0;
+    const targetEpisode = activeSidePanel ? 1 : 0;
+    const targetSubtitle = openMenu || subtitleSyncOpen ? 1 : 0;
+
+    gsap.killTweensOf(barAlphaRef.current);
+    gsap.killTweensOf(episodeAlphaRef.current);
+    gsap.killTweensOf(subtitleAlphaRef.current);
+
+    gsap.to(barAlphaRef.current, {
+      v: targetBar,
+      duration: targetBar ? 0.45 : 0.32,
+      ease: targetBar ? "expo.out" : "expo.in",
+      overwrite: "auto",
+      onUpdate: commitBlur,
+      onComplete: commitBlur,
+    });
+    gsap.to(episodeAlphaRef.current, {
+      v: targetEpisode,
+      duration: targetEpisode ? 0.38 : 0.28,
+      ease: targetEpisode ? "expo.out" : "expo.in",
+      overwrite: "auto",
+      onUpdate: commitBlur,
+      onComplete: commitBlur,
+    });
+    gsap.to(subtitleAlphaRef.current, {
+      v: targetSubtitle,
+      duration: targetSubtitle ? 0.38 : 0.28,
+      ease: targetSubtitle ? "expo.out" : "expo.in",
+      overwrite: "auto",
+      onUpdate: commitBlur,
+      onComplete: commitBlur,
+    });
+
+    // Commit inicial inmediato para que el primer frame ya tenga blur si toca
+    commitBlur();
+
+    const observer = new ResizeObserver(syncBlurGeometry);
     if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
-    const episodePanel = document.querySelector<HTMLElement>("[data-player-episode-panel-glass]");
-    if (episodePanel) observer.observe(episodePanel);
-    const subtitlePanel = document.querySelector<HTMLElement>("[data-player-floating-panel-glass]");
-    if (subtitlePanel) observer.observe(subtitlePanel);
-    const syncDialogPanel = subtitleSyncOpen
-      ? document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]")
-      : null;
-    if (syncDialogPanel) observer.observe(syncDialogPanel);
+    const episodeEl = document.querySelector<HTMLElement>("[data-player-episode-panel-glass]");
+    if (episodeEl) observer.observe(episodeEl);
+    const floatingEl = document.querySelector<HTMLElement>("[data-player-floating-panel-glass]");
+    if (floatingEl) observer.observe(floatingEl);
+    const syncEl = document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]");
+    if (syncEl) observer.observe(syncEl);
     observer.observe(document.documentElement);
-    window.addEventListener("resize", syncBlurAfterResize);
-    window.visualViewport?.addEventListener("resize", syncBlurAfterResize);
+
+    const mutationObserver = new MutationObserver(syncBlurGeometry);
+    mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+
+    window.addEventListener("resize", syncBlurGeometry);
+    window.visualViewport?.addEventListener("resize", syncBlurGeometry);
     return () => {
       disposed = true;
       observer.disconnect();
-      window.removeEventListener("resize", syncBlurAfterResize);
-      window.visualViewport?.removeEventListener("resize", syncBlurAfterResize);
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", syncBlurGeometry);
+      window.visualViewport?.removeEventListener("resize", syncBlurGeometry);
       window.cancelAnimationFrame(animationFrame);
-      resizeSettleTimers.forEach(timer => window.clearTimeout(timer));
-      subtitleRefreshTimers.forEach(timer => window.clearTimeout(timer));
+      gsap.killTweensOf(barAlphaRef.current);
+      if (blurSyncTimerRef.current !== null) {
+        window.clearTimeout(blurSyncTimerRef.current);
+        blurSyncTimerRef.current = null;
+      }
+      if (blurHideTimerRef.current !== null) {
+        window.clearTimeout(blurHideTimerRef.current);
+        blurHideTimerRef.current = null;
+      }
     };
   }, [active, activeSidePanel, controlsLocked, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
 
@@ -406,8 +474,8 @@ export default function PlayerControls({
     <div
       ref={controlsRef}
       data-player-interactive
-      className="absolute inset-x-0 bottom-0 z-40 px-4 pb-3"
-      style={{ opacity: 1, pointerEvents: active ? "auto" : "none" }}
+      className="absolute inset-x-0 bottom-0 z-40 px-4 pb-3 will-change-transform"
+      style={{ opacity: 0, pointerEvents: active ? "auto" : "none", willChange: "transform, opacity, filter", transform: "translateZ(0)" }}
       onMouseEnter={onControlsEnter}
       onMouseLeave={onControlsLeave}
       onMouseMove={event => event.stopPropagation()}
@@ -416,9 +484,12 @@ export default function PlayerControls({
       <div
         ref={controlsGlassRef}
         data-player-controls-glass
-        className="relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)]"
+        className="relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)] will-change-transform"
         style={{
           background: "rgba(70, 70, 70, 0.22)",
+          willChange: "transform, backdrop-filter",
+          transform: "translateZ(0)",
+          backfaceVisibility: "hidden",
         }}
       >
         <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
@@ -637,11 +708,44 @@ function SubtitleMenu({
   const selectedOption = subtitleOptions.find(option => option.value === selectedSubtitleValue);
   const initialLanguage = selectedOption ? subtitleLanguageKey(selectedOption) : "off";
   const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage);
+  const [mounted, setMounted] = useState(open);
 
   useEffect(() => {
     if (!open) return;
     setSelectedLanguage(initialLanguage);
   }, [initialLanguage, open]);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const el = menuRef.current;
+    if (!el) {
+      setMounted(false);
+      return;
+    }
+    gsap.killTweensOf(el);
+    gsap.to(el, {
+      xPercent: -50,
+      opacity: 0,
+      y: 8,
+      scale: 0.98,
+      filter: "blur(6px)",
+      duration: 0.28,
+      ease: "expo.in",
+      overwrite: "auto",
+      onComplete: () => setMounted(false),
+    });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !mounted || !menuRef.current) return;
+    const el = menuRef.current;
+    gsap.killTweensOf(el);
+    gsap.set(el, { xPercent: -50, opacity: 0, y: 10, scale: 0.98, filter: "blur(8px)" });
+    gsap.to(el, { xPercent: -50, opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.36, ease: "expo.out", overwrite: "auto" });
+  }, [open, mounted]);
 
   useEffect(() => {
     if (!open) return;
@@ -698,21 +802,22 @@ function SubtitleMenu({
       >
         <Captions size={17} />
       </button>
-      {open && !disabled ? (
-        <div
-          ref={menuRef}
-          data-player-subtitle-panel-glass
-          data-player-floating-panel-glass
-          role="dialog"
-          aria-label="Subtítulos"
-          className="fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white"
-          style={{
-            ...CONTEXT_GLASS_STYLE,
-            bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
-            height: "min(470px, calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top) - 86px))",
-            minHeight: 300,
-          }}
-        >
+      {mounted && !disabled
+        ? createPortal(
+            <div
+              ref={menuRef}
+              data-player-subtitle-panel-glass
+              data-player-floating-panel-glass
+              role="dialog"
+              aria-label="Subtítulos"
+              className="fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white"
+              style={{
+                ...CONTEXT_GLASS_STYLE,
+                bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
+                height: "min(470px, calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top, 0px) - 86px))",
+                minHeight: 300,
+              }}
+            >
           <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
             <div className="flex min-w-0 items-center gap-2.5">
               <Captions size={18} className="shrink-0 text-white/72" />
@@ -826,9 +931,11 @@ function SubtitleMenu({
                 </button>
               </div>
             </section>
-          </div>
-        </div>
-      ) : null}
+            </div>
+          </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -1178,16 +1285,30 @@ function subtitleLanguageLabel(option: SelectOption) {
 }
 
 function subtitleVariantSourceLabel(option: SelectOption) {
-  if (option.sourceLabel?.trim()) return option.sourceLabel.trim();
+  if (option.sourceLabel?.trim()) {
+    let s = option.sourceLabel.trim();
+    // Sanea "captura" y artefactos "TO AI" que aparecen truncados en capturas
+    s = s.replace(/\b(captura|capture|TO\s*AI|TO\s*AI\s*captura)\b/gi, "").trim();
+    s = s.replace(/\s{2,}/g, " ").replace(/^[·\-–—\s]+|[·\-–—\s]+$/g, "");
+    if (s) return s;
+  }
   if (!option.value) return "Ninguno";
   if (option.value.startsWith("track:")) return "Embebido";
   return "Externo";
 }
 
 function clipSubtitleLabel(label: string) {
-  const trimmed = label.trim();
-  if (trimmed.length <= 34) return trimmed;
-  return `${trimmed.slice(0, 33)}...`;
+  let trimmed = label.trim();
+  // Elimina fragmentos tipo "captura" y "TO AI" antes de truncar para no dejar letras huérfanas
+  trimmed = trimmed.replace(/\b(captura|capture)\b/gi, "").replace(/\bTO\s*AI\b/gi, "").replace(/\s{2,}/g, " ").trim();
+  // Limpia separadores huérfanos tipo " - - "
+  trimmed = trimmed.replace(/\s*-\s*-\s*/g, " - ").replace(/^[·\-–—\s]+|[·\-–—\s]+$/g, "").trim();
+  if (trimmed.length <= 34) return trimmed || "Subtítulo";
+  // Trunca por palabra para no dejar tokens tipo "TO" "AI" aislados
+  const slice = trimmed.slice(0, 34);
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > 18) return `${slice.slice(0, lastSpace).trim()}...`;
+  return `${slice.trim()}...`;
 }
 
 function formatDelay(valueMs: number) {

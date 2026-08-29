@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { getApiKeys, tmdbFetch } from "../../config/apiKeys";
+import { getApiKeys, getTheIntroDbToken, tmdbFetch } from "../../config/apiKeys";
 import { invokeCommand } from "../../runtime/platform";
 import type { StreamQuery } from "../../types/stream";
 
 export interface SkipSegment {
   id: string;
-  source: "introdb" | "aniskip" | "anime-skip";
-  kind: "intro" | "recap";
+  source: "introdb" | "aniskip" | "anime-skip" | "theintrodb";
+  kind: "intro" | "recap" | "outro";
   start: number;
   end: number;
 }
@@ -50,6 +50,7 @@ function kindForAnimeSkipType(type: string): SkipSegment["kind"] | null {
   const normalized = type.toLowerCase();
   if (normalized === "intro" || normalized === "new intro" || normalized === "mixed intro" || normalized.includes("intro")) return "intro";
   if (normalized === "recap" || normalized.includes("recap")) return "recap";
+  if (normalized === "ed" || normalized === "ending" || normalized.includes("ending") || normalized.includes("credits")) return "outro";
   return null;
 }
 
@@ -81,7 +82,7 @@ function segmentsFromAnimeSkipTimestamps(timestamps: any[]): SkipSegment[] {
 function segmentsFromAniSkipResults(results: any[]): SkipSegment[] {
   return results.map(result => {
     const skipType = String(result?.skipType ?? "").toLowerCase();
-    const kind: SkipSegment["kind"] | null = skipType.includes("recap") ? "recap" : skipType.includes("op") ? "intro" : null;
+    const kind: SkipSegment["kind"] | null = skipType.includes("recap") ? "recap" : skipType.includes("op") ? "intro" : skipType.includes("ed") ? "outro" : null;
     const start = Number(result?.interval?.startTime);
     const end = Number(result?.interval?.endTime);
     if (!kind || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
@@ -156,22 +157,127 @@ async function resolveKitsuToArmEntry(kitsuId: string, include = "myanimelist,im
 }
 
 async function loadIntroDbSegments(query: StreamQuery): Promise<SkipSegment[]> {
-  if (!query.season || !query.episode || query.type === "movie") return [];
   const imdbId = await resolveImdbId(query);
   if (!imdbId) return [];
-  const json = await invokeCommand<Record<string, unknown>>("fetch_introdb_segments", {
-    imdbId,
-    season: query.season,
-    episode: query.episode,
-  }).catch(() => ({}));
+  const isMovie = query.type === "movie";
+  // Las películas se consultan solo por IMDb id (sin season/episode); las series con ambos.
+  const json = isMovie
+    ? await invokeCommand<Record<string, unknown>>("fetch_introdb_segments", { imdbId }).catch(() => ({}))
+    : await invokeCommand<Record<string, unknown>>("fetch_introdb_segments", {
+        imdbId,
+        season: query.season,
+        episode: query.episode,
+      }).catch(() => ({}));
+  if (isMovie) {
+    // Película: intro + outro (créditos finales) si IntroDB los tiene.
+    return [
+      normalizeSegment("introdb", "intro", (json as { intro?: IntroDbSegment }).intro),
+      normalizeSegment("introdb", "outro", (json as { outro?: IntroDbSegment }).outro),
+    ].filter(Boolean) as SkipSegment[];
+  }
   return [
     normalizeSegment("introdb", "recap", (json as { recap?: IntroDbSegment }).recap),
     normalizeSegment("introdb", "intro", (json as { intro?: IntroDbSegment }).intro),
+    normalizeSegment("introdb", "outro", (json as { outro?: IntroDbSegment }).outro),
   ].filter(Boolean) as SkipSegment[];
 }
 
+const THEINTRODB_BASE = "https://api.theintrodb.org";
+
+interface TheIntroDbSegment {
+  type?: string;
+  segment_type?: string;
+  kind?: string;
+  start_time?: number;
+  startTime?: number;
+  start_sec?: number;
+  start_ms?: number;
+  end_time?: number;
+  endTime?: number;
+  end_sec?: number;
+  end_ms?: number;
+}
+
+function theIntroDbKind(type: string): SkipSegment["kind"] | null {
+  const normalized = (type ?? "").toLowerCase();
+  if (normalized.includes("outro") || normalized.includes("credit") || normalized.includes("end") || normalized === "ed") return "outro";
+  return null;
+}
+
+function normalizeTheIntroDbSegment(segment: TheIntroDbSegment | null | undefined): SkipSegment | null {
+  const start = Number(
+    segment?.start_time ??
+    segment?.startTime ??
+    segment?.start_sec ??
+    (typeof segment?.start_ms === "number" ? segment.start_ms / 1000 : NaN),
+  );
+  const end = Number(
+    segment?.end_time ??
+    segment?.endTime ??
+    segment?.end_sec ??
+    (typeof segment?.end_ms === "number" ? segment.end_ms / 1000 : NaN),
+  );
+  const kind = theIntroDbKind(String(segment?.type ?? segment?.segment_type ?? segment?.kind ?? ""));
+  if (!kind || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return { id: `theintrodb:${kind}:${start}:${end}`, source: "theintrodb", kind, start: Math.max(0, start), end };
+}
+
+async function loadTheIntroDbSegments(query: StreamQuery): Promise<SkipSegment[]> {
+  // Solo se usa para OUTROS (créditos) de películas y series. Requiere el token Bearer.
+  const token = getTheIntroDbToken();
+  if (!token) return [];
+  const imdbId = await resolveImdbId(query);
+  if (!imdbId) return [];
+  const isMovie = query.type === "movie";
+  if (!isMovie && (!query.season || !query.episode)) return [];
+
+  const url = new URL(`${THEINTRODB_BASE}/media`);
+  url.searchParams.set("imdb_id", imdbId);
+  if (!isMovie) {
+    url.searchParams.set("season", String(query.season));
+    url.searchParams.set("episode", String(query.episode));
+  }
+
+  let json: any = null;
+  let httpStatus = 0;
+  try {
+    const response = await fetch(url.toString(), {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+    httpStatus = response.status;
+    if (!response.ok) {
+      console.warn(`[THEINTRODB] HTTP ${response.status} para ${imdbId} (${isMovie ? "movie" : "tv"})`, url.toString());
+      return [];
+    }
+    json = await response.json();
+  } catch (error) {
+    console.warn(`[THEINTRODB] fallo de red para ${imdbId}`, String(error));
+    return [];
+  }
+
+  // El segmento de créditos puede venir en varias formas: media.segments[], media.segment,
+  // o campos directos intro/outro. Lo robustecemos.
+  const candidates: TheIntroDbSegment[] = [];
+  const segmentsArr = (json?.segments ?? json?.segment ?? []) as any;
+  if (Array.isArray(segmentsArr)) candidates.push(...segmentsArr);
+  else if (segmentsArr && typeof segmentsArr === "object") candidates.push(segmentsArr);
+  if (json?.outro && typeof json.outro === "object") candidates.push(json.outro);
+
+  const parsed = candidates
+    .map(segment => normalizeTheIntroDbSegment(segment))
+    .filter(Boolean) as SkipSegment[];
+
+  console.info(`[THEINTRODB] ${isMovie ? "pelicula" : "serie"} imdb_id=${imdbId} status=${httpStatus}`, {
+    raw: json,
+    candidatos: candidates.length,
+    outrosEncontrados: parsed.filter(s => s.kind === "outro"),
+  });
+
+  return parsed;
+}
+
 async function loadAniSkipSegments(malId: string, episode: number): Promise<SkipSegment[]> {
-  const url = `https://api.aniskip.com/v2/skip-times/${encodeURIComponent(malId)}/${episode}?episodeLength=0&types=op&types=recap&types=mixed-op`;
+  const url = `https://api.aniskip.com/v2/skip-times/${encodeURIComponent(malId)}/${episode}?episodeLength=0&types=op&types=recap&types=mixed-op&types=ed`;
   const json = await fetchJson<{ found?: boolean; results?: any[] }>(url);
   if (!json?.found || !Array.isArray(json.results)) return [];
   return segmentsFromAniSkipResults(json.results);
@@ -288,7 +394,7 @@ export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, curr
     let cancelled = false;
 
     async function load() {
-      if (!options.enabled || !query || query.type === "movie") {
+      if (!options.enabled || !query) {
         setSegments([]);
         return;
       }
@@ -299,18 +405,26 @@ export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, curr
         return;
       }
 
-      const [introDbSegments, animeSkipSegments] = await Promise.all([
-        loadIntroDbSegments(query).catch(() => []),
-        options.animeSkipEnabled ? loadAnimeSegments(query, mediaTitle).catch(() => []) : Promise.resolve([]),
-      ]);
+      // Las películas solo consultan TheIntroDB (outros/créditos); las series
+      // combinan introdb.app + anime-skip + TheIntroDB.
+      const isMovie = query.type === "movie";
+      const [introDbSegments, theIntroDbSegments, animeSkipSegments] = isMovie
+        ? [Promise.resolve([] as SkipSegment[]), loadTheIntroDbSegments(query).catch(() => []), Promise.resolve([] as SkipSegment[])]
+        : [
+            loadIntroDbSegments(query).catch(() => []),
+            loadTheIntroDbSegments(query).catch(() => []),
+            options.animeSkipEnabled ? loadAnimeSegments(query, mediaTitle).catch(() => []) : Promise.resolve([]),
+          ];
+
+      const [a, b, c] = await Promise.all([introDbSegments, theIntroDbSegments, animeSkipSegments]);
 
       if (!cancelled) {
         const byKind = new Map<string, SkipSegment>();
-        for (const segment of [...introDbSegments, ...animeSkipSegments]) {
+        for (const segment of [...a, ...b, ...c]) {
           const previous = byKind.get(segment.kind);
-          if (!previous || segment.source === "introdb") byKind.set(segment.kind, segment);
+          if (!previous || segment.source === "introdb" || segment.source === "theintrodb") byKind.set(segment.kind, segment);
         }
-        const nextSegments = Array.from(byKind.values()).sort((a, b) => a.start - b.start);
+        const nextSegments = Array.from(byKind.values()).sort((a2, b2) => a2.start - b2.start);
         skipSegmentCache.set(cacheKey, nextSegments);
         setSegments(nextSegments);
       }
@@ -326,5 +440,11 @@ export function useSkipIntro(query: StreamQuery | null, mediaTitle: string, curr
     segments.find(segment => currentTime >= Math.max(0, segment.start - 8) && currentTime < segment.end - 0.5) ?? null
   ), [currentTime, segments]);
 
-  return { segments, activeSegment };
+  // Segmento de créditos/outro (para disparar UpNext exactamente cuando terminan).
+  const creditsSegment = useMemo(
+    () => segments.find(segment => segment.kind === "outro") ?? null,
+    [segments],
+  );
+
+  return { segments, activeSegment, creditsSegment };
 }
