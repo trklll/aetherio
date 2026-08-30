@@ -27,7 +27,6 @@ export interface LibraryFilters {
   list: string;
   type: string;
   genre: string;
-  year: string;
   sort: LibrarySort;
 }
 
@@ -36,7 +35,6 @@ export interface FilteredLibrary {
   lists: FacetOption[];
   types: FacetOption[];
   genres: FacetOption[];
-  years: FacetOption[];
 }
 
 export interface DiscoverCatalog {
@@ -67,7 +65,6 @@ export function readLibraryFilters(): LibraryFilters {
     list: ALL,
     type: ALL,
     genre: ALL,
-    year: ALL,
     sort: "added_desc",
   };
   try {
@@ -78,7 +75,6 @@ export function readLibraryFilters(): LibraryFilters {
       list: parsed.list || ALL,
       type: parsed.type || ALL,
       genre: parsed.genre || ALL,
-      year: parsed.year || ALL,
       sort: isLibrarySort(parsed.sort) ? parsed.sort : fallback.sort,
     };
   } catch {
@@ -173,24 +169,20 @@ export function filterLibrary(items: LibraryItem[], filters: LibraryFilters): Fi
   const listItems = selectedList === ALL ? items : items.filter(item => item.listKey === selectedList);
   const selectedType = validateSelection(filters.type, typeKeys(listItems));
   const selectedGenre = validateSelection(filters.genre, genreKeys(listItems));
-  const selectedYear = validateSelection(filters.year, yearKeys(listItems));
 
   const matchesType = (item: LibraryItem) => selectedType === ALL || normalizeType(item.media.type) === selectedType;
   const matchesGenre = (item: LibraryItem) => selectedGenre === ALL
     || (item.media.genres ?? []).some(genre => normalizeKey(genre) === selectedGenre);
-  const matchesYear = (item: LibraryItem) => selectedYear === ALL || String(item.media.year ?? "") === selectedYear;
 
-  const visible = listItems.filter(item => matchesType(item) && matchesGenre(item) && matchesYear(item));
-  const genreBase = listItems.filter(item => matchesType(item) && matchesYear(item));
-  const yearBase = listItems.filter(item => matchesType(item) && matchesGenre(item));
-  const typeBase = listItems.filter(item => matchesGenre(item) && matchesYear(item));
+  const visible = listItems.filter(item => matchesType(item) && matchesGenre(item));
+  const genreBase = listItems.filter(item => matchesType(item));
+  const typeBase = listItems.filter(item => matchesGenre(item));
 
   return {
     items: sortLibraryItems(visible, filters.sort),
     lists: buildListOptions(items),
     types: buildTypeOptions(listItems, typeBase),
     genres: buildGenreOptions(listItems, genreBase),
-    years: buildYearOptions(listItems, yearBase),
   };
 }
 
@@ -443,11 +435,22 @@ function sortLibraryItems(items: LibraryItem[], sort: LibrarySort) {
 function buildListOptions(items: LibraryItem[]): FacetOption[] {
   const counts = countBy(items, item => item.listKey);
   const labels = new Map(items.map(item => [item.listKey, item.listLabel]));
-  return [{ key: ALL, label: "Todo", count: items.length }, ...Array.from(counts, ([key, count]) => ({
+  const facets = Array.from(counts, ([key, count]) => ({
     key,
     label: labels.get(key) ?? key,
     count,
-  }))];
+  }));
+  const byKey = new Map(facets.map(facet => [facet.key, facet]));
+  const ordered = [];
+  const saved = byKey.get("saved");
+  if (saved) ordered.push(saved);
+  const activity = byKey.get("activity");
+  if (activity) ordered.push(activity);
+  for (const facet of facets) {
+    if (facet.key === "saved" || facet.key === "activity") continue;
+    ordered.push(facet);
+  }
+  return [{ key: ALL, label: "Todo", count: items.length }, ...ordered];
 }
 
 function buildTypeOptions(allItems: LibraryItem[], filteredItems: LibraryItem[]): FacetOption[] {
@@ -477,14 +480,6 @@ function buildGenreOptions(allItems: LibraryItem[], filteredItems: LibraryItem[]
   ];
 }
 
-function buildYearOptions(allItems: LibraryItem[], filteredItems: LibraryItem[]): FacetOption[] {
-  const counts = countBy(filteredItems.filter(item => item.media.year), item => String(item.media.year));
-  return [
-    { key: ALL, label: "Todos los años", count: filteredItems.length },
-    ...yearKeys(allItems).map(key => ({ key, label: key, count: counts.get(key) ?? 0 })),
-  ];
-}
-
 function countBy(items: LibraryItem[], keyFor: (item: LibraryItem) => string) {
   const counts = new Map<string, number>();
   for (const item of items) {
@@ -504,11 +499,6 @@ function typeKeys(items: LibraryItem[]) {
 
 function genreKeys(items: LibraryItem[]) {
   return Array.from(new Set(items.flatMap(item => (item.media.genres ?? []).map(normalizeKey)))).sort();
-}
-
-function yearKeys(items: LibraryItem[]) {
-  return Array.from(new Set(items.flatMap(item => item.media.year ? [String(item.media.year)] : [])))
-    .sort((a, b) => Number(b) - Number(a));
 }
 
 function validateSelection(selected: string, available: string[]) {

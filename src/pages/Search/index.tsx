@@ -11,8 +11,6 @@ import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 const POSTER_CARD = { width: 180, height: 271 };
 const ROW_GAP = 22;
 const TOP_RESULTS_LIMIT = 3;
-const TOP_RESULT_SCALE = 1.2;
-const HOME_PAGE_SCALE = 1.2;
 
 export default function SearchPage() {
   const [params] = useSearchParams();
@@ -47,7 +45,7 @@ export default function SearchPage() {
   }
 
   return (
-    <main className="min-h-screen pb-14 text-white">
+    <main className="home-page-scale min-h-screen pb-14 text-white">
       <header style={{ padding: "42px 48px 28px" }}>
         <h1 style={{ fontSize: 28, lineHeight: 1.12, fontWeight: 750, letterSpacing: -0.6 }}>
           {headingQuery ? `Resultados para “${headingQuery}”` : "Encuentra algo para ver"}
@@ -152,9 +150,9 @@ function ResultSection({
 
 function SectionHead({ title, inset = true }: { title: string; inset?: boolean }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 * HOME_PAGE_SCALE, padding: inset ? "0 48px" : 0, marginBottom: 14 * HOME_PAGE_SCALE }}>
-      <h2 style={{ fontSize: 17 * HOME_PAGE_SCALE, fontWeight: 700, color: "#fff", lineHeight: 1 }}>{title}</h2>
-      <ChevronRight size={15 * HOME_PAGE_SCALE} style={{ color: "rgba(255,255,255,0.4)", marginTop: HOME_PAGE_SCALE }} />
+    <div style={{ display: "flex", alignItems: "center", gap: 4, padding: inset ? "0 48px" : 0, marginBottom: 14 }}>
+      <h2 style={{ fontSize: 17, fontWeight: 700, color: "#fff", lineHeight: 1 }}>{title}</h2>
+      <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} />
     </div>
   );
 }
@@ -168,28 +166,28 @@ function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: ()
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 16 * TOP_RESULT_SCALE,
-        height: 100 * TOP_RESULT_SCALE,
+        gap: 16,
+        height: 100,
         minWidth: 0,
-        borderRadius: 12 * TOP_RESULT_SCALE,
+        borderRadius: 12,
         border: "none",
         background: "rgb(54,54,54)",
-        padding: `0 ${16 * TOP_RESULT_SCALE}px`,
+        padding: "0 16px",
         textAlign: "left",
         cursor: "pointer",
         overflow: "hidden",
       }}
     >
-      <div style={{ width: 48 * TOP_RESULT_SCALE, height: 72 * TOP_RESULT_SCALE, flexShrink: 0, overflow: "hidden", borderRadius: 6 * TOP_RESULT_SCALE, background: "rgba(255,255,255,0.08)" }}>
+      <div style={{ width: 48, height: 72, flexShrink: 0, overflow: "hidden", borderRadius: 6, background: "rgba(255,255,255,0.08)" }}>
         {poster ? (
           <img src={poster} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         ) : null}
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 16 * TOP_RESULT_SCALE, fontWeight: 500, color: "#fff", lineHeight: 1.15 }}>
+        <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 16, fontWeight: 500, color: "#fff", lineHeight: 1.15 }}>
           {item.name ?? "Sin título"}
         </p>
-        <p style={{ marginTop: 4 * TOP_RESULT_SCALE, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 * TOP_RESULT_SCALE, fontWeight: 400, color: "rgba(255,255,255,0.82)", lineHeight: 1.15 }}>
+        <p style={{ marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 400, color: "rgba(255,255,255,0.82)", lineHeight: 1.15 }}>
           {item.mediaLabel}{item.year ? ` · ${item.year}` : ""}
         </p>
       </div>
@@ -387,7 +385,7 @@ function SearchSkeleton() {
         <SectionHead title="Top resultados" inset={false} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 20 }}>
           {Array.from({ length: 3 }, (_, index) => (
-            <div key={index} className="skeleton" style={{ height: 100 * TOP_RESULT_SCALE, borderRadius: 12 * TOP_RESULT_SCALE }} />
+            <div key={index} className="skeleton" style={{ height: 100, borderRadius: 12 }} />
           ))}
         </div>
       </section>

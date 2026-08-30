@@ -8,7 +8,7 @@ import type { MediaItem } from "../../types/ui";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
-import { gsap } from "../../utils/motion";
+import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 
 const IMG = "https://image.tmdb.org/t/p";
@@ -153,6 +153,37 @@ function normalizeTmdbCatalogItem(item: any, type: string): MediaItem | null {
   });
 }
 
+// §3/§4/§14 — stagger grid cards in on change; reduced-motion collapses to a cross-fade.
+// Only newly-mounted cards animate on each pass (tracked via a ref), so reuse (identity
+// churn, paged appends) never re-webs the whole grid.
+function useGridEntrance(containerRef: React.RefObject<HTMLElement | null>, deps: React.DependencyList) {
+  const seenRef = useRef<WeakSet<Element>>(new WeakSet());
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const cards = Array.from(container.querySelectorAll<HTMLElement>("[data-grid-entrance]")).filter(card => !seenRef.current.has(card));
+    cards.forEach(card => seenRef.current.add(card));
+    if (!cards.length) return;
+    if (prefersReducedMotion()) {
+      const timeline = gsap.timeline();
+      timeline.to(cards, { opacity: 1, duration: 0.2, ease: "power1.out" });
+      return () => {
+        timeline.kill();
+        gsap.set(cards, { clearProps: "opacity" });
+      };
+    }
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    timeline
+      .fromTo(cards, { opacity: 0, y: 16, scale: 0.985 }, { opacity: 1, y: 0, scale: 1, duration: 0.42, stagger: 0.05, clearProps: "opacity" })
+      .set(cards, { clearProps: "transform" });
+    return () => {
+      timeline.kill();
+      gsap.set(cards, { clearProps: "opacity,transform" });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
 export default function CatalogPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -163,7 +194,6 @@ export default function CatalogPage() {
   const title = params.get("title") ?? "Catálogo";
   const extraParams = useMemo(() => readExtraParams(params.get("extras")), [params]);
   const addon = useMemo(() => addons.find(item => item.id === addonId), [addonId, addons]);
-  const rootRef = useRef<HTMLDivElement>(null);
   const { gradient } = useProfileGradient();
   const cacheKey = `${addonId}:${catalogId}:${type}:${JSON.stringify(extraParams)}`;
 
@@ -180,28 +210,8 @@ export default function CatalogPage() {
   const [items, setItems] = useState<MediaItem[]>(() => cachedItems ?? []);
   const [loading, setLoading] = useState(() => !cachedItems);
   const [error, setError] = useState("");
-  const animatedCountRef = useRef(0);
-
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root || items.length === 0) return;
-    const els = Array.from(root.querySelectorAll<HTMLElement>(
-      ":scope > div:not([data-catalog-header]) > div",
-    ));
-    if (els.length <= animatedCountRef.current) return;
-    const fresh = els.slice(animatedCountRef.current);
-    animatedCountRef.current = els.length;
-    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
-    timeline.fromTo(
-      fresh,
-      { opacity: 0, y: 16 },
-      { opacity: 1, y: 0, duration: 0.5, stagger: 0.04, clearProps: "transform" },
-    );
-    return () => {
-      timeline.kill();
-      gsap.set(fresh, { clearProps: "opacity,transform" });
-    };
-  }, [items, loading]);
+  const gridRef = useRef<HTMLDivElement>(null);
+  useGridEntrance(gridRef, [items, loading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -301,7 +311,7 @@ export default function CatalogPage() {
 
   return (
     <PageContainer>
-      <div ref={rootRef} className="relative flex min-h-full flex-col" style={{ padding: "24px var(--app-safe-x) 56px" }}>
+      <div className="relative flex min-h-full flex-col" style={{ padding: "24px var(--app-safe-x) 56px" }}>
         <div data-catalog-header style={{ marginBottom: 26, display: "flex", alignItems: "center", gap: 14 }}>
           <button
             type="button"
@@ -326,6 +336,7 @@ export default function CatalogPage() {
         ) : null}
 
         <div
+          ref={gridRef}
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fill, minmax(180px, 180px))",
@@ -365,11 +376,19 @@ function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
   };
 
   return (
-    <div style={{ width: 180 }}>
+    <div style={{ width: 180 }} data-grid-entrance>
       <button
         type="button"
         onClick={openDetail}
-        style={{ position: "relative", width: 180, height: 271, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+        onMouseEnter={event => tweenTo(event.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32)}
+        onMouseLeave={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
+        onPointerDown={event => {
+          if (event.button !== 0) return;
+          tweenTo(event.currentTarget, { scale: 0.95, y: 0 });
+        }}
+        onPointerUp={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
+        onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
+        style={{ position: "relative", width: 180, height: 271, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
       >
         {image ? (
           <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />

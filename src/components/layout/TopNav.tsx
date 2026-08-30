@@ -74,7 +74,10 @@ export default function TopNav() {
 
   function openSearch() {
     setSearching(true);
-    setTimeout(() => inputRef.current?.focus(), 300);
+    // §1 Response — instant focus, no 300ms artificial delay
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    });
   }
 
   function closeSearch() {

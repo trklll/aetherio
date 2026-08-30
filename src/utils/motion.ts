@@ -8,21 +8,54 @@ export const quickEase = "power2.out";
 export const elegantEase = "expo.out";
 export const elegantInEase = "expo.in";
 
+// Apple spring mapping — damping 1.0 = critically damped (no bounce), 0.8 = slight overshoot
+// GSAP has no true spring physics; we approximate with eases that are interruptible via overwrite:"auto"
+// and sampled to match Apple's response durations. Damping 1.0 -> power3/expo, Damping 0.8 -> back/elastic subtle
+export const appleSpring = {
+  // Critically damped defaults (§4) — graceful, no bounce
+  criticallyDamped: { ease: "power3.out", duration: 0.38 } as const,
+  // Momentum-driven — a little bounce, only when gesture carried velocity (§4)
+  withBounce: { ease: "back.out(1.15)", duration: 0.38 } as const,
+  chromeIn: { ease: "power3.out", duration: 0.38 } as const,
+  chromeOut: { ease: "power3.in", duration: 0.28 } as const,
+} as const;
+
 export const motionTimings = {
   hover: 0.18,
   row: 0.22,
   page: 0.52,
   hero: 0.64,
-  chromeIn: 0.48,
-  chromeOut: 0.36,
-  playerBarIn: 0.52,
-  playerBarOut: 0.42,
+  chromeIn: 0.38,
+  chromeOut: 0.28,
+  playerBarIn: 0.45,
+  playerBarOut: 0.32,
 } as const;
 
 type MotionTarget = gsap.TweenTarget;
 
 export function prefersReducedMotion() {
-  return false;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+export function prefersReducedTransparency() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-transparency: reduce)").matches;
+}
+
+export function prefersContrastMore() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-contrast: more)").matches;
+}
+
+// §9 Rubber-banding — progressive resistance at boundaries
+export function rubberband(overshoot: number, dimension: number, constant = 0.55) {
+  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
+}
+
+// §6 Momentum projection — Apple's exponential-decay form (decelerationRate 0.998 normal, 0.99 snappier)
+export function project(initialVelocity: number, decelerationRate = 0.998) {
+  return (initialVelocity / 1000) * decelerationRate / (1 - decelerationRate);
 }
 
 export function tweenTo(
@@ -34,12 +67,79 @@ export function tweenTo(
   if (!resolvedTarget || (Array.isArray(resolvedTarget) && resolvedTarget.length === 0)) {
     return gsap.to({}, { duration: 0 });
   }
+  if (prefersReducedMotion()) {
+    // §14 Reduced motion — cross-fade, no slide/scale/blur, keep opacity/color
+    const reducedVars: gsap.TweenVars = {};
+    if (vars.opacity !== undefined) reducedVars.opacity = vars.opacity;
+    // keep color/background changes that aid comprehension, drop transform/filter
+    if (vars.backgroundColor !== undefined) reducedVars.backgroundColor = vars.backgroundColor;
+    if (vars.color !== undefined) reducedVars.color = vars.color;
+    if (vars.borderColor !== undefined) reducedVars.borderColor = vars.borderColor;
+    // if only transform/filter was requested, cross-fade opacity instead
+    const hasOpacity = reducedVars.opacity !== undefined;
+    if (!hasOpacity && Object.keys(reducedVars).length === 0) {
+      // element already visible — just snap, or fade if it was hidden
+      const el = Array.isArray(resolvedTarget) ? resolvedTarget[0] : resolvedTarget;
+      const currentOpacity = el instanceof HTMLElement ? Number(getComputedStyle(el).opacity) : 1;
+      reducedVars.opacity = currentOpacity < 0.5 ? 1 : currentOpacity;
+    }
+    return gsap.to(resolvedTarget, {
+      ...reducedVars,
+      duration: 0.2,
+      ease: "power1.out",
+      overwrite: "auto",
+      clearProps: vars.clearProps,
+    });
+  }
   return gsap.to(resolvedTarget, {
     ...vars,
-    duration: prefersReducedMotion() ? 0 : duration,
+    duration,
     ease: vars.ease ?? appleEase,
     overwrite: "auto",
   });
+}
+
+export function springTo(
+  target: MotionTarget,
+  vars: gsap.TweenVars,
+  opts: { damping?: number; response?: number; duration?: number; ease?: string } = {},
+) {
+  const resolvedTarget = Array.isArray(target) ? target.filter(Boolean) : target;
+  if (!resolvedTarget || (Array.isArray(resolvedTarget) && resolvedTarget.length === 0)) {
+    return gsap.to({}, { duration: 0 });
+  }
+  if (prefersReducedMotion()) {
+    // §14 — replace spring with short cross-fade
+    const reducedVars: gsap.TweenVars = {};
+    if (vars.opacity !== undefined) reducedVars.opacity = vars.opacity;
+    if (vars.backgroundColor !== undefined) reducedVars.backgroundColor = vars.backgroundColor;
+    return gsap.to(resolvedTarget, {
+      ...reducedVars,
+      duration: 0.2,
+      ease: "power1.out",
+      overwrite: "auto",
+    });
+  }
+  // §4 — damping 1.0 no bounce, <1.0 slight bounce. Always animate from presentation value (overwrite:auto) + compositor props
+  const damping = opts.damping ?? 1.0;
+  const ease = opts.ease ?? (damping >= 1 ? appleSpring.criticallyDamped.ease : appleSpring.withBounce.ease);
+  const duration = opts.duration ?? opts.response ?? appleSpring.criticallyDamped.duration;
+  gsap.killTweensOf(resolvedTarget);
+  return gsap.to(resolvedTarget, {
+    ...vars,
+    duration,
+    ease: vars.ease ?? ease,
+    overwrite: "auto",
+  });
+}
+
+// Helper to compute transformOrigin anchored to trigger element (§7)
+export function anchorTransformOrigin(anchorRect: DOMRect, menuLeft: number, menuTop: number, menuWidth: number, menuHeight: number) {
+  const anchorCenterX = anchorRect.left + anchorRect.width / 2;
+  const anchorCenterY = anchorRect.top + anchorRect.height / 2;
+  const originX = ((anchorCenterX - menuLeft) / Math.max(1, menuWidth)) * 100;
+  const originY = ((anchorCenterY - menuTop) / Math.max(1, menuHeight)) * 100;
+  return `${Math.min(100, Math.max(0, originX))}% ${Math.min(100, Math.max(0, originY))}%`;
 }
 
 export function useGsapState<T extends HTMLElement>(

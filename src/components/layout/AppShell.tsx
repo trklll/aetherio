@@ -6,7 +6,7 @@ import WindowControls from "./WindowControls";
 import { toggleWindowFullscreen } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
-import { gsap, installInertialScroll, tweenTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
+import { gsap, installInertialScroll, springTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -42,11 +42,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
     const el = backChromeRef.current;
     if (!el) return;
     gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: backVisible ? 1 : 0, y: 0, scale: 1, filter: "blur(0px)" });
+      el.style.pointerEvents = backVisible ? "auto" : "none";
+      return;
+    }
+    el.style.pointerEvents = backVisible ? "auto" : "none";
     if (backVisible) {
       gsap.set(el, { y: -8, scale: 0.96, filter: "blur(6px)" });
-      tweenTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }, motionTimings.chromeIn);
+      springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeIn });
     } else {
-      tweenTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" }, motionTimings.chromeOut);
+      springTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeOut });
     }
   }, [backVisible]);
 
@@ -54,11 +60,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
     const el = actionChromeRef.current;
     if (!el) return;
     gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: controlsVisible ? 1 : 0, y: 0, scale: 1, filter: "blur(0px)" });
+      el.style.pointerEvents = controlsVisible ? "auto" : "none";
+      return;
+    }
+    el.style.pointerEvents = controlsVisible ? "auto" : "none";
     if (controlsVisible) {
       gsap.set(el, { y: -8, scale: 0.96, filter: "blur(6px)" });
-      tweenTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }, motionTimings.chromeIn);
+      springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeIn });
     } else {
-      tweenTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" }, motionTimings.chromeOut);
+      springTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeOut });
     }
   }, [controlsVisible]);
 

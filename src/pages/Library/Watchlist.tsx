@@ -58,7 +58,7 @@ export default function LibraryPage() {
     <PageContainer className="min-h-full pb-10 pt-8">
       <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
         <div>
-          <p className="mb-2 text-xs font-black uppercase tracking-[0.22em] text-white/34">Aetherio</p>
+          <p className="mb-2 text-xs font-black text-white/34">Aetherio</p>
           <h1 className="text-[clamp(2.35rem,4.8vw,4.8rem)] font-black leading-none text-white">Biblioteca</h1>
         </div>
         <div className="liquid-glass inline-flex rounded-2xl p-1">
@@ -228,7 +228,7 @@ function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; 
     <div className="liquid-glass rounded-2xl px-5 py-4">
       <div className="mb-3 flex items-center gap-2 text-white/54">
         {icon}
-        <span className="text-xs font-black uppercase tracking-[0.14em]">{label}</span>
+        <span className="text-sm font-black text-white">{label}</span>
       </div>
       <div className="text-3xl font-black text-white">{value}</div>
     </div>

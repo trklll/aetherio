@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Play } from "lucide-react";
+import { Info, Play } from "lucide-react";
 import { gsap } from "../../utils/motion";
 import { getUpNextMiniRect } from "../../utils/upnextMiniRect";
 
@@ -34,6 +34,7 @@ export interface UpNextProps {
   recommendation: UpNextRecommendation;
   countdownSeconds?: number;
   onPlay?: () => void;
+  onDetails?: () => void;
   onCountdownEnd?: () => void;
   onMiniClick?: () => void;
   /** Cuando true, la página se desvanece y achica de vuelta (antes de desmontar). */
@@ -46,6 +47,7 @@ export default function UpNext({
   recommendation,
   countdownSeconds = 12,
   onPlay,
+  onDetails,
   onCountdownEnd,
   onMiniClick,
   exiting = false,
@@ -106,8 +108,8 @@ export default function UpNext({
       );
       if (panel) gsap.fromTo(
         panel,
-        { opacity: 0, x: 28, filter: "blur(8px)" },
-        { opacity: 1, x: 0, filter: "blur(0px)", duration: 0.9, ease: "expo.out", delay: 0.45 },
+        { opacity: 0, y: 28, filter: "blur(8px)" },
+        { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.9, ease: "expo.out", delay: 0.45 },
       );
     }, root);
     return () => ctx.revert();
@@ -128,7 +130,7 @@ export default function UpNext({
     const done = () => onExitComplete?.();
     const tl = gsap.timeline({ onComplete: done });
     if (miniEl) tl.to(miniEl, { opacity: 0, scale: 0.98, filter: "blur(6px)", duration: 0.4, ease: "power2.in" }, 0);
-    if (panel) tl.to(panel, { opacity: 0, x: 24, filter: "blur(6px)", duration: 0.4, ease: "power2.in" }, 0.02);
+    if (panel) tl.to(panel, { opacity: 0, y: 24, filter: "blur(6px)", duration: 0.4, ease: "power2.in" }, 0.02);
     if (backdrop) tl.to(backdrop, { opacity: 0, duration: 0.5, ease: "power2.in" }, 0.1);
     tl.call(done);
   }, [exiting, onExitComplete]);
@@ -206,76 +208,54 @@ export default function UpNext({
 
       <div
         data-upnext-panel
-        className="absolute z-10 flex flex-col justify-center gap-4 overflow-y-auto px-8 py-8 md:px-10"
+        className="absolute bottom-0 right-0 z-10 flex flex-col gap-5 px-10 pb-10 md:px-12 md:pb-12"
         style={{
           right: "var(--app-safe-x)",
-          top: "calc(var(--app-safe-top) + 48px)",
           bottom: "24px",
-          width: "min(440px, 38vw)",
-          maxHeight: "calc(100vh - var(--app-safe-top) - 72px)",
+          width: "min(816px, 62vw)",
+          maxWidth: "816px",
         } as any}
       >
-        <div className="flex gap-4 items-start">
-          {recommendation.posterUrl ? (
+        {recommendation.logoUrl ? (
+          <div className="min-h-[120px] flex items-center">
             <img
-              src={recommendation.posterUrl}
-              alt=""
-              className="h-[132px] w-[88px] shrink-0 rounded-xl object-cover shadow-[0_8px_24px_rgba(0,0,0,0.45)] md:h-[156px] md:w-[104px]"
+              src={recommendation.logoUrl}
+              alt={recommendation.title}
+              className="max-h-[120px] max-w-[360px] w-auto object-contain object-left drop-shadow-[0_2px_10px_rgba(0,0,0,0.75)]"
             />
-          ) : null}
-          <div className="min-w-0 flex-1 pt-1">
-            {recommendation.logoUrl ? (
-              <img
-                src={recommendation.logoUrl}
-                alt={recommendation.title}
-                className="max-h-[48px] md:max-h-[56px] w-auto max-w-full object-contain object-left drop-shadow-[0_4px_20px_rgba(0,0,0,0.65)]"
-              />
-            ) : (
-              <h1 className="text-xl md:text-2xl font-extrabold tracking-tight text-white drop-shadow-[0_4px_20px_rgba(0,0,0,0.65)] leading-tight line-clamp-3">
-                {recommendation.title}
-              </h1>
-            )}
-            <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs font-medium text-white/70">
-              {recommendation.year ? <span>{recommendation.year}</span> : null}
-              {recommendation.mediaTypeLabel ? (
-                <>
-                  <span className="h-1 w-1 rounded-full bg-white/35" />
-                  <span>{recommendation.mediaTypeLabel}</span>
-                </>
-              ) : null}
-              {typeof recommendation.rating === "number" ? (
-                <>
-                  <span className="h-1 w-1 rounded-full bg-white/35" />
-                  <span className="inline-flex items-center gap-1">★ {recommendation.rating.toFixed(1)}</span>
-                </>
-              ) : null}
-              {typeof recommendation.runtime === "number" && recommendation.runtime > 0 ? (
-                <>
-                  <span className="h-1 w-1 rounded-full bg-white/35" />
-                  <span>{Math.floor(recommendation.runtime / 60)}h {String(recommendation.runtime % 60).padStart(2, "0")}m</span>
-                </>
-              ) : null}
-            </div>
-            {recommendation.genres?.length ? (
-              <p className="mt-1.5 text-xs leading-4 text-white/55 line-clamp-1">{recommendation.genres.join(" • ")}</p>
-            ) : null}
           </div>
-        </div>
+        ) : (
+          <h1 className="text-left text-[3.12rem] font-black tracking-tight text-white leading-[1.05] drop-shadow-[0_2px_20px_rgba(0,0,0,0.8)] line-clamp-3 max-w-[22ch]">
+            {recommendation.title}
+          </h1>
+        )}
 
         {recommendation.overview ? (
-          <p className="text-[13px] md:text-sm leading-5 md:leading-6 text-white/80 line-clamp-5 drop-shadow-[0_2px_12px_rgba(0,0,0,0.5)]">{recommendation.overview}</p>
+          <p className="text-left text-[18px] leading-7 text-white/80 max-w-[65ch] drop-shadow-[0_2px_12px_rgba(0,0,0,0.5)]" style={{ lineHeight: 1.6 }}>{recommendation.overview}</p>
         ) : null}
 
-        <div className="flex items-center gap-3 pt-1">
+        <div className="flex items-center justify-start gap-3 pt-1">
           <button
             type="button"
             data-player-interactive
             onClick={onPlay}
-            className="flex items-center gap-2.5 rounded-full border border-white/[0.08] bg-white px-7 py-3 text-[15px] font-bold text-black shadow-[0_8px_24px_rgba(0,0,0,0.35)] gsap-transition hover:bg-white/90 hover:scale-[1.02] active:scale-[0.98]"
+            className="flex items-center gap-2.5 rounded-full border border-white/[0.08] bg-white px-7 py-3 text-[16px] font-bold text-black shadow-[0_8px_24px_rgba(0,0,0,0.35)] gsap-transition hover:bg-white/90 hover:scale-[1.02] active:scale-[0.98]"
           >
-            <Play size={19} strokeWidth={2.6} fill="currentColor" />
+            <Play size={20} strokeWidth={2.6} fill="currentColor" />
             Reproducir
           </button>
+
+          {onDetails && (
+            <button
+              type="button"
+              data-player-interactive
+              onClick={onDetails}
+              className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.06] px-6 py-3 text-[15px] font-semibold text-white/80 backdrop-blur-md gsap-transition hover:bg-white/[0.12] hover:text-white"
+            >
+              <Info size={19} strokeWidth={2.2} />
+              Mas info
+            </button>
+          )}
         </div>
       </div>
     </div>

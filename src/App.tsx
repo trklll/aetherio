@@ -482,6 +482,9 @@ function PageRoutes({ location, defaultRoute }: { location: Location; defaultRou
 }
 
 function makePageCacheKey(location: Location) {
+  // Ajustes usa `?tab=` solo para estado local; no debe crear una nueva página cacheada
+  // ni disparar la animación `aetherio-page-enter` en cada cambio de pestaña.
+  if (location.pathname === "/settings") return location.pathname;
   return `${location.pathname}${location.search}`;
 }
 

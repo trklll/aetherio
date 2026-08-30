@@ -2909,6 +2909,11 @@ if (!stream) {
             const rec = related.recommendation;
             if (rec) navigate(`/episode?type=${rec.type}&id=tmdb:${rec.tmdbId}`);
             }}
+            onDetails={() => {
+            dismissUpNext();
+            const rec = related.recommendation;
+            if (rec) navigate(`/detail/${rec.type}/tmdb:${rec.tmdbId}`);
+            }}
             onCountdownEnd={() => {
             dismissUpNext();
             const rec = related.recommendation;

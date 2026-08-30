@@ -336,14 +336,7 @@ export default function SettingsPage() {
     <PageContainer className="min-h-screen py-5 lg:py-8">
       <div className="mx-auto grid max-w-[1360px] grid-cols-1 gap-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-8">
         <aside className="self-start lg:sticky lg:top-4">
-          <div className="mb-5 flex items-center gap-3 px-2">
-            <img src={aetherioLogo} alt="Aetherio" className="h-12 w-12 rounded-2xl object-contain" />
-            <div>
-              <p className="text-xs font-black text-white/38">Aetherio</p>
-              <h1 className="text-2xl font-black text-white">Ajustes</h1>
-            </div>
-          </div>
-
+          <h1 className="mb-5 px-2 text-3xl font-black text-white">Ajustes</h1>
           <nav className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.055] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.34)] sm:grid-cols-3 lg:block lg:rounded-[30px]">
             {SIDEBAR_ITEMS.map(item => (
               <button
@@ -351,7 +344,7 @@ export default function SettingsPage() {
                 type="button"
                 onClick={() => selectTab(item.id)}
                 className={clsx(
-                  "flex w-full min-w-0 items-center gap-3 rounded-full px-4 py-3 text-left text-sm font-black gsap-transition lg:mb-1 lg:last:mb-0",
+                  "flex w-full min-w-0 items-center gap-3 rounded-full px-4 py-3 text-left text-sm font-black lg:mb-1 lg:last:mb-0",
                   activeTab === item.id
                     ? "bg-white text-black"
                     : "text-white/62 hover:bg-white/10 hover:text-white",

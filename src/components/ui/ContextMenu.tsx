@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { gsap, tweenTo } from "../../utils/motion";
-import { CONTEXT_GLASS_STYLE } from "./glassSurface";
+import { gsap, tweenTo, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
+import { getContextGlassStyle } from "./glassSurface";
 
 export interface ContextMenuItem {
   label: string;
@@ -123,25 +123,50 @@ export default function ContextMenu({
       return;
     }
     gsap.killTweensOf(el);
-    gsap.to(el, {
+    if (prefersReducedMotion()) {
+      gsap.to(el, {
+        opacity: 0,
+        duration: 0.18,
+        ease: "power1.out",
+        overwrite: "auto",
+        onComplete: () => setMounted(false),
+      });
+      return;
+    }
+    // §3/§4 — spring exit, interruptible from presentation value
+    springTo(el, {
       opacity: 0,
       y: 6,
       scale: 0.98,
       filter: "blur(6px)",
-      duration: 0.26,
-      ease: "expo.in",
-      overwrite: "auto",
-      onComplete: () => setMounted(false),
+    } as unknown as gsap.TweenVars, { duration: 0.26, damping: 1.0 });
+    // ensure unmount after animation; spring duration is bounded
+    gsap.delayedCall(0.28, () => {
+      if (!open) setMounted(false);
     });
   }, [open]);
 
   useEffect(() => {
     if (!open || !mounted || !menuRef.current) return;
     const el = menuRef.current;
+    const anchor = anchorRef.current;
+    // §7 — anchor transformOrigin to trigger
+    if (anchor && el) {
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = el.getBoundingClientRect();
+      const origin = anchorTransformOrigin(anchorRect, position.left, position.top, menuRect.width || width, menuRect.height || 44 * items.length);
+      gsap.set(el, { transformOrigin: origin });
+    }
     gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: 0 });
+      gsap.to(el, { opacity: 1, duration: 0.2, ease: "power1.out", overwrite: "auto" });
+      return;
+    }
     gsap.set(el, { opacity: 0, y: 6, scale: 0.98, filter: "blur(6px)" });
-    gsap.to(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.36, ease: "expo.out", overwrite: "auto" });
-  }, [open, mounted]);
+    // §3/§4 — critically damped spring, no bounce, interruptible
+    springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { duration: 0.36, damping: 1.0 });
+  }, [open, mounted, position.left, position.top, width, items.length, anchorRef]);
 
   if (!mounted) return null;
 
@@ -163,6 +188,8 @@ export default function ContextMenu({
   // Si tras filtrar no queda nada, no renderiza el menú vacío que provocaba el artefacto "TO AI"
   if (!sanitizedItems.length) return null;
 
+  // §14 — respect reduced-transparency / contrast
+  const glassStyle = getContextGlassStyle();
   return createPortal(
     <div
       ref={menuRef}
@@ -170,7 +197,7 @@ export default function ContextMenu({
       data-player-floating-panel-glass
       role="menu"
       style={{
-        ...CONTEXT_GLASS_STYLE,
+        ...glassStyle,
         position: "fixed",
         left: position.left,
         top: position.top,
@@ -181,6 +208,8 @@ export default function ContextMenu({
         overflowX: "hidden",
         borderRadius: 16,
         padding: 5,
+        willChange: "transform, opacity, filter",
+        transform: "translateZ(0)",
       }}
       onClick={event => event.stopPropagation()}
     >
@@ -212,6 +241,23 @@ export default function ContextMenu({
             fontWeight: 500,
             textAlign: "left",
             cursor: item.disabled ? "default" : "pointer",
+            willChange: "transform, background-color",
+            transform: "translateZ(0)",
+          }}
+          onPointerDown={event => {
+            if (item.disabled) return;
+            // §1 Response — highlight on pointer-down instant, not hover
+            gsap.killTweensOf(event.currentTarget);
+            gsap.set(event.currentTarget, { scale: 0.97 });
+            tweenTo(event.currentTarget, { backgroundColor: "rgba(255,255,255,0.14)", scale: 0.97 }, 0.1);
+          }}
+          onPointerUp={event => {
+            if (item.disabled) return;
+            tweenTo(event.currentTarget, { backgroundColor: "rgba(255,255,255,0.12)", scale: 1 }, 0.14);
+          }}
+          onPointerLeave={event => {
+            if (item.disabled) return;
+            tweenTo(event.currentTarget, { backgroundColor: "rgba(255,255,255,0)", scale: 1 }, 0.14);
           }}
           onMouseEnter={event => {
             if (!item.disabled) tweenTo(event.currentTarget, { backgroundColor: "rgba(255,255,255,0.12)" });

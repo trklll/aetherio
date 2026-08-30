@@ -92,7 +92,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [watchedVersion, setWatchedVersion] = useState(0);
   const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type), [row.name, row.type, titleOverride]);
   const ranked = useMemo(() => isTrendingRow(row), [row]);
-  const maxCards = ranked ? 10 : 20;
+  const maxCards = ranked ? 10 : 200;
   const rowItems = useMemo(() => row.items.slice(0, maxCards), [row.items, maxCards]);
   const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
   const virtualWindow = useHorizontalVirtualWindow({

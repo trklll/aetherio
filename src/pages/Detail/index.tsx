@@ -53,9 +53,9 @@ const DETAIL_LOGO_KEY = "aetherio-detail-logo";
 const DETAIL_HERO_HEIGHT = "calc(78vh + var(--app-shell-nav-height) - 150px)";
 const DETAIL_VERTICAL_CARD_GAP = 22;
 const DETAIL_EPISODE_CARD_GAP = 22;
-const DETAIL_ROW_SHADOW_TOP_GUTTER = 25;
-const DETAIL_ROW_SHADOW_BOTTOM_GUTTER = 50;
-const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 38, bottom: 72 };
+const DETAIL_ROW_SHADOW_TOP_GUTTER = 16;
+const DETAIL_ROW_SHADOW_BOTTOM_GUTTER = 40;
+const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 16, bottom: 40 };
 // The media area is 196px tall; anchor arrows to its visual center instead of
 // the full card height, which also includes title and metadata below it.
 const DETAIL_MEDIA_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + 196 / 2;
@@ -2468,7 +2468,7 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
 
   return (
     <div className="liquid-glass-dark" style={{ borderRadius:18,padding:"22px 24px",minHeight:138 }}>
-    <h2 style={{ fontSize:15,fontWeight:700,color:"#fff",marginBottom:18,letterSpacing:0 }}>{title}</h2>
+    <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",marginBottom:16,lineHeight:1.1 }}>{title}</h2>
       <div style={{ display:"flex",alignItems:"center",gap:14,flexWrap:"wrap" }}>
         {items.slice(0, 8).map(item => (
           <button
@@ -2502,7 +2502,7 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
 
 function SectionH({ title }:{title:string}) {
   return (
-    <div style={{ display:"flex",alignItems:"center",marginBottom:16 }}>
+    <div className="detail-section-header" style={{ display:"flex",alignItems:"center",marginBottom:12, transition:"transform 0.32s cubic-bezier(0.16,1,0.3,1)" }}>
       <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>{title}</h2>
     </div>
   );

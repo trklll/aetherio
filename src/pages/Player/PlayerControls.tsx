@@ -24,8 +24,8 @@ import {
 import type { SelectOption, VideoScaleMode } from "./types";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
-import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
-import { gsap } from "../../utils/motion";
+import { getContextGlassStyle } from "../../components/ui/glassSurface";
+import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
 import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
 
@@ -172,20 +172,26 @@ export default function PlayerControls({
     [selectedSubtitleValue, subtitleOptions, subtitlesLoading],
   );
 
-  // Barra con animación suave (menos exagerada) y blur sincronizado vía barAlpha
+  // §3/§4/§14 Barra con spring críticamente amortiguado, interrumpible desde presentation value
   useEffect(() => {
     const el = controlsRef.current;
     if (!el) return;
     gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: active ? 1 : 0, y: 0, scale: 1, filter: "blur(0px)" });
+      el.style.pointerEvents = active ? "auto" : "none";
+      return;
+    }
     if (active) {
       el.style.pointerEvents = "auto";
+      // §3 Always animate from presentation value — gsap.set then springTo does it; no jump
       gsap.set(el, { opacity: 0, y: 14, scale: 0.97, filter: "blur(8px)" });
-      gsap.to(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.45, ease: "expo.out", overwrite: "auto" });
+      springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.45 });
     } else {
-      gsap.to(el, { opacity: 0, y: 8, scale: 0.985, filter: "blur(6px)", duration: 0.32, ease: "expo.in", overwrite: "auto" });
+      springTo(el, { opacity: 0, y: 8, scale: 0.985, filter: "blur(6px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.32 });
       window.setTimeout(() => {
         if (el && !active) el.style.pointerEvents = "none";
-      }, 320);
+      }, 340);
     }
   }, [active]);
 
@@ -403,30 +409,29 @@ export default function PlayerControls({
     gsap.killTweensOf(episodeAlphaRef.current);
     gsap.killTweensOf(subtitleAlphaRef.current);
 
-    gsap.to(barAlphaRef.current, {
-      v: targetBar,
-      duration: targetBar ? 0.45 : 0.32,
-      ease: targetBar ? "expo.out" : "expo.in",
-      overwrite: "auto",
-      onUpdate: commitBlur,
-      onComplete: commitBlur,
-    });
-    gsap.to(episodeAlphaRef.current, {
-      v: targetEpisode,
-      duration: targetEpisode ? 0.38 : 0.28,
-      ease: targetEpisode ? "expo.out" : "expo.in",
-      overwrite: "auto",
-      onUpdate: commitBlur,
-      onComplete: commitBlur,
-    });
-    gsap.to(subtitleAlphaRef.current, {
-      v: targetSubtitle,
-      duration: targetSubtitle ? 0.38 : 0.28,
-      ease: targetSubtitle ? "expo.out" : "expo.in",
-      overwrite: "auto",
-      onUpdate: commitBlur,
-      onComplete: commitBlur,
-    });
+    // §4 Critically damped springs for blur alpha — interruptible, no bounce
+    if (prefersReducedMotion()) {
+      barAlphaRef.current.v = targetBar;
+      episodeAlphaRef.current.v = targetEpisode;
+      subtitleAlphaRef.current.v = targetSubtitle;
+      commitBlur();
+    } else {
+      springTo(barAlphaRef.current as unknown as gsap.TweenTarget, {
+        v: targetBar,
+        onUpdate: commitBlur,
+        onComplete: commitBlur,
+      } as unknown as gsap.TweenVars, { damping: 1.0, duration: targetBar ? 0.45 : 0.32 });
+      springTo(episodeAlphaRef.current as unknown as gsap.TweenTarget, {
+        v: targetEpisode,
+        onUpdate: commitBlur,
+        onComplete: commitBlur,
+      } as unknown as gsap.TweenVars, { damping: 1.0, duration: targetEpisode ? 0.38 : 0.28 });
+      springTo(subtitleAlphaRef.current as unknown as gsap.TweenTarget, {
+        v: targetSubtitle,
+        onUpdate: commitBlur,
+        onComplete: commitBlur,
+      } as unknown as gsap.TweenVars, { damping: 1.0, duration: targetSubtitle ? 0.38 : 0.28 });
+    }
 
     // Commit inicial inmediato para que el primer frame ya tenga blur si toca
     commitBlur();
@@ -486,18 +491,23 @@ export default function PlayerControls({
         data-player-controls-glass
         className="relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)] will-change-transform"
         style={{
-          background: "rgba(70, 70, 70, 0.22)",
+          background: prefersReducedMotion() || (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches)
+            ? "rgba(28,28,30,0.94)"
+            : "rgba(70, 70, 70, 0.22)",
+          backdropFilter: (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches) ? "none" : "blur(22px) saturate(180%)",
+          WebkitBackdropFilter: (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches) ? "none" : "blur(22px) saturate(180%)",
+          border: "1px solid rgba(255,255,255,0.08)",
           willChange: "transform, backdrop-filter",
           transform: "translateZ(0)",
           backfaceVisibility: "hidden",
         }}
       >
         <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
-          <span className="max-w-[36ch] truncate text-base font-semibold text-white/92">{currentMetaTitle}</span>
+          <span className="max-w-[36ch] truncate text-base font-semibold tracking-[-0.015em] leading-[1.1] text-white/92" style={{ fontOpticalSizing: "auto" }}>{currentMetaTitle}</span>
           {title ? (
             <>
               <span className="h-1 w-1 rounded-full bg-white/45" />
-              <span>{title}</span>
+              <span className="tracking-[0.01em] leading-[1.4]">{title}</span>
             </>
           ) : null}
         </div>
@@ -726,25 +736,48 @@ function SubtitleMenu({
       return;
     }
     gsap.killTweensOf(el);
-    gsap.to(el, {
+    if (prefersReducedMotion()) {
+      gsap.to(el, { opacity: 0, duration: 0.18, ease: "power1.out", overwrite: "auto", onComplete: () => setMounted(false) });
+      return;
+    }
+    // §3/§4 spring exit anchored, interruptible
+    const anchor = buttonRef.current;
+    if (anchor) {
+      const aRect = anchor.getBoundingClientRect();
+      const mRect = el.getBoundingClientRect();
+      const origin = anchorTransformOrigin(aRect, mRect.left, mRect.top, mRect.width, mRect.height);
+      gsap.set(el, { transformOrigin: origin });
+    }
+    springTo(el, {
       xPercent: -50,
       opacity: 0,
       y: 8,
       scale: 0.98,
       filter: "blur(6px)",
-      duration: 0.28,
-      ease: "expo.in",
-      overwrite: "auto",
-      onComplete: () => setMounted(false),
-    });
+    } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.28 });
+    gsap.delayedCall(0.30, () => { if (!open) setMounted(false); });
   }, [open]);
 
   useEffect(() => {
     if (!open || !mounted || !menuRef.current) return;
     const el = menuRef.current;
+    // §7 anchor origin to trigger button
+    const anchor = buttonRef.current;
+    if (anchor) {
+      const aRect = anchor.getBoundingClientRect();
+      // position is centered left 50%, compute origin after mount
+      const mRect = el.getBoundingClientRect();
+      const origin = anchorTransformOrigin(aRect, mRect.left, mRect.top, mRect.width, mRect.height);
+      gsap.set(el, { transformOrigin: origin });
+    }
     gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { xPercent: -50, opacity: 0 });
+      gsap.to(el, { xPercent: -50, opacity: 1, duration: 0.2, ease: "power1.out", overwrite: "auto" });
+      return;
+    }
     gsap.set(el, { xPercent: -50, opacity: 0, y: 10, scale: 0.98, filter: "blur(8px)" });
-    gsap.to(el, { xPercent: -50, opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.36, ease: "expo.out", overwrite: "auto" });
+    springTo(el, { xPercent: -50, opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.36 });
   }, [open, mounted]);
 
   useEffect(() => {
@@ -792,9 +825,17 @@ function SubtitleMenu({
         type="button"
         disabled={disabled}
         onClick={onToggle}
-        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition ${
+        onPointerDown={e => {
+          if (disabled) return;
+          gsap.killTweensOf(e.currentTarget);
+          gsap.to(e.currentTarget, { scale: 0.96, duration: 0.1, ease: "power2.out", overwrite: "auto" });
+        }}
+        onPointerUp={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        onPointerLeave={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition will-change-transform active:scale-[0.96] ${
           open ? "border-white/[0.12] bg-white/18" : "border-white/[0.07] bg-white/10 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-35"
         }`}
+        style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
         title={label}
         aria-label={label}
         aria-haspopup="menu"
@@ -810,12 +851,14 @@ function SubtitleMenu({
               data-player-floating-panel-glass
               role="dialog"
               aria-label="Subtítulos"
-              className="fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white"
+              className="fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white will-change-transform"
               style={{
-                ...CONTEXT_GLASS_STYLE,
+                ...getContextGlassStyle(),
                 bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
                 height: "min(470px, calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top, 0px) - 86px))",
                 minHeight: 300,
+                willChange: "transform, opacity, filter",
+                transform: "translateZ(0)",
               }}
             >
           <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
@@ -957,9 +1000,23 @@ function IconButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex items-center justify-center rounded-full border border-white/[0.07] bg-white/10 text-white gsap-transition hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-35 ${
+      onPointerDown={e => {
+        if (disabled) return;
+        // §1 Response on pointer-down instant
+        gsap.killTweensOf(e.currentTarget);
+        gsap.to(e.currentTarget, { scale: 0.96, duration: 0.1, ease: "power2.out", overwrite: "auto" });
+      }}
+      onPointerUp={e => {
+        if (disabled) return;
+        gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" });
+      }}
+      onPointerLeave={e => {
+        gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" });
+      }}
+      className={`flex items-center justify-center rounded-full border border-white/[0.07] bg-white/10 text-white gsap-transition hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-35 active:scale-[0.96] will-change-transform ${
         large ? "h-11 w-11" : "h-10 w-10"
       }`}
+      style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
       title={label}
       aria-label={label}
     >
@@ -1076,9 +1133,17 @@ function VideoEnhancementMenu({
         type="button"
         disabled={disabled}
         onClick={onToggle}
-        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition ${
+        onPointerDown={e => {
+          if (disabled) return;
+          gsap.killTweensOf(e.currentTarget);
+          gsap.to(e.currentTarget, { scale: 0.96, duration: 0.1, ease: "power2.out", overwrite: "auto" });
+        }}
+        onPointerUp={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        onPointerLeave={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition will-change-transform active:scale-[0.96] ${
           open ? "border-white/[0.12] bg-white/18" : "border-white/[0.07] bg-white/10 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-35"
         }`}
+        style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
         title={label}
         aria-label={label}
         aria-haspopup="menu"
@@ -1131,9 +1196,17 @@ function IconMenu({
         type="button"
         disabled={disabled}
         onClick={onToggle}
-        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition ${
+        onPointerDown={e => {
+          if (disabled) return;
+          gsap.killTweensOf(e.currentTarget);
+          gsap.to(e.currentTarget, { scale: 0.96, duration: 0.1, ease: "power2.out", overwrite: "auto" });
+        }}
+        onPointerUp={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        onPointerLeave={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition will-change-transform active:scale-[0.96] ${
           open ? "border-white/[0.12] bg-white/18" : "border-white/[0.07] bg-white/10 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-35"
         }`}
+        style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
         title={label}
         aria-label={label}
         aria-haspopup="menu"
