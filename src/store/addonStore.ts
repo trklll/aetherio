@@ -57,7 +57,7 @@ const TORRENTIO_LATINO_ADDON: InstalledAddon = {
     version: "0.0.15",
     name: "Torrentio",
     description: "Provides torrent streams from scraped torrent providers.",
-    catalogs: [],
+    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
     resources: [{
       name: "stream",
       types: ["movie", "series", "anime"],
@@ -124,10 +124,7 @@ const ANIMES_ADDON: InstalledAddon = {
   url: ANIMES_MANIFEST_URL,
   manifest: {
     ...ANIMES_MANIFEST,
-    catalogs: (ANIMES_MANIFEST.catalogs as unknown as any[]).filter(catalog =>
-      Array.isArray(catalog?.extra) &&
-      catalog.extra.some((extra: any) => String(extra?.name ?? "").toLowerCase() === "search"),
-    ),
+    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
   },
   enabled: true,
   installedAt: 0,
@@ -150,7 +147,7 @@ const HDHUB_ADDON: InstalledAddon = {
     resources: ["stream", "catalog"],
     types: ["movie", "series", "HdHub"],
     idPrefixes: ["tt", "tmdb:", "kitsu:"],
-    catalogs: [],
+    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
     logo: "http://hdhub.thevolecitor.qzz.io/logo.png",
     background: "http://hdhub.thevolecitor.qzz.io/logo.png",
     behaviorHints: { configurable: true },

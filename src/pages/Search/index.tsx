@@ -8,7 +8,7 @@ import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import type { UnifiedSearchResult } from "../../utils/searchProviders";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 
-const POSTER_CARD = { width: 180, height: 271 };
+const POSTER_CARD = { width: 207, height: 312 };
 const ROW_GAP = 22;
 const TOP_RESULTS_LIMIT = 3;
 

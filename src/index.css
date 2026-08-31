@@ -147,11 +147,11 @@ html.aetherio-android-tv .scroll-row{
 ::selection{background:rgba(255,255,255,0.2);color:#fff;}
 
 .liquid-glass{
-  background:rgba(255,255,255,0.10);
-  backdrop-filter:blur(12px) saturate(150%);
-  -webkit-backdrop-filter:blur(12px) saturate(150%);
-  border:1px solid rgba(225,230,238,0.09);
-  box-shadow:0 2px 12px rgba(0,0,0,0.32),inset 0 1px 0 rgba(255,255,255,0.045);
+  background:rgba(255,255,255,0.16);
+  backdrop-filter:blur(16px) saturate(180%);
+  -webkit-backdrop-filter:blur(16px) saturate(180%);
+  border:1px solid rgba(225,230,238,0.15);
+  box-shadow:0 2px 12px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.08);
 }
 .liquid-glass-arrow{
   position:relative;
@@ -306,9 +306,9 @@ html.aetherio-android-tv .scroll-row{
 
 .detail-episode-card{
   position:relative;
-  flex:0 0 302px;
-  width:302px;
-  height:306px;
+  flex:0 0 347px;
+  width:347px;
+  height:352px;
   border-radius:14px;
   outline:none;
 }
@@ -323,7 +323,7 @@ html.aetherio-android-tv .scroll-row{
 .detail-episode-card__media{
   position:relative;
   width:100%;
-  height:196px;
+  height:225px;
   overflow:hidden;
   border-radius:14px;
   background:#2b2b2d;
@@ -410,8 +410,7 @@ html.aetherio-android-tv .scroll-row{
 .detail-episode-card__menu:hover,
 .detail-episode-card__menu:focus-visible{
   background:rgba(5,6,7,0.84);
-  outline:1px solid rgba(255,255,255,0.72);
-  outline-offset:1px;
+  outline:none;
 }
 .detail-episode-card__copy{padding-top:18px;}
 .detail-episode-card__eyebrow{

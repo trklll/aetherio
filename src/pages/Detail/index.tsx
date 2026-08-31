@@ -56,9 +56,17 @@ const DETAIL_EPISODE_CARD_GAP = 22;
 const DETAIL_ROW_SHADOW_TOP_GUTTER = 16;
 const DETAIL_ROW_SHADOW_BOTTOM_GUTTER = 40;
 const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 16, bottom: 40 };
-// The media area is 196px tall; anchor arrows to its visual center instead of
-// the full card height, which also includes title and metadata below it.
-const DETAIL_MEDIA_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + 196 / 2;
+// Keep arrows centered on the media (image) height, not the full card
+const DETAIL_EPISODE_MEDIA_HEIGHT = 225;
+const DETAIL_TRAILER_HEIGHT = 195;
+const DETAIL_CAST_PORTRAIT_SIZE = 159;
+const DETAIL_VERTICAL_POSTER_HEIGHT = 312;
+const DETAIL_COLLECTION_HEIGHT = 192;
+const DETAIL_MEDIA_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_EPISODE_MEDIA_HEIGHT / 2 + 10;
+const DETAIL_TRAILER_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_TRAILER_HEIGHT / 2;
+const DETAIL_CAST_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_CAST_PORTRAIT_SIZE / 2;
+const DETAIL_RELATED_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_VERTICAL_POSTER_HEIGHT / 2;
+const DETAIL_COLLECTION_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_COLLECTION_HEIGHT / 2;
 
 function preloadImage(url?: string | null) {
   if (!url) return Promise.resolve();
@@ -2256,7 +2264,7 @@ export default function DetailPage() {
         {/* Episodios */}
         {!isMovie&&curSeason&&(
           <section>
-            <div style={{ display:"flex",alignItems:"center",gap:14,marginBottom:18 }}>
+            <div style={{ display:"flex",alignItems:"center",gap:14,marginBottom:12 }}>
               {regularSeasons.length>1&&(
                 <SeasonMenu
                   seasons={regularSeasons}
@@ -2300,7 +2308,7 @@ export default function DetailPage() {
 
         {!isMovie&&Boolean(specialSeason?.episodes.length)&&(
           <section>
-            <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1,marginBottom:18 }}>Especiales</h2>
+            <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1,marginBottom:12 }}>Especiales</h2>
             <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
               {specialSeason!.episodes.map(ep=>(
                 <EpCard
@@ -2334,7 +2342,7 @@ export default function DetailPage() {
         {!!data.trailers?.length&&(
           <section>
             <SectionH title="Tráilers" />
-            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
+            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_TRAILER_ARROW_TOP}>
               {data.trailers.map((t,index)=><TrailerCard key={t.key ?? `trailer-${index}`} trailer={t} media={data} />)}
             </ScrollRow>
           </section>
@@ -2351,7 +2359,7 @@ export default function DetailPage() {
         {!!data.cast?.length&&(
           <section>
             <SectionH title="Reparto" />
-            <ScrollRow gap={25} initialScrollKey={`${data.id}:cast:start`}>
+            <ScrollRow gap={25} arrowTop={DETAIL_CAST_ARROW_TOP} initialScrollKey={`${data.id}:cast:start`}>
               {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>{ navigate(`/person/${encodeURIComponent(String(c.id))}`); }} />)}
             </ScrollRow>
           </section>
@@ -2362,7 +2370,7 @@ export default function DetailPage() {
         {!!data.collection?.length&&(
           <section>
             <SectionH title={data.collectionName || "Colección"} />
-            <ScrollRow gap={20} initialScrollKey={`${data.id}:collection`}>
+            <ScrollRow gap={20} arrowTop={DETAIL_COLLECTION_ARROW_TOP} initialScrollKey={`${data.id}:collection`}>
               {data.collection.map(item=><CollectionCard key={`${item.type}:${item.id}`} item={item} onPress={()=>{
                 writeDetailMediaMeta({
                   id:item.id,
@@ -2383,11 +2391,11 @@ export default function DetailPage() {
         {!!data.related?.length&&(
           <section>
             <SectionH title="Más como esto" />
-            <ScrollRow gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER}>
+            <ScrollRow gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER} arrowTop={DETAIL_RELATED_ARROW_TOP}>
               {data.related.map(r=>(
                 <div key={r.id}
                   onClick={()=>navigate(`/detail/${r.media_type}/tmdb:${r.id}`)}
-                  style={{ flexShrink:0,width:180,height:271,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
+                  style={{ flexShrink:0,width:207,height:312,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
                   onMouseEnter={e=>{
                     const card = e.currentTarget as HTMLDivElement;
                     tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
@@ -2521,7 +2529,7 @@ function TmdbCommentsSection({
 
   return (
     <section>
-      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,marginBottom:16 }}>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,marginBottom:12 }}>
         <div>
           <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>Comentarios de TMDB</h2>
           <p style={{ marginTop:6,fontSize:12,color:"rgba(255,255,255,0.42)" }}>Comentarios del título</p>
@@ -3001,7 +3009,7 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     <button
       type="button"
       onClick={playTrailer}
-      style={{ flexShrink:0,width:302,height:196,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",padding:0,textAlign:"left" }}
+      style={{ flexShrink:0,width:347,height:195,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",padding:0,textAlign:"left" }}
       onMouseEnter={e=>{
          tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
          gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
@@ -3067,7 +3075,7 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
       onBlur={event=>setFocusedScale(event.currentTarget,false)}
       style={{
         flexShrink:0,
-        width:188,
+        width:194,
         border:0,
         borderRadius:0,
         padding:0,
@@ -3095,11 +3103,11 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
             const img=e.currentTarget;
             if(img.naturalWidth<10||img.naturalHeight<10) setImageFailed(true);
           }}
-          style={{ width:154,height:154,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#272A2F",boxShadow:"0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)" }}
+          style={{ width:159,height:159,borderRadius:"50%",objectFit:"cover",flexShrink:0,background:"#272A2F",boxShadow:"0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)" }}
         />
       ):(
         <div data-cast-portrait style={{
-          width:154,height:154,borderRadius:"50%",
+          width:159,height:159,borderRadius:"50%",
           background:"linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
           boxShadow:"0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)",
           display:"flex",alignItems:"center",justifyContent:"center",

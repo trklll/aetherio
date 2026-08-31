@@ -272,7 +272,7 @@ function EntitySkeleton() {
           <div key={row} style={{ marginBottom: 42 }}>
             <div className="skeleton" style={{ height: 20, width: 170, borderRadius: 8, margin: "0 48px 16px" }} />
             <div style={{ display: "flex", gap: 22, overflow: "hidden", padding: "0 48px" }}>
-              {[0, 1, 2, 3, 4].map(item => <div key={item} className="skeleton" style={{ width: 180, height: 271, borderRadius: 10, flexShrink: 0 }} />)}
+              {[0, 1, 2, 3, 4].map(item => <div key={item} className="skeleton" style={{ width: 207, height: 312, borderRadius: 10, flexShrink: 0 }} />)}
             </div>
           </div>
         ))}

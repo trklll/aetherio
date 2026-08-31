@@ -316,9 +316,9 @@ function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen:
       type="button"
       onClick={onOpen}
       style={{
-        width: 180,
-        height: 271,
-        flex: "0 0 180px",
+        width: 207,
+        height: 312,
+        flex: "0 0 207px",
         overflow: "hidden",
         borderRadius: 10,
         border: "1px solid rgba(255,255,255,0.12)",
@@ -327,7 +327,7 @@ function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen:
         cursor: "pointer",
       }}
     >
-      <div style={{ width: 180, height: 271, background: "rgba(255,255,255,0.06)" }}>
+      <div style={{ width: 207, height: 312, background: "rgba(255,255,255,0.06)" }}>
         {poster ? <img src={poster} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
       </div>
     </button>
@@ -346,7 +346,7 @@ function SearchSkeleton() {
       <section>
         <SectionHead title="Programas de TV" />
         <PosterRow>
-          {Array.from({ length: 6 }, (_, index) => <div key={index} className="skeleton h-[271px] w-[180px] rounded-xl" />)}
+          {Array.from({ length: 6 }, (_, index) => <div key={index} className="skeleton h-[312px] w-[207px] rounded-xl" />)}
         </PosterRow>
       </section>
     </div>

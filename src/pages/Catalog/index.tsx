@@ -339,7 +339,7 @@ export default function CatalogPage() {
           ref={gridRef}
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 180px))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))",
             gap: 14,
             alignItems: "start",
             justifyContent: "center",
@@ -388,7 +388,7 @@ function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
         }}
         onPointerUp={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
         onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
-        style={{ position: "relative", width: 180, height: 271, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
+        style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
       >
         {image ? (
           <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />

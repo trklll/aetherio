@@ -28,8 +28,8 @@ import type { MediaItem } from "../../types/ui";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const IMG = "https://image.tmdb.org/t/p";
-const CARD_W = 336;
-const CARD_H = 196;
+const CARD_W = 386;
+const CARD_H = 225;
 const GAP = 18;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
@@ -317,7 +317,7 @@ export default function ContinueWatchingRow() {
   }
 
   return (
-    <section style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 16 }}>
+    <section style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 0, marginBottom: -24 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: 48, paddingRight: 48 }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>Continuar viendo</span>
       </div>

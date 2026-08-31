@@ -153,6 +153,8 @@ export default function TopNav() {
         style={{
           boxShadow: "0 3px 14px rgba(0,0,0,0.38)",
           padding: collapsed ? "4px" : "6px 8px",
+          transform: "scale(1.1)",
+          transformOrigin: "center top",
           transition: "padding 0.32s cubic-bezier(0.32, 0.72, 0, 1)",
         }}
       >

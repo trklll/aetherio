@@ -210,7 +210,7 @@ export default function GenreListingPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 180px))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))",
             gap: 14,
             alignItems: "start",
             justifyContent: "center",
@@ -251,7 +251,7 @@ function GridCard({ item }: { item: MediaItem }) {
         type="button"
         onClick={openDetail}
         disabled={resolving}
-        style={{ position: "relative", width: 180, height: 271, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: resolving ? "wait" : "pointer", textAlign: "left", opacity: resolving ? 0.6 : 1, transition: "opacity 0.2s" }}
+        style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: resolving ? "wait" : "pointer", textAlign: "left", opacity: resolving ? 0.6 : 1, transition: "opacity 0.2s" }}
       >
         {image ? (
           <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />

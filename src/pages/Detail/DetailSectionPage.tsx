@@ -159,19 +159,19 @@ export default function DetailSectionPage() {
         {error ? <div className="liquid-glass-dark rounded-[18px] p-5 text-sm text-white/68">{error}</div> : null}
 
         {sectionKind === "trailers" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(302px, 302px))", gap: 18 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(347px, 347px))", gap: 18 }}>
             {trailers.map(item => <TrailerGridCard key={item.key} item={item} media={media} type={type} id={id} />)}
           </div>
         ) : null}
 
         {sectionKind === "cast" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(204px, 204px))", gap: "34px 40px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(211px, 211px))", gap: "34px 40px" }}>
             {people.map(person => <PersonGridCard key={`${person.id}-${person.role}`} person={person} disabled={isAnimeDetected} />)}
           </div>
         ) : null}
 
         {sectionKind === "related" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 180px))", gap: "22px 24px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))", gap: "22px 24px" }}>
             {related.map(item => (
               <RelatedGridCard
                 key={`${item.type}-${item.id}`}
@@ -221,7 +221,7 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
         }));
         navigate(`/player?${new URLSearchParams({ type, id, trailer: "1" }).toString()}`);
       }}
-      style={{ position: "relative", width: 302, height: 196, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer", textAlign: "left" }}
+      style={{ position: "relative", width: 347, height: 195, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer", textAlign: "left" }}
     >
       <img src={item.thumbnail} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
       <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.28) 48%, transparent 100%)" }} />
@@ -239,7 +239,7 @@ function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: b
   const handleClick = disabled ? undefined : () => navigate(`/person/${person.id}`);
   const hasImage = Boolean(person.image) && !imgFailed;
   return (
-    <button type="button" onClick={handleClick} disabled={disabled} style={{ width: 204, border: "none", background: "none", padding: 0, cursor: disabled ? "default" : "pointer", textAlign: "center" }}>
+    <button type="button" onClick={handleClick} disabled={disabled} style={{ width: 211, border: "none", background: "none", padding: 0, cursor: disabled ? "default" : "pointer", textAlign: "center" }}>
       {hasImage ? (
         <img
           src={person.image}
@@ -248,10 +248,10 @@ function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: b
           decoding="async"
           onError={() => setImgFailed(true)}
           onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth < 10 || img.naturalHeight < 10) setImgFailed(true); }}
-          style={{ width: 180, height: 180, borderRadius: "50%", objectFit: "cover", margin: "0 auto 12px" }}
+          style={{ width: 186, height: 186, borderRadius: "50%", objectFit: "cover", margin: "0 auto 12px" }}
         />
       ) : (
-        <div style={{ width: 180, height: 180, borderRadius: "50%", background: "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)", boxShadow: "0 8px 16px rgba(0,0,0,0.4)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 58, fontWeight: 900, letterSpacing: 1, fontFamily: "Inter, system-ui, sans-serif" }}>
+        <div style={{ width: 186, height: 186, borderRadius: "50%", background: "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)", boxShadow: "0 8px 16px rgba(0,0,0,0.4)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 58, fontWeight: 900, letterSpacing: 1, fontFamily: "Inter, system-ui, sans-serif" }}>
           {initials(person.name)}
         </div>
       )}
@@ -263,7 +263,7 @@ function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: b
 
 function RelatedGridCard({ item, onOpen }: { item: RelatedItem; onOpen: () => void }) {
   return (
-    <button type="button" onClick={onOpen} style={{ position: "relative", width: 180, height: 271, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer" }}>
+    <button type="button" onClick={onOpen} style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer" }}>
       {item.poster ? <img src={item.poster} alt={item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
     </button>
   );

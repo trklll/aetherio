@@ -178,7 +178,7 @@ export default function StreamingProviderRowsGroup({ provider, seriesRow, movies
       style={{
         position: "relative",
         display: "block",
-        margin: "8px 48px 22px",
+        margin: "0 48px 0",
         padding: "20px 42px 18px 32px",
         overflow: "visible",
         borderRadius: 26,

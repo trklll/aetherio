@@ -79,7 +79,7 @@ fn build_activity(payload: &ActivityPayload) -> activity::Activity<'_> {
         .large_image_key
         .as_deref()
         .filter(|v| !v.is_empty())
-        .unwrap_or("aetherio");
+        .unwrap_or("Aetherio");
     let large_text: &str = payload
         .large_image_text
         .as_deref()

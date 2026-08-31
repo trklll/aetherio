@@ -14,7 +14,7 @@ const PAGE_LIMIT = 20;
 const MAX_ITEMS = 240;
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
-const VERTICAL_CARD = { width: 180, height: 271 };
+const VERTICAL_CARD = { width: 207, height: 312 };
 
 function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500") {
   if (!url) return url;

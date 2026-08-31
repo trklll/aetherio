@@ -126,7 +126,7 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
         state: episodeLabel || title,
         startTimestamp: start,
         endTimestamp: end,
-        largeImageKey: input.posterUrl || "aetherio",
+        largeImageKey: input.posterUrl || "Aetherio",
         largeImageText: title,
         smallImageKey: "play",
         smallImageText: "Reproduciendo",
@@ -139,7 +139,7 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
     void setDiscordActivity({
       details: title,
       state: `Pausado en ${formatTimestamp(input.currentTime)}`,
-      largeImageKey: input.posterUrl || "aetherio",
+      largeImageKey: input.posterUrl || "Aetherio",
       largeImageText: title,
       smallImageKey: "pause",
       smallImageText: "Pausado",

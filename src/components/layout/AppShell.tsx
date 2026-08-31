@@ -32,10 +32,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const controlsHideTimerRef = useRef<number | null>(null);
   const showBack = isEpisodePage || isPlayer || isDetailPage || isPersonPage;
 
+  // Scroll-based hide for window controls (outside player) — syncs with TopNav
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    if (isPlayer) return;
+    let raf = 0;
+    function onScroll() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const shell = document.querySelector("[data-aetherio-scroll-shell]");
+        const el = (shell as HTMLElement) ?? document.scrollingElement ?? document.documentElement;
+        const y = el.scrollTop;
+        // Use same threshold as TopNav (220px) with slight damping to feel simultaneous
+        setScrolled(y > 220);
+      });
+    }
+    const shell = document.querySelector("[data-aetherio-scroll-shell]");
+    const target = (shell as HTMLElement) ?? window;
+    target.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      target.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [isPlayer, location.pathname]);
+
   // Back button visibility: independent zone (top-left corner)
   const backVisible = isPlayer ? (playerChromeVisible || backZone) : showBack ? backZone : true;
-  // Window controls visibility: independent zone (top-right corner)
-  const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : showBack ? controlsZone : true;
+  // Window controls visibility: independent zone (top-right corner) + scroll hide
+  // When scrolled, controlsVisible is false unless controlsZone is true (hover)
+  const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : (controlsZone || !scrolled);
+
+  console.log('[AppShell] controlsVisible:', controlsVisible, 'scrolled:', scrolled, 'controlsZone:', controlsZone);
   const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
@@ -383,6 +412,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
             right: "var(--app-safe-x)",
             top: "var(--app-safe-top)",
             pointerEvents: controlsVisible ? "auto" : "none",
+            background: "rgba(0,0,0,0.25)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+            borderRadius: "12px",
+            padding: "4px",
+            transform: "scale(1.1)",
+            transformOrigin: "top right",
           }}
         >
           {!androidRuntime && (!isPlayer || showBack) && (

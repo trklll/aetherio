@@ -21,8 +21,8 @@ import { captureCardRect, setSharedElementName } from "../../utils/sharedElement
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
 import CardArtworkPicker from "./CardArtworkPicker";
 
-const HORIZONTAL_CARD = { width: 336, height: 196 };
-const VERTICAL_CARD = { width: 180, height: 271 };
+const HORIZONTAL_CARD = { width: 386, height: 225 };
+const VERTICAL_CARD = { width: 207, height: 312 };
 const RANKED_CARD = { width: 248, height: 252 };
 const RANKED_DOUBLE_CARD = { width: 298, height: 252 };
 const RANKED_POSTER = { width: 168, height: 252, singleLeft: 80, doubleLeft: 130 };
@@ -224,7 +224,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   }, [hovered, showLeft, showRight]);
 
   return (
-    <section style={{ paddingLeft: 0, paddingRight: 0 }}>
+        <section style={{ paddingLeft: 0, paddingRight: 0, marginBottom: -24 }}>
       {!hideHeader ? (
         <button
           onClick={disableHeaderNavigation ? undefined : openCatalog}
@@ -666,57 +666,96 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     );
   }
 
+  const [hovered, setHovered] = useState(false);
+  const titleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    if (hovered) {
+      tweenTo(el, { opacity: 1, y: 0 }, 0.25);
+    } else {
+      tweenTo(el, { opacity: 0, y: 8 }, 0.2);
+    }
+  }, [hovered]);
+
   return (
-    <div
-      ref={cardRef}
-      onClick={openDetail}
-      onContextMenu={openArtworkMenu}
-      style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, borderRadius: 12, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", border: "1px solid rgba(225,230,238,0.10)", willChange: "transform" }}
-      onMouseEnter={e => {
-        tweenTo(e.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
-      }}
-      onMouseLeave={e => {
-        tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
-      }}
-    >
-      {effectiveWatched ? (
+    <div style={{ flexShrink: 0, width: cardSize.width }}>
+      <div
+        ref={cardRef}
+        onClick={openDetail}
+        onContextMenu={openArtworkMenu}
+        style={{ position: "relative", zIndex: 1, width: cardSize.width, height: cardSize.height, borderRadius: 12, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", border: "1px solid rgba(225,230,238,0.10)", willChange: "transform" }}
+        onMouseEnter={e => {
+          setHovered(true);
+          tweenTo(e.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
+        }}
+        onMouseLeave={e => {
+          setHovered(false);
+          tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+        }}
+      >
+        {effectiveWatched ? (
+          <div
+            style={{
+              position: "absolute",
+              top: 10,
+              right: 10,
+              zIndex: 2,
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: "1px solid rgba(255,255,255,0.72)",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(242,244,247,0.88))",
+              boxShadow: "0 10px 24px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.92)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
+          </div>
+        ) : null}
+        {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} /> : null}
+        {image ? <img src={image} alt={item.name} decoding="async" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
+
+        {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
+          {showLogo ? (
+            <img src={logo} alt={item.name}
+              decoding="async"
+              loading="eager"
+              onError={() => setLogoFailed(true)}
+              style={{ maxHeight: 48, maxWidth: 206, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
+          ) : (
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+              {item.name}
+            </span>
+          )}
+        </div> : null}
+        {artworkControls}
+      </div>
+
+      {posterLayout === "vertical" && (
         <div
+          ref={titleRef}
           style={{
-            position: "absolute",
-            top: 10,
-            right: 10,
-            zIndex: 2,
-            width: 28,
-            height: 28,
-            borderRadius: 999,
-            border: "1px solid rgba(255,255,255,0.72)",
-            background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(242,244,247,0.88))",
-            boxShadow: "0 10px 24px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.92)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            marginTop: 10,
+            opacity: 0,
+            transform: "translateY(4px)",
+            fontSize: 13,
+            fontWeight: 500,
+            color: "#fff",
+            textAlign: "center",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: cardSize.width,
+            padding: "0 2px",
           }}
         >
-          <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
+          {item.name}
         </div>
-      ) : null}
-      {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} /> : null}
-      {image ? <img src={image} alt={item.name} decoding="async" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
-
-      {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
-        {showLogo ? (
-          <img src={logo} alt={item.name}
-            decoding="async"
-            loading="eager"
-            onError={() => setLogoFailed(true)}
-            style={{ maxHeight: 48, maxWidth: 206, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
-        ) : (
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,0.95)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-            {item.name}
-          </span>
-        )}
-      </div> : null}
-      {artworkControls}
+      )}
     </div>
   );
 });

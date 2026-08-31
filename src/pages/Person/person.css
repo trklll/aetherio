@@ -80,7 +80,7 @@
 .person-rail-arrow[data-visible="true"]{opacity:1;pointer-events:auto;}
 .person-rail-arrow-left{left:0;transform:translate(-30%,-50%);}
 .person-rail-arrow-right{right:0;transform:translate(30%,-50%);}
-.person-known-card{position:relative;flex:0 0 348px;width:348px;height:178px;overflow:hidden;border:0;border-radius:16px;padding:0;background:rgba(255,255,255,.06);cursor:pointer;}
+.person-known-card{position:relative;flex:0 0 400px;width:400px;height:205px;overflow:hidden;border:0;border-radius:16px;padding:0;background:rgba(255,255,255,.06);cursor:pointer;}
 .person-known-card:hover,.person-known-card:focus-visible{z-index:2;background:rgba(255,255,255,.10);outline:none;transform:scale(1.035);}
 .person-known-artwork{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
 .person-known-scrim{position:absolute;inset:0;background:linear-gradient(to bottom,transparent,rgba(0,0,0,.78));}
@@ -128,9 +128,9 @@
 .person-credit-row-line{position:absolute;top:8px;right:0;left:0;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.22),transparent 90%);content:"";}
 .person-credit-rail{display:flex;min-width:0;gap:16px;overflow-x:auto;overflow-y:visible;padding:18px 10px 30px;scrollbar-width:none;}
 .person-credit-rail::-webkit-scrollbar{display:none;}
-.person-credit-poster-card{display:flex;flex:0 0 180px;width:180px;min-width:0;flex-direction:column;border:0;padding:0;background:transparent;color:#fff;cursor:pointer;text-align:left;transition:transform .24s cubic-bezier(.22,1,.36,1),filter .24s ease;}
+.person-credit-poster-card{display:flex;flex:0 0 207px;width:207px;min-width:0;flex-direction:column;border:0;padding:0;background:transparent;color:#fff;cursor:pointer;text-align:left;transition:transform .24s cubic-bezier(.22,1,.36,1),filter .24s ease;}
 .person-credit-poster-card:hover,.person-credit-poster-card:focus-visible{z-index:2;outline:none;transform:translateY(-6px);}
-.person-credit-poster-frame{position:relative;display:flex;width:180px;height:270px;align-items:center;justify-content:center;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.035));box-shadow:0 14px 26px rgba(0,0,0,.26);}
+.person-credit-poster-frame{position:relative;display:flex;width:207px;height:312px;align-items:center;justify-content:center;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.035));box-shadow:0 14px 26px rgba(0,0,0,.26);}
 .person-credit-poster-card:hover .person-credit-poster-frame,.person-credit-poster-card:focus-visible .person-credit-poster-frame{border-color:rgba(255,255,255,.48);box-shadow:0 20px 38px rgba(0,0,0,.34),0 0 0 3px rgba(255,255,255,.10);}
 .person-credit-poster-frame img{width:100%;height:100%;object-fit:cover;}
 .person-credit-poster-fallback{color:rgba(255,255,255,.78);font-size:30px;font-weight:850;letter-spacing:.08em;}
@@ -157,7 +157,7 @@
   .person-credit-year-marker h3{font-size:27px;line-height:32px;}
   .person-credit-year-count{margin-left:auto;}
   .person-credit-rail{padding-right:0;padding-left:0;}
-  .person-credit-poster-card{flex-basis:148px;width:148px;}
-  .person-credit-poster-frame{width:148px;height:222px;border-radius:15px;}
+  .person-credit-poster-card{flex-basis:170px;width:170px;}
+  .person-credit-poster-frame{width:170px;height:255px;border-radius:15px;}
   .person-header h1{font-size:34px;}
 }
