@@ -1906,10 +1906,14 @@ export default function DetailPage() {
     const darkOpacity = Math.round(Math.min(0.55, Math.max(0, scrollTop / 400)) * 100) / 100;
     if (blur !== backdropBlurAmountRef.current) {
       backdropBlurAmountRef.current = blur;
-      tweenTo(backdropImageRef.current, {
-        filter: `blur(${blur}px)`,
-        scale: 1 + blur * 0.0018,
-      }, 0.28);
+      // The hero background blur is a readability function of the detail page,
+      // not decorative motion — apply it directly so it works even with
+      // prefers-reduced-motion (which tweenTo would otherwise strip).
+      const el = backdropImageRef.current;
+      if (el) {
+        gsap.killTweensOf(el);
+        gsap.set(el, { filter: `blur(${blur}px)`, scale: 1 + blur * 0.0018 });
+      }
     }
     if (vignetteOpacity !== metadataVignetteOpacityRef.current) {
       metadataVignetteOpacityRef.current = vignetteOpacity;

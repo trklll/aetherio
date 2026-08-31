@@ -68,7 +68,20 @@ export function tweenTo(
     return gsap.to({}, { duration: 0 });
   }
   if (prefersReducedMotion()) {
-    // §14 Reduced motion — cross-fade, no slide/scale/blur, keep opacity/color
+    // §14 Reduced motion — cross-fade, no slide/scale/blur, keep opacity/color.
+    // Scroll offsets are functional navigation, not decorative motion, so they
+    // must be preserved even when reduced motion is requested (otherwise the
+    // row arrows / "scroll" controls appear dead).
+    const isScrollOnly =
+      vars.scrollLeft !== undefined || vars.scrollTop !== undefined;
+    if (isScrollOnly) {
+      return gsap.to(resolvedTarget, {
+        ...vars,
+        duration: 0.2,
+        ease: "power1.out",
+        overwrite: "auto",
+      } as gsap.TweenVars);
+    }
     const reducedVars: gsap.TweenVars = {};
     if (vars.opacity !== undefined) reducedVars.opacity = vars.opacity;
     // keep color/background changes that aid comprehension, drop transform/filter

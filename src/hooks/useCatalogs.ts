@@ -19,6 +19,7 @@ import {
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
 import { HOME_CACHE_MAX_AGE, isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
+import { homeImagePreloadConcurrency, isLowEndDevice } from "../utils/hardware.ts";
 import type { CatalogRowData, MediaItem } from "../types/ui.ts";
 import { matchesContentOrientation, type ContentOrientation } from "../config/homePreferences.ts";
 import { sanitizeLogoUrl } from "../utils/artwork.ts";
@@ -1109,15 +1110,30 @@ export async function warmHomeStartup(
     if (item.logo) urls.add(item.logo);
     if (item.poster) urls.add(item.poster);
   }
-  for (const row of rows) {
-    for (const item of row.items) {
+  // On weak hardware, cap how much artwork is eager-loaded so the Home is
+  // painted from the persisted cache immediately and the rest decodes lazily
+  // as rows scroll into view.
+  const rowsToPreload = isLowEndDevice() ? rows.slice(0, 6) : rows;
+  for (const row of rowsToPreload) {
+    const itemsToPreload = isLowEndDevice() ? row.items.slice(0, 8) : row.items;
+    for (const item of itemsToPreload) {
       if (item.poster) urls.add(item.poster);
       if (item.background) urls.add(item.background);
       if (item.logo) urls.add(item.logo);
     }
   }
 
-  await Promise.allSettled(Array.from(urls).map(preloadStartupImage));
+  const allUrls = Array.from(urls);
+  // On weak hardware don't block startup on image fetch/decode; let the Home
+  // render from cache and load images lazily. Otherwise the await below stalls
+  // the whole warm-up behind many large downloads.
+  if (isLowEndDevice()) {
+    void Promise.allSettled(allUrls.map(preloadStartupImage));
+    preloadHomeImages(rowsToPreload, heroItems);
+    return;
+  }
+
+  await Promise.allSettled(allUrls.map(preloadStartupImage));
   preloadHomeImages(rows, heroItems);
 }
 
@@ -1133,6 +1149,13 @@ function preloadStartupImage(url: string) {
     };
     const timeout = window.setTimeout(finish, 8_000);
     image.onload = () => {
+      // On weak hardware, `image.decode()` blocks the main thread for every
+      // large artwork and freezes the Home during warm-up. Let the browser
+      // decode lazily instead so the UI stays responsive.
+      if (isLowEndDevice()) {
+        finish();
+        return;
+      }
       if (typeof image.decode !== "function") {
         finish();
         return;
@@ -1297,7 +1320,7 @@ function collectStarterHomeImageUrls(rows: CatalogRowData[], heroItems: MediaIte
 }
 
 async function preloadImageUrls(urls: string[]) {
-  const workers = Math.min(12, urls.length);
+  const workers = Math.min(homeImagePreloadConcurrency(), urls.length);
   let index = 0;
   await Promise.all(Array.from({ length: workers }, async () => {
     while (index < urls.length) {
@@ -1319,6 +1342,10 @@ function preloadImage(url: string) {
     };
     image.decoding = "async";
     image.onload = () => {
+      if (isLowEndDevice()) {
+        done();
+        return;
+      }
       const decode = image.decode?.();
       if (decode) void decode.then(done).catch(done);
       else done();
