@@ -9,7 +9,7 @@ Aetherio es una aplicación multimedia de escritorio para Windows. Gestiona tu b
 
 ## Instalación
 
-1. Descarga el instalador desde [Releases](https://github.com/trkllaetherio/releases)
+1. Descarga el instalador desde [Releases](https://github.com/trkll/aetherio/releases)
 2. Ejecuta el instalador
 3. Abre Aetherio desde el menú Inicio o el acceso directo del escritorio
 
