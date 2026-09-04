@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import type { MediaStream } from "../types/stream.ts";
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
+import {
+  clampNextEpisodeThresholdMinutes,
+  clampNextEpisodeThresholdPercent,
+  clampPostPlayMovieThresholdPercent,
+  normalizeThresholdMode,
+  type NextEpisodeThresholdMode,
+} from "../pages/Player/nextEpisodeRules.ts";
 
 export type SourceSelectionMode = "manual" | "first";
 export type AddonSubtitleLoadMode = "preferred" | "all";
@@ -23,13 +30,17 @@ export interface PlaybackPreferences {
   animeSkipEnabled: boolean;
   autoPlayNextEpisode: boolean;
   preferBingeGroup: boolean;
+  nextEpisodeThresholdMode: NextEpisodeThresholdMode;
   nextEpisodeThresholdPercent: number;
+  nextEpisodeThresholdMinutesBeforeEnd: number;
   preferredSubtitleLanguage: string;
   addonSubtitleLoadMode: AddonSubtitleLoadMode;
   /** When true, the desktop runtime advertises what is being watched to Discord. */
   enableDiscordRichPresence: boolean;
   /** Cuando termina la película/serie, muestra la página "Up Next" con recomendación y mini reproductor. */
   upNextEnabled: boolean;
+  /** Umbral de pelis estilo Nuvio (shouldShowMovieRecommendation): % puro, 80-100. */
+  postPlayMovieThresholdPercent: number;
 }
 
 interface CachedLastLink {
@@ -57,7 +68,10 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   animeSkipEnabled: false,
   autoPlayNextEpisode: true,
   preferBingeGroup: true,
+  nextEpisodeThresholdMode: "percentage",
   nextEpisodeThresholdPercent: 99,
+  nextEpisodeThresholdMinutesBeforeEnd: 2,
+  postPlayMovieThresholdPercent: 90,
   preferredSubtitleLanguage: "spa",
   addonSubtitleLoadMode: "preferred",
   enableDiscordRichPresence: true,
@@ -132,7 +146,7 @@ export function savePlaybackPreferences(preferences: PlaybackPreferences) {
     const raw = localStorage.getItem(storageKey);
     if (raw) {
       const previous = JSON.parse(raw) as Record<string, unknown>;
-      for (const key of ["introDbSubmissionEnabled", "nextEpisodeThresholdMode"]) {
+      for (const key of ["introDbSubmissionEnabled"]) {
         if (Object.prototype.hasOwnProperty.call(previous, key)) legacy[key] = previous[key];
       }
     }
@@ -235,11 +249,25 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
     animeSkipEnabled: typeof preferences.animeSkipEnabled === "boolean" ? preferences.animeSkipEnabled : DEFAULT_PLAYBACK_PREFERENCES.animeSkipEnabled,
     autoPlayNextEpisode: typeof preferences.autoPlayNextEpisode === "boolean" ? preferences.autoPlayNextEpisode : DEFAULT_PLAYBACK_PREFERENCES.autoPlayNextEpisode,
     preferBingeGroup: typeof preferences.preferBingeGroup === "boolean" ? preferences.preferBingeGroup : DEFAULT_PLAYBACK_PREFERENCES.preferBingeGroup,
-    nextEpisodeThresholdPercent: clampNumber(preferences.nextEpisodeThresholdPercent, 50, 100, DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdPercent),
+    nextEpisodeThresholdMode: normalizeThresholdMode(
+      (preferences as Record<string, unknown>).nextEpisodeThresholdMode ?? DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdMode,
+    ),
+    nextEpisodeThresholdPercent: clampNextEpisodeThresholdPercent(
+      preferences.nextEpisodeThresholdPercent,
+      DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdPercent,
+    ),
+    nextEpisodeThresholdMinutesBeforeEnd: clampNextEpisodeThresholdMinutes(
+      (preferences as Record<string, unknown>).nextEpisodeThresholdMinutesBeforeEnd,
+      DEFAULT_PLAYBACK_PREFERENCES.nextEpisodeThresholdMinutesBeforeEnd,
+    ),
     preferredSubtitleLanguage: normalizeLanguage(preferences.preferredSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.preferredSubtitleLanguage),
     addonSubtitleLoadMode: preferences.addonSubtitleLoadMode === "all" ? "all" : "preferred",
     enableDiscordRichPresence: typeof preferences.enableDiscordRichPresence === "boolean" ? preferences.enableDiscordRichPresence : DEFAULT_PLAYBACK_PREFERENCES.enableDiscordRichPresence,
     upNextEnabled: typeof preferences.upNextEnabled === "boolean" ? preferences.upNextEnabled : DEFAULT_PLAYBACK_PREFERENCES.upNextEnabled,
+    postPlayMovieThresholdPercent: clampPostPlayMovieThresholdPercent(
+      preferences.postPlayMovieThresholdPercent,
+      DEFAULT_PLAYBACK_PREFERENCES.postPlayMovieThresholdPercent,
+    ),
   };
 }
 

@@ -6,6 +6,7 @@ import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
+import { applyBetterPosterToUrl, extractImdbId } from "../../config/betterPosters";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 
@@ -14,7 +15,7 @@ const PAGE_LIMIT = 20;
 const MAX_ITEMS = 240;
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
-const VERTICAL_CARD = { width: 207, height: 312 };
+const VERTICAL_CARD = { width: 197, height: 296 };
 
 function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500") {
   if (!url) return url;
@@ -22,9 +23,12 @@ function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500
 }
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
+  const upgradedPoster = upgradeTmdbImage(item.poster, "w500");
+  const better = applyBetterPosterToUrl(upgradedPoster, extractImdbId(item.id));
   return {
     ...item,
-    poster: upgradeTmdbImage(item.poster, "w500"),
+    poster: better ?? upgradedPoster,
+    originalPoster: better && better !== upgradedPoster ? upgradedPoster : item.originalPoster,
     background: upgradeTmdbImage(item.background, "w780"),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w500")),
   };

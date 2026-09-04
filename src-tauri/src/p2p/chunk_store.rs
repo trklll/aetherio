@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -208,6 +209,79 @@ impl ChunkStore {
         }
 
         Ok(Bytes::from(result))
+    }
+
+    /// Elimina chunks del disco que superen `max_age` o que, en conjunto, excedan
+    /// `max_bytes`. Primero borra por antigüedad y, si aún se supera el presupuesto,
+    /// sigue borrando los más viejos hasta quedar dentro del límite. Devuelve el
+    /// número de archivos eliminados.
+    pub fn sweep(&self, max_age: Duration, max_bytes: u64) -> usize {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+
+        let mut files: Vec<(PathBuf, u64, u128)> = Vec::new();
+        let mut total: u64 = 0;
+        Self::collect_files(&self.disk_root, &mut files, &mut total);
+
+        files.sort_by_key(|(_, _, mtime)| *mtime); // más viejos primero
+        let max_age_ms = max_age.as_millis();
+
+        let mut removed = 0usize;
+        for (path, size, mtime) in files {
+            let age_ms = now_ms.saturating_sub(mtime);
+            if age_ms <= max_age_ms && total <= max_bytes {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(size);
+                removed += 1;
+            }
+        }
+
+        Self::prune_empty_dirs(&self.disk_root);
+        removed
+    }
+
+    fn collect_files(dir: &Path, out: &mut Vec<(PathBuf, u64, u128)>, total: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                Self::collect_files(&path, out, total);
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            out.push((path, meta.len(), mtime));
+            *total += meta.len();
+        }
+    }
+
+    fn prune_empty_dirs(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            Self::prune_empty_dirs(&path);
+            if std::fs::read_dir(&path)
+                .map(|mut r| r.next().is_none())
+                .unwrap_or(false)
+            {
+                let _ = std::fs::remove_dir(&path);
+            }
+        }
     }
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Image as ImageIcon, X } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
+import { buildBetterPosterUrl } from "../../config/betterPosters";
 import type { MediaItem } from "../../types/ui";
 import type { HomeCardArtworkMode } from "../../utils/homeCardArtwork";
 import { tweenTo } from "../../utils/motion";
@@ -74,6 +75,17 @@ async function resolveTmdbId(item: MediaItem, type: string) {
   return null;
 }
 
+function betterPosterOption(item: MediaItem): ArtworkOption | null {
+  const imdb = imdbId(item.id);
+  if (!imdb) return null;
+  try {
+    const url = buildBetterPosterUrl(imdb);
+    return { url, preview: url, label: "BetterPosters", score: Number.MAX_SAFE_INTEGER - 1 };
+  } catch {
+    return null;
+  }
+}
+
 function optionFromUrl(url: string | undefined, label: string): ArtworkOption | null {
   if (!url) return null;
   return {
@@ -138,6 +150,10 @@ export default function CardArtworkPicker({
       setOptions(uniqueOptions([initial]));
 
       try {
+        // Opción BetterPosters (solo pósters con IMDb id): va primero para poder
+        // volver al póster con etiquetas aunque el default cambie.
+        const betterOption = mode === "poster" ? betterPosterOption(item) : null;
+        if (betterOption && !cancelled) setOptions(uniqueOptions([initial, betterOption]));
         const tmdbId = await resolveTmdbId(item, type);
         if (!tmdbId) throw new Error("No se pudo identificar este medio en TMDB.");
         let data = await tmdbFetch<any>(`/${tmdbMediaType(type)}/${tmdbId}/images`, {
@@ -160,7 +176,7 @@ export default function CardArtworkPicker({
           .sort((a, b) => b.score - a.score)
           .slice(0, 36);
         if (!cancelled) {
-          const merged = uniqueOptions([initial, ...fetched]);
+          const merged = uniqueOptions([initial, betterOption, ...fetched]);
           setOptions(merged);
           if (!merged.length) setError("TMDB no devolvió imágenes para este medio.");
         }

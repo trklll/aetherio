@@ -204,7 +204,7 @@ export default function LibraryPage() {
                       ref={libraryGridRef}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(197px, 197px))",
                         gap: 14,
                         alignItems: "start",
                         justifyContent: "center",
@@ -370,7 +370,7 @@ function DiscoverLibrary({
             ref={discoverGridRef}
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(197px, 197px))",
               gap: 14,
               alignItems: "start",
               justifyContent: "center",
@@ -613,7 +613,7 @@ function LibraryGridCard({ item }: { item: MediaItem }) {
   };
 
   return (
-    <div style={{ width: 207 }} data-grid-entrance>
+    <div style={{ width: 197 }} data-grid-entrance>
       <button
         type="button"
         onClick={openDetail}
@@ -625,7 +625,7 @@ function LibraryGridCard({ item }: { item: MediaItem }) {
         }}
         onPointerUp={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
         onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
-        style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
+        style={{ position: "relative", width: 197, height: 296, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
       >
         {image ? (
           <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
@@ -662,12 +662,12 @@ function DiscoverSkeleton() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(197px, 197px))",
           gap: 14,
           justifyContent: "center",
         }}
       >
-        {[0, 1, 2, 3, 4, 5].map(card => <div key={card} className="skeleton h-[312px] w-[207px] rounded-xl" />)}
+        {[0, 1, 2, 3, 4, 5].map(card => <div key={card} className="skeleton h-[296px] w-[197px] rounded-xl" />)}
       </div>
     </div>
   );

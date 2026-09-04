@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Film, LoaderCircle, RefreshCw, User, Zap } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Film, LoaderCircle, LogOut, RefreshCw, User, Users, X, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys.ts";
 import { useHomePreferences } from "../../config/homePreferences.ts";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
@@ -37,7 +37,12 @@ import { inspectStreamManifest, shouldInspectStreamManifest } from "../../utils/
 import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
 import { getSourceLogo, getStreamAddonLogo } from "../../utils/sourceLogos.ts";
+import { useParty } from "../../party/PartyContext.tsx";
+import { normalizeRoomCode, isCompleteRoomCode, type PartyMedia } from "../../party/protocol.ts";
+import ContextMenu from "../../components/ui/ContextMenu.tsx";
 import { pickBestMatchingSource, type AutoNextSourceHint } from "../../utils/autoNextSource.ts";
+import { consumeAutoResolveBackPress, registerAutoResolve } from "../../utils/autoResolveGuard.ts";
+import PlayerLoadingOverlay from "../Player/PlayerLoadingOverlay.tsx";
 import {
   AVAILABLE_STREAMS_KEY,
   AUTO_NEXT_SOURCE_KEY,
@@ -147,6 +152,10 @@ export default function EpisodiePage() {
   const routeCacheKey = episodePageCacheKey(query, episodeTitleParam);
   const initialCachedMeta = readPageDataCache<EpisodePageMeta>("episode", routeCacheKey);
   const autoSelectedKeyRef = useRef("");
+  // Modo Party elegido en el panel de fuentes (bloquea autoplay mientras se elige).
+  const [partyMode, setPartyMode] = useState<null | "guest" | "host">(null);
+  // Cancelacion del auto-resolve estilo NuvioTV: atras/ESC en el loader revela el picker manual.
+  const [autoResolveCancelled, setAutoResolveCancelled] = useState(false);
   const [meta, setMeta] = useState<EpisodePageMeta | null>(() => initialCachedMeta);
   const [metaReady, setMetaReady] = useState(() => Boolean(initialCachedMeta));
   const [selectedStreamId, setSelectedStreamId] = useState("");
@@ -196,12 +205,36 @@ export default function EpisodiePage() {
 
   useEffect(() => {
     setSelectedSource(null);
+    setAutoResolveCancelled(false);
   }, [query?.type, query?.id, query?.season, query?.episode]);
 
   const originalLanguage = useOriginalLanguage(query, selectedStream);
   const autoplayRequested = params.get(AUTO_PLAY_PARAM) === "1";
   const continueRequested = params.get(CONTINUE_PLAY_PARAM) === "1";
   const returnedFromPlayer = params.get(FROM_PLAYER_PARAM) === "1";
+  // Intencion de auto-resolve (audita los 3 modos automaticos: reproduccion
+  // automatica, primera fuente y reutilizar enlace). Sincrono para poder
+  // mostrar el loader estilo NuvioTV antes de que lleguen los streams.
+  const autoResolveIntent = useMemo(() => {
+    if (!query || returnedFromPlayer || partyMode) return false;
+    if (autoplayRequested) return true;
+    if (playbackPreferences.sourceSelectionMode === "first") return true;
+    if (!playbackPreferences.reuseLastLink) return false;
+    if (continueRequested && getExactResumeForQuery(query)?.streamId) return true;
+    return Boolean(getCachedLastLink(
+      streamCacheKey(query.type, query.id, query.season, query.episode),
+      playbackPreferences.lastLinkCacheHours,
+    ));
+  }, [
+    autoplayRequested,
+    continueRequested,
+    partyMode,
+    playbackPreferences.lastLinkCacheHours,
+    playbackPreferences.reuseLastLink,
+    playbackPreferences.sourceSelectionMode,
+    query,
+    returnedFromPlayer,
+  ]);
   const { subtitles: addonSubtitles } = useSubtitles(query, selectedStream, subtitleChoice);
 
   useEffect(() => {
@@ -443,6 +476,12 @@ export default function EpisodiePage() {
     window.history.pushState({ aetherioEpisodeBackGuard: true }, "");
 
     const onPopState = () => {
+      // Atras del navegador en el loader: cancela el autoplay y revela el
+      // picker manual en vez de salir al detalle (estilo NuvioTV).
+      if (consumeAutoResolveBackPress()) {
+        window.history.pushState({ aetherioEpisodeBackGuard: true }, "");
+        return;
+      }
       navigate(detailPath, { replace: true });
     };
 
@@ -472,6 +511,10 @@ export default function EpisodiePage() {
 
   useEffect(() => {
     if (!query || returnedFromPlayer || loading || scrapedLoading || !metaReady || !allStreams.length) return;
+    // En modo Party (invitado/anfitrión) la fuente se elige a mano: no autoplay.
+    if (partyMode) return;
+    // Auto-resolve cancelado por el usuario (atras/ESC en el loader): picker manual.
+    if (autoResolveCancelled) return;
     const cached = getPreferredCachedStream(allStreams, query, playbackPreferences);
     const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
     const shouldAutoPlay = continueRequested
@@ -492,6 +535,7 @@ export default function EpisodiePage() {
     playStream(nextStream, { replace: true, transition: false });
   }, [
     autoplayRequested,
+    autoResolveCancelled,
     continueRequested,
     loading,
     scrapedLoading,
@@ -505,7 +549,45 @@ export default function EpisodiePage() {
     returnedFromPlayer,
     streamId,
     allStreams,
+    partyMode,
   ]);
+
+  // Replica sincronica de la decision del efecto de autoplay: con streams
+  // listos, ¿el autoplay dispararia? Si no, se revela el picker con error/reintento.
+  const wouldAutoPlayNow = useMemo(() => {
+    if (!query || returnedFromPlayer || partyMode || autoResolveCancelled) return false;
+    if (!allStreams.length) return false;
+    const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
+    if (!nextStream) return false;
+    if (continueRequested) return playbackPreferences.reuseLastLink;
+    return autoplayRequested
+      || playbackPreferences.sourceSelectionMode === "first"
+      || Boolean(playbackPreferences.sourceSelectionMode === "manual" && getPreferredCachedStream(allStreams, query, playbackPreferences));
+  }, [
+    allStreams,
+    autoplayRequested,
+    autoResolveCancelled,
+    continueRequested,
+    originalLanguage,
+    partyMode,
+    playbackPreferences,
+    query,
+    returnedFromPlayer,
+  ]);
+
+  const streamsSettled = !loading && !scrapedLoading;
+  // Loader estilo NuvioTV: mientras haya intencion de auto-resolve no se
+  // muestra el picker (el usuario no debe pensar que tiene que elegir).
+  const showAutoResolveLoader = metaReady
+    && autoResolveIntent
+    && !autoResolveCancelled
+    && !playerTransitioning
+    && (!streamsSettled || wouldAutoPlayNow);
+
+  useEffect(() => {
+    if (!showAutoResolveLoader) return;
+    return registerAutoResolve(() => setAutoResolveCancelled(true));
+  }, [showAutoResolveLoader]);
 
   useEffect(() => () => {
     if (playerTransitionTimerRef.current !== null) {
@@ -695,6 +777,33 @@ export default function EpisodiePage() {
     }, PLAYER_HANDOFF_DELAY_MS);
   }
 
+  // Mismo loader de "cargando streams" del Player (fondo + logo en respiracion):
+  // no se crea uno nuevo, se reutiliza PlayerLoadingOverlay. Atras/ESC
+  // cancela el autoplay y revela el picker manual (guard autoResolve).
+  if (showAutoResolveLoader) {
+    return (
+      <div className="relative min-h-screen overflow-hidden bg-black text-white">
+        <div className="pointer-events-none absolute inset-0 bg-black" />
+        {background ? (
+          <img
+            src={background}
+            alt=""
+            decoding="async"
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center grayscale"
+          />
+        ) : null}
+        <div className="pointer-events-none absolute inset-0 bg-black/66" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-black/70 to-black/92" />
+        <PlayerLoadingOverlay
+          visible
+          artwork={meta?.logo ?? null}
+          title={mainTitle}
+          message="Obteniendo mejor fuente"
+        />
+      </div>
+    );
+  }
+
   return (
     <div ref={pageRef} className="relative min-h-screen overflow-hidden bg-[#111111] text-white">
       <div className="pick-streams-background absolute left-0 top-0 overflow-hidden" aria-hidden="true">
@@ -809,6 +918,9 @@ export default function EpisodiePage() {
               isAnime={preferAnimeAv1}
               selectedStreamId={selectedStreamId}
               selectedSource={selectedSource}
+              partyMedia={query ? { type: query.type, id: query.id, season: query.season, episode: query.episode } : null}
+              partyMode={partyMode}
+              onPartyModeChange={setPartyMode}
               onSourceChange={setSelectedSource}
               onReload={() => {
                 reload();
@@ -1150,6 +1262,9 @@ function SourcePickerPanel({
   isAnime,
   selectedStreamId,
   selectedSource,
+  partyMedia,
+  partyMode,
+  onPartyModeChange,
   onSourceChange,
   onSelect,
   onReload,
@@ -1162,6 +1277,9 @@ function SourcePickerPanel({
   isAnime: boolean;
   selectedStreamId: string;
   selectedSource: string | null;
+  partyMedia: PartyMedia | null;
+  partyMode: null | "guest" | "host";
+  onPartyModeChange: (mode: null | "guest" | "host") => void;
   onSourceChange: (source: string | null) => void;
   onSelect: (streamId: string) => void;
   onReload: () => void;
@@ -1169,6 +1287,51 @@ function SourcePickerPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const party = useParty();
+  const partyBtnRef = useRef<HTMLButtonElement>(null);
+  const [partyMenuOpen, setPartyMenuOpen] = useState(false);
+  const [partyName, setPartyName] = useState("");
+  const [partyCode, setPartyCode] = useState("");
+  const [partyPassword, setPartyPassword] = useState("");
+  const [partyJoining, setPartyJoining] = useState(false);
+  const [partyCreateError, setPartyCreateError] = useState<string | null>(null);
+
+  const heading = partyMode === "host" ? "Seleccionar fuente para la sala" : title;
+
+  async function handlePick(streamId: string) {
+    if (partyMode === "host") {
+      if (party.status !== "connected") {
+        setPartyCreateError(null);
+        try {
+          await party.createRoom(partyMedia, partyName.trim() || "Anfitrión", partyPassword);
+        } catch (createError) {
+          setPartyCreateError(createError instanceof Error ? createError.message : "No se pudo crear la sala.");
+          return;
+        }
+      }
+      onSelect(streamId);
+      return;
+    }
+    onSelect(streamId);
+  }
+
+  function handleGuestJoin() {
+    if (!isCompleteRoomCode(partyCode)) return;
+    setPartyJoining(true);
+    party.joinRoom(normalizeRoomCode(partyCode), partyName.trim() || "Invitado", partyPassword);
+    window.setTimeout(() => setPartyJoining(false), 600);
+  }
+
+  function exitPartyMode() {
+    // Si había sala activa y era anfitrión, la sala MUERE; si no, solo sale.
+    if (party.roomCode) {
+      if (party.isOwner) party.closeRoom();
+      else party.leaveRoom();
+    }
+    onPartyModeChange(null);
+    setPartyMenuOpen(false);
+    setPartyCreateError(null);
+  }
 
   const updateScrollButtons = useCallback(() => {
     const el = scrollRef.current;
@@ -1223,10 +1386,60 @@ function SourcePickerPanel({
   return (
     <section
       className="liquid-glass w-full overflow-hidden rounded-3xl border border-white/[0.14]"
-      aria-label={title}
+      aria-label={heading}
     >
       <div className="flex items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4">
-        <p className="text-base font-bold text-white/90">{title}</p>
+        <p className="min-w-0 flex-1 truncate text-base font-bold text-white/90">{heading}</p>
+        {partyMode !== null ? (
+          <button
+            type="button"
+            onClick={exitPartyMode}
+            className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/[0.09] bg-white/[0.07] px-3 text-xs font-bold text-white/78 gsap-transition hover:bg-white/[0.13] hover:text-white"
+            title="Salir del modo Party"
+          >
+            <X size={15} /> Salir
+          </button>
+        ) : null}
+        <div className="relative">
+          <button
+            ref={partyBtnRef}
+            type="button"
+            onClick={() => setPartyMenuOpen(value => !value)}
+            className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border gsap-transition ${
+              party.status === "connected"
+                ? "border-white/[0.14] bg-white/18 text-white"
+                : "border-white/[0.09] bg-white/[0.07] text-white/82 hover:bg-white/[0.13] hover:text-white"
+            }`}
+            title={party.status === "connected" ? "Party: en sala" : "Party: ver juntos"}
+            aria-label={party.status === "connected" ? "Party: en sala" : "Party: ver juntos"}
+          >
+            <Users size={16} />
+            {party.status === "connected" && party.peers.length > 0 ? (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-0.5 text-[10px] font-black text-black">
+                {party.peers.length}
+              </span>
+            ) : null}
+          </button>
+          <ContextMenu
+            open={partyMenuOpen}
+            anchorRef={partyBtnRef}
+            onClose={() => setPartyMenuOpen(false)}
+            width={200}
+            placement="below-start"
+            items={[
+              {
+                label: "Como invitado",
+                description: "Entrar a una sala con su código",
+                onSelect: () => { onPartyModeChange("guest"); setPartyMenuOpen(false); },
+              },
+              {
+                label: "Como anfitrión",
+                description: "Crear una sala y elegir fuente para todos",
+                onSelect: () => { onPartyModeChange("host"); setPartyMenuOpen(false); setPartyCreateError(null); },
+              },
+            ]}
+          />
+        </div>
         <button
           type="button"
           onClick={onReload}
@@ -1237,6 +1450,75 @@ function SourcePickerPanel({
           <RefreshCw size={17} />
         </button>
       </div>
+
+      {partyMode === "guest" ? (
+        <div className="p-5">
+          {party.status === "connected" ? (
+            <div className="flex flex-col items-center gap-3 py-4 text-center">
+              <p className="text-xl font-black tracking-[0.25em] text-white">{party.roomCode}</p>
+              <p className="text-sm text-white/60">
+                {party.peers.length} en la sala{party.isOwner ? " · anfitrión" : ""}
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {party.peers.map(peer => (
+                  <span key={peer.id} className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white/85">
+                    {peer.name}{peer.isOwner ? " · anfitrión" : ""}
+                  </span>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => { if (party.isOwner) party.closeRoom(); else party.leaveRoom(); onPartyModeChange(null); }}
+                className="gsap-transition mt-2 flex w-full max-w-[260px] items-center justify-center gap-1.5 rounded-full border border-white/12 px-4 py-2 text-xs font-black text-white/60 hover:bg-white/10 hover:text-white active:scale-[0.98]"
+              >
+                <LogOut size={14} /> Salir de la sala
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <label className="block text-sm font-semibold text-white/72">Tu nombre</label>
+              <input
+                value={partyName}
+                onChange={event => setPartyName(event.target.value)}
+                placeholder="¿Cómo te verán?"
+                maxLength={32}
+                className="gsap-transition w-full rounded-full border border-white/12 bg-white/10 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/34 focus:border-white/34"
+              />
+              <label className="block text-sm font-semibold text-white/72">Código de sala</label>
+              <div className="flex gap-2">
+                <input
+                  value={partyCode}
+                  onChange={event => setPartyCode(normalizeRoomCode(event.target.value))}
+                  placeholder="ABC123"
+                  maxLength={6}
+                  className="gsap-transition min-w-0 flex-1 rounded-full border border-white/12 bg-white/10 px-4 py-2.5 text-center text-sm font-black uppercase tracking-[0.2em] text-white outline-none placeholder:text-white/34 focus:border-white/34"
+                />
+                <button
+                  type="button"
+                  onClick={handleGuestJoin}
+                  disabled={!isCompleteRoomCode(partyCode)}
+                  className="gsap-transition shrink-0 rounded-full bg-white px-5 py-2.5 text-sm font-black text-black hover:bg-white/86 active:scale-[0.97] disabled:opacity-40"
+                >
+                  {partyJoining ? "Entrando…" : "Unirse"}
+                </button>
+              </div>
+              <input
+                value={partyPassword}
+                onChange={event => setPartyPassword(event.target.value)}
+                placeholder="Contraseña (si la sala la tiene)"
+                type="password"
+                maxLength={128}
+                autoComplete="off"
+                className="gsap-transition w-full rounded-full border border-white/12 bg-white/10 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/34 focus:border-white/34"
+              />
+              {party.error ? <p className="text-xs font-semibold text-red-300">{party.error}</p> : null}
+              {partyCreateError ? <p className="text-xs font-semibold text-red-300">{partyCreateError}</p> : null}
+              <p className="text-center text-xs text-white/40">Después de entrar, elige una fuente para reproducir lo mismo que la sala.</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       <div className="relative border-b border-white/[0.06] px-4 py-3" style={{ minHeight: uniqueSources.length > 0 ? undefined : 52 }}>
         {uniqueSources.length > 0 ? (
           <>
@@ -1339,12 +1621,14 @@ function SourcePickerPanel({
                 key={stream.id}
                 stream={stream}
                 selected={stream.id === selectedStreamId}
-                onSelect={onSelect}
+                onSelect={handlePick}
               />
             ))}
           </div>
         )}
       </div>
+      </>
+      )}
     </section>
   );
 }

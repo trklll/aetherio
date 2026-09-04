@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, SkipForward } from "lucide-react";
 import {
@@ -43,6 +43,7 @@ import EpisodePanel from "./EpisodePanel";
 import SourcePanel from "./SourcePanel";
 import PlayerControls from "./PlayerControls";
 import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
+import PlayerActionFeedback, { type PlayerActionFeedbackData, type PlayerFeedbackKind } from "./PlayerActionFeedback";
 import UpNext from "../../components/upnext/UpNext";
 import { useRelatedRecommendation } from "../../hooks/useRelatedRecommendation";
 import { useControlsVisibility } from "./useControlsVisibility";
@@ -50,8 +51,12 @@ import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
 import { useMpvStatus } from "./useMpvStatus";
 import { useSkipIntro } from "./useSkipIntro";
+import { shouldShowMovieRecommendation, shouldShowNextEpisodeCard } from "./nextEpisodeRules";
+import { useParty } from "../../party/PartyContext";
+import { partyMediaKey, type PartyStreamEvent } from "../../party/protocol";
+import { buildShareableOffer, partyOfferToMediaStream } from "../../party/streamShare";
 import SubtitleSyncDialog from "./SubtitleSyncDialog";
-import { gsap } from "../../utils/motion";
+import { appleEase, gsap } from "../../utils/motion";
 import { getUpNextMiniRect } from "../../utils/upnextMiniRect";
 import {
   SUBTITLE_DELAY_MAX_MS,
@@ -91,6 +96,12 @@ const LOAD_FAILURE_TIMEOUT_MS = 12_000;
 const P2P_LOAD_FAILURE_TIMEOUT_MS = 180000;
 const DIRECT_FIRST_FRAME_TIMEOUT_MS = 8_000;
 const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
+// Party: ventana anti-eco tras aplicar una acción remota, salto mínimo que
+// cuenta como seek manual, tolerancia de deriva y periodo de re-sync.
+const PARTY_ECHO_WINDOW_MS = 1500;
+const PARTY_SEEK_JUMP_S = 3;
+const PARTY_DRIFT_TOLERANCE_S = 2.5;
+const PARTY_DRIFT_INTERVAL_MS = 12_000;
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 interface MpvAutocropResult {
@@ -212,6 +223,29 @@ export default function PlayerPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(0.86);
   const { controlsVisible, wakeControls, holdControls, releaseControls } = useControlsVisibility(3000);
+  // OSD central: iconos de play/pausa/seek/volumen SIN despertar la barra (§1 respuesta inmediata).
+  const [actionFeedback, setActionFeedback] = useState<PlayerActionFeedbackData | null>(null);
+  const actionFeedbackIdRef = useRef(0);
+  const actionFeedbackTimerRef = useRef<number | null>(null);
+
+  const flashActionFeedback = useCallback((kind: PlayerFeedbackKind, extra?: { deltaSeconds?: number; volume?: number }) => {
+    actionFeedbackIdRef.current += 1;
+    setActionFeedback({
+      id: actionFeedbackIdRef.current,
+      kind,
+      deltaSeconds: extra?.deltaSeconds,
+      volume: extra?.volume,
+    });
+    if (actionFeedbackTimerRef.current !== null) window.clearTimeout(actionFeedbackTimerRef.current);
+    actionFeedbackTimerRef.current = window.setTimeout(() => {
+      actionFeedbackTimerRef.current = null;
+      setActionFeedback(null);
+    }, 950);
+  }, []);
+
+  useEffect(() => () => {
+    if (actionFeedbackTimerRef.current !== null) window.clearTimeout(actionFeedbackTimerRef.current);
+  }, []);
   const [selectedMpvSubtitle, setSelectedMpvSubtitle] = useState("");
   const [selectedMpvAudio, setSelectedMpvAudio] = useState("");
   const [selectedSpeed, setSelectedSpeed] = useState("1");
@@ -230,6 +264,35 @@ export default function PlayerPage() {
   const [availableStreams, setAvailableStreams] = useState<MediaStream[]>([]);
   const [showUpNext, setShowUpNext] = useState(false);
   const upNextShownKeyRef = useRef("");
+  // ---- Party (visionado sincronizado): cada app resuelve su propio stream ----
+  const [partyCodeCopied, setPartyCodeCopied] = useState(false);
+  const partyLastSentMediaKeyRef = useRef("");
+  const partyJustFollowedKeyRef = useRef("");
+  const partyLastAppliedControlAtRef = useRef(0);
+  const partyLastSeekTimeRef = useRef<number | null>(null);
+  const partyConnectedAtRef = useRef(0);
+  // ---- Party mismo-stream: puntero compartido (URL/magnet del grupo) ----
+  const [partyStreamFailed, setPartyStreamFailed] = useState(false);
+  const partyLastSharedTargetRef = useRef("");
+  const partyAppliedOfferAtRef = useRef(0);
+  const partyAppliedOfferTargetRef = useRef("");
+  const partyFailedTargetRef = useRef("");
+  const partyStreamSwitchAtRef = useRef(0);
+  // ---- Party anti-grief: tope de acciones remotas por peer ----
+  const partyPeerControlLogRef = useRef<Record<string, number[]>>({});
+  const partyMutedPeersRef = useRef<Record<string, number>>({});
+  // ---- Party espera por buffering: pausar al grupo hasta que carguen ----
+  const partyBufferTimerRef = useRef(0);
+  const partyBufferingSentRef = useRef(false);
+  const partyWaitPauseRef = useRef(false);
+  const partyWaitOverrideRef = useRef(false);
+  const partyPrevPlayingRef = useRef(false);
+  // ---- Party lobby (sala de espera): retener el inicio hasta "Empezar" ----
+  const partyLobbyRef = useRef(false);
+  const partyLobbyPrevRef = useRef(false);
+  const partyLobbyStartBypassRef = useRef(false);
+  const partyLobbyAppliedStartRef = useRef(0);
+  const partyWasOwnerRef = useRef(false);
   const [playbackStarted, setPlaybackStarted] = useState(false);
   const [mpvReadyForCommands, setMpvReadyForCommands] = useState(false);
   const [mpvFileLoaded, setMpvFileLoaded] = useState(false);
@@ -260,7 +323,7 @@ export default function PlayerPage() {
   params.get("season"),
   params.get("ep"),
   ]);
-  const { episodeOptions, seriesLogoUrl } = useEpisodeMetadata(query);
+  const { episodeOptions, seriesLogoUrl, nextSeasonEpisode } = useEpisodeMetadata(query);
   const { addonLogoUrl, detailLogoUrl } = usePlayerLogos(query, stream);
   const safeStream = stream ?? null;
   const isIframeStream = safeStream?.behaviorHints?.scraperPlayback === "iframe";
@@ -291,22 +354,6 @@ export default function PlayerPage() {
   const currentEpisode = query?.season && query?.episode
     ? episodeOptions.find(ep => ep.episode === query.episode) ?? null
     : null;
-
-  useDiscordPresence({
-    enabled: playbackPreferences.enableDiscordRichPresence && !androidPlayback,
-    hasStream: Boolean(stream),
-    playbackStarted,
-    playing: playing && !manualPaused,
-    manualPaused,
-    currentTime,
-    duration,
-    query,
-    stream: safeStream,
-    mediaName: selectedMediaName,
-    episodeName: currentEpisode?.name,
-    posterUrl: selectedMediaPoster || undefined,
-    isTrailer: isTrailerStream,
-  });
 
   useEffect(() => {
     leavingPlayerRef.current = isLeavingPlayer;
@@ -801,6 +848,7 @@ export default function PlayerPage() {
       || !mpvReadyForCommands
       || mpvFileLoaded
       || playbackStarted
+      || partyLobbyRef.current
       || mpvStatus?.startsWith("MPV no")
       || mpvStatus?.startsWith("El torrent no entrego datos")
     ) return;
@@ -1015,6 +1063,8 @@ export default function PlayerPage() {
 
   function togglePlay() {
     if (showUpNext) return;
+    // Lobby: el transporte lo gobierna el anfitrión (salvo la secuencia de arranque).
+    if (partyLobbyRef.current && !partyLobbyStartBypassRef.current) return;
     if (startupGateActiveRef.current) {
       startupGateActiveRef.current = false;
       startupGatePausedRef.current = false;
@@ -1051,6 +1101,7 @@ export default function PlayerPage() {
 
   function seek(value: number) {
     if (showUpNext) return;
+    if (partyLobbyRef.current && !partyLobbyStartBypassRef.current) return;
     debugLog("seek() called", { value });
     seekBufferingRef.current = true;
     seekStartedAtRef.current = Date.now();
@@ -1067,8 +1118,16 @@ export default function PlayerPage() {
 
   function jump(offset: number) {
     if (showUpNext) return;
+    if (partyLobbyRef.current) return;
     debugLog("jump() called", { offset });
     void sendMpvCommand(["seek", offset, "relative"]);
+  }
+
+  /** Salto con OSD: los botones ±10s de la barra usan esta vía para que el
+   * signo de adelante/atrás aparezca siempre, igual que con el teclado. */
+  function jumpWithFeedback(offset: number) {
+    jump(offset);
+    flashActionFeedback(offset >= 0 ? "forward" : "rewind", { deltaSeconds: offset });
   }
 
   function applyVolume(nextVolume: number) {
@@ -1166,21 +1225,28 @@ export default function PlayerPage() {
         ? "Preparando stream P2P..."
         : "Abriendo MPV...");
     launchStartedAtRef.current = Date.now();
-    const resumeStartTime = Math.max(resumeSeekTargetRef.current, getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
+    // Lobby Party: el medio se precarga en pausa (hold) y sin reanudar.
+    const lobbyHold = partyLobbyRef.current;
+    const resumeStartTime = lobbyHold ? 0 : Math.max(resumeSeekTargetRef.current, getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
     const { error } = await openExternal(stream, undefined, resumeStartTime, query?.episode);
     setMpvReadyForCommands(!error);
     setPlaying(false);
-    setManualPaused(false);
-    manualPausedRef.current = false;
+    setManualPaused(lobbyHold);
+    manualPausedRef.current = lobbyHold;
     setMpvStatus(error ? `${androidPlayback ? "Android TV" : "MPV"} no inicio: ${error}` : null);
     if (!error) {
       if (androidPlayback) {
-        startupGateActiveRef.current = false;
-        setMpvFileLoaded(true);
-        setPlaybackStarted(true);
-        setPlaying(true);
+        if (lobbyHold) {
+          startupGateActiveRef.current = false;
+          setMpvFileLoaded(true);
+        } else {
+          startupGateActiveRef.current = false;
+          setMpvFileLoaded(true);
+          setPlaybackStarted(true);
+          setPlaying(true);
+        }
       } else {
-        void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current]);
+        void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current || lobbyHold]);
         applyVideoScale(videoScaleMode);
       }
     }
@@ -1300,7 +1366,11 @@ export default function PlayerPage() {
     if (!query?.season || !query.episode) return;
     const currentIndex = episodeOptions.findIndex(episode => episode.episode === query.episode);
     if (currentIndex === -1) return;
-    const nextEpisode = episodeOptions[currentIndex + (direction === "next" ? 1 : -1)];
+    const nextEpisode = direction === "next"
+      ? resolvedNextEpisode
+      : currentIndex > 0
+        ? (episodeOptions[currentIndex - 1] ?? null)
+        : null;
     if (!nextEpisode) return;
     if (direction === "next" && stream && playbackPreferences.preferBingeGroup) {
       sessionStorage.setItem(AUTO_NEXT_SOURCE_KEY, JSON.stringify({
@@ -1330,15 +1400,18 @@ export default function PlayerPage() {
       return;
     }
     if (Date.now() - launchStartedAtRef.current < 1200) return;
-    wakeControls();
+    // Click: solo OSD play/pausa, sin despertar la barra.
     if (!showFallbackPanel && mpvReadyForCommands && playbackStarted) {
+      const wasPlaying = playing;
       togglePlay();
+      flashActionFeedback(wasPlaying ? "pause" : "play");
     }
   }
 
   function startHoldToAccelerate(event: PointerEvent<HTMLDivElement>) {
     if (showUpNext) return;
-    wakeControls();
+    // Mantener pulsado acelera: no despierta la barra (el OSD de play/pausa
+    // lo gestiona handleScreenClick al soltar si fue pulsación corta).
     const target = event.target as HTMLElement | null;
     if (target?.closest("[data-player-interactive]")) return;
     if (!playbackPreferences.holdToAccelerate || showFallbackPanel || manualPaused || !mpvReadyForCommands || !playbackStarted) return;
@@ -1396,7 +1469,9 @@ export default function PlayerPage() {
     lastContinueSaveAtRef.current = 0;
     resumeSeekAppliedRef.current = "";
     resumeSeekAttemptsRef.current = 0;
-    resumeSeekTargetRef.current = Math.max(getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
+    // Lobby Party: abrir en 0 (hold), sin reanudar.
+    const lobbyHold = partyLobbyRef.current;
+    resumeSeekTargetRef.current = lobbyHold ? 0 : Math.max(getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
     savedAudioRestoreKeyRef.current = "";
     savedAudioRestoreAttemptsRef.current = 0;
     if (savedAudioRestoreTimerRef.current) {
@@ -1449,8 +1524,8 @@ export default function PlayerPage() {
     setCurrentTime(0);
     setDuration(0);
     setPlaying(false);
-    setManualPaused(false);
-    manualPausedRef.current = false;
+    setManualPaused(lobbyHold);
+    manualPausedRef.current = lobbyHold;
     setMpvStatus(androidPlayback
       ? "Abriendo reproductor Android TV..."
       : isP2pStream
@@ -1468,17 +1543,19 @@ export default function PlayerPage() {
       if (cancelled || leavingPlayerRef.current) return;
       setPlaying(false);
       setMpvReadyForCommands(!error);
-      setManualPaused(false);
-      manualPausedRef.current = false;
+      setManualPaused(lobbyHold);
+      manualPausedRef.current = lobbyHold;
       setMpvStatus(error ? `${androidPlayback ? "Android TV" : "MPV"} no inicio: ${error}` : null);
       if (!error) {
         if (androidPlayback) {
           startupGateActiveRef.current = false;
           setMpvFileLoaded(true);
-          setPlaybackStarted(true);
-          setPlaying(true);
+          if (!lobbyHold) {
+            setPlaybackStarted(true);
+            setPlaying(true);
+          }
         } else {
-          void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current]);
+          void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current || lobbyHold]);
           applyVideoScale(videoScaleMode);
         }
       }
@@ -1495,13 +1572,14 @@ export default function PlayerPage() {
         window.clearTimeout(savedAudioRestoreTimerRef.current);
         savedAudioRestoreTimerRef.current = null;
       }
-      resumeSeekSettledRef.current = true;
-      resumeSeekTargetRef.current = 0;
-      resumeSeekStartedAtRef.current = 0;
-      setPlaying(false);
-      setMpvReadyForCommands(false);
-      setManualPaused(false);
-      manualPausedRef.current = false;
+    resumeSeekSettledRef.current = true;
+    resumeSeekTargetRef.current = 0;
+    resumeSeekStartedAtRef.current = 0;
+    setPlaying(false);
+    setMpvReadyForCommands(false);
+    // Preservar el hold del lobby (StrictMode remonta el efecto sin reabrir).
+    setManualPaused(partyLobbyRef.current);
+    manualPausedRef.current = partyLobbyRef.current;
       mpvLaunchKeyRef.current = "";
       mpvRecoveryKeyRef.current = "";
       setStalledPlayback(false);
@@ -1971,13 +2049,14 @@ export default function PlayerPage() {
     togglePlay,
     jump,
     applyVolume,
-    wakeControls,
+    flash: flashActionFeedback,
     startSpaceAcceleration,
     stopSpaceAcceleration,
     volume,
+    playing,
     enabled: !showUpNext,
   });
-  const controlsActive = controlsVisible || activeSidePanel !== null;
+  const controlsActive = controlsVisible || activeSidePanel !== null || partyLobbyRef.current;
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("aetherio-player-controls", { detail: { visible: controlsActive } }));
@@ -1994,7 +2073,13 @@ const { activeSegment: activeSkipSegment, creditsSegment: upNextCreditsSegment }
 const playbackTarget = getPlaybackTarget(stream);
 const currentEpisodeIndex = episodeOptions.findIndex(episode => episode.episode === query?.episode);
 const canGoPrevEpisode = currentEpisodeIndex > 0;
-const canGoNextEpisode = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodeOptions.length - 1;
+const withinSeasonNextEpisode = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodeOptions.length - 1
+  ? (episodeOptions[currentEpisodeIndex + 1] ?? null)
+  : null;
+// En el último episodio de una temporada, permite avanzar al primer episodio de
+// la siguiente temporada (si existe) en lugar de disparar Up Next.
+const resolvedNextEpisode = withinSeasonNextEpisode ?? nextSeasonEpisode ?? null;
+const canGoNextEpisode = Boolean(resolvedNextEpisode);
 const isMovie = query?.type === "movie";
 const showPanelToggle = !isMovie && panelItems.length > 0;
 
@@ -2039,7 +2124,7 @@ function sendCurrentTraktPlaybackEvent(action: "start" | "pause" | "stop") {
 
 function saveUpcomingEpisodePrompt() {
   if (!query || isMovie || !canGoNextEpisode) return;
-  const nextEpisode = episodeOptions[currentEpisodeIndex + 1];
+  const nextEpisode = resolvedNextEpisode;
   if (!nextEpisode) return;
   const promptKey = `${query.type}:${query.id}:${nextEpisode.season}:${nextEpisode.episode}`;
   if (nextEpisodePromptKeyRef.current === promptKey) return;
@@ -2057,7 +2142,7 @@ function saveUpcomingEpisodePrompt() {
     episodeStill: nextEpisode.still || undefined,
     poster: typeof stream?.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : undefined,
     episodeName: nextEpisode.name,
-    entryKind: "next",
+    entryKind: nextEpisode.season > query.season! ? "new" : "next",
     source: "local",
   });
 }
@@ -2252,10 +2337,23 @@ useEffect(() => {
 }, [duration, isTrailerStream, mpvFileLoaded, mpvReadyForCommands, query, stream]);
 
 useEffect(() => {
+  // Regla estilo Nuvio (PlayerNextEpisodeRules): si hay outro y termina pegado
+  // al final, dispara en el inicio del outro; si termina lejos, respeta el
+  // umbral configurado (porcentaje o minutos restantes). Sin outro, umbral puro.
   if (!playbackPreferences.autoPlayNextEpisode || !canGoNextEpisode || manualPaused) return;
   if (!duration || duration < 60 || currentTime <= 0) return;
-  const progress = (currentTime / duration) * 100;
-  if (progress < playbackPreferences.nextEpisodeThresholdPercent) return;
+  const outroSegments = upNextCreditsSegment && Number.isFinite(upNextCreditsSegment.start) && Number.isFinite(upNextCreditsSegment.end) && upNextCreditsSegment.end > upNextCreditsSegment.start
+    ? [{ start: upNextCreditsSegment.start, end: upNextCreditsSegment.end }]
+    : [];
+  const ready = shouldShowNextEpisodeCard({
+    position: currentTime,
+    duration,
+    outroSegments,
+    thresholdMode: playbackPreferences.nextEpisodeThresholdMode,
+    thresholdPercent: playbackPreferences.nextEpisodeThresholdPercent,
+    thresholdMinutesBeforeEnd: playbackPreferences.nextEpisodeThresholdMinutesBeforeEnd,
+  });
+  if (!ready) return;
   const autoKey = `${query?.type ?? ""}:${query?.id ?? ""}:${query?.season ?? ""}:${query?.episode ?? ""}`;
   if (!autoKey.trim() || nextEpisodeAutoKeyRef.current === autoKey) return;
   nextEpisodeAutoKeyRef.current = autoKey;
@@ -2266,24 +2364,35 @@ useEffect(() => {
   duration,
   manualPaused,
   playbackPreferences.autoPlayNextEpisode,
+  playbackPreferences.nextEpisodeThresholdMinutesBeforeEnd,
+  playbackPreferences.nextEpisodeThresholdMode,
   playbackPreferences.nextEpisodeThresholdPercent,
   query?.episode,
   query?.id,
   query?.season,
   query?.type,
+  upNextCreditsSegment,
 ]);
 
 useEffect(() => {
   // Se dispara al TERMINAR una pelicula o el ultimo episodio de una serie
   // (no al llegar al siguiente episodio). Muestra una recomendacion.
-  // Umbral: 98% del titulo o menos de 5s restantes. Desactivable desde ajustes.
+  // Estilo Nuvio (shouldShowMovieRecommendation): umbral de peli configurable
+  // (default 90%) o menos de 5s restantes. Si hay timestamp de créditos
+  // (TheIntroDB/IntroDB), se usa como referencia exacta. Desactivable desde ajustes.
   if (!playbackPreferences.upNextEnabled) return;
   if (duration < 60 || currentTime <= 0) return;
   const progress = (currentTime / duration) * 100;
-  // Si hay un timestamp de créditos (TheIntroDB), se usa como referencia exacta;
-  // si no, el umbral del 98% como respaldo.
+  // Si hay un timestamp de créditos, se usa como referencia exacta;
+  // si no, el umbral de peli (estilo Nuvio) como respaldo.
   const hasCredits = upNextCreditsSegment && Number.isFinite(upNextCreditsSegment.start) && upNextCreditsSegment.start > 0;
-  const finished = (hasCredits ? currentTime >= upNextCreditsSegment!.start : progress >= 98) || duration - currentTime <= 5;
+  const finished = (hasCredits
+    ? currentTime >= upNextCreditsSegment!.start
+    : shouldShowMovieRecommendation({
+      position: currentTime,
+      duration,
+      thresholdPercent: playbackPreferences.postPlayMovieThresholdPercent,
+    })) || duration - currentTime <= 5;
   if (!finished) {
     // si el usuario retrocede por debajo del umbral, permite volver a mostrar
     if (progress < 93 && duration - currentTime > 10) {
@@ -2302,6 +2411,7 @@ useEffect(() => {
   console.info("[UPNEXT] Up Next disparado", {
     viaCredits: hasCredits,
     creditsStart: hasCredits ? upNextCreditsSegment!.start : null,
+    movieThresholdPct: playbackPreferences.postPlayMovieThresholdPercent,
     progressPct: Number(progress.toFixed(1)),
     currentTime,
     duration,
@@ -2320,8 +2430,572 @@ useEffect(() => {
   related.recommendation,
   showUpNext,
   playbackPreferences.upNextEnabled,
+  playbackPreferences.postPlayMovieThresholdPercent,
   upNextCreditsSegment,
 ]);
+
+// ---- Party: sincronización con la sala (control compartido, last-writer-wins) ----
+const {
+  status: partyStatus,
+  roomCode: partyRoomCode,
+  selfId: partySelfId,
+  peers: partyPeers,
+  media: partyMedia,
+  lastControl: partyLastControl,
+  lastMediaEvent: partyLastMediaEvent,
+  lastStreamOffer: partyLastStreamOffer,
+  bufferingPeers: partyBufferingPeers,
+  lobby: partyLobby,
+  lastLobbyEvent: partyLastLobbyEvent,
+  sendLobby: partySendLobby,
+  isOwner: partyIsOwner,
+  sendControl: partySendControl,
+  sendMedia: partySendMedia,
+  sendStream: partySendStream,
+  sendPresence: partySendPresence,
+  notify: partyNotify,
+  noteRemoteApplied: partyNoteRemote,
+  lastRemoteAppliedAt: partyLastRemoteAt,
+} = useParty();
+const partyQueryKey = query ? `${query.type}:${query.id}:${query.season ?? ""}:${query.episode ?? ""}` : "";
+const partyRoomKey = partyMediaKey(partyMedia);
+partyLobbyRef.current = partyLobby;
+// Presencia Discord (debajo de party a propósito: usa su estado).
+useDiscordPresence({
+  enabled: playbackPreferences.enableDiscordRichPresence && !androidPlayback,
+  hasStream: Boolean(stream),
+  playbackStarted,
+  playing: playing && !manualPaused,
+  manualPaused,
+  currentTime,
+  duration,
+  query,
+  stream: safeStream,
+  mediaName: selectedMediaName,
+  episodeName: currentEpisode?.name,
+  posterUrl: selectedMediaPoster || undefined,
+  isTrailer: isTrailerStream,
+  partyConnected: partyStatus === "connected",
+  partyLobby,
+  partyIsOwner,
+  partyPeerCount: partyPeers.length,
+  partyPeerNames: partyPeers.map(peer => peer.name),
+});
+// Miembros (que no soy yo) congelados ahora mismo: hay que esperarlos.
+const partyWaitingFor = partyStatus === "connected"
+  ? partyBufferingPeers.filter(peer => peer.id !== partySelfId)
+  : [];
+// Arte del lobby: fondo del medio + logo (con fallback a texto).
+const partyLobbyBackdrop = selectedMediaBackground
+  || (typeof stream?.behaviorHints?.background === "string" ? stream.behaviorHints.background : "")
+  || (typeof stream?.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "");
+const partyLobbyLogo = sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl);
+// ---- Lobby: crossfade de fondo/logo como en Detail (stack prev/curr + precarga) ----
+const [lobbyBgStack, setLobbyBgStack] = useState<{ prev: string | null; curr: string }>({ prev: null, curr: "" });
+const [lobbyLogoStack, setLobbyLogoStack] = useState<{ prev: string | null; curr: string }>({ prev: null, curr: "" });
+const lobbyBgTokenRef = useRef(0);
+const lobbyLogoTokenRef = useRef(0);
+const lobbyBgPrevRef = useRef<HTMLImageElement | null>(null);
+const lobbyBgCurrRef = useRef<HTMLImageElement | null>(null);
+const lobbyLogoPrevRef = useRef<HTMLImageElement | null>(null);
+const lobbyLogoCurrRef = useRef<HTMLImageElement | null>(null);
+
+useLayoutEffect(() => {
+  const next = partyLobbyBackdrop;
+  if (!partyLobby || !next || lobbyBgStack.curr === next) return;
+  const token = ++lobbyBgTokenRef.current;
+  let cancelled = false;
+  const commit = () => {
+    if (cancelled || lobbyBgTokenRef.current !== token) return;
+    setLobbyBgStack(latest => (latest.curr === next ? latest : { prev: latest.curr || null, curr: next }));
+  };
+  if (!lobbyBgStack.curr) {
+    commit();
+    return () => { cancelled = true; };
+  }
+  const probe = new Image();
+  probe.decoding = "async";
+  probe.src = next;
+  if (probe.complete && probe.naturalWidth > 0) {
+    commit();
+  } else {
+    probe.onload = commit;
+    probe.onerror = commit;
+  }
+  return () => { cancelled = true; };
+}, [partyLobby, partyLobbyBackdrop, lobbyBgStack.curr]);
+
+useLayoutEffect(() => {
+  if (!partyLobby) return;
+  const currEl = lobbyBgCurrRef.current;
+  if (!currEl) return;
+  const prevEl = lobbyBgPrevRef.current;
+  const targets = [prevEl, currEl].filter((el): el is HTMLImageElement => el !== null);
+  const targetCurr = lobbyBgStack.curr;
+  gsap.killTweensOf(targets);
+  if (lobbyBgStack.prev && prevEl) {
+    gsap.to(prevEl, { opacity: 0, duration: 0.62, ease: "power1.out", overwrite: true });
+    gsap.fromTo(currEl, { opacity: 0 }, {
+      opacity: 0.5,
+      duration: 0.62,
+      ease: appleEase,
+      overwrite: true,
+      onComplete: () => setLobbyBgStack(current => (current.curr === targetCurr && current.prev ? { prev: null, curr: current.curr } : current)),
+    });
+  } else {
+    gsap.fromTo(currEl, { opacity: 0, scale: 1.02 }, { opacity: 0.5, scale: 1, duration: 0.68, ease: "power3.out", overwrite: true });
+  }
+  return () => { gsap.killTweensOf(targets); };
+}, [partyLobby, lobbyBgStack]);
+
+useLayoutEffect(() => {
+  const next = partyLobbyLogo;
+  if (!partyLobby || !next || lobbyLogoStack.curr === next) return;
+  const token = ++lobbyLogoTokenRef.current;
+  let cancelled = false;
+  const commit = () => {
+    if (cancelled || lobbyLogoTokenRef.current !== token) return;
+    setLobbyLogoStack(latest => (latest.curr === next ? latest : { prev: latest.curr || null, curr: next }));
+  };
+  if (!lobbyLogoStack.curr) {
+    commit();
+    return () => { cancelled = true; };
+  }
+  const probe = new Image();
+  probe.decoding = "async";
+  probe.src = next;
+  if (probe.complete && probe.naturalWidth > 0) {
+    commit();
+  } else {
+    probe.onload = commit;
+    probe.onerror = commit;
+  }
+  return () => { cancelled = true; };
+}, [partyLobby, partyLobbyLogo, lobbyLogoStack.curr]);
+
+useLayoutEffect(() => {
+  if (!partyLobby) return;
+  const currEl = lobbyLogoCurrRef.current;
+  if (!currEl) return;
+  const prevEl = lobbyLogoPrevRef.current;
+  const targets = [prevEl, currEl].filter((el): el is HTMLImageElement => el !== null);
+  const targetCurr = lobbyLogoStack.curr;
+  gsap.killTweensOf(targets);
+  if (lobbyLogoStack.prev && prevEl) {
+    gsap.to(prevEl, { opacity: 0, duration: 0.34, ease: "power1.out", overwrite: true });
+    gsap.fromTo(currEl, { opacity: 0 }, {
+      opacity: 1,
+      duration: 0.34,
+      ease: appleEase,
+      overwrite: true,
+      onComplete: () => setLobbyLogoStack(current => (current.curr === targetCurr && current.prev ? { prev: null, curr: current.curr } : current)),
+    });
+  } else {
+    gsap.fromTo(currEl, { opacity: 0 }, { opacity: 1, duration: 0.34, ease: appleEase, overwrite: true });
+  }
+  return () => { gsap.killTweensOf(targets); };
+}, [partyLobby, lobbyLogoStack]);
+
+useEffect(() => {
+  if (partyStatus === "connected") partyConnectedAtRef.current = Date.now();
+}, [partyStatus]);
+
+// Anunciar lo que veo al entrar / cambiar de episodio.
+useEffect(() => {
+  if (partyStatus !== "connected" || !query || !partyQueryKey) return;
+  if (partyQueryKey === partyJustFollowedKeyRef.current) {
+    partyJustFollowedKeyRef.current = "";
+    partyLastSentMediaKeyRef.current = partyQueryKey;
+    return;
+  }
+  if (partyQueryKey === partyLastSentMediaKeyRef.current) return;
+  partyLastSentMediaKeyRef.current = partyQueryKey;
+  partySendMedia({ type: query.type, id: query.id, season: query.season, episode: query.episode, title: mediaTitle });
+}, [partyStatus, partyQueryKey, query, mediaTitle, partySendMedia]);
+
+// Seguir al grupo: la sala cambió de contenido y no fui yo.
+useEffect(() => {
+  const event = partyLastMediaEvent;
+  if (partyStatus !== "connected" || !event?.media) return;
+  if (event.from && event.from === partySelfId) return;
+  const key = partyMediaKey(event.media);
+  if (!key || key === partyQueryKey) return;
+  partyJustFollowedKeyRef.current = key;
+  const target = event.media;
+  navigate(`/episode?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}&autoplay=1`);
+}, [partyStatus, partyLastMediaEvent, partySelfId, partyQueryKey, navigate]);
+
+function partyCanBroadcast(): boolean {
+  if (partyStatus !== "connected" || !playbackStarted || isTrailerStream) return false;
+  // En lobby nadie emite: el anfitrión libera con la secuencia de arranque.
+  if (partyLobbyRef.current) return false;
+  if (Date.now() - partyConnectedAtRef.current < 5000) return false;
+  if (Date.now() - partyStreamSwitchAtRef.current < 5000) return false;
+  if (Date.now() - partyLastRemoteAt() < PARTY_ECHO_WINDOW_MS) return false;
+  return true;
+}
+
+// Al salir/cambiar de sala se olvida el stream compartido anterior.
+useEffect(() => {
+  if (partyStatus !== "idle") return;
+  partyLastSharedTargetRef.current = "";
+  partyAppliedOfferAtRef.current = 0;
+  partyAppliedOfferTargetRef.current = "";
+  partyFailedTargetRef.current = "";
+  partyWaitPauseRef.current = false;
+  partyWaitOverrideRef.current = false;
+  partyBufferingSentRef.current = false;
+  window.clearTimeout(partyBufferTimerRef.current);
+  setPartyStreamFailed(false);
+}, [partyStatus, partyRoomCode]);
+
+// Solo el anfitrión comparte su stream (misma URL/magnet para todos). Nunca
+// se comparte el objeto entero: solo el destino reproducible + cabeceras saneadas.
+useEffect(() => {
+  if (partyStatus !== "connected" || !stream || isTrailerStream) return;
+  if (!partyIsOwner) return;
+  if (!partyQueryKey || !partyRoomKey || partyQueryKey !== partyRoomKey) return;
+  const { offer } = buildShareableOffer(stream);
+  if (!offer || offer.target === partyLastSharedTargetRef.current) return;
+  partyLastSharedTargetRef.current = offer.target;
+  partySendStream(offer);
+}, [partyStatus, stream, isTrailerStream, partyIsOwner, partyQueryKey, partyRoomKey, partySendStream]);
+
+// Heredar la sala (el anfitrión se fue): re-compartir la fuente actual para
+// que la sala no se quede sin origen (quien entre tarde, recargas, Empezar).
+// Solo si ya veo la fuente del grupo; si no, no hay nada que ofrecer.
+useEffect(() => {
+  const was = partyWasOwnerRef.current;
+  partyWasOwnerRef.current = partyIsOwner;
+  if (was || !partyIsOwner || partyStatus !== "connected" || !stream || isTrailerStream) return;
+  if (!partyQueryKey || !partyRoomKey || partyQueryKey !== partyRoomKey) return;
+  const groupTarget = partyLastStreamOffer?.offer.target;
+  if (stream.addonId !== "party" && getPlaybackTarget(stream) !== groupTarget) return;
+  const { offer } = buildShareableOffer(stream);
+  if (!offer || offer.target === partyLastSharedTargetRef.current) return;
+  partyLastSharedTargetRef.current = offer.target;
+  partySendStream(offer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyIsOwner, partyStatus, stream, isTrailerStream, partyQueryKey, partyRoomKey]);
+
+// Al entrar alguien (también tras migrar el anfitrión): el owner re-comparte
+// la fuente actual para que el recién llegado la reciba sin esperar cambios.
+const partyPeerCountRef = useRef(0);
+useEffect(() => {
+  const prev = partyPeerCountRef.current;
+  partyPeerCountRef.current = partyPeers.length;
+  if (partyPeers.length <= prev) return;
+  if (!partyIsOwner || partyStatus !== "connected" || !stream || isTrailerStream) return;
+  if (!partyQueryKey || !partyRoomKey || partyQueryKey !== partyRoomKey) return;
+  const groupTarget = partyLastStreamOffer?.offer.target;
+  if (stream.addonId !== "party" && getPlaybackTarget(stream) !== groupTarget) return;
+  const { offer } = buildShareableOffer(stream);
+  if (!offer) return;
+  partyLastSharedTargetRef.current = offer.target;
+  partySendStream(offer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyPeers, partyIsOwner, partyStatus, stream, isTrailerStream, partyQueryKey, partyRoomKey]);
+
+// Reintentar la fuente del anfitrión cuando no abrió en este dispositivo.
+function retryPartyStream() {
+  const event = partyLastStreamOffer;
+  if (partyStatus !== "connected" || !event?.offer) return;
+  partyFailedTargetRef.current = "";
+  partyAppliedOfferAtRef.current = 0;
+  partyStreamSwitchAtRef.current = Date.now();
+  partyNoteRemote();
+  setPartyStreamFailed(false);
+  setStream(partyOfferToMediaStream(event.offer, event.from));
+}
+
+// Aplicar la fuente del anfitrión: misma fuente exacta en todos los dispositivos.
+function applyPartyStreamOffer(event: PartyStreamEvent) {
+  if (!stream || isTrailerStream || showUpNext) return;
+  if (event.offer.target === partyFailedTargetRef.current) return;
+  if (partyRoomKey && partyQueryKey && partyRoomKey !== partyQueryKey) return;
+  const myTarget = getPlaybackTarget(stream);
+  if (myTarget && myTarget === event.offer.target) {
+    partyAppliedOfferAtRef.current = event.at;
+    partyAppliedOfferTargetRef.current = event.offer.target;
+    setPartyStreamFailed(false);
+    return;
+  }
+  partyAppliedOfferAtRef.current = event.at;
+  partyAppliedOfferTargetRef.current = event.offer.target;
+  partyStreamSwitchAtRef.current = Date.now();
+  partyNoteRemote();
+  setPartyStreamFailed(false);
+  setStream(partyOfferToMediaStream(event.offer, event.from));
+}
+
+useEffect(() => {
+  const event = partyLastStreamOffer;
+  if (partyStatus !== "connected" || !event?.offer) return;
+  if (event.from === partySelfId || event.at <= partyAppliedOfferAtRef.current) return;
+  applyPartyStreamOffer(event);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyLastStreamOffer, partyStatus, partySelfId, stream, isTrailerStream, showUpNext, partyRoomKey, partyQueryKey]);
+
+// Si la fuente del anfitrión no abre en este dispositivo: marcar fallo (la
+// sala siempre usa su fuente; reintentar desde el aviso).
+useEffect(() => {
+  if (partyStatus !== "connected" || partyIsOwner) return;
+  if (!mpvStatus || !/no inici/i.test(mpvStatus)) return;
+  if (!partyAppliedOfferTargetRef.current || partyStreamFailed) return;
+  partyFailedTargetRef.current = partyAppliedOfferTargetRef.current;
+  partyStreamSwitchAtRef.current = Date.now();
+  partyNoteRemote();
+  setPartyStreamFailed(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [mpvStatus, partyStatus, partyIsOwner, partyStreamFailed]);
+
+// Avisar si me congelo: solo si persiste 2s (evita flapping de seeks) y veo lo mismo que la sala.
+const partyBuffering = playbackStarted && !isTrailerStream && playing && (mpvPausedForCache || stalledPlayback || seekBuffering);
+useEffect(() => {
+  if (partyStatus !== "connected" || partyLobby || !partyBuffering || (partyRoomKey && partyQueryKey !== partyRoomKey)) {
+    window.clearTimeout(partyBufferTimerRef.current);
+    if (partyBufferingSentRef.current) {
+      partyBufferingSentRef.current = false;
+      partySendPresence(false);
+    }
+    return;
+  }
+  if (partyBufferingSentRef.current) return;
+  window.clearTimeout(partyBufferTimerRef.current);
+  partyBufferTimerRef.current = window.setTimeout(() => {
+    partyBufferingSentRef.current = true;
+    partySendPresence(true);
+  }, 2000);
+  return () => window.clearTimeout(partyBufferTimerRef.current);
+}, [partyBuffering, partyStatus, partyLobby, partyQueryKey, partyRoomKey, partySendPresence]);
+
+// Esperar a los que cargan: pauso en silencio (sin emitir) y reanudo solo.
+useEffect(() => {
+  if (partyStatus !== "connected" || partyLobby || !playbackStarted || isTrailerStream || showUpNext) return;
+  if (partyRoomKey && partyQueryKey && partyRoomKey !== partyQueryKey) return;
+  if (partyWaitingFor.length === 0) {
+    partyWaitOverrideRef.current = false;
+    if (partyWaitPauseRef.current) {
+      partyWaitPauseRef.current = false;
+      if (!playing) togglePlay();
+    }
+    return;
+  }
+  if (partyWaitOverrideRef.current) return;
+  if (playing) {
+    partyWaitPauseRef.current = true;
+    partyNoteRemote();
+    togglePlay();
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyWaitingFor, partyStatus, partyLobby, playbackStarted, isTrailerStream, showUpNext, playing, partyQueryKey, partyRoomKey]);
+
+// Emitir play/pausa locales.
+useEffect(() => {
+  const was = partyPrevPlayingRef.current;
+  partyPrevPlayingRef.current = playing;
+  if (playing && partyWaitPauseRef.current && partyWaitingFor.length > 0) {
+    // El usuario forzó reanudar durante la espera: su intención manda solo
+    // para él (no arrastra al grupo) hasta que nadie cargue.
+    partyWaitPauseRef.current = false;
+    partyWaitOverrideRef.current = true;
+    partyNoteRemote();
+    return;
+  }
+  if (was === playing) return;
+  if (!partyCanBroadcast()) return;
+  if (currentTimeRef.current < 2) return;
+  partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [playing, partyStatus, playbackStarted, isTrailerStream]);
+
+// Emitir seeks locales (saltos > 3s entre ticks = seek manual).
+useEffect(() => {
+  if (partyStatus !== "connected" || !playbackStarted || isTrailerStream) return;
+  const previous = partyLastSeekTimeRef.current;
+  partyLastSeekTimeRef.current = currentTime;
+  if (previous == null) return;
+  if (!partyCanBroadcast()) return;
+  if (Math.abs(currentTime - previous) > PARTY_SEEK_JUMP_S) {
+    partySendControl("seek", Math.max(0, currentTime));
+  }
+}, [currentTime, partyStatus, playbackStarted, isTrailerStream, partySendControl, partyLastRemoteAt]);
+
+// Aplicar acciones remotas del grupo.
+useEffect(() => {
+  const event = partyLastControl;
+  if (partyStatus !== "connected" || !event) return;
+  if (event.from === partySelfId || event.at <= partyLastAppliedControlAtRef.current) return;
+  if (!playbackStarted || isTrailerStream || showUpNext) return;
+  // En lobby el play lo libera solo la secuencia de arranque (que ya limpió el lobby).
+  if (partyLobby) return;
+  if (partyRoomKey && partyQueryKey && partyRoomKey !== partyQueryKey) return;
+  // Anti-grief: más de 8 acciones en 10s = mute 60s + aviso.
+  const now = Date.now();
+  if ((partyMutedPeersRef.current[event.from] ?? 0) > now) return;
+  const log = (partyPeerControlLogRef.current[event.from] ?? []).filter(stamp => now - stamp < 10_000);
+  log.push(now);
+  partyPeerControlLogRef.current[event.from] = log;
+  if (log.length > 8) {
+    partyMutedPeersRef.current[event.from] = now + 60_000;
+    const offender = partyPeers.find(peer => peer.id === event.from);
+    partyNotify(`Se ignora a ${offender?.name ?? "un miembro"} 60s por spam de controles.`);
+    return;
+  }
+  partyLastAppliedControlAtRef.current = event.at;
+  partyNoteRemote();
+  const position = Math.max(0, event.position);
+  if (event.kind === "seek") {
+    seek(position);
+    return;
+  }
+  const wantPlaying = event.kind === "play";
+  if (wantPlaying !== playing) {
+    if (Math.abs(currentTimeRef.current - position) > PARTY_DRIFT_TOLERANCE_S) seek(position);
+    togglePlay();
+  } else if (Math.abs(currentTimeRef.current - position) > PARTY_DRIFT_TOLERANCE_S) {
+    seek(position);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyLastControl, partyStatus, partyLobby, partySelfId, partyRoomKey, partyQueryKey, playbackStarted, isTrailerStream, showUpNext, playing, partyPeers, partyNotify]);
+
+// ---- Party lobby (sala de espera): retener en pausa al inicio y precargar ----
+function partyLobbyReady(): boolean {
+  return !!stream && mpvFileLoaded && !partyStreamFailed
+    && !!partyQueryKey && !!partyRoomKey && partyQueryKey === partyRoomKey;
+}
+
+// Entrar al lobby: pausa + vuelta al inicio + hold de autoplay (el preload de
+// mpv carga en pausa). El contexto estampa `waiting` al conectar.
+useEffect(() => {
+  if (partyLobby === partyLobbyPrevRef.current) return;
+  partyLobbyPrevRef.current = partyLobby;
+  if (!partyLobby || isTrailerStream) return;
+  manualPausedRef.current = true;
+  setManualPaused(true);
+  setPlaying(false);
+  setStalledPlayback(false);
+  void sendMpvCommand(["set_property", "pause", true]);
+  if (playbackStarted || mpvFileLoaded) {
+    partyLobbyStartBypassRef.current = true;
+    try {
+      seek(0);
+    } finally {
+      partyLobbyStartBypassRef.current = false;
+    }
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyLobby, isTrailerStream, playbackStarted, mpvFileLoaded]);
+
+// Presencia de lobby: `buffering=true` = aún cargando; `false` = listo.
+// (El efecto normal de buffering se pausa en lobby y este toma el mando.)
+useEffect(() => {
+  if (partyStatus !== "connected" || !partyLobby || isTrailerStream) return;
+  partySendPresence(!partyLobbyReady());
+}, [partyStatus, partyLobby, isTrailerStream, stream, mpvFileLoaded, partyStreamFailed, partyQueryKey, partyRoomKey, partySendPresence]);
+
+// Watchdog del hold: re-impone pausa+inicio mientras haya lobby. Cubre el
+// `pause` inicial perdido (mpv aún sin IPC al abrir), StrictMode y cualquier
+// desincronización (mpv reproduciendo con React en pausa). Converge solo.
+useEffect(() => {
+  if (partyStatus !== "connected" || !partyLobby || isTrailerStream) return;
+  const id = window.setInterval(() => {
+    if (!partyLobbyRef.current || partyLobbyStartBypassRef.current) return;
+    manualPausedRef.current = true;
+    setManualPaused(true);
+    setPlaying(false);
+    setStalledPlayback(false);
+    if (mpvFileLoaded && mpvReadyForCommands) {
+      void sendMpvCommand(["set_property", "pause", true]);
+      if (currentTimeRef.current > 2) {
+        partyLobbyStartBypassRef.current = true;
+        try {
+          seek(0);
+        } finally {
+          partyLobbyStartBypassRef.current = false;
+        }
+      }
+    }
+  }, 800);
+  return () => window.clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyStatus, partyLobby, isTrailerStream, mpvFileLoaded, mpvReadyForCommands]);
+
+// Arranque local desde el inicio (sin emitir: lo usa quien recibe "started").
+function playPartyFromStart() {
+  partyLobbyStartBypassRef.current = true;
+  try {
+    manualPausedRef.current = false;
+    setManualPaused(false);
+    seek(0);
+    partyNoteRemote();
+    if (!playing) togglePlay();
+  } finally {
+    partyLobbyStartBypassRef.current = false;
+  }
+}
+
+// Arranque del grupo (anfitrión): libera el lobby, reparte contenido + oferta
+// por debajo (cubre a quien entró tarde) y emite play@0.
+function startPartyPlayback() {
+  if (!partyIsOwner || !partyLobbyRef.current) return;
+  partySendLobby("started");
+  if (query && !isTrailerStream) {
+    partySendMedia({ type: query.type, id: query.id, season: query.season, episode: query.episode, title: mediaTitle });
+    if (stream) {
+      const { offer } = buildShareableOffer(stream);
+      if (offer) {
+        partyLastSharedTargetRef.current = offer.target;
+        partySendStream(offer);
+      }
+    }
+  }
+  playPartyFromStart();
+  partySendControl("play", 0);
+}
+
+// Reaccionar a "started": el anfitrión ya arrancó en su click (from propio).
+useEffect(() => {
+  const event = partyLastLobbyEvent;
+  if (partyStatus !== "connected" || !event || event.state !== "started") return;
+  if (event.at <= partyLobbyAppliedStartRef.current) return;
+  partyLobbyAppliedStartRef.current = event.at;
+  if (event.from === partySelfId) return;
+  if (isTrailerStream || showUpNext) return;
+  playPartyFromStart();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [partyLastLobbyEvent, partyStatus, partySelfId, isTrailerStream, showUpNext, playing]);
+
+// Corrección de deriva: converge a la línea de tiempo compartida cada 12s.
+const partyActionsRef = useRef({ togglePlay, seek });
+partyActionsRef.current = { togglePlay, seek };
+const partyLiveRef = useRef({ control: partyLastControl, playing, started: playbackStarted, trailer: isTrailerStream, upNext: showUpNext, queryKey: partyQueryKey, roomKey: partyRoomKey });
+partyLiveRef.current = { control: partyLastControl, playing, started: playbackStarted, trailer: isTrailerStream, upNext: showUpNext, queryKey: partyQueryKey, roomKey: partyRoomKey };
+useEffect(() => {
+  if (partyStatus !== "connected") return;
+  const id = window.setInterval(() => {
+    const live = partyLiveRef.current;
+    const event = live.control;
+    if (!event || !live.started || live.trailer || live.upNext) return;
+    if (!live.queryKey || !live.roomKey || live.queryKey !== live.roomKey) return;
+    if (Date.now() - partyLastRemoteAt() < PARTY_ECHO_WINDOW_MS) return;
+    const expected = event.kind === "play" ? event.position + (Date.now() - event.at) / 1000 : event.position;
+    if (!Number.isFinite(expected) || expected < 0) return;
+    const current = currentTimeRef.current;
+    partyNoteRemote();
+    if (event.kind === "pause") {
+      if (live.playing && Date.now() - event.at > 3000) {
+        if (Math.abs(current - expected) > 1) partyActionsRef.current.seek(expected);
+        partyActionsRef.current.togglePlay();
+      }
+      return;
+    }
+    if (Math.abs(current - expected) > PARTY_DRIFT_TOLERANCE_S) {
+      partyActionsRef.current.seek(expected);
+    }
+  }, PARTY_DRIFT_INTERVAL_MS);
+  return () => window.clearInterval(id);
+}, [partyStatus, partyNoteRemote, partyLastRemoteAt]);
 
 // UpNext achica el video nativo MPV de verdad.
 // - Fuente única de verdad: getUpNextMiniRect() (src/utils/upnextMiniRect.ts).
@@ -2698,6 +3372,8 @@ if (!stream) {
       ) : null}
 
       <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} message={mpvStatus} hideMessage={playbackStarted} p2p={isP2pStream} />
+      {/* OSD central: play/pausa/seek/volumen por teclado o click. No despierta la barra. */}
+      {actionFeedback ? <PlayerActionFeedback feedback={actionFeedback} /> : null}
       {fileDropNotice ? (
         <div
           data-player-interactive
@@ -2803,13 +3479,22 @@ if (!stream) {
         activeSidePanel={activeSidePanel}
         hasEpisodeOptions={episodeOptions.length > 0}
         controlsLocked={false}
+        lobbyMode={partyLobby}
+        showPartyButton={!isTrailerStream}
+        partyConnected={partyStatus === "connected"}
+        partyPeerCount={partyPeers.length}
+        partyPeerNames={partyPeers.map(peer => peer.name)}
+        partyCurrentMedia={query ? { type: query.type, id: query.id, season: query.season, episode: query.episode } : null}
+        partyCurrentTitle={mediaTitle}
+        partyStreamFailed={partyStreamFailed}
+        onPartyRetryStream={() => retryPartyStream()}
         canGoPrevEpisode={canGoPrevEpisode}
         canGoNextEpisode={canGoNextEpisode}
         canChangeSource={availableStreams.length > 0 && !isTrailerStream}
         onControlsEnter={holdControls}
         onControlsLeave={() => releaseControls(2)}
         onSeek={seek}
-        onJump={jump}
+        onJump={jumpWithFeedback}
         onTogglePlay={togglePlay}
         onVolumeChange={applyVolume}
         onToggleMute={toggleMute}
@@ -2921,6 +3606,112 @@ if (!stream) {
             }}
             onMiniClick={dismissUpNext}
             />
+      ) : null}
+
+      {partyStatus === "connected" && !partyLobby && partyWaitingFor.length > 0 ? (
+        <div className="gsap-fade-in pointer-events-none fixed bottom-24 left-1/2 z-[80] flex -translate-x-1/2 items-center gap-2.5 rounded-full border border-white/15 bg-black/70 py-2.5 pl-4 pr-5 backdrop-blur-md">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/60" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-white" />
+          </span>
+          <p className="whitespace-nowrap text-sm font-bold text-white">
+            Esperando a {partyWaitingFor.slice(0, 2).map(peer => peer.name).join(", ")}{partyWaitingFor.length > 2 ? ` +${partyWaitingFor.length - 2}` : ""}…
+          </p>
+        </div>
+      ) : null}
+      {partyLobby && partyStatus === "connected" && !isTrailerStream ? (
+        <div
+          className="absolute inset-0 z-30 grid place-items-center overflow-y-auto bg-black/70 p-5"
+          onClick={event => event.stopPropagation()}
+        >
+          {lobbyBgStack.curr ? (
+            <>
+              {lobbyBgStack.prev ? (
+                <img ref={lobbyBgPrevRef} src={lobbyBgStack.prev} alt="" aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full object-cover" />
+              ) : null}
+              <img ref={lobbyBgCurrRef} src={lobbyBgStack.curr} alt="" aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full object-cover" />
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/65" />
+            </>
+          ) : null}
+          <div role="dialog" aria-label="Sala de espera Party" className="gsap-fade-in relative w-full max-w-sm rounded-[28px] border border-white/10 bg-white/[0.06] p-6 shadow-[0_32px_90px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[28px] backdrop-saturate-[180%]">
+            <p className="text-sm font-bold text-white/55">Sala de espera</p>
+            {lobbyLogoStack.curr ? (
+              <div className="relative mt-2 flex min-h-10 items-center">
+                {lobbyLogoStack.prev ? (
+                  <img ref={lobbyLogoPrevRef} src={lobbyLogoStack.prev} alt="" aria-hidden="true" className="absolute inset-0 max-h-20 w-auto max-w-full object-contain drop-shadow-[0_10px_28px_rgba(0,0,0,0.8)]" />
+                ) : null}
+                <img ref={lobbyLogoCurrRef} src={lobbyLogoStack.curr} alt={mediaTitle} className="max-h-20 w-auto max-w-full object-contain drop-shadow-[0_10px_28px_rgba(0,0,0,0.8)]" />
+              </div>
+            ) : (
+              <p className="mt-1 truncate text-xl font-black tracking-tight text-white">{mediaTitle}</p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (!partyRoomCode) return;
+                void navigator.clipboard?.writeText(partyRoomCode).then(() => {
+                  setPartyCodeCopied(true);
+                  window.setTimeout(() => setPartyCodeCopied(false), 1500);
+                }).catch(() => undefined);
+              }}
+              className="gsap-transition mt-3 flex w-full items-center justify-center gap-2.5 rounded-full border border-white/12 bg-white/10 px-5 py-2.5 active:scale-[0.97]"
+              aria-label="Copiar código de sala"
+            >
+              <span className="text-2xl font-black tracking-[0.25em] text-white">{partyRoomCode}</span>
+              <span className="text-xs font-bold text-white/55">{partyCodeCopied ? "¡Copiado!" : "Copiar"}</span>
+            </button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {[{ id: partySelfId, name: `${partyPeers.find(peer => peer.id === partySelfId)?.name ?? "Tú"} (tú)`, ready: partyLobbyReady() },
+                ...partyPeers.filter(peer => peer.id !== partySelfId).map(peer => ({
+                  id: peer.id,
+                  name: `${peer.name}${peer.isOwner ? " · anfitrión" : ""}`,
+                  ready: !partyBufferingPeers.some(entry => entry.id === peer.id),
+                })),
+              ].map(member => (
+                <span key={member.id || member.name} className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white/85">
+                  <span className={`h-1.5 w-1.5 rounded-full ${member.ready ? "bg-emerald-300" : "animate-pulse bg-white/70"}`} />
+                  {member.name}{member.ready ? "" : " · cargando"}
+                </span>
+              ))}
+            </div>
+            {partyStreamFailed && !partyIsOwner ? (
+              <div className="rounded-2xl border border-white/[0.07] bg-black/20 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <p className="text-xs leading-5 text-amber-200/90">
+                  La fuente del anfitrión no abrió en tu dispositivo.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => retryPartyStream()}
+                  className="gsap-transition mt-2.5 w-full rounded-full bg-white px-4 py-2 text-xs font-black text-black hover:bg-white/86 active:scale-[0.97]"
+                >
+                  Reintentar
+                </button>
+              </div>
+            ) : null}
+            {partyIsOwner ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => startPartyPlayback()}
+                  className="gsap-transition mt-4 w-full rounded-full bg-white px-5 py-3 text-sm font-black text-black hover:bg-white/86 active:scale-[0.97]"
+                >
+                  Empezar para todos
+                </button>
+                <p className="mt-2 text-center text-xs text-white/50">
+                  {[partyLobbyReady(), ...partyPeers.map(peer => !partyBufferingPeers.some(entry => entry.id === peer.id))].filter(Boolean).length} de {partyPeers.length + 1} listos · los que falten se ponen al día solos
+                </p>
+              </>
+            ) : (
+              <p className="mt-4 flex items-center justify-center gap-2 text-center text-sm font-bold text-white/70">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/60" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-white" />
+                </span>
+                Esperando al anfitrión…
+              </p>
+            )}
+          </div>
+        </div>
       ) : null}
     </div>
   );

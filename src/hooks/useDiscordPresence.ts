@@ -47,6 +47,16 @@ export interface DiscordPresenceInput {
   posterUrl?: string;
   /** Trailer streams should not advertise as "Watching". */
   isTrailer: boolean;
+  /** Party: conectado a una sala. */
+  partyConnected: boolean;
+  /** Party: en sala de espera (inicio retenido). */
+  partyLobby: boolean;
+  /** Party: soy el anfitrión. */
+  partyIsOwner: boolean;
+  /** Party: miembros además de mí. */
+  partyPeerCount: number;
+  /** Party: nombres de los demás miembros. */
+  partyPeerNames: string[];
 }
 
 function formatTimestamp(seconds: number): string {
@@ -76,6 +86,17 @@ function buildActionButtons(query: StreamQuery | null) {
   ];
 }
 
+/** "con Ana, Bea, Car" (recorta a 4 nombres + "+n"). */
+function partyNamesSuffix(names: string[], extra = 0): string {
+  const clean = names.map(name => name.trim()).filter(Boolean);
+  const total = clean.length + extra;
+  if (total === 0) return "";
+  if (clean.length <= 4) {
+    return `con ${clean.join(", ")}${extra > 0 ? ` y ${extra} más` : ""}`;
+  }
+  return `con ${clean.slice(0, 4).join(", ")} y ${clean.length - 4 + extra} más`;
+}
+
 export function useDiscordPresence(input: DiscordPresenceInput) {
   const lastSignatureRef = useRef<string>("");
 
@@ -99,18 +120,38 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
   // building a signature from the fields that affect the rendered activity.
   useEffect(() => {
     if (!input.enabled) return;
+    const title = input.mediaName || input.stream?.name || input.stream?.title || "Reproduciendo";
+    const buttons = buildActionButtons(input.query);
+
+    // Party: sala de espera (aún sin reproducir: sin timestamps).
+    if (input.partyConnected && input.partyLobby && !input.isTrailer) {
+      const signature = `party-lobby:${input.partyIsOwner ? "owner" : "guest"}:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${input.partyPeerCount}`;
+      if (signature === lastSignatureRef.current) return;
+      lastSignatureRef.current = signature;
+      void setDiscordActivity({
+        details: `Party · ${title}`,
+        state: input.partyIsOwner ? "Armando la sala…" : "En sala de espera…",
+        largeImageKey: input.posterUrl || "Aetherio",
+        largeImageText: title,
+        buttons,
+      });
+      return;
+    }
+
     if (!input.hasStream || !input.playbackStarted || input.isTrailer) {
       return;
     }
 
-    const title = input.mediaName || input.stream?.name || input.stream?.title || "Reproduciendo";
-    const buttons = buildActionButtons(input.query);
+    // Viendo en party: nombres del grupo en el estado.
+    const partySuffix = input.partyConnected
+      ? ` · en Party ${partyNamesSuffix(input.partyPeerNames)}`
+      : "";
 
     let signature: string;
     if (input.playing) {
-      signature = `playing:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${Math.floor(input.currentTime)}`;
+      signature = `playing:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${Math.floor(input.currentTime)}:party${input.partyConnected ? input.partyPeerNames.join(",") : "-"}`;
     } else {
-      signature = `paused:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${formatTimestamp(input.currentTime)}`;
+      signature = `paused:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${formatTimestamp(input.currentTime)}:party${input.partyConnected ? input.partyPeerNames.join(",") : "-"}`;
     }
 
     if (signature === lastSignatureRef.current) return;
@@ -123,13 +164,13 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
 
       void setDiscordActivity({
         details: title,
-        state: episodeLabel || title,
+        state: `${episodeLabel || title}${partySuffix}`,
         startTimestamp: start,
         endTimestamp: end,
         largeImageKey: input.posterUrl || "Aetherio",
         largeImageText: title,
         smallImageKey: "play",
-        smallImageText: "Reproduciendo",
+        smallImageText: input.partyConnected ? "Viendo en Party" : "Reproduciendo",
         buttons,
       });
       return;
@@ -138,11 +179,11 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
     // Paused branch — show position, no timestamps.
     void setDiscordActivity({
       details: title,
-      state: `Pausado en ${formatTimestamp(input.currentTime)}`,
+      state: `Pausado en ${formatTimestamp(input.currentTime)}${partySuffix}`,
       largeImageKey: input.posterUrl || "Aetherio",
       largeImageText: title,
       smallImageKey: "pause",
-      smallImageText: "Pausado",
+      smallImageText: input.partyConnected ? "Pausado en Party" : "Pausado",
       buttons,
     });
   }, [
@@ -158,16 +199,22 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
     input.mediaName,
     input.posterUrl,
     input.isTrailer,
+    input.partyConnected,
+    input.partyLobby,
+    input.partyIsOwner,
+    input.partyPeerCount,
+    input.partyPeerNames,
   ]);
 
   // Hard clear when the stream is gone (e.g. navigating away mid-playback).
+  // En lobby no se limpia: aún no hay reproducción pero sí sala.
   useEffect(() => {
     if (!input.enabled) return;
-    if (!input.hasStream || !input.playbackStarted) {
+    if ((!input.hasStream || !input.playbackStarted) && !(input.partyConnected && input.partyLobby)) {
       if (lastSignatureRef.current !== "") {
         lastSignatureRef.current = "";
         void clearDiscordActivity();
       }
     }
-  }, [input.enabled, input.hasStream, input.playbackStarted]);
+  }, [input.enabled, input.hasStream, input.playbackStarted, input.partyConnected, input.partyLobby]);
 }
