@@ -9,11 +9,13 @@ import { IMG, getDetailLogoKey, resolveTmdbId } from "./utils";
 export function useEpisodeMetadata(query: StreamQuery | null) {
   const [episodeOptions, setEpisodeOptions] = useState<EpisodeOption[]>([]);
   const [seriesLogoUrl, setSeriesLogoUrl] = useState<string | null>(null);
+  const [nextSeasonEpisode, setNextSeasonEpisode] = useState<EpisodeOption | null>(null);
 
   useEffect(() => {
     if (!query?.season || !query.episode || query.type === "movie") {
       setEpisodeOptions([]);
       setSeriesLogoUrl(null);
+      setNextSeasonEpisode(null);
       return;
     }
     let cancelled = false;
@@ -42,10 +44,42 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
           airDate: episode.air_date,
           still: episode.still_path ? `${IMG}/original${episode.still_path}` : undefined,
         })));
+
+        // Resolver el primer episodio de la siguiente temporada, si existe, para
+        // poder avanzar al S01 de la temporada siguiente en el fin de temporada.
+        const currentSeason = Number(query.season);
+        const seasonNumbers = (detailsJson?.seasons ?? [])
+          .map((season: any) => Number(season?.season_number))
+          .filter((season: number) => Number.isFinite(season) && season > 0);
+        const nextSeasonNumber = seasonNumbers
+          .filter((season: number) => season > currentSeason)
+          .sort((a: number, b: number) => a - b)[0];
+
+        let resolved: EpisodeOption | null = null;
+        if (nextSeasonNumber) {
+          const nextSeasonJson = await tmdbFetch<any>(`/tv/${tmdbId}/season/${nextSeasonNumber}`, { params: { language: "es-ES" } });
+          if (!cancelled && Array.isArray(nextSeasonJson?.episodes) && nextSeasonJson.episodes.length > 0) {
+            const episodes = nextSeasonJson.episodes as any[];
+            const first = episodes.find((episode: any) => Number(episode?.episode_number) === 1) ?? episodes[0];
+            if (first) {
+              resolved = {
+                id: `${tmdbId}:${nextSeasonNumber}:${Number(first.episode_number)}`,
+                episode: Number(first.episode_number),
+                season: nextSeasonNumber,
+                name: first.name ?? `Episodio ${first.episode_number}`,
+                overview: typeof first.overview === "string" ? first.overview : undefined,
+                airDate: first.air_date,
+                still: first.still_path ? `${IMG}/original${first.still_path}` : undefined,
+              };
+            }
+          }
+        }
+        if (!cancelled) setNextSeasonEpisode(resolved);
       } catch {
         if (!cancelled) {
           setEpisodeOptions([]);
           setSeriesLogoUrl(null);
+          setNextSeasonEpisode(null);
         }
       }
     };
@@ -56,7 +90,7 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
     };
   }, [query]);
 
-  return { episodeOptions, seriesLogoUrl };
+  return { episodeOptions, seriesLogoUrl, nextSeasonEpisode };
 }
 
 export function usePlayerLogos(query: StreamQuery | null, stream: MediaStream | null) {

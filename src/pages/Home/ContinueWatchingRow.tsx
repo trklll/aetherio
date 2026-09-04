@@ -577,7 +577,7 @@ async function createNextEpisodePromptFromEntry(entry: ContinueWatchingEntry | n
         poster: entry.poster,
         episodeName: episode.name,
         runtimeSeconds: Number.isFinite(episode.runtime) && episode.runtime > 0 ? episode.runtime * 60 : undefined,
-        entryKind: "next",
+        entryKind: seasonNumber > entry.season ? "new" : "next",
         source: "local",
       });
       return { query: nextQuery, episodeName: episode.name };
@@ -832,6 +832,7 @@ const ContinueCard = memo(function ContinueCard({
       : entry.entryKind === "next"
         ? "Siguiente episodio"
         : "";
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -879,10 +880,6 @@ const ContinueCard = memo(function ContinueCard({
       logo: entry.logo,
     });
     setArtworkPickerOpen(false);
-  }
-
-  function openEntry() {
-    onClick();
   }
 
   return (
@@ -992,7 +989,15 @@ const ContinueCard = memo(function ContinueCard({
             void syncTraktMarkedWatched(marked);
             void createNextEpisodePromptFromEntry(marked ?? entry);
           } },
-          { label: entry.type === "movie" ? "Ir a la pelicula" : "Ir al episodio", icon: <Info size={15} />, onSelect: openEntry },
+          {
+            label: entry.type === "movie"
+              ? "Ir a la pelicula"
+              : entry.type === "anime"
+                ? "Ir al anime"
+                : "Ir a la serie",
+            icon: <Info size={15} />,
+            onSelect: () => navigate(`/detail/${encodeURIComponent(entry.type)}/${encodeURIComponent(entry.id)}`),
+          },
         ]}
       />
       <CardArtworkPicker

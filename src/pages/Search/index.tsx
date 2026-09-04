@@ -6,6 +6,7 @@ import { useAddonStore } from "../../store/addonStore";
 import { useMediaSearch } from "../../hooks/useMediaSearch";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import type { UnifiedSearchResult } from "../../utils/searchProviders";
+import { resolveBetterPosterSync } from "../../hooks/useBetterPoster";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 
 const POSTER_CARD = { width: 207, height: 312 };
@@ -158,7 +159,7 @@ function SectionHead({ title, inset = true }: { title: string; inset?: boolean }
 }
 
 function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
-  const poster = item.poster ?? item.background;
+  const poster = resolveBetterPosterSync(item.id, item.externalIds?.imdb, item.poster ?? item.background ?? undefined);
   return (
     <button
       type="button"
@@ -329,7 +330,7 @@ function SearchRowArrow({
 
 function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
   const cardRef = useRef<HTMLButtonElement>(null);
-  const poster = item.poster ?? item.background;
+  const poster = resolveBetterPosterSync(item.id, item.externalIds?.imdb, item.poster ?? item.background ?? undefined);
 
   return (
     <button

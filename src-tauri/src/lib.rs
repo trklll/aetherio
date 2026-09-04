@@ -2681,7 +2681,21 @@ fn invalidate_p2p_server(state: &P2pState, expected_base_url: &str, reason: &str
 }
 
 #[cfg(not(target_os = "android"))]
-fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration) -> Result<(), String> {
+fn dir_total_size(path: &Path) -> u64 {
+    let Ok(meta) = path.symlink_metadata() else { return 0 };
+    if meta.is_file() {
+        return meta.len();
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        total = total.saturating_add(dir_total_size(&entry.path()));
+    }
+    total
+}
+
+#[cfg(not(target_os = "android"))]
+fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration, max_bytes: u64) -> Result<(), String> {
     if cache_root.file_name().and_then(|value| value.to_str()) != Some("p2p") {
         return Err(String::from("Se rechazo limpiar una ruta P2P inesperada."));
     }
@@ -2689,18 +2703,48 @@ fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration) -> Result<(), Str
         return Ok(());
     }
 
-    let mut removed = 0usize;
-    let mut kept = 0usize;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|v| v.as_millis())
+        .unwrap_or(0);
+    let max_age_ms = max_age.as_millis();
+
+    let mut entries: Vec<(PathBuf, u64, u128)> = Vec::new();
+    let mut total = 0u64;
     for entry in fs::read_dir(cache_root)
         .map_err(|error| format!("No se pudo revisar cache P2P anterior: {}", error))?
     {
         let entry = entry.map_err(|error| format!("Entrada P2P invalida: {}", error))?;
         let path = entry.path();
-        let age = fs::metadata(&path)
-            .and_then(|metadata| metadata.modified())
+        // El directorio `chunks` lo gestiona el ChunkStore en ejecución (evita
+        // borrados concurrentes mientras reproduce). Se salta aqui.
+        if path.is_dir()
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                == Some("chunks")
+        {
+            continue;
+        }
+        let size = dir_total_size(&path);
+        let mtime = entry
+            .metadata()
             .ok()
-            .and_then(|modified| modified.elapsed().ok());
-        if age.map(|age| age <= max_age).unwrap_or(true) {
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        entries.push((path, size, mtime));
+        total = total.saturating_add(size);
+    }
+
+    entries.sort_by_key(|(_, _, mtime)| *mtime); // más viejos primero
+
+    let mut removed = 0usize;
+    let mut kept = 0usize;
+    for (path, size, mtime) in entries {
+        let age_ms = now_ms.saturating_sub(mtime);
+        if age_ms <= max_age_ms && total <= max_bytes {
             kept += 1;
             continue;
         }
@@ -2710,6 +2754,7 @@ fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration) -> Result<(), Str
             fs::remove_file(&path)
         };
         result.map_err(|error| format!("No se pudo limpiar {}: {}", path.display(), error))?;
+        total = total.saturating_sub(size);
         removed += 1;
     }
     p2p_log(
@@ -2750,7 +2795,7 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
     let dht_config_path = cache_root.with_file_name("p2p-dht.json");
     // Conserva datos parciales y bitfields de fastresume recientes para que la
     // reanudacion de descargas sea inmediata; solo limpia sobrantes viejos.
-    sweep_stale_p2p_cache(&cache_root, Duration::from_secs(48 * 60 * 60))?;
+    sweep_stale_p2p_cache(&cache_root, p2p::P2P_MAX_CACHE_AGE, p2p::P2P_MAX_CACHE_BYTES)?;
     fs::create_dir_all(&cache_root)
         .map_err(|error| format!("No se pudo crear cache P2P: {}", error))?;
     p2p_log(
@@ -2762,6 +2807,7 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
     let (stopped_tx, stopped_rx) = mpsc::channel::<()>();
     let shutdown = Arc::new(AtomicBool::new(false));
     let thread_shutdown = shutdown.clone();
+    let maintenance_shutdown = shutdown.clone();
     thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -2777,6 +2823,7 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         };
 
         runtime.block_on(async move {
+            let maintenance_root = cache_root.clone();
             let session = match Session::new_with_opts(
                 cache_root.clone(),
                 SessionOptions {
@@ -2869,6 +2916,21 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
                     }
                 }
             };
+            // Mantenimiento periodico del cache P2P (tamano + antiguedad)
+            // mientras el servidor esta activo, no solo al arrancar.
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    if maintenance_shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let _ = sweep_stale_p2p_cache(
+                        &maintenance_root,
+                        p2p::P2P_MAX_CACHE_AGE,
+                        p2p::P2P_MAX_CACHE_BYTES,
+                    );
+                }
+            });
             let api = Api::new(session.clone(), None, None);
             let http_api = HttpApi::new(
                 api,
@@ -2930,7 +2992,7 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
             .app_cache_dir()
             .map_err(|error| format!("No se pudo ubicar cache P2P: {}", error))?
             .join("p2p");
-        let (store, tracker, _handler) = p2p::spawn_p2p_layer(cache_root);
+        let (store, tracker) = p2p::spawn_p2p_layer(cache_root);
         *state.chunk_store.lock().map_err(|_| String::from("No se pudo guardar el base de chunks P2P."))? = Some(store);
         *state.tracker.lock().map_err(|_| String::from("No se pudo guardar el tracker P2P."))? = Some(tracker);
     }
