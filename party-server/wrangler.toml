@@ -1,0 +1,11 @@
+name = "aetherio-party"
+main = "src/index.ts"
+compatibility_date = "2025-06-20"
+
+[[durable_objects.bindings]]
+name = "PARTY_ROOMS"
+class_name = "PartyRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PartyRoom"]

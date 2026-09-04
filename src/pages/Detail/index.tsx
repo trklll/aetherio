@@ -42,7 +42,7 @@ import {
 } from "../../trakt";
 import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../services/tmdbComments";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
-import { gsap, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
+import { gsap, appleEase, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
 import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
 import { useAwardsByTmdbId, awardCategoryLabel, featuredText } from "../../hooks/useAwards";
 import { AwardLogo } from "../../components/awards/AwardLogo";
@@ -58,9 +58,9 @@ const DETAIL_ROW_SHADOW_BOTTOM_GUTTER = 40;
 const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 16, bottom: 40 };
 // Keep arrows centered on the media (image) height, not the full card
 const DETAIL_EPISODE_MEDIA_HEIGHT = 225;
-const DETAIL_TRAILER_HEIGHT = 195;
+const DETAIL_TRAILER_HEIGHT = 224;
 const DETAIL_CAST_PORTRAIT_SIZE = 159;
-const DETAIL_VERTICAL_POSTER_HEIGHT = 312;
+const DETAIL_VERTICAL_POSTER_HEIGHT = 296;
 const DETAIL_COLLECTION_HEIGHT = 192;
 const DETAIL_MEDIA_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_EPISODE_MEDIA_HEIGHT / 2 + 10;
 const DETAIL_TRAILER_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_TRAILER_HEIGHT / 2;
@@ -782,8 +782,18 @@ export default function DetailPage() {
   const detailContentRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const loadGenerationRef = useRef(0);
-  const backdropImageRef = useRef<HTMLImageElement>(null);
+  const backdropImageRef = useRef<HTMLDivElement>(null);
   const backdropBlurAmountRef = useRef(0);
+  const bgPrevImageRef = useRef<HTMLImageElement>(null);
+  const bgCurrImageRef = useRef<HTMLImageElement>(null);
+  const bgLoadTokenRef = useRef(0);
+  const [bgStack, setBgStack] = useState<{ prev: string | null; curr: string }>(() => ({
+    prev: null,
+    curr: data?.backdrop ?? data?.poster ?? "",
+  }));
+  const logoImgRef = useRef<HTMLImageElement>(null);
+  const logoPrevImageRef = useRef<HTMLImageElement>(null);
+  const [logoStack, setLogoStack] = useState<{ prev: string | null; curr: string }>({ prev: null, curr: "" });
   const metadataVignetteRef = useRef<HTMLDivElement>(null);
   const metadataVignetteOpacityRef = useRef(1);
   const darkOverlayRef = useRef<HTMLDivElement>(null);
@@ -906,6 +916,79 @@ export default function DetailPage() {
     backdropBlurAmountRef.current = -1;
     updateBackdropBlur(detailScrollRef.current?.scrollTop ?? 0);
   }, [data?.backdrop, data?.poster]);
+
+  // Crossfade del fondo del medio: al cambiar backdrop, se hace un fundido de la imagen anterior a la nueva
+  // Sincroniza el stack del fondo. Si ya hay una imagen visible, la nueva se
+  // precarga por completo antes de fundir: así el crossfade nunca muestra un
+  // hueco negro ni un "pop" en los últimos frames mientras descarga.
+  useLayoutEffect(() => {
+    const next = data?.backdrop ?? data?.poster ?? "";
+    if (!next || bgStack.curr === next) return;
+    const token = ++bgLoadTokenRef.current;
+    let cancelled = false;
+    const commit = () => {
+      if (cancelled || bgLoadTokenRef.current !== token) return;
+      setBgStack(latest => (latest.curr === next ? latest : { prev: latest.curr || null, curr: next }));
+    };
+    if (!bgStack.curr) {
+      commit();
+      return () => { cancelled = true; };
+    }
+    const probe = new Image();
+    probe.decoding = "async";
+    probe.src = next;
+    if (probe.complete && probe.naturalWidth > 0) {
+      commit();
+    } else {
+      probe.onload = commit;
+      probe.onerror = commit;
+    }
+    return () => { cancelled = true; };
+  }, [data?.backdrop, data?.poster, bgStack.curr]);
+
+  useLayoutEffect(() => {
+    if (!bgStack.prev || bgStack.prev === bgStack.curr) return;
+    const prevEl = bgPrevImageRef.current;
+    const currEl = bgCurrImageRef.current;
+    if (!prevEl || !currEl) return;
+    const targetCurr = bgStack.curr;
+    gsap.killTweensOf([prevEl, currEl]);
+    gsap.to(prevEl, { opacity: 0, duration: 0.62, ease: "power1.out", overwrite: true });
+    gsap.fromTo(currEl, { opacity: 0 }, {
+      opacity: 1,
+      duration: 0.62,
+      ease: appleEase,
+      overwrite: true,
+      onComplete: () => setBgStack(current => (current.curr === targetCurr && current.prev ? { prev: null, curr: current.curr } : current)),
+    });
+    return () => gsap.killTweensOf([prevEl, currEl]);
+  }, [bgStack]);
+
+  // Crossfade del logo: al cambiar logo, fundido de la imagen anterior a la nueva.
+  // Estos efectos van antes de cualquier return temprano (Rules of Hooks).
+  useLayoutEffect(() => {
+    const nextLogo = sanitizeLogoUrl(data?.logo) || cachedLogo;
+    if (!nextLogo) return;
+    setLogoStack(current => (current.curr === nextLogo ? current : { prev: current.curr || null, curr: nextLogo }));
+  }, [data?.logo, cachedLogo]);
+
+  useLayoutEffect(() => {
+    if (!logoStack.prev || logoStack.prev === logoStack.curr) return;
+    const prevEl = logoPrevImageRef.current;
+    const currEl = logoImgRef.current;
+    if (!prevEl || !currEl) return;
+    const targetCurr = logoStack.curr;
+    gsap.killTweensOf([prevEl, currEl]);
+    gsap.to(prevEl, { opacity: 0, duration: 0.34, ease: "power1.out", overwrite: true });
+    gsap.fromTo(currEl, { opacity: 0 }, {
+      opacity: 1,
+      duration: 0.34,
+      ease: appleEase,
+      overwrite: true,
+      onComplete: () => setLogoStack(current => (current.curr === targetCurr && current.prev ? { prev: null, curr: current.curr } : current)),
+    });
+    return () => gsap.killTweensOf([prevEl, currEl]);
+  }, [logoStack]);
 
   useLayoutEffect(() => {
     const root = detailContentRef.current;
@@ -1602,7 +1685,7 @@ export default function DetailPage() {
         background: nextEpisode.still ?? detailData.backdrop,
         episodeStill: nextEpisode.still,
         poster: detailData.poster,
-        entryKind: "next",
+        entryKind: nextEpisode.season > episode.season ? "new" : "next",
         source: "local",
       });
     }
@@ -1649,7 +1732,7 @@ export default function DetailPage() {
         background: nextSeasonEpisode.still ?? detailData.backdrop,
         episodeStill: nextSeasonEpisode.still,
         poster: detailData.poster,
-        entryKind: "next",
+        entryKind: nextSeasonEpisode.season > seasonNumber ? "new" : "next",
         source: "local",
       });
     }
@@ -1683,7 +1766,7 @@ export default function DetailPage() {
         background: currentEpisode.still ?? detailData.backdrop,
         episodeStill: currentEpisode.still,
         poster: detailData.poster,
-        entryKind: "next",
+        entryKind: currentEpisode.season > seasonNumber ? "new" : "next",
         source: "local",
       });
     }
@@ -1947,7 +2030,7 @@ export default function DetailPage() {
           pointerEvents:"none",
         }}
       >
-        {(data.backdrop ?? data.poster) ? (
+        {bgStack.curr ? (
           <div
             style={{
               position:"absolute",
@@ -1959,21 +2042,50 @@ export default function DetailPage() {
               transform:"translate(-50%, -50%)",
             }}
           >
-            <img
+            <div
               ref={backdropImageRef}
-              src={data.backdrop ?? data.poster}
-              alt=""
-              width="1920"
-              height="1080"
               style={{
-                width:"100%",
-                height:"100%",
-                objectFit:"cover",
-                objectPosition:"center",
+                position:"absolute",
+                inset:0,
                 filter:"blur(0px)",
                 transform:"scale(1)",
               }}
-            />
+            >
+              {bgStack.prev && bgStack.prev !== bgStack.curr ? (
+                <img
+                  ref={bgPrevImageRef}
+                  src={bgStack.prev}
+                  alt=""
+                  width="1920"
+                  height="1080"
+                  style={{
+                    position:"absolute",
+                    inset:0,
+                    width:"100%",
+                    height:"100%",
+                    objectFit:"cover",
+                    objectPosition:"center",
+                    opacity:1,
+                  }}
+                />
+              ) : null}
+              <img
+                ref={bgCurrImageRef}
+                src={bgStack.curr}
+                alt=""
+                width="1920"
+                height="1080"
+                style={{
+                  position:"absolute",
+                  inset:0,
+                  width:"100%",
+                  height:"100%",
+                  objectFit:"cover",
+                  objectPosition:"center",
+                  opacity:bgStack.prev ? 0 : 1,
+                }}
+              />
+            </div>
           </div>
         ) : null}
       </div>
@@ -2024,10 +2136,19 @@ export default function DetailPage() {
                 type="button"
                 onClick={() => navigate(`/detail/${encodeURIComponent(data.type)}/${encodeURIComponent(data.id)}`, { replace: true })}
                 aria-label={`Ir al detalle de ${data.name}`}
-                style={{ border:0,padding:0,background:"transparent",cursor:"pointer",display:"block" }}
+                style={{ position:"relative", border:0,padding:0,background:"transparent",cursor:"pointer",display:"block" }}
               >
+                {logoStack.prev && logoStack.prev !== logoStack.curr ? (
+                  <img
+                    ref={logoPrevImageRef}
+                    src={logoStack.prev}
+                    alt=""
+                    style={{ position:"absolute",inset:0,maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 10px rgba(0,0,0,0.75))",opacity:1,pointerEvents:"none" }}
+                  />
+                ) : null}
                 <img
-                  src={displayLogo}
+                  ref={logoImgRef}
+                  src={logoStack.curr || displayLogo}
                   alt={data.name}
                   onLoad={() => {
                     logoLog("logo img onLoad", { url: displayLogo });
@@ -2037,7 +2158,7 @@ export default function DetailPage() {
                     logoLog("logo img onError", { url: displayLogo });
                     setLogoStatus("error");
                   }}
-                  style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 10px rgba(0,0,0,0.75))",opacity:1, display:"block" }}
+                  style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 10px rgba(0,0,0,0.75))",opacity:logoStack.prev ? 0 : 1, display:"block" }}
                 />
               </button>
             </div>
@@ -2399,7 +2520,7 @@ export default function DetailPage() {
               {data.related.map(r=>(
                 <div key={r.id}
                   onClick={()=>navigate(`/detail/${r.media_type}/tmdb:${r.id}`)}
-                  style={{ flexShrink:0,width:207,height:312,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
+                  style={{ flexShrink:0,width:197,height:296,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
                   onMouseEnter={e=>{
                     const card = e.currentTarget as HTMLDivElement;
                     tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
@@ -3013,7 +3134,7 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     <button
       type="button"
       onClick={playTrailer}
-      style={{ flexShrink:0,width:347,height:195,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",padding:0,textAlign:"left" }}
+      style={{ flexShrink:0,width:399,height:224,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",padding:0,textAlign:"left" }}
       onMouseEnter={e=>{
          tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
          gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });

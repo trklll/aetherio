@@ -7,6 +7,8 @@ import { toggleWindowFullscreen } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
 import { gsap, installInertialScroll, springTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
+import { consumeAutoResolveBackPress } from "../../utils/autoResolveGuard";
+import { useParty } from "../../party/PartyContext";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -32,31 +34,73 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const controlsHideTimerRef = useRef<number | null>(null);
   const showBack = isEpisodePage || isPlayer || isDetailPage || isPersonPage;
 
+  // La sala vive solo dentro del flujo de reproducción (episode -> player).
+  // Al abandonarlo —salir del player, volver al detalle, abrir otro medio—,
+  // si era anfitrión la sala MUERE (closeRoom) y si era invitado solo se
+  // desconecta. Así ninguna sala vieja reaparece en la siguiente reproducción.
+  const { closeRoom: partyCloseRoom, leaveRoom: partyLeaveRoom, isOwner: partyIsOwner, roomCode: partyRoomCode } = useParty();
+  const partyExitRef = useRef({ closeRoom: partyCloseRoom, leaveRoom: partyLeaveRoom, isOwner: false, roomCode: "" });
+  partyExitRef.current = { closeRoom: partyCloseRoom, leaveRoom: partyLeaveRoom, isOwner: partyIsOwner, roomCode: partyRoomCode };
+  const prevRouteRef = useRef({ path: loc.pathname, search: loc.search });
+  useEffect(() => {
+    const prev = prevRouteRef.current;
+    prevRouteRef.current = { path: loc.pathname, search: loc.search };
+    if (prev.path === loc.pathname && prev.search === loc.search) return;
+    const party = partyExitRef.current;
+    if (!party.roomCode) return;
+    const nowPlayer = loc.pathname === "/player";
+    // episode -> player: se entra a reproducir, la sala sigue.
+    // player -> player (siguiente episodio / Up Next): la sala sigue.
+    if (nowPlayer) return;
+    const wasPlayer = prev.path === "/player";
+    const wasEpisode = prev.path === "/episode" || prev.path === "/streams";
+    if (!wasPlayer && !wasEpisode) return;
+    if (party.isOwner) party.closeRoom();
+    else party.leaveRoom();
+  }, [loc.pathname, loc.search]);
+
   // Scroll-based hide for window controls (outside player) — syncs with TopNav
+  // Umbral y fuente idénticos a TopNav: max scrollTop de TODOS los shells
+  // (Detail tiene su propio shell anidado) para que se contraigan en TODA la app.
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
-    if (isPlayer) return;
+    if (isPlayer) {
+      setScrolled(false);
+      return;
+    }
     let raf = 0;
+    function readY(): number {
+      const shells = Array.from(document.querySelectorAll<HTMLElement>("[data-aetherio-scroll-shell]"));
+      let max = 0;
+      for (const s of shells) {
+        if (s.scrollTop > max) max = s.scrollTop;
+      }
+      const docY = document.scrollingElement?.scrollTop ?? window.scrollY ?? 0;
+      if (docY > max) max = docY;
+      return max;
+    }
     function onScroll() {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        const shell = document.querySelector("[data-aetherio-scroll-shell]");
-        const el = (shell as HTMLElement) ?? document.scrollingElement ?? document.documentElement;
-        const y = el.scrollTop;
         // Use same threshold as TopNav (220px) with slight damping to feel simultaneous
-        setScrolled(y > 220);
+        setScrolled(readY() > 220);
       });
     }
-    const shell = document.querySelector("[data-aetherio-scroll-shell]");
-    const target = (shell as HTMLElement) ?? window;
-    target.addEventListener("scroll", onScroll, { passive: true });
+    // capture:true atrapa scrolls de shells anidados (no burbujean)
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true } as AddEventListenerOptions);
+    window.addEventListener("resize", onScroll);
+    const t1 = window.setTimeout(onScroll, 50);
+    const t2 = window.setTimeout(onScroll, 250);
     onScroll();
     return () => {
-      target.removeEventListener("scroll", onScroll);
+      document.removeEventListener("scroll", onScroll, { capture: true } as EventListenerOptions);
+      window.removeEventListener("resize", onScroll);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [isPlayer, location.pathname]);
+  }, [isPlayer, loc.pathname, loc.search]);
 
   // Back button visibility: independent zone (top-left corner)
   const backVisible = isPlayer ? (playerChromeVisible || backZone) : showBack ? backZone : true;
@@ -64,7 +108,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // When scrolled, controlsVisible is false unless controlsZone is true (hover)
   const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : (controlsZone || !scrolled);
 
-  console.log('[AppShell] controlsVisible:', controlsVisible, 'scrolled:', scrolled, 'controlsZone:', controlsZone);
   const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
@@ -302,6 +345,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [loc.pathname, loc.search]);
 
   function goBack() {
+    // Loader de auto-resolve activo (estilo NuvioTV): atras/ESC cancela el
+    // autoplay y revela el picker manual en vez de salir de la pagina.
+    if (consumeAutoResolveBackPress()) return;
+
     if (isDetailPage) {
       const historyIndex = getRouterHistoryIndex();
       const returnDelta = historyIndex === null

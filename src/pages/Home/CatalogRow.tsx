@@ -7,6 +7,7 @@ import { supportsAiringSchedule, useAiringSchedule } from "../../hooks/useAiring
 import { useHorizontalVirtualWindow } from "../../hooks/useHorizontalVirtualWindow";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import { sanitizeLogoUrl } from "../../utils/artwork";
+import { isTopFormatRow } from "../../utils/topRows";
 import { buildMediaKey, CONTINUE_WATCHING_EVENT, markMediaAsWatched, readPlaybackStateEntries } from "../../utils/continueWatching";
 import {
   HOME_CARD_ARTWORK_CHANGED_EVENT,
@@ -15,6 +16,8 @@ import {
   type HomeCardArtworkMode,
 } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { isBetterPosterUrl } from "../../config/betterPosters";
+import { useBetterPoster } from "../../hooks/useBetterPoster";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
@@ -22,31 +25,14 @@ import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../uti
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 386, height: 225 };
-const VERTICAL_CARD = { width: 207, height: 312 };
-const RANKED_CARD = { width: 248, height: 252 };
-const RANKED_DOUBLE_CARD = { width: 298, height: 252 };
-const RANKED_POSTER = { width: 168, height: 252, singleLeft: 80, doubleLeft: 130 };
+const VERTICAL_CARD = { width: 197, height: 296 };
+const RANKED_CARD = { width: 277, height: 296 };
+const RANKED_DOUBLE_CARD = { width: 327, height: 296 };
+const RANKED_POSTER = { width: 197, height: 296, singleLeft: 80, doubleLeft: 130 };
 const HORIZONTAL_GAP = 18;
 const RANKED_GAP = 10;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
-
-const RANKED_CATALOG_IDS = new Set([
-  "tmdb.trending_movie",
-  "tmdb.trending_series",
-  "mal.top_anime",
-  "jikan.top_movies",
-  "mal.last_year_best",
-]);
-
-function isTrendingRow(row: Pick<CatalogRowData, "catalogId" | "name">) {
-  if (RANKED_CATALOG_IDS.has(row.catalogId)) return true;
-  const name = row.name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-  return name.includes("trending") || name.includes("tendencia") || name.startsWith("top ");
-}
 
 function homeRailTitle(title: string, type: string) {
   const catalogTitle = title.trim() || "Catalogo";
@@ -91,7 +77,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [showRight, setShowRight] = useState(false);
   const [watchedVersion, setWatchedVersion] = useState(0);
   const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type), [row.name, row.type, titleOverride]);
-  const ranked = useMemo(() => isTrendingRow(row), [row]);
+  const ranked = useMemo(() => isTopFormatRow(row), [row]);
   const maxCards = ranked ? 10 : 200;
   const rowItems = useMemo(() => row.items.slice(0, maxCards), [row.items, maxCards]);
   const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
@@ -378,15 +364,28 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const [inLibrary, setInLibrary] = useState(() => isInLibrary(type, item.id));
   const [, setArtworkVersion] = useState(0);
   const [logoFailed, setLogoFailed] = useState(false);
+  // Si el póster BetterPosters falla (offline, 404, rate-limit), volver al original TMDB/Cinemeta.
+  const [posterFailed, setPosterFailed] = useState(false);
+  const posterLoadedRef = useRef(false);
   const detailBackground = resolveDetailBackground(type, item.id, item.background);
   const ranked = typeof rank === "number";
   const effectivePosterLayout = ranked ? "vertical" : posterLayout;
   const artworkMode: HomeCardArtworkMode = effectivePosterLayout === "vertical" ? "poster" : "background";
   const cardBackground = readHomeCardArtwork("background", type, item.id, detailBackground);
   const cardPoster = readHomeCardArtwork("poster", type, item.id, item.poster);
+  // Override manual del usuario → no tocar. Solo se resuelve BetterPosters en vertical.
+  const hasCustomPoster = Boolean(cardPoster && cardPoster !== item.poster);
+  // En formato top el número grande ya indica el puesto: pósters sin badges #Hoy.
+  const posterOverrides = ranked ? { trendTags: false } : undefined;
+  const resolvedPoster = useBetterPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides);
+  const verticalPoster = resolvedPoster.url ?? cardPoster;
+  const fallbackPoster = item.originalPoster ?? resolvedPoster.original;
   const image = effectivePosterLayout === "vertical"
-    ? cardPoster ?? cardBackground ?? ""
+    ? verticalPoster ?? cardBackground ?? ""
     : cardBackground ?? cardPoster ?? "";
+  const displayImage = effectivePosterLayout === "vertical" && posterFailed && fallbackPoster
+    ? fallbackPoster
+    : image;
   const customLogo = sanitizeLogoUrl(readHomeCardArtwork("logo", type, item.id));
   const logo = customLogo || sanitizeLogoUrl(item.logo);
   const showLogo = Boolean(logo && !logoFailed);
@@ -442,7 +441,20 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
 
   useEffect(() => {
     setLogoFailed(false);
-  }, [logo]);
+    setPosterFailed(false);
+    posterLoadedRef.current = false;
+  }, [logo, item.poster, resolvedPoster.url]);
+
+  // btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
+  // sin error: si en 15s no cargó, caer al póster original.
+  useEffect(() => {
+    posterLoadedRef.current = false;
+    if (!isBetterPosterUrl(displayImage) || !fallbackPoster) return;
+    const timer = window.setTimeout(() => {
+      if (!posterLoadedRef.current) setPosterFailed(true);
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [displayImage, fallbackPoster]);
 
   useEffect(() => {
     const refresh = () => setInLibrary(isInLibrary(type, item.id));
@@ -599,7 +611,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             width: rankedPosterLeft,
             textAlign: "right",
             fontFamily: "inherit",
-            fontSize: 176,
+            fontSize: 207,
             lineHeight: 0.86,
             fontWeight: 800,
             fontVariantNumeric: "tabular-nums",
@@ -653,10 +665,12 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
           {image ? (
             <img
               data-card-artwork
-              src={image}
+              src={displayImage}
               alt={item.name}
               decoding="async"
               loading="lazy"
+              onLoad={() => { posterLoadedRef.current = true; }}
+              onError={() => { if (fallbackPoster) setPosterFailed(true); }}
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }}
             />
           ) : null}
@@ -717,7 +731,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
           </div>
         ) : null}
         {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} /> : null}
-        {image ? <img src={image} alt={item.name} decoding="async" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
+        {image ? <img src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
         {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
           {showLogo ? (

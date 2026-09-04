@@ -54,6 +54,7 @@ import {
   syncAniListLibrary,
 } from "./integrations/aniList.ts";
 import { startDiscordRichPresence, stopDiscordRichPresence } from "./integrations/discordPresence.ts";
+import { PartyProvider } from "./party/PartyContext.tsx";
 import {
   getPlaybackPreferences,
   PLAYBACK_PREFERENCES_CHANGED_EVENT,
@@ -399,10 +400,12 @@ export default function App() {
   const defaultRoute = "/home";
 
   return withStartup(
-    <AppShell>
-      <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
-      <CachedPageRoutes key={profileRevision} location={location} defaultRoute={defaultRoute} />
-    </AppShell>,
+    <PartyProvider>
+      <AppShell>
+        <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
+        <CachedPageRoutes key={profileRevision} location={location} defaultRoute={defaultRoute} />
+      </AppShell>
+    </PartyProvider>,
   );
 }
 

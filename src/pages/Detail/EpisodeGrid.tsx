@@ -171,7 +171,7 @@ export default function DetailSectionPage() {
         ) : null}
 
         {sectionKind === "related" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(207px, 207px))", gap: "22px 24px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(197px, 197px))", gap: "22px 24px" }}>
             {related.map(item => (
               <RelatedGridCard
                 key={`${item.type}-${item.id}`}
@@ -221,7 +221,7 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
         }));
         navigate(`/player?${new URLSearchParams({ type, id, trailer: "1" }).toString()}`);
       }}
-      style={{ position: "relative", width: 347, height: 195, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer", textAlign: "left" }}
+      style={{ position: "relative", width: 399, height: 224, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer", textAlign: "left" }}
     >
       <img src={item.thumbnail} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
       <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.28) 48%, transparent 100%)" }} />
@@ -263,7 +263,7 @@ function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: b
 
 function RelatedGridCard({ item, onOpen }: { item: RelatedItem; onOpen: () => void }) {
   return (
-    <button type="button" onClick={onOpen} style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer" }}>
+    <button type="button" onClick={onOpen} style={{ position: "relative", width: 197, height: 296, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer" }}>
       {item.poster ? <img src={item.poster} alt={item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
     </button>
   );

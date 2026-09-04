@@ -41,25 +41,40 @@ export default function TopNav() {
   const collapsed = scrolled && !hovering && !searching;
   useEffect(() => {
     let raf = 0;
+    function readY(): number {
+      // Hay páginas (Detail) con su propio [data-aetherio-scroll-shell] anidado:
+      // hay que mirar TODOS los shells, no solo el primero.
+      const shells = Array.from(document.querySelectorAll<HTMLElement>("[data-aetherio-scroll-shell]"));
+      let max = 0;
+      for (const s of shells) {
+        if (s.scrollTop > max) max = s.scrollTop;
+      }
+      const docY = document.scrollingElement?.scrollTop ?? window.scrollY ?? 0;
+      if (docY > max) max = docY;
+      return max;
+    }
     function onScroll() {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        const shell = document.querySelector("[data-aetherio-scroll-shell]");
-        const el = (shell as HTMLElement) ?? document.scrollingElement ?? document.documentElement;
-        const y = el.scrollTop;
-        setScrolled(y > 220);
+        setScrolled(readY() > 220);
       });
     }
-    const shell = document.querySelector("[data-aetherio-scroll-shell]");
-    const target = (shell as HTMLElement) ?? window;
-    target.addEventListener("scroll", onScroll, { passive: true });
+    // capture:true atrapa scrolls de shells anidados (no burbujean)
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true } as AddEventListenerOptions);
+    window.addEventListener("resize", onScroll);
+    // El shell interno (Detail) se monta después de navegar: re-evaluar en próximos frames
+    const t1 = window.setTimeout(onScroll, 50);
+    const t2 = window.setTimeout(onScroll, 250);
     onScroll();
     return () => {
-      target.removeEventListener("scroll", onScroll);
+      document.removeEventListener("scroll", onScroll, { capture: true } as EventListenerOptions);
+      window.removeEventListener("resize", onScroll);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   const isActive = (to: string) => {
     const [path, qs] = to.split("?");

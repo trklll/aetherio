@@ -1,6 +1,17 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys.ts";
+import {
+  applyBetterPosterToUrl,
+  BETTER_POSTER_CHANGED_EVENT,
+  betterPosterSignature,
+  extractImdbId,
+} from "../config/betterPosters.ts";
+import {
+  betterMetaTypeFor,
+  parseTmdbId,
+  resolveTmdbToImdb,
+} from "../services/betterPosterResolve.ts";
 import { getMdbListSettings } from "../config/mdblist.ts";
 import {
   fetchAnilistTopAnime,
@@ -40,6 +51,118 @@ const HOME_RAIL_ITEM_LIMIT = 20;
 const CINEMETA_HOST = "v3-cinemeta.strem.io";
 const CINEMETA_RESOLVE_CONCURRENCY = 8;
 
+// Rails cuyo orden sigue el ranking "Hoy" de BetterPosters (coincide con los
+// badges #N baked en los pósters). El resto de rails conserva su orden propio.
+const RANK_SORTED_RAIL_IDS = new Set([
+  "tmdb.top_movie",
+  "tmdb.top_series",
+  "tmdb.trending_movie",
+  "tmdb.trending_series",
+]);
+
+const BTTTR_RANK_TTL_MS = 1000 * 60 * 60;
+// Tiempo máximo que el ranking puede retrasar una fila (el resto sigue en background).
+const RANK_BUDGET_MS = 5000;
+const btttrRankCache = new Map<string, { at: number; map: Map<string, number> }>();
+
+/**
+ * Mapa imdbId (minúsculas) → posición del ranking "Hoy" de btttr.cc, leído de
+ * sus catálogos públicos (misma fuente que los badges #N de los pósters).
+ */
+async function fetchBtttrRankMap(kind: "movie" | "series"): Promise<Map<string, number>> {
+  const now = Date.now();
+  const hit = btttrRankCache.get(kind);
+  if (hit && now - hit.at < BTTTR_RANK_TTL_MS) return hit.map;
+  const url = kind === "movie"
+    ? "https://btttr.cc/catalog/movie/tmdb-today.json"
+    : "https://btttr.cc/catalog/series/tmdb-today-shows.json";
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`rank catalog ${response.status}`);
+  const data = await response.json() as any;
+  const metas = Array.isArray(data?.metas) ? data.metas : [];
+  const map = new Map<string, number>();
+  metas.forEach((meta: any, index: number) => {
+    const id = String(meta?.id ?? "").toLowerCase();
+    if (!id || map.has(id)) return;
+    const rank = Number(meta?._rank);
+    map.set(id, Number.isFinite(rank) && rank > 0 ? rank : index + 1);
+  });
+  btttrRankCache.set(kind, { at: now, map });
+  return map;
+}
+
+async function rankOfItem(item: MediaItem, rankMap: Map<string, number>): Promise<number | null> {
+  const direct = extractImdbId(item.id)?.toLowerCase();
+  if (direct) return rankMap.get(direct) ?? null;
+  const tmdbId = parseTmdbId(item.id);
+  if (tmdbId == null) return null;
+  const resolved = await resolveTmdbToImdb(betterMetaTypeFor(item.type), tmdbId).catch(() => null);
+  if (!resolved) return null;
+  return rankMap.get(resolved.toLowerCase()) ?? null;
+}
+
+/**
+ * Ordena por ranking ascendente e intercala los no rankeados ("Recién
+ * Añadida" y resto) repartidos de forma uniforme entre los rankeados.
+ */
+function sortByRankWithInterleave(
+  items: MediaItem[],
+  ranks: Array<number | null>,
+): MediaItem[] {
+  const ranked: Array<{ item: MediaItem; rank: number }> = [];
+  const unranked: MediaItem[] = [];
+  items.forEach((item, index) => {
+    const rank = ranks[index];
+    if (rank == null) unranked.push(item);
+    else ranked.push({ item, rank });
+  });
+  ranked.sort((a, b) => a.rank - b.rank);
+  if (!ranked.length || !unranked.length) {
+    return [...ranked.map(entry => entry.item), ...unranked];
+  }
+  const merged: MediaItem[] = [];
+  const totalUnranked = unranked.length;
+  let pending = 0;
+  for (const entry of ranked) {
+    merged.push(entry.item);
+    pending += totalUnranked / ranked.length;
+    while (pending >= 1 && unranked.length) {
+      merged.push(unranked.shift()!);
+      pending -= 1;
+    }
+  }
+  merged.push(...unranked);
+  return merged;
+}
+
+async function sortRailByBtttrRank(items: MediaItem[], type: string): Promise<MediaItem[]> {
+  if (items.length < 2) return items;
+  const kind = type.toLowerCase() === "movie" ? "movie" : "series";
+  // Presupuesto acotado: el ranking nunca debe retrasar el pintado de la fila.
+  // Lo que no se resuelva a tiempo queda como no-rankeado (intercalado) y las
+  // resoluciones pendientes siguen en segundo plano para próximas cargas.
+  const rankMap = await withTimeout(
+    fetchBtttrRankMap(kind as "movie" | "series").catch(() => null),
+    RANK_BUDGET_MS,
+  ).catch(() => null);
+  if (!rankMap || !rankMap.size) return items;
+  const ranks = await Promise.all(
+    items.map(item => withTimeout(rankOfItem(item, rankMap).catch(() => null), RANK_BUDGET_MS).catch(() => null)),
+  );
+  if (ranks.every(rank => rank == null)) return items;
+  return sortByRankWithInterleave(items, ranks);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("budget")), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 interface HomeCatalogRequest {
   catalog: any;
   extraParams: Record<string, string>;
@@ -72,9 +195,19 @@ function stripSeasonPattern(name: string): string | null {
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
   const detailBackground = resolveDetailBackground(item.type, item.id, item.background);
+  const customPoster = readHomeCardArtwork("poster", item.type, item.id, undefined);
+  const basePoster = customPoster ?? item.poster;
+  const upgraded = upgradeTmdbImage(basePoster, "original");
+  // El override manual del usuario siempre gana: no aplicar BetterPosters encima.
+  const hasCustom = Boolean(customPoster && customPoster !== item.poster);
+  const better = hasCustom
+    ? upgraded
+    : applyBetterPosterToUrl(upgraded, extractImdbId(item.id));
   return {
     ...item,
-    poster: upgradeTmdbImage(readHomeCardArtwork("poster", item.type, item.id, item.poster), "original"),
+    poster: better ?? upgraded,
+    // Si BetterPosters falla (offline, 404, rate-limit), el <img> vuelve al original.
+    originalPoster: better && better !== upgraded ? upgraded : item.originalPoster,
     background: upgradeTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground), HOME_BACKGROUND_IMAGE_SIZE),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "original")),
   };
@@ -113,8 +246,12 @@ function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: Con
     addon.enabled && Array.isArray(addon.manifest?.catalogs) && addon.manifest.catalogs.length > 0
   ));
   const orientationTag = `|orient:${contentOrientation}`;
+  const posterTag = `|bp:${betterPosterSignature()}`;
+  // El ranking "Hoy" y sus badges cambian a diario: la firma incluye el día
+  // para que el orden se regenere cada día en el primer arranque.
+  const dayTag = `|d:${todayKey()}`;
   if (!catalogAddons.length) {
-    return `${HOME_ROWS_DATA_VERSION}|aetherio-starter|${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}${orientationTag}`;
+    return `${HOME_ROWS_DATA_VERSION}|aetherio-starter|${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}${orientationTag}${posterTag}`;
   }
 
   return `${HOME_ROWS_DATA_VERSION}|${catalogAddons
@@ -130,7 +267,7 @@ function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: Con
         .join(",");
       return `${addon.id}|${addon.url}|${addon.version}|${catalogs}`;
     })
-    .join("||")}${orientationTag}`;
+    .join("||")}${orientationTag}${posterTag}${dayTag}`;
 }
 
 function homeRailTitle(title: string | undefined, type: string) {
@@ -745,7 +882,7 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
   const tmdbRows = await Promise.all(requests.map(async (request): Promise<CatalogRowData | null> => {
     const results = await fetchStarterTmdbResults(request);
     const seen = new Set<string>();
-    const items = results
+    const unsorted = results
       .filter((item: any) => {
         const lang = String(item?.original_language ?? "").toLowerCase();
         return !lang.startsWith("zh");
@@ -757,6 +894,13 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
         return true;
       })
       .slice(0, HOME_RAIL_ITEM_LIMIT);
+    if (!unsorted.length) return null;
+    // Popular/Tendencias siguen el ranking "Hoy" de BetterPosters (#N del badge),
+    // con no-rankeados ("Recién Añadida", resto) intercalados. Además esto
+    // precalienta la caché tmdb→imdb y los pósters resuelven al instante.
+    const items = RANK_SORTED_RAIL_IDS.has(request.id)
+      ? await sortRailByBtttrRank(unsorted, request.type).catch(() => unsorted)
+      : unsorted;
     if (!items.length) return null;
     return {
       addonId: "aetherio-starter",
@@ -1171,6 +1315,18 @@ function preloadStartupImage(url: string) {
 export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const queryClient = useQueryClient();
   const [tmdbReady, setTmdbReady] = useState(() => Boolean(getTmdbApiKey()));
+  // Fuerza recomputar rowsSignature (incluye ajustes BetterPosters) al cambiarlos.
+  const [posterVersion, setPosterVersion] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setPosterVersion(version => version + 1);
+    window.addEventListener(BETTER_POSTER_CHANGED_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(BETTER_POSTER_CHANGED_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (!tmdbReady) {
@@ -1180,7 +1336,11 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
     }
   }, [tmdbReady]);
 
-  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
+  const rowsSignature = useMemo(
+    () => enabledAddonSignature(addons, contentOrientation),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [addons, contentOrientation, posterVersion],
+  );
   const currentHeroSignature = heroSignature();
   const prevSignatureRef = useRef<string | undefined>(undefined);
 
