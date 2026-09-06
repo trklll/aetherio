@@ -16,8 +16,10 @@ import {
   type HomeCardArtworkMode,
 } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { getPosterTagColor, pickSamplablePosterUrl } from "../../utils/posterTagColor";
 import { isBetterPosterUrl } from "../../config/betterPosters";
 import { useBetterPoster } from "../../hooks/useBetterPoster";
+import { readHiddenMediaKeys } from "../../services/watchedVisibility";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
@@ -79,7 +81,15 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type), [row.name, row.type, titleOverride]);
   const ranked = useMemo(() => isTopFormatRow(row), [row]);
   const maxCards = ranked ? 10 : 200;
-  const rowItems = useMemo(() => row.items.slice(0, maxCards), [row.items, maxCards]);
+  // Vistos fuera: los completados sin episodios nuevos no ocupan las rows
+  // (el filtro va ANTES del slice para que la row se rellene con el resto).
+  const hiddenMediaKeys = useMemo(() => readHiddenMediaKeys(), [watchedVersion]);
+  const rowItems = useMemo(
+    () => row.items
+      .filter(item => !hiddenMediaKeys.has(buildMediaKey(row.type, item.id)))
+      .slice(0, maxCards),
+    [row.items, maxCards, hiddenMediaKeys, row.type],
+  );
   const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
   const virtualWindow = useHorizontalVirtualWindow({
     itemCount: rowItems.length,
@@ -208,6 +218,9 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
     tweenTo(leftArrowRef.current, { opacity: hovered && showLeft ? 1 : 0 }, 0.45);
     tweenTo(rightArrowRef.current, { opacity: hovered && showRight ? 1 : 0 }, 0.45);
   }, [hovered, showLeft, showRight]);
+
+  // Fila vacía tras ocultar vistos: no pinta ni cabecera.
+  if (rowItems.length === 0) return null;
 
   return (
         <section style={{ paddingLeft: 0, paddingRight: 0, marginBottom: -24 }}>
@@ -358,6 +371,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const [scheduleNearViewport, setScheduleNearViewport] = useState(false);
   const airingSchedule = useAiringSchedule(type, item.id, scheduleNearViewport);
   const effectiveWatched = watched && !airingSchedule;
+  // Tinte sólido del tag de horario extraído del póster (como el #Hoy de BTTTR).
+  const [tagBackground, setTagBackground] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
@@ -376,7 +391,9 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   // Override manual del usuario → no tocar. Solo se resuelve BetterPosters en vertical.
   const hasCustomPoster = Boolean(cardPoster && cardPoster !== item.poster);
   // En formato top el número grande ya indica el puesto: pósters sin badges #Hoy.
-  const posterOverrides = ranked ? { trendTags: false } : undefined;
+  // Con horario de emisión ("Cada domingo") el badge nuestro pisa al #Hoy de
+  // BTTTR: se pide el póster sin trend tags para que solo se vea el nuestro.
+  const posterOverrides = ranked || airingSchedule ? { trendTags: false } : undefined;
   const resolvedPoster = useBetterPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides);
   const verticalPoster = resolvedPoster.url ?? cardPoster;
   const fallbackPoster = item.originalPoster ?? resolvedPoster.original;
@@ -389,6 +406,18 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const customLogo = sanitizeLogoUrl(readHomeCardArtwork("logo", type, item.id));
   const logo = customLogo || sanitizeLogoUrl(item.logo);
   const showLogo = Boolean(logo && !logoFailed);
+  useEffect(() => {
+    if (!airingSchedule) return;
+    let cancelled = false;
+    setTagBackground(null);
+    const sampleUrl = pickSamplablePosterUrl(item.originalPoster, cardPoster, item.poster);
+    if (!sampleUrl) return;
+    void getPosterTagColor(sampleUrl).then(color => {
+      if (!cancelled && color) setTagBackground(color);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [airingSchedule, cardPoster, item.originalPoster, item.poster]);
   const doubleDigitRank = ranked && rank >= 10;
   const rankedPosterLeft = doubleDigitRank ? RANKED_POSTER.doubleLeft : RANKED_POSTER.singleLeft;
   const cardSize = ranked
@@ -439,17 +468,35 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     return () => window.removeEventListener(HOME_CARD_ARTWORK_CHANGED_EVENT, refresh);
   }, [item.id, type]);
 
+  // El logo puede llegar tarde (enrich de fase 2) y NO debe resetear el
+  // estado del póster: antes, su cambio disparaba este efecto, ponía
+  // posterLoadedRef a false y el timer de 15s degradaba a TMDB pósters
+  // BTTTR ya verificados y cargados (ola BTTTR→normal a los ~15s).
   useEffect(() => {
     setLogoFailed(false);
+  }, [logo]);
+
+  useEffect(() => {
     setPosterFailed(false);
     posterLoadedRef.current = false;
-  }, [logo, item.poster, resolvedPoster.url]);
+  }, [item.poster, resolvedPoster.url]);
 
   // btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
   // sin error: si en 15s no cargó, caer al póster original.
+  // (No se resetea posterLoadedRef aquí: el reset vive en el efecto que
+  // observa cambios de URL; resetear aquí degradaba imágenes ya cargadas
+  // desde caché cuyo onLoad corrió antes que este efecto.)
+  // Al armar se consulta el estado real del <img>: con BTTTR verificado la
+  // imagen suele estar ya completa (caché) y su onLoad puede haber corrido
+  // ANTES que los efectos — sin este cheque el timer la degradaba igual.
+  const imgElRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
-    posterLoadedRef.current = false;
     if (!isBetterPosterUrl(displayImage) || !fallbackPoster) return;
+    const el = imgElRef.current;
+    if (el && el.currentSrc === displayImage && el.complete && el.naturalWidth > 0) {
+      posterLoadedRef.current = true;
+      return;
+    }
     const timer = window.setTimeout(() => {
       if (!posterLoadedRef.current) setPosterFailed(true);
     }, 15000);
@@ -503,6 +550,9 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   }, [detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, type]);
 
   const isHorizontal = effectivePosterLayout !== "vertical" && !ranked;
+  // Los pósters BTTTR no se pueden cambiar; solo cuando cae al fallback
+  // (TMDB o nuestro) se permite elegir póster.
+  const canChangeCardArtwork = artworkMode !== "poster" || !isBetterPosterUrl(displayImage);
 
   const artworkControls = (
     <>
@@ -539,11 +589,11 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               });
             },
           }] : []),
-          {
+          ...(canChangeCardArtwork ? [{
             label: artworkMode === "poster" ? "Elegir póster de la card" : "Elegir fondo de la card",
             icon: <ImageIcon size={15} />,
             onSelect: () => setArtworkPickerOpen(true),
-          },
+          }] : []),
           ...(isHorizontal ? [{
             label: "Elegir logo de la card",
             icon: <ImageIcon size={15} />,
@@ -661,10 +711,11 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
             </div>
           ) : null}
-          {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact /> : null}
+          {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact background={tagBackground} /> : null}
           {image ? (
             <img
               data-card-artwork
+              ref={imgElRef}
               src={displayImage}
               alt={item.name}
               decoding="async"
@@ -730,8 +781,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
           </div>
         ) : null}
-        {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} /> : null}
-        {image ? <img src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
+        {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} background={tagBackground} /> : null}
+        {image ? <img ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
         {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
           {showLogo ? (
@@ -774,8 +825,11 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   );
 });
 
-function AiringScheduleBadge({ label, watched, compact }: { label: string; watched: boolean; compact: boolean }) {
+function AiringScheduleBadge({ label, watched: _watched, compact, background }: { label: string; watched: boolean; compact: boolean; background?: string | null }) {
   const badgeRef = useGsapState<HTMLDivElement>({ opacity: 1, y: 0 }, [label], 0.28);
+  // Mismo diseño que el tag #Hoy de BTTTR: pastilla sólida arriba centrada,
+  // pegada al borde superior, teñida con la paleta del póster. Crece a lo
+  // ancho en una sola línea; la fuente no cambia.
   return (
     <div
       ref={badgeRef}
@@ -783,30 +837,33 @@ function AiringScheduleBadge({ label, watched, compact }: { label: string; watch
       title={label}
       style={{
         position: "absolute",
-        top: watched ? 48 : 10,
-        right: 10,
+        top: 0,
+        left: "50%",
+        translate: "-50% 0",
         zIndex: 4,
-        minHeight: compact ? 24 : 26,
-        maxWidth: "calc(100% - 20px)",
+        maxWidth: "calc(100% - 8px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: compact ? "5px 7px" : "6px 9px",
-        borderRadius: 10,
+        padding: compact ? "8px 18px 10px" : "6px 14px 8px",
+        borderRadius: "0 0 10px 10px",
         border: "none",
-        background: "#fff",
-        color: "#111",
+        background: background ?? "#343b48",
+        color: "#fff",
         textShadow: "none",
-        boxShadow: "none",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
         opacity: 0,
-        fontSize: compact ? 10 : 11,
-        lineHeight: 1.15,
+        fontSize: compact ? 15 : 12,
+        lineHeight: 1.25,
         fontWeight: 700,
-        letterSpacing: -0.1,
+        letterSpacing: 0,
+        textAlign: "center",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
         pointerEvents: "none",
       }}
     >
-      <span style={{ minWidth: 0 }}>{label}</span>
+      <span style={{ minWidth: 0, whiteSpace: "nowrap" }}>{label}</span>
     </div>
   );
 }
