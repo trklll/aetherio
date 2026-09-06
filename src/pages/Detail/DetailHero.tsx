@@ -246,9 +246,18 @@ function CatalogGridCard({
   posterLayout: "horizontal" | "vertical";
 }) {
   const navigate = useNavigate();
-  const image = posterLayout === "vertical"
+  // Aunque esta vista no está ruteada hoy, el póster puede ser una URL
+  // BTTTR horneada por normalizeMediaItem: si falla, volver al original
+  // en vez de dejar la card en negro.
+  const [failed, setFailed] = useState(false);
+  const base = posterLayout === "vertical"
     ? item.poster ?? item.background ?? ""
     : item.background ?? item.poster ?? "";
+  const fallback = item.originalPoster && item.originalPoster !== base
+    ? item.originalPoster
+    : undefined;
+  useEffect(() => { setFailed(false); }, [base]);
+  const image = failed && fallback ? fallback : base;
   const logo = sanitizeLogoUrl(item.logo);
   const openDetail = () => {
     writeDetailMediaMeta({
@@ -271,7 +280,7 @@ function CatalogGridCard({
       style={{ position: "relative", width, height, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", contentVisibility: "auto", containIntrinsicSize: `${width}px ${height}px` }}
     >
       {image ? (
-        <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        <img src={image} alt={item.name} loading="lazy" decoding="async" onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
       ) : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top,rgba(0,0,0,0.86) 0%,rgba(0,0,0,0.12) 62%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 10px 10px" }}>

@@ -23,6 +23,9 @@ export async function getTmdbApiKeyAsync(): Promise<string> {
   const userKey = getApiKeys().tmdbApiKey;
   if (userKey) return userKey;
   if (_builtinTmdbKey) return _builtinTmdbKey;
+  // Los builds web no tienen comando Tauri: la key de entorno es la única
+  // vía (antes se ignoraba aquí y tmdbFetch devolvía null siempre).
+  if (APP_TMDB_API_KEY) return APP_TMDB_API_KEY;
   if (_tmdbKeyPromise) return _tmdbKeyPromise;
   return initBuiltinTmdbKey();
 }

@@ -12,6 +12,7 @@ interface TmdbEpisodeDate {
 interface TmdbTvDetails {
   in_production?: boolean;
   status?: string;
+  poster_path?: string | null;
   next_episode_to_air?: TmdbEpisodeDate | null;
   last_episode_to_air?: TmdbEpisodeDate | null;
 }

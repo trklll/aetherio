@@ -22,7 +22,12 @@ const TASK_SETTLE_TIMEOUT_MS = 20_000;
 const TMDB_RESOLVE_TIMEOUT_MS = 8_000;
 
 let memoryCache: Record<string, string> | null = null;
-const negativeMemory = new Set<string>();
+// Fallos de resolución (transitorios: sin red al arrancar, key aún no lista,
+// hiccup de btttr). Antes eran permanentes en la sesión; ahora caducan para
+// reintentar, porque un fallo al arrancar dejaba pósters sin mejorar
+// hasta reiniciar la app.
+const negativeMemory = new Map<string, number>();
+export const RESOLVE_NEGATIVE_TTL_MS = 5 * 60 * 1000;
 const inFlight = new Map<string, Promise<string | null>>();
 const queue: Array<() => void> = [];
 let active = 0;
@@ -79,6 +84,16 @@ function drain() {
   }
 }
 
+function isNegativeCached(key: string): boolean {
+  const failedAt = negativeMemory.get(key);
+  if (failedAt == null) return false;
+  if (Date.now() - failedAt >= RESOLVE_NEGATIVE_TTL_MS) {
+    negativeMemory.delete(key);
+    return false;
+  }
+  return true;
+}
+
 /**
  * Resuelve `tt...` para un TMDB id. Devuelve null si btttr.cc no lo conoce o
  * falla la red (el llamador debe mantener el póster original).
@@ -87,7 +102,7 @@ export function resolveTmdbToImdb(type: BetterMetaType, tmdbId: number): Promise
   const key = cacheKeyFor(type, tmdbId);
   const cached = readCache()[key];
   if (cached) return Promise.resolve(cached);
-  if (negativeMemory.has(key)) return Promise.resolve(null);
+  if (isNegativeCached(key)) return Promise.resolve(null);
   const pending = inFlight.get(key);
   if (pending) return pending;
 
@@ -95,18 +110,26 @@ export function resolveTmdbToImdb(type: BetterMetaType, tmdbId: number): Promise
     const run = () => {
       active += 1;
       const pending = resolveImdbId(type, tmdbId);
-      // Aunque se agote el presupuesto, un resultado tardío se guarda en caché.
+      // Aunque se agote el presupuesto, un resultado tardío se guarda en caché
+      // y limpia el negativo (el fallo inicial pudo ser transitorio).
       void pending.then(result => {
-        if (result) writeCachedImdb(type, tmdbId, result);
+        if (result) {
+          writeCachedImdb(type, tmdbId, result);
+          negativeMemory.delete(key);
+        }
       }).catch(() => {});
       void Promise.race([pending, delay(TASK_SETTLE_TIMEOUT_MS).then(() => null)])
         .then(result => {
-          if (result) writeCachedImdb(type, tmdbId, result);
-          else negativeMemory.add(key);
+          if (result) {
+            writeCachedImdb(type, tmdbId, result);
+            negativeMemory.delete(key);
+          } else {
+            negativeMemory.set(key, Date.now());
+          }
           resolve(result);
         })
         .catch(() => {
-          negativeMemory.add(key);
+          negativeMemory.set(key, Date.now());
           resolve(null);
         })
         .finally(() => {
