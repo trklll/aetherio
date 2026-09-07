@@ -15,6 +15,8 @@ export interface HomePreferences {
 
 export const HOME_PREFERENCES_STORAGE_KEY = "aetherio-home-preferences";
 export const HOME_PREFERENCES_CHANGED_EVENT = "aetherio-home-preferences-changed";
+// Marca de la migración única a pósters verticales (por perfil).
+const POSTER_LAYOUT_MIGRATION_KEY = "aetherio-poster-layout-vertical-migration-v1";
 
 export const DEFAULT_HOME_PREFERENCES: HomePreferences = {
   contentOrientation: "both",
@@ -38,9 +40,29 @@ export function getHomePreferences(): HomePreferences {
   try {
     const raw = localStorage.getItem(getHomePreferencesStorageKey());
     if (!raw) return DEFAULT_HOME_PREFERENCES;
-    return normalizeHomePreferences(JSON.parse(raw) as Partial<HomePreferences>);
+    const parsed = JSON.parse(raw) as Partial<HomePreferences>;
+    return normalizeHomePreferences(migratePosterLayoutToVertical(parsed));
   } catch {
     return DEFAULT_HOME_PREFERENCES;
+  }
+}
+
+/**
+ * Migración única a pósters verticales: quien tenía "horizontal" guardado
+ * pasa a "vertical" una sola vez. El toggle de Ajustes sigue permitiendo
+ * volver a horizontal (la marca evita re-forzar al que lo elige a mano).
+ */
+function migratePosterLayoutToVertical(preferences: Partial<HomePreferences>): Partial<HomePreferences> {
+  if (preferences.posterLayout !== "horizontal") return preferences;
+  try {
+    const migrationKey = getScopedStorageKey(POSTER_LAYOUT_MIGRATION_KEY);
+    if (localStorage.getItem(migrationKey)) return preferences;
+    const migrated: Partial<HomePreferences> = { ...preferences, posterLayout: "vertical" };
+    localStorage.setItem(getHomePreferencesStorageKey(), JSON.stringify(normalizeHomePreferences(migrated)));
+    localStorage.setItem(migrationKey, "1");
+    return migrated;
+  } catch {
+    return preferences;
   }
 }
 
