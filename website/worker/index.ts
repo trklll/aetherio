@@ -1,10 +1,11 @@
 import { handleAuthRequest, type AuthEnv } from "./auth";
 import { handleReleaseRequest, type ReleaseEnv } from "./releases";
+import { handleProxyRequest, type ProxyEnv } from "./tmdb";
 import { handleAwardsRequest, type AwardsApiEnv } from "./awards/api";
 import { runImport, weeklyTargets } from "./awards/import";
 import { resolvePeopleBatch } from "./awards/people";
 
-interface Env extends AuthEnv, ReleaseEnv, AwardsApiEnv {
+interface Env extends AuthEnv, ReleaseEnv, AwardsApiEnv, ProxyEnv {
   ASSETS: Fetcher;
   RELEASE_PUBLISH_TOKEN?: string;
   AWARDS_IMPORT_TOKEN?: string;
@@ -24,6 +25,11 @@ export default {
 
     const awardsResponse = await handleAwardsRequest(request, env, url);
     if (awardsResponse) return awardsResponse;
+
+    // Proxy con credenciales de servidor (TMDB / IntroDB): la key nunca
+    // viaja al cliente.
+    const proxyResponse = await handleProxyRequest(request, env);
+    if (proxyResponse) return proxyResponse;
 
     const releaseResponse = await handleReleaseRequest(request, env, url);
     if (releaseResponse) return releaseResponse;
