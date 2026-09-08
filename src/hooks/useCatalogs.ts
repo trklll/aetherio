@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys.ts";
+import { getTmdbApiKey, tmdbFetch } from "../config/apiKeys.ts";
 import {
   applyBetterPosterToUrl,
   BETTER_POSTER_CHANGED_EVENT,
@@ -1438,7 +1438,8 @@ function preloadStartupImage(url: string) {
 
 export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const queryClient = useQueryClient();
-  const [tmdbReady, setTmdbReady] = useState(() => Boolean(getTmdbApiKey()));
+  // TMDB siempre disponible: key propia en directo o proxy del servidor.
+  const [tmdbReady] = useState(true);
   // Fuerza recomputar rowsSignature (incluye ajustes BetterPosters) al cambiarlos.
   const [posterVersion, setPosterVersion] = useState(0);
 
@@ -1451,14 +1452,6 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
       window.removeEventListener("storage", refresh);
     };
   }, []);
-
-  useEffect(() => {
-    if (!tmdbReady) {
-      let cancelled = false;
-      getTmdbApiKeyAsync().then(() => { if (!cancelled) setTmdbReady(true); });
-      return () => { cancelled = true; };
-    }
-  }, [tmdbReady]);
 
   const rowsSignature = useMemo(
     () => enabledAddonSignature(addons, contentOrientation),

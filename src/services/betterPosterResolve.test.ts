@@ -62,12 +62,19 @@ describe("parseTmdbId / betterMetaTypeFor / readCachedImdb", () => {
 });
 
 describe("resolveTmdbToImdb", () => {
-  it("resuelve vía meta de btttr y cachea el acierto", async () => {
-    const fetchMock = vi.fn(async () => metaResponse("tt9988776"));
+  it("resuelve vía external_ids del proxy (sin key propia) y cachea el acierto", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("/api/tmdb/")) {
+        return { ok: true, status: 200, json: async () => ({ imdb_id: "tt9988776" }) };
+      }
+      return metaResponse("tt9988776");
+    });
     vi.stubGlobal("fetch", fetchMock);
-    // Sin key TMDB en este entorno, external_ids se salta y solo hay 1 fetch (meta).
+    // Sin key TMDB propia, external_ids sale por el proxy del servidor (sin api_key).
     await expect(resolveTmdbToImdb("series", 991001)).resolves.toBe("tt9988776");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/tmdb/tv/991001/external_ids");
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("api_key");
     expect(readCachedImdb("series", 991001)).toBe("tt9988776");
     await expect(resolveTmdbToImdb("series", 991001)).resolves.toBe("tt9988776");
     expect(fetchMock).toHaveBeenCalledTimes(1);

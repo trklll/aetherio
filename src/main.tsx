@@ -8,7 +8,6 @@ import UpdatePopup from "./components/updater/UpdatePopup.tsx";
 import { queryClient } from "./queryClient";
 import { installAndroidTvRemoteNavigation, installRuntimeDocumentClasses } from "./runtime/platform.ts";
 import { installGsapAnimations } from "./utils/motion.ts";
-import { initBuiltinTmdbKey } from "./config/apiKeys.ts";
 import "./index.css";
 
 const isSplashWindow = new URLSearchParams(window.location.search).get("window") === "splash";
@@ -22,7 +21,6 @@ if (isSplashWindow) {
   root.render(<NativeSplashWindow />);
 } else {
   installAndroidTvRemoteNavigation();
-  initBuiltinTmdbKey();
   root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>

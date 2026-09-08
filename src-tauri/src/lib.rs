@@ -5287,9 +5287,11 @@ fn trakt_api_get(
     }))
 }
 
+/// Sin uso: la key TMDB ya no viaja en el cliente (proxy del servidor).
+/// Se conserva el comando por compatibilidad; siempre vacío.
 #[tauri::command]
 fn get_builtin_tmdb_key() -> String {
-    "d8fbcec110971e64699f338caf0e7192".to_string()
+    String::new()
 }
 
 fn trakt_client_secret() -> Result<String, String> {
