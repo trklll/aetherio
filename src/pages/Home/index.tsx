@@ -19,6 +19,7 @@ import StreamingProviderRowsGroup, {
   type StreamingProviderTheme,
 } from "./StreamingProviderRowsGroup";
 import { gsap } from "../../utils/motion";
+import { separateTopRows } from "../../utils/topRows";
 
 export type { CatalogRowData, MediaItem };
 
@@ -71,8 +72,10 @@ export default function HomePage() {
   }, [loading, location.search]);
 
   const typeFilter = new URLSearchParams(location.search).get("type");
+  // La separación de tops aplica al orden por defecto; si el usuario reordena
+  // manualmente, su orden explícito manda.
   const visibleRows = useMemo(
-    () => applyHomeCatalogPreferences(rows, homePreferences),
+    () => applyHomeCatalogPreferences(separateTopRows(rows), homePreferences),
     [homePreferences, rows],
   );
 

@@ -1,7 +1,7 @@
 {
 "name": "aetherio",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.6.5",
   "type": "module",
   "scripts": {
     "predev": "npm run anime4k:sync && npm run providers:build",
@@ -9,6 +9,7 @@
     "prebuild": "npm run anime4k:sync && npm run providers:build",
     "build": "tsc && vite build",
     "test:search": "vitest run src/utils/searchProviders.test.ts",
+    "test:posters": "vitest run src/config/betterPosters.test.ts src/services/betterPosterVerify.test.ts src/services/betterPosterResolve.test.ts src/utils/animeRows.test.ts src/services/animeProbes.test.ts src/services/watchedVisibility.test.ts",
     "providers:build": "node scripts/build-provider-runtime.mjs",
     "anime4k:sync": "node scripts/sync-anime4k-shaders.mjs",
     "preview": "vite preview",

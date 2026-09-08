@@ -49,6 +49,14 @@ import {
   savePlaybackPreferences,
   type PlaybackPreferences,
 } from "../../config/playbackPreferences";
+import {
+  BETTER_POSTER_LANGUAGE_OPTIONS,
+  BETTER_POSTER_RATING_SOURCE_OPTIONS,
+  getBetterPosterSettings,
+  saveBetterPosterSettings,
+  type BetterPosterRatingSource,
+  type BetterPosterSettings,
+} from "../../config/betterPosters";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
@@ -126,6 +134,7 @@ export default function SettingsPage() {
   const [keys, setKeys] = useState<ApiKeys>(() => getApiKeys());
   const [mdbList, setMdbList] = useState<MdbListSettings>(() => getMdbListSettings());
   const [playback, setPlayback] = useState<PlaybackPreferences>(() => getPlaybackPreferences());
+  const [betterPosters, setBetterPosters] = useState<BetterPosterSettings>(() => getBetterPosterSettings());
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => getInitialTab(location.search));
   const [accountView, setAccountView] = useState<AccountView>(() => getInitialAccountView(location.search));
   const [designView, setDesignView] = useState<DesignView>("overview");
@@ -151,6 +160,7 @@ export default function SettingsPage() {
     setKeys(getApiKeys());
     setMdbList(getMdbListSettings());
     setPlayback(getPlaybackPreferences());
+    setBetterPosters(getBetterPosterSettings());
   }, []);
 
   useEffect(() => {
@@ -233,6 +243,15 @@ export default function SettingsPage() {
   function saveMdbListApiKey() {
     saveMdbListSettings(mdbList);
     setSaved(current => ({ ...current, mdblist: true }));
+  }
+
+  function updateBetterPosters(patch: Partial<BetterPosterSettings>) {
+    setBetterPosters(current => {
+      const next = { ...current, ...patch };
+      saveBetterPosterSettings(next);
+      return next;
+    });
+    setSaved(current => ({ ...current, design: true }));
   }
 
   function updateHomePreferences(patch: Partial<HomePreferences>) {
@@ -406,6 +425,8 @@ export default function SettingsPage() {
               onPreferencesChange={updateHomePreferences}
               onToggleCatalog={toggleCatalog}
               onMoveCatalog={moveCatalog}
+              betterPosters={betterPosters}
+              onBetterPostersChange={updateBetterPosters}
             />
           ) : null}
 
@@ -1125,6 +1146,8 @@ function DesignPanel({
   onPreferencesChange,
   onToggleCatalog,
   onMoveCatalog,
+  betterPosters,
+  onBetterPostersChange,
 }: {
   view: DesignView;
   preferences: HomePreferences;
@@ -1135,6 +1158,8 @@ function DesignPanel({
   onPreferencesChange: (patch: Partial<HomePreferences>) => void;
   onToggleCatalog: (row: CatalogRowData) => void;
   onMoveCatalog: (row: CatalogRowData, direction: "left" | "right") => void;
+  betterPosters: BetterPosterSettings;
+  onBetterPostersChange: (patch: Partial<BetterPosterSettings>) => void;
 }) {
   if (view === "home-screen") {
     return (
@@ -1155,6 +1180,57 @@ function DesignPanel({
               description="Solo aplica a catálogos. Continuar viendo mantiene su formato actual."
               checked={preferences.posterLayout === "horizontal"}
               onChange={checked => onPreferencesChange({ posterLayout: checked ? "horizontal" : "vertical" })}
+            />
+          </PillBlock>
+
+          <PillBlock title="PÓSTERS BETTERPOSTERS (BTTTR.CC)">
+            <ToggleRow
+              title="Usar BetterPosters"
+              description="Pósters con etiquetas de género, rating y tendencias. Activado por defecto; si falla una imagen se usa el póster original."
+              checked={betterPosters.enabled}
+              onChange={checked => onBetterPostersChange({ enabled: checked })}
+            />
+            <ToggleRow
+              title="Etiquetas de tendencia"
+              description="Trending, Nuevo, IMDb #3."
+              checked={betterPosters.trendTags}
+              onChange={checked => onBetterPostersChange({ trendTags: checked })}
+            />
+            <ToggleRow
+              title="Género en el póster"
+              description="Etiqueta de género en la parte inferior."
+              checked={betterPosters.showGenre}
+              onChange={checked => onBetterPostersChange({ showGenre: checked })}
+            />
+            <ToggleRow
+              title="Rating en el póster"
+              description="Estrella con puntuación en la parte inferior."
+              checked={betterPosters.showRating}
+              onChange={checked => onBetterPostersChange({ showRating: checked })}
+            />
+            <ToggleRow
+              title="Sellos de calidad"
+              description="Insignias 4K, Dolby Vision, Atmos."
+              checked={betterPosters.qualityTags}
+              onChange={checked => onBetterPostersChange({ qualityTags: checked })}
+            />
+            <ToggleRow
+              title="Clasificación por edad"
+              description="PG-13, TV-MA, R."
+              checked={betterPosters.ageRating}
+              onChange={checked => onBetterPostersChange({ ageRating: checked })}
+            />
+            <SelectRow
+              title="Fuente del rating"
+              value={betterPosters.ratingSource}
+              options={BETTER_POSTER_RATING_SOURCE_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
+              onChange={value => onBetterPostersChange({ ratingSource: value as BetterPosterRatingSource })}
+            />
+            <SelectRow
+              title="Idioma del póster"
+              value={betterPosters.lang}
+              options={BETTER_POSTER_LANGUAGE_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
+              onChange={value => onBetterPostersChange({ lang: value })}
             />
           </PillBlock>
 
@@ -1385,15 +1461,37 @@ function PlaybackPanel({
             checked={playback.preferBingeGroup}
             onChange={checked => onPlaybackChange("preferBingeGroup", checked)}
           />
-<RangeRow
-            title="Porcentaje de umbral"
-            description="Pasar automáticamente al siguiente episodio cuando la reproducción alcance este porcentaje."
-            value={playback.nextEpisodeThresholdPercent}
-            min={50}
-            max={100}
-            suffix="%"
-            onChange={value => onPlaybackChange("nextEpisodeThresholdPercent", value)}
+<SelectRow
+            title="Modo de umbral"
+            value={playback.nextEpisodeThresholdMode}
+            options={[
+              { value: "percentage", label: "Porcentaje" },
+              { value: "minutes", label: "Minutos antes del final" },
+            ]}
+            onChange={value => onPlaybackChange("nextEpisodeThresholdMode", value)}
           />
+          {playback.nextEpisodeThresholdMode === "minutes" ? (
+            <RangeRow
+              title="Minutos antes del final"
+              description="Pasar automáticamente al siguiente episodio cuando queden estos minutos. Igual que NuvioTV (0-3.5 min)."
+              value={playback.nextEpisodeThresholdMinutesBeforeEnd}
+              min={0}
+              max={3.5}
+              step={0.5}
+              suffix=" min"
+              onChange={value => onPlaybackChange("nextEpisodeThresholdMinutesBeforeEnd", value)}
+            />
+          ) : (
+            <RangeRow
+              title="Porcentaje de umbral"
+              description="Pasar automáticamente al siguiente episodio cuando la reproducción alcance este porcentaje. Si hay outro detectado y termina pegado al final, se dispara al empezar los créditos (igual que NuvioTV)."
+              value={playback.nextEpisodeThresholdPercent}
+              min={97}
+              max={100}
+              suffix="%"
+              onChange={value => onPlaybackChange("nextEpisodeThresholdPercent", value)}
+            />
+          )}
         </PillBlock>
 
         <PillBlock title="UP NEXT">
@@ -1402,6 +1500,15 @@ function PlaybackPanel({
             description="Al terminar una película o el último episodio, mostrar una recomendación relacionada con mini reproductor (el video sigue sonando achicado)."
             checked={playback.upNextEnabled}
             onChange={checked => onPlaybackChange("upNextEnabled", checked)}
+          />
+          <RangeRow
+            title="Umbral de película"
+            description="Mostrar la recomendación cuando la película alcance este porcentaje (igual que NuvioTV: 80-100%). Si hay créditos detectados, se dispara al empezar los créditos."
+            value={playback.postPlayMovieThresholdPercent}
+            min={80}
+            max={100}
+            suffix="%"
+            onChange={value => onPlaybackChange("postPlayMovieThresholdPercent", value)}
           />
         </PillBlock>
 
@@ -1414,7 +1521,10 @@ function PlaybackPanel({
 function AboutPanel() {
   const [appVersion, setAppVersion] = useState(packageJson.version ?? "desconocida");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateReady, setUpdateReady] = useState(false);
+  const pendingUpdateRef = useRef<{ version: string; downloadAndInstall: () => Promise<void> } | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -1429,10 +1539,14 @@ function AboutPanel() {
   async function handleCheckUpdate() {
     setCheckingUpdate(true);
     setUpdateMessage(null);
+    setUpdateReady(false);
+    pendingUpdateRef.current = null;
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check({ timeout: 15_000 });
       if (update) {
+        pendingUpdateRef.current = update;
+        setUpdateReady(true);
         setUpdateMessage(`Nueva versión disponible: v${update.version}`);
       } else {
         setUpdateMessage("Ya tienes la última versión.");
@@ -1442,6 +1556,24 @@ function AboutPanel() {
       setUpdateMessage(`No se pudo verificar actualizaciones: ${msg}`);
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    const update = pendingUpdateRef.current;
+    if (!update || installingUpdate) return;
+    setInstallingUpdate(true);
+    setUpdateMessage(`Descargando e instalando v${update.version}… No cierres la app.`);
+    try {
+      await update.downloadAndInstall();
+      setUpdateMessage("Actualización instalada. Reiniciando…");
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : (typeof err === "string" ? err : JSON.stringify(err));
+      setUpdateMessage(`No se pudo instalar la actualización: ${msg}`);
+    } finally {
+      setInstallingUpdate(false);
     }
   }
 
@@ -1469,6 +1601,18 @@ function AboutPanel() {
             <Search size={15} className={checkingUpdate ? "animate-spin" : ""} />
             {checkingUpdate ? "Buscando…" : "Buscar actualizaciones"}
           </button>
+          {updateReady && !installingUpdate ? (
+            <button
+              type="button"
+              onClick={() => void handleInstallUpdate()}
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-black text-black transition-colors hover:bg-white/86"
+            >
+              Instalar actualización
+            </button>
+          ) : null}
+          {installingUpdate ? (
+            <p className="text-sm font-semibold text-white/80">Instalando… No cierres la app.</p>
+          ) : null}
           {updateMessage ? (
             <p className="text-sm text-white/60">{updateMessage}</p>
           ) : null}
@@ -1609,6 +1753,7 @@ function RangeRow({
   value,
   min,
   max,
+  step,
   suffix,
   onChange,
 }: {
@@ -1617,6 +1762,7 @@ function RangeRow({
   value: number;
   min: number;
   max: number;
+  step?: number;
   suffix: string;
   onChange: (value: number) => void;
 }) {
@@ -1633,6 +1779,7 @@ function RangeRow({
         type="range"
         min={min}
         max={max}
+        step={step ?? 1}
         value={value}
         onChange={event => onChange(Number(event.target.value))}
         className="w-full accent-white"
@@ -1726,7 +1873,11 @@ function getInitialAccountView(search: string): AccountView {
 }
 
 function cleanCatalogTitle(name: string) {
-  return name.replace(/\s*[|.-]\s*.+$/, "").replace(/\s*(ElfHosted|AIOMetadata|Cinemeta)\s*$/i, "").trim();
+  return name
+    .replace(/\s*\|.+$/, "")
+    .replace(/\s*\.\s*.+$/, "")
+    .replace(/\s*(ElfHosted|AIOMetadata|Cinemeta)\s*$/i, "")
+    .trim() || name.trim();
 }
 
 function describeUnknownError(error: unknown, fallback: string) {

@@ -5,6 +5,8 @@ import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
+import { applyBetterPosterToUrl, extractImdbId, isBetterPosterUrl } from "../../config/betterPosters";
+import { useBetterPoster } from "../../hooks/useBetterPoster";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
@@ -21,9 +23,12 @@ function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500
 }
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
+  const upgradedPoster = upgradeTmdbImage(item.poster, "w500");
+  const better = applyBetterPosterToUrl(upgradedPoster, extractImdbId(item.id));
   return {
     ...item,
-    poster: upgradeTmdbImage(item.poster, "w500"),
+    poster: better ?? upgradedPoster,
+    originalPoster: better && better !== upgradedPoster ? upgradedPoster : item.originalPoster,
     background: upgradeTmdbImage(item.background, "w780"),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w500")),
   };
@@ -128,7 +133,7 @@ function tmdbCatalogParams(catalogId: string): { path: string; type: "movie" | "
     case "jikan.recommendations":
       return { path: "/discover/tv", type: "series", params: { sort_by: "vote_average.desc", "vote_count.gte": "200", ...animeBase } };
     case "jikan.top_favorites":
-      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_average.desc", "vote_count.gte": "150", ...animeBase } };
+      return { path: "/discover/tv", type: "series", params: { sort_by: "vote_count.desc", ...animeBase } };
     case "jikan.most_popular":
       return { path: "/discover/tv", type: "series", params: { sort_by: "vote_count.desc", "vote_count.gte": "100", ...animeBase } };
     default:
@@ -360,7 +365,32 @@ export default function CatalogPage() {
 
 function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
   const navigate = useNavigate();
-  const image = item.poster ?? item.background ?? "";
+  const resolved = useBetterPoster(item.id, type, item.poster);
+  const poster = resolved.url ?? item.poster;
+  const fallback = resolved.original ?? item.originalPoster;
+  const [failed, setFailed] = useState(false);
+  const loadedRef = useRef(false);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  useEffect(() => { setFailed(false); loadedRef.current = false; }, [resolved.url]);
+  // btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
+  // sin error: si en 15s no cargó, caer al póster original.
+  // (Sin reset de loadedRef aquí: ya se resetea al cambiar resolved.url;
+  // resetear aquí degradaba imágenes en caché cuyo onLoad corrió antes.)
+  // Al armar se consulta el <img>: con BTTTR verificado suele estar completo
+  // y su onLoad puede haber corrido antes que los efectos.
+  useEffect(() => {
+    if (!isBetterPosterUrl(poster) || !fallback || failed) return;
+    const el = imgRef.current;
+    if (el && el.currentSrc === poster && el.complete && el.naturalWidth > 0) {
+      loadedRef.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!loadedRef.current) setFailed(true);
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [poster, fallback, failed]);
+  const image = failed && fallback ? fallback : (poster ?? item.background ?? "");
   const openDetail = () => {
     writeDetailMediaMeta({
       id: item.id,
@@ -391,7 +421,7 @@ function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
         style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
       >
         {image ? (
-          <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          <img ref={imgRef} src={image} alt={item.name} loading="lazy" decoding="async" onLoad={() => { loadedRef.current = true; }} onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
         ) : null}
       </button>
       <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>

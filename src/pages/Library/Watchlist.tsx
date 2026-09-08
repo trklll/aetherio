@@ -12,6 +12,7 @@ import {
 } from "../../utils/continueWatching";
 import CatalogRow from "../Home/CatalogRow";
 import ContinueWatchingRow from "../Home/ContinueWatchingRow";
+import { separateTopRows } from "../../utils/topRows";
 import {
   ANILIST_LIBRARY_CHANGED_EVENT,
   readAniListLibrary,
@@ -50,7 +51,7 @@ export default function LibraryPage() {
   const aniListEntries = useMemo(() => readAniListLibrary(), [version]);
   const aniListRows = useMemo(() => buildAniListLibraryRows(aniListEntries), [aniListEntries]);
   const discoverRows = useMemo(
-    () => applyHomeCatalogPreferences(rows, homePreferences),
+    () => applyHomeCatalogPreferences(separateTopRows(rows), homePreferences),
     [homePreferences, rows],
   );
 

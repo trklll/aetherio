@@ -5,6 +5,36 @@ const ANILIST_URL = "https://graphql.anilist.co";
 const anilistIdByMalCache = new Map<number, number>();
 const anilistIdByMalPromises = new Map<number, Promise<number | null>>();
 
+const PROBE_TTL_MS = 10 * 60 * 1000;
+const PROBE_TIMEOUT_MS = 5_000;
+let probeAt = 0;
+let probeOk = true;
+
+/**
+ * ¿Responde la API de AniList? Con caché corta: cuando la suspenden (403
+ * documentado por "stability issues") se salta sus intentos y se tira de
+ * TMDB directo sin esperar timeouts.
+ */
+export async function probeAnilist(): Promise<boolean> {
+  if (Date.now() - probeAt < PROBE_TTL_MS) return probeOk;
+  probeAt = Date.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    const response = await fetch(ANILIST_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ query: "query { Page(page: 1, perPage: 1) { media { id } } }" }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    probeOk = response.ok;
+  } catch {
+    probeOk = false;
+  }
+  return probeOk;
+}
+
 interface AniListMedia {
   id: number;
   idMal: number | null;

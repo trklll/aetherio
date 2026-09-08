@@ -1,34 +1,17 @@
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
-import { invoke } from "@tauri-apps/api/core";
 
-const APP_TMDB_API_KEY = (import.meta.env.VITE_TMDB_API_KEY as string | undefined)?.trim() ?? "";
+/**
+ * Las credenciales de servicio ya NO viajan en el cliente: sin key propia
+ * del usuario, las llamadas TMDB/IntroDB salen por el proxy del servidor
+ * (mismo origen que la API de cuentas), que inyecta la key del lado seguro.
+ */
+const AETHERIO_API_BASE = (import.meta.env.VITE_AETHERIO_API_URL as string | undefined)?.replace(/\/$/, "")
+  ?? "https://trkll.aetherio.workers.dev";
+const TMDB_PROXY_PREFIX = "/api/tmdb";
 
-let _builtinTmdbKey = "";
-let _tmdbKeyPromise: Promise<string> | null = null;
-
-export function initBuiltinTmdbKey(): Promise<string> {
-  if (_tmdbKeyPromise) return _tmdbKeyPromise;
-  _tmdbKeyPromise = (async () => {
-    try {
-      _builtinTmdbKey = await invoke<string>("get_builtin_tmdb_key");
-    } catch {
-      _builtinTmdbKey = "";
-    }
-    return _builtinTmdbKey;
-  })();
-  return _tmdbKeyPromise;
-}
-
+/** Key propia del usuario o "" (entonces se usa el proxy del servidor). */
 export async function getTmdbApiKeyAsync(): Promise<string> {
-  const userKey = getApiKeys().tmdbApiKey;
-  if (userKey) return userKey;
-  if (_builtinTmdbKey) return _builtinTmdbKey;
-  if (_tmdbKeyPromise) return _tmdbKeyPromise;
-  return initBuiltinTmdbKey();
-}
-
-export function isTmdbReady() {
-  return Boolean(getApiKeys().tmdbApiKey || _builtinTmdbKey || APP_TMDB_API_KEY);
+  return getApiKeys().tmdbApiKey;
 }
 
 interface CacheEntry {
@@ -65,17 +48,15 @@ export const EMPTY_API_KEYS: ApiKeys = {
 };
 
 // Token de TheIntroDB (theintrodb.org) para créditos de películas/series.
-// El valor que se envía como Bearer es la parte tras "theintrodb:".
-const THEINTRODB_DEFAULT_TOKEN = "theintrodb:user_3IVP8IjpQEUwPHgWTSztNipKNTf:QnCoTl08452s1q8q03apXL60EHNUiGLQ0-mvkkNP-bQ";
-
+// Solo el que configure el usuario: el valor por defecto sale por el proxy
+// del servidor para que ningún token viaje en el cliente.
 export function getTheIntroDbToken(): string {
-  const stored = getApiKeys().introDbApiKey;
-  if (stored) return stored;
-  // Semilla por defecto (la parte tras "theintrodb:") para que funcione sin configurar.
-  const seeded = THEINTRODB_DEFAULT_TOKEN.startsWith("theintrodb:")
-    ? THEINTRODB_DEFAULT_TOKEN.slice("theintrodb:".length)
-    : THEINTRODB_DEFAULT_TOKEN;
-  return seeded;
+  return getApiKeys().introDbApiKey.trim();
+}
+
+/** Base del proxy IntroDB del servidor (inyecta el token del lado seguro). */
+export function getIntroDbProxyBase(): string {
+  return `${AETHERIO_API_BASE}/api/introdb`;
 }
 
 export function getApiKeys(): ApiKeys {
@@ -123,7 +104,7 @@ export function getApiKeysForProfile(profileId: string): ApiKeys {
 }
 
 export function getTmdbApiKey() {
-  return getApiKeys().tmdbApiKey || _builtinTmdbKey || APP_TMDB_API_KEY;
+  return getApiKeys().tmdbApiKey;
 }
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
@@ -142,10 +123,18 @@ export async function validateTmdbApiKey(apiKey: string) {
 }
 
 export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { params?: Record<string, string> }): Promise<T | null> {
-  const key = await getTmdbApiKeyAsync();
-  if (!key) return null;
-  const url = new URL(path.startsWith("http") ? path : `${TMDB_BASE}${path}`);
-  url.searchParams.set("api_key", key);
+  // Con key propia se va directo a TMDB; sin ella, por el proxy del servidor
+  // (la key built-in ya no existe en el cliente).
+  const userKey = getApiKeys().tmdbApiKey;
+  let url: URL;
+  if (userKey) {
+    url = new URL(path.startsWith("http") ? path : `${TMDB_BASE}${path}`);
+    url.searchParams.set("api_key", userKey);
+  } else {
+    const proxyPath = path.startsWith("http") ? tmdbProxyPathForUrl(path) : path;
+    if (!proxyPath) return null;
+    url = new URL(`${AETHERIO_API_BASE}${TMDB_PROXY_PREFIX}${proxyPath.startsWith("/") ? proxyPath : `/${proxyPath}`}`);
+  }
   if (init?.params) {
     for (const [k, v] of Object.entries(init.params)) {
       url.searchParams.set(k, v);
@@ -179,4 +168,19 @@ export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { pa
 
 function getApiKeysStorageKey() {
   return getScopedStorageKey(API_KEYS_STORAGE_KEY);
+}
+
+/** De una URL TMDB absoluta, solo la ruta (el proxy solo acepta TMDB). */
+function tmdbProxyPathForUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.toLowerCase() !== "api.themoviedb.org") return null;
+    const basePath = "/3";
+    const pathname = parsed.pathname.startsWith(basePath)
+      ? parsed.pathname.slice(basePath.length) || "/"
+      : parsed.pathname;
+    return pathname;
+  } catch {
+    return null;
+  }
 }

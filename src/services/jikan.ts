@@ -13,6 +13,35 @@ const TMDB_FIND_CONCURRENCY = 2;
 let jikanHealthFailures = 0;
 let jikanDisabled = false;
 
+const PROBE_TTL_MS = 10 * 60 * 1000;
+const PROBE_TIMEOUT_MS = 4_000;
+let probeAt = 0;
+let probeOk = true;
+
+/**
+ * ¿Responde la API de Jikan? Con caché corta: evita quemar timeouts en serie
+ * (3s por entrada) cuando MAL está caído, y reabre el cortacircuitos al
+ * recuperarse (antes quedaba deshabilitado toda la sesión).
+ */
+export async function probeJikan(): Promise<boolean> {
+  if (Date.now() - probeAt < PROBE_TTL_MS) return probeOk;
+  probeAt = Date.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    const response = await fetch(`${JIKAN_URL}/top/anime?limit=1`, { signal: controller.signal });
+    clearTimeout(timer);
+    probeOk = response.ok;
+  } catch {
+    probeOk = false;
+  }
+  if (probeOk) {
+    jikanDisabled = false;
+    jikanHealthFailures = 0;
+  }
+  return probeOk;
+}
+
 interface JikanImage {
   jpg?: { image_url?: string; large_image_url?: string };
   webp?: { image_url?: string; large_image_url?: string };

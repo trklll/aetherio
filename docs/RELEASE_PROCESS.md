@@ -70,7 +70,14 @@ La lista debe incluir:
 - `ANILIST_CLIENT_ID` y `ANILIST_CLIENT_SECRET`;
 - `OAUTH_TOKEN_ENCRYPTION_KEY`;
 - `PASSWORD_PEPPER`;
-- `RELEASE_PUBLISH_TOKEN`.
+- `RELEASE_PUBLISH_TOKEN`;
+- `TMDB_API_KEY` (proxy `/api/tmdb`: la key ya no viaja en el cliente);
+- `INTRODB_TOKEN` (proxy `/api/introdb/media`: solo la parte tras `theintrodb:`).
+
+```powershell
+npx wrangler secret put TMDB_API_KEY
+npx wrangler secret put INTRODB_TOKEN
+```
 
 ## Flujo normal
 

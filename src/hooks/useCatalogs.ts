@@ -1,10 +1,28 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getTmdbApiKey, getTmdbApiKeyAsync, tmdbFetch } from "../config/apiKeys.ts";
+import { getTmdbApiKey, tmdbFetch } from "../config/apiKeys.ts";
+import {
+  applyBetterPosterToUrl,
+  BETTER_POSTER_CHANGED_EVENT,
+  betterPosterSignature,
+  extractImdbId,
+  getBetterPosterSettings,
+  isBetterPosterUrl,
+  type BetterPosterOverrides,
+  type BetterPosterSettings,
+} from "../config/betterPosters.ts";
+import {
+  betterMetaTypeFor,
+  parseTmdbId,
+  resolveTmdbToImdb,
+} from "../services/betterPosterResolve.ts";
+import { verifyBetterPosterUrl } from "../services/betterPosterVerify.ts";
+import { isTopFormatRow } from "../utils/topRows.ts";
 import { getMdbListSettings } from "../config/mdblist.ts";
 import {
   fetchAnilistTopAnime,
   fetchAnilistAiringAnime,
+  probeAnilist,
   resolveAnilistToTmdb,
 } from "../services/anilist.ts";
 import {
@@ -13,6 +31,7 @@ import {
   fetchJikanTopFavorites,
   fetchJikanMostPopular,
   fetchJikanRecommendations,
+  probeJikan,
   resolveMalToTmdb,
   runJikanSerial,
 } from "../services/jikan.ts";
@@ -23,6 +42,8 @@ import { homeImagePreloadConcurrency, isLowEndDevice } from "../utils/hardware.t
 import type { CatalogRowData, MediaItem } from "../types/ui.ts";
 import { matchesContentOrientation, type ContentOrientation } from "../config/homePreferences.ts";
 import { sanitizeLogoUrl } from "../utils/artwork.ts";
+import { dedupeAnimeHomeRows } from "../utils/animeRows.ts";
+import { readHiddenMediaKeys, refreshWatchedSeriesCache } from "../services/watchedVisibility.ts";
 import { resolveDetailBackground } from "../utils/mediaMetadata.ts";
 import { readHomeCardArtwork } from "../utils/homeCardArtwork.ts";
 import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
@@ -32,13 +53,125 @@ const HERO_TOTAL_LIMIT = 15;
 const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v23";
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v24";
 const HOME_BACKGROUND_IMAGE_SIZE = "w1280" as const;
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v4";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
 const HOME_RAIL_ITEM_LIMIT = 20;
 const CINEMETA_HOST = "v3-cinemeta.strem.io";
 const CINEMETA_RESOLVE_CONCURRENCY = 8;
+
+// Rails cuyo orden sigue el ranking "Hoy" de BetterPosters (coincide con los
+// badges #N baked en los pósters). El resto de rails conserva su orden propio.
+const RANK_SORTED_RAIL_IDS = new Set([
+  "tmdb.top_movie",
+  "tmdb.top_series",
+  "tmdb.trending_movie",
+  "tmdb.trending_series",
+]);
+
+const BTTTR_RANK_TTL_MS = 1000 * 60 * 60;
+// Tiempo máximo que el ranking puede retrasar una fila (el resto sigue en background).
+const RANK_BUDGET_MS = 5000;
+const btttrRankCache = new Map<string, { at: number; map: Map<string, number> }>();
+
+/**
+ * Mapa imdbId (minúsculas) → posición del ranking "Hoy" de btttr.cc, leído de
+ * sus catálogos públicos (misma fuente que los badges #N de los pósters).
+ */
+async function fetchBtttrRankMap(kind: "movie" | "series"): Promise<Map<string, number>> {
+  const now = Date.now();
+  const hit = btttrRankCache.get(kind);
+  if (hit && now - hit.at < BTTTR_RANK_TTL_MS) return hit.map;
+  const url = kind === "movie"
+    ? "https://btttr.cc/catalog/movie/tmdb-today.json"
+    : "https://btttr.cc/catalog/series/tmdb-today-shows.json";
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`rank catalog ${response.status}`);
+  const data = await response.json() as any;
+  const metas = Array.isArray(data?.metas) ? data.metas : [];
+  const map = new Map<string, number>();
+  metas.forEach((meta: any, index: number) => {
+    const id = String(meta?.id ?? "").toLowerCase();
+    if (!id || map.has(id)) return;
+    const rank = Number(meta?._rank);
+    map.set(id, Number.isFinite(rank) && rank > 0 ? rank : index + 1);
+  });
+  btttrRankCache.set(kind, { at: now, map });
+  return map;
+}
+
+async function rankOfItem(item: MediaItem, rankMap: Map<string, number>): Promise<number | null> {
+  const direct = extractImdbId(item.id)?.toLowerCase();
+  if (direct) return rankMap.get(direct) ?? null;
+  const tmdbId = parseTmdbId(item.id);
+  if (tmdbId == null) return null;
+  const resolved = await resolveTmdbToImdb(betterMetaTypeFor(item.type), tmdbId).catch(() => null);
+  if (!resolved) return null;
+  return rankMap.get(resolved.toLowerCase()) ?? null;
+}
+
+/**
+ * Ordena por ranking ascendente e intercala los no rankeados ("Recién
+ * Añadida" y resto) repartidos de forma uniforme entre los rankeados.
+ */
+function sortByRankWithInterleave(
+  items: MediaItem[],
+  ranks: Array<number | null>,
+): MediaItem[] {
+  const ranked: Array<{ item: MediaItem; rank: number }> = [];
+  const unranked: MediaItem[] = [];
+  items.forEach((item, index) => {
+    const rank = ranks[index];
+    if (rank == null) unranked.push(item);
+    else ranked.push({ item, rank });
+  });
+  ranked.sort((a, b) => a.rank - b.rank);
+  if (!ranked.length || !unranked.length) {
+    return [...ranked.map(entry => entry.item), ...unranked];
+  }
+  const merged: MediaItem[] = [];
+  const totalUnranked = unranked.length;
+  let pending = 0;
+  for (const entry of ranked) {
+    merged.push(entry.item);
+    pending += totalUnranked / ranked.length;
+    while (pending >= 1 && unranked.length) {
+      merged.push(unranked.shift()!);
+      pending -= 1;
+    }
+  }
+  merged.push(...unranked);
+  return merged;
+}
+
+async function sortRailByBtttrRank(items: MediaItem[], type: string): Promise<MediaItem[]> {
+  if (items.length < 2) return items;
+  const kind = type.toLowerCase() === "movie" ? "movie" : "series";
+  // Presupuesto acotado: el ranking nunca debe retrasar el pintado de la fila.
+  // Lo que no se resuelva a tiempo queda como no-rankeado (intercalado) y las
+  // resoluciones pendientes siguen en segundo plano para próximas cargas.
+  const rankMap = await withTimeout(
+    fetchBtttrRankMap(kind as "movie" | "series").catch(() => null),
+    RANK_BUDGET_MS,
+  ).catch(() => null);
+  if (!rankMap || !rankMap.size) return items;
+  const ranks = await Promise.all(
+    items.map(item => withTimeout(rankOfItem(item, rankMap).catch(() => null), RANK_BUDGET_MS).catch(() => null)),
+  );
+  if (ranks.every(rank => rank == null)) return items;
+  return sortByRankWithInterleave(items, ranks);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("budget")), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
 
 interface HomeCatalogRequest {
   catalog: any;
@@ -72,9 +205,22 @@ function stripSeasonPattern(name: string): string | null {
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
   const detailBackground = resolveDetailBackground(item.type, item.id, item.background);
+  const customPoster = readHomeCardArtwork("poster", item.type, item.id, undefined);
+  const basePoster = customPoster ?? item.poster;
+  // w500 (no original): las cards muestran ~197px y el fallback debe pintar
+  // rápido incluso en redes lentas; los originales de varios MB retrasaban
+  // la primera pintura y alargaban los huecos negros.
+  const upgraded = upgradeTmdbImage(basePoster, "w500");
+  // El override manual del usuario siempre gana: no aplicar BetterPosters encima.
+  const hasCustom = Boolean(customPoster && customPoster !== item.poster);
+  const better = hasCustom
+    ? upgraded
+    : applyBetterPosterToUrl(upgraded, extractImdbId(item.id));
   return {
     ...item,
-    poster: upgradeTmdbImage(readHomeCardArtwork("poster", item.type, item.id, item.poster), "original"),
+    poster: better ?? upgraded,
+    // Si BetterPosters falla (offline, 404, rate-limit), el <img> vuelve al original.
+    originalPoster: better && better !== upgraded ? upgraded : item.originalPoster,
     background: upgradeTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground), HOME_BACKGROUND_IMAGE_SIZE),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "original")),
   };
@@ -113,8 +259,12 @@ function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: Con
     addon.enabled && Array.isArray(addon.manifest?.catalogs) && addon.manifest.catalogs.length > 0
   ));
   const orientationTag = `|orient:${contentOrientation}`;
+  const posterTag = `|bp:${betterPosterSignature()}`;
+  // El ranking "Hoy" y sus badges cambian a diario: la firma incluye el día
+  // para que el orden se regenere cada día en el primer arranque.
+  const dayTag = `|d:${todayKey()}`;
   if (!catalogAddons.length) {
-    return `${HOME_ROWS_DATA_VERSION}|aetherio-starter|${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}${orientationTag}`;
+    return `${HOME_ROWS_DATA_VERSION}|aetherio-starter|${todayKey()}|${getTmdbApiKey() ? "tmdb" : "no-tmdb"}${orientationTag}${posterTag}`;
   }
 
   return `${HOME_ROWS_DATA_VERSION}|${catalogAddons
@@ -130,7 +280,7 @@ function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: Con
         .join(",");
       return `${addon.id}|${addon.url}|${addon.version}|${catalogs}`;
     })
-    .join("||")}${orientationTag}`;
+    .join("||")}${orientationTag}${posterTag}${dayTag}`;
 }
 
 function homeRailTitle(title: string | undefined, type: string) {
@@ -523,10 +673,13 @@ function mergeHeroItems(
 ) {
   const candidates: MediaItem[] = [];
   const seen = new Set<string>();
+  // Lo visto no protagoniza el héroe tampoco.
+  const hidden = readHiddenMediaKeys();
 
   const add = (item: MediaItem, group?: string) => {
     const key = `${item.type}:${item.id}`;
     if (seen.has(key)) return;
+    if (hidden.has(key)) return;
     const background = upgradeTmdbImage(
       resolveDetailBackground(item.type, item.id, item.background),
       HOME_BACKGROUND_IMAGE_SIZE,
@@ -570,7 +723,11 @@ function heroRandomValue(item: MediaItem) {
   return Number(hashValue(`${todayKey()}|${item.type}|${item.id}|${item.heroGroup ?? ""}`));
 }
 
-export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
+export async function fetchHomeRows(
+  addons: InstalledAddon[],
+  contentOrientation: ContentOrientation = "both",
+  onPhase?: (rows: CatalogRowData[]) => void,
+) {
   const enabledAddons = addons.filter(addon => addon.enabled);
   const cinemetaResolutionCache = new Map<string, Promise<MediaItem | null>>();
   const limitCinemetaResolution = createPromiseLimiter(CINEMETA_RESOLVE_CONCURRENCY);
@@ -620,6 +777,11 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
     : await fetchTmdbStarterRows();
 
   if (contentOrientation === "both") {
+    // FASE 1: pintar ya con las filas base (pósters listos). El anime
+    // (AniList/Jikan en serie) y el enrich de logos llegan en background.
+    if (baseRows.length) {
+      try { onPhase?.(baseRows); } catch { /* pintar nunca debe romper la carga */ }
+    }
     const animeRows = await fetchAnimeRows();
     if (!animeRows.length) return baseRows;
 
@@ -671,6 +833,10 @@ export async function fetchHomeRows(addons: InstalledAddon[], contentOrientation
   }
 
   if (contentOrientation === "movies-series") {
+    // FASE 1: pintar ya; el enrich de logos/descripciones llega después.
+    if (baseRows.length) {
+      try { onPhase?.(baseRows); } catch { /* pintar nunca debe romper la carga */ }
+    }
     const allEnriched = await enrichAllItemsWithLogos(baseRows.flatMap(row => row.items));
     let offset = 0;
     return baseRows.map(row => {
@@ -745,7 +911,7 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
   const tmdbRows = await Promise.all(requests.map(async (request): Promise<CatalogRowData | null> => {
     const results = await fetchStarterTmdbResults(request);
     const seen = new Set<string>();
-    const items = results
+    const unsorted = results
       .filter((item: any) => {
         const lang = String(item?.original_language ?? "").toLowerCase();
         return !lang.startsWith("zh");
@@ -757,6 +923,13 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
         return true;
       })
       .slice(0, HOME_RAIL_ITEM_LIMIT);
+    if (!unsorted.length) return null;
+    // Popular/Tendencias siguen el ranking "Hoy" de BetterPosters (#N del badge),
+    // con no-rankeados ("Recién Añadida", resto) intercalados. Además esto
+    // precalienta la caché tmdb→imdb y los pósters resuelven al instante.
+    const items = RANK_SORTED_RAIL_IDS.has(request.id)
+      ? await sortRailByBtttrRank(unsorted, request.type).catch(() => unsorted)
+      : unsorted;
     if (!items.length) return null;
     return {
       addonId: "aetherio-starter",
@@ -803,20 +976,26 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
 
   const jikanEntries: AnimeEntry[] = [
     { id: "jikan.recommendations", title: "La comunidad lo recomienda", fetch: fetchJikanRecommendations, kind: "other", order: 2, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" } },
-    { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 3, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "150" } },
+    { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 3, tmdb: { sort_by: "vote_count.desc" } },
     { id: "jikan.upcoming", title: "Lo que viene", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
     { id: "jikan.top_airing", title: "Las que están arrasando", fetch: fetchJikanTopAiring, kind: "current", order: 6, tmdb: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5" } },
     { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "other", order: 7, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
   ];
 
+  // Si AniList/Jikan están caídos (habitual: APIs gratuitas), no se queman
+  // timeouts en serie: se va directo al fallback TMDB de cada entrada.
+  const [anilistOk, jikanOk] = await Promise.all([probeAnilist(), probeJikan()]);
+
   // Fetch AniList entries in parallel, Jikan entries serially (rate-limit).
   const anilistRaw = await Promise.all(
     anilistEntries.map(async (entry): Promise<{ entry: AnimeEntry; items: MediaItem[] }> => {
       let items: MediaItem[] = [];
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
-        try { items = await entry.fetch(); } catch {}
-        if (items.length) break;
+      if (anilistOk) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+          try { items = await entry.fetch(); } catch {}
+          if (items.length) break;
+        }
       }
       if (!items.length && entry.tmdb) {
         try {
@@ -840,7 +1019,9 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
     sortedJikan.map((entry) => ({
       fn: async (): Promise<{ entry: AnimeEntry; items: MediaItem[] }> => {
         let items: MediaItem[] = [];
-        try { items = await entry.fetch(); } catch {}
+        if (jikanOk) {
+          try { items = await entry.fetch(); } catch {}
+        }
         if (!items.length && entry.tmdb) {
           try {
             const tmdbParams: Record<string, string> = { language: "es-ES", page: "1", ...animeBase };
@@ -862,34 +1043,7 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
 
   const allResults = [...anilistRaw, ...jikanResults].sort((a, b) => a.entry.order - b.entry.order);
 
-  // Central dedupe by mal_id; later rows lose items already seen.
-  const seenMalIds = new Set<number>();
-  const seenKeys = new Set<string>();
-  const rows: CatalogRowData[] = [];
-  for (const { entry, items } of allResults) {
-    const deduped: MediaItem[] = [];
-    for (const item of items) {
-      const malId = (item as MediaItem & { _malId?: number })._malId;
-      const itemKey = `${item.type}:${item.id}`;
-      if (seenKeys.has(itemKey)) continue;
-      if (malId && seenMalIds.has(malId)) continue;
-      seenKeys.add(itemKey);
-      if (malId) seenMalIds.add(malId);
-      deduped.push(item);
-    }
-    if (!deduped.length) continue;
-    rows.push({
-      addonId: "aetherio-starter",
-      addonName: "Aetherio",
-      catalogId: entry.id,
-      type: "anime",
-      name: entry.title,
-      subtitle: "Actualizado con TMDB",
-      items: deduped,
-      order: entry.order,
-    } satisfies CatalogRowData);
-  }
-  return rows;
+  return dedupeAnimeHomeRows(allResults);
 }
 
 function buildBothModeRows(baseRows: CatalogRowData[], animeRows: CatalogRowData[]): CatalogRowData[] {
@@ -1077,7 +1231,11 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
 
   const rowsPromise = queryClient.prefetchQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
-    queryFn: () => fetchHomeRows(addons, contentOrientation),
+    // Con fases: las filas base pintan en cuanto están (vía setQueryData)
+    // aunque el anime/enrich siga en vuelo.
+    queryFn: () => fetchHomeRows(addons, contentOrientation, phased => {
+      queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), phased);
+    }),
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
   });
@@ -1096,45 +1254,155 @@ export async function warmHomeStartup(
   contentOrientation: ContentOrientation = "both",
   onImages?: () => void,
 ) {
-  await prefetchHomeData(queryClient, addons, contentOrientation);
-
+  // Siembra caché persistida y arranca el fetch con fases (las fases pintan
+  // vía setQueryData aunque el anime/enrich siga en vuelo).
   const rowsSignature = enabledAddonSignature(addons, contentOrientation);
-  const rows = queryClient.getQueryData<CatalogRowData[]>(homeCatalogKeys.rows(rowsSignature)) ?? [];
+  const currentHeroSignature = heroSignature();
+  const home = useCacheStore.getState().home;
+  const rows = cachedRows(rowsSignature);
+  const hero = cachedHero(currentHeroSignature);
+  if (rows) {
+    queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), rows, { updatedAt: home?.rowsUpdatedAt });
+  }
+  if (hero) {
+    queryClient.setQueryData(homeCatalogKeys.hero(currentHeroSignature), hero, { updatedAt: home?.heroUpdatedAt });
+  }
+  const rowsPromise = queryClient.prefetchQuery({
+    queryKey: homeCatalogKeys.rows(rowsSignature),
+    queryFn: () => fetchHomeRows(addons, contentOrientation, phased => {
+      queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), phased);
+    }),
+    staleTime: HOME_ROWS_STALE_TIME,
+    gcTime: HOME_GC_TIME,
+  });
+  const heroPromise = queryClient.prefetchQuery({
+    queryKey: homeCatalogKeys.hero(currentHeroSignature),
+    queryFn: fetchHomeHero,
+    staleTime: HOME_HERO_STALE_TIME,
+    gcTime: HOME_GC_TIME,
+  });
+  // El splash NO espera al pipeline completo: en cuanto hay filas (fase 1,
+  // caché o resultado final) se calienta lo visible y se suelta. El resto
+  // (anime, enrich, héroe) termina en background y la home lo pinta al llegar.
+  void Promise.allSettled([rowsPromise, heroPromise]);
+  await waitForInitialRows(queryClient, homeCatalogKeys.rows(rowsSignature), STARTUP_ROWS_BUDGET_MS);
+
+  const readyRows = queryClient.getQueryData<CatalogRowData[]>(homeCatalogKeys.rows(rowsSignature)) ?? [];
   const heroSource = queryClient.getQueryData<MediaItem[]>(homeCatalogKeys.hero(heroSignature())) ?? [];
-  const heroItems = mergeHeroItems(heroSource, rows, contentOrientation);
+  const heroItems = mergeHeroItems(heroSource, readyRows, contentOrientation);
 
   onImages?.();
+  // Solo lo visible bloquea la salida del splash (antes se esperaban TODAS
+  // las imágenes: cientos de descargas antes de entrar). Además se precalientan
+  // las URLs BTTTR finales: sin esto el warmup cargaba pósters TMDB que el
+  // render sustituía por BTTTR fríos nada más entrar (todo negro otra vez).
+  const visibleUrls = collectVisibleImageUrls(readyRows, heroItems);
+  await Promise.allSettled([
+    prewarmVisibleBetterPosters(readyRows),
+    preloadImageUrls(visibleUrls),
+  ]);
+
+  // El resto de imágenes sigue en background sin bloquear la entrada.
+  if (!isLowEndDevice()) {
+    void (async () => {
+      try {
+        const seen = new Set(visibleUrls);
+        const rest = collectStarterHomeImageUrls(readyRows, heroItems).filter(url => !seen.has(url));
+        await preloadImageUrls(rest);
+      } catch { /* best-effort */ }
+    })();
+  } else {
+    void Promise.allSettled(collectStarterHomeImageUrls(readyRows, heroItems).map(preloadStartupImage));
+  }
+  preloadHomeImages(readyRows.slice(0, 4), heroItems);
+}
+
+/** Espera a que haya filas (fase o final) sin colgar el splash eternamente. */
+async function waitForInitialRows(
+  queryClient: QueryClient,
+  key: ReturnType<typeof homeCatalogKeys.rows>,
+  budgetMs: number,
+) {
+  const startedAt = Date.now();
+  for (;;) {
+    const data = queryClient.getQueryData<CatalogRowData[]>(key) ?? [];
+    if (data.length) return true;
+    if (Date.now() - startedAt >= budgetMs) return false;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+
+const STARTUP_ROWS_BUDGET_MS = 30_000;
+
+/** URLs de lo que se ve al entrar: héroe + primeras filas (acota el splash). */
+function collectVisibleImageUrls(rows: CatalogRowData[], heroItems: MediaItem[]) {
   const urls = new Set<string>();
-  for (const item of heroItems) {
+  for (const item of heroItems.slice(0, 4)) {
     if (item.background) urls.add(item.background);
     if (item.logo) urls.add(item.logo);
     if (item.poster) urls.add(item.poster);
   }
-  // On weak hardware, cap how much artwork is eager-loaded so the Home is
-  // painted from the persisted cache immediately and the rest decodes lazily
-  // as rows scroll into view.
-  const rowsToPreload = isLowEndDevice() ? rows.slice(0, 6) : rows;
-  for (const row of rowsToPreload) {
-    const itemsToPreload = isLowEndDevice() ? row.items.slice(0, 8) : row.items;
-    for (const item of itemsToPreload) {
-      if (item.poster) urls.add(item.poster);
-      if (item.background) urls.add(item.background);
+  for (const row of rows.slice(0, PREWARM_VISIBLE_ROWS)) {
+    for (const item of row.items.slice(0, PREWARM_VISIBLE_ITEMS)) {
+      const background = readHomeCardArtwork(
+        "background",
+        item.type,
+        item.id,
+        resolveDetailBackground(item.type, item.id, item.background) ?? item.background,
+      );
+      const poster = readHomeCardArtwork("poster", item.type, item.id, item.poster);
+      if (background) urls.add(background);
+      if (poster) urls.add(poster);
       if (item.logo) urls.add(item.logo);
     }
   }
+  return [...urls];
+}
 
-  const allUrls = Array.from(urls);
-  // On weak hardware don't block startup on image fetch/decode; let the Home
-  // render from cache and load images lazily. Otherwise the await below stalls
-  // the whole warm-up behind many large downloads.
-  if (isLowEndDevice()) {
-    void Promise.allSettled(allUrls.map(preloadStartupImage));
-    preloadHomeImages(rowsToPreload, heroItems);
-    return;
+const PREWARM_VISIBLE_ROWS = 6;
+const PREWARM_VISIBLE_ITEMS = 10;
+const PREWARM_BUDGET_MS = 20_000;
+const PREWARM_RESOLVE_BUDGET_MS = 8_000;
+
+/**
+ * Precalienta las URLs BTTTR finales de las cards visibles (verificación
+ * offscreen con el limitador compartido): al entrar, el hook las encuentra
+ * ya verificadas y pinta BTTTR al instante en vez de ola TMDB→BTTTR.
+ */
+async function prewarmVisibleBetterPosters(rows: CatalogRowData[]) {
+  const settings = getBetterPosterSettings();
+  if (!settings.enabled) return;
+  const jobs: Array<Promise<unknown>> = [];
+  for (const row of rows.slice(0, PREWARM_VISIBLE_ROWS)) {
+    const overrides = isTopFormatRow(row) ? { trendTags: false } : undefined;
+    for (const item of row.items.slice(0, PREWARM_VISIBLE_ITEMS)) {
+      jobs.push(prewarmOneBetterPoster(item, settings, overrides));
+    }
   }
+  await withTimeout(Promise.allSettled(jobs), PREWARM_BUDGET_MS).catch(() => undefined);
+}
 
-  await Promise.allSettled(allUrls.map(preloadStartupImage));
-  preloadHomeImages(rows, heroItems);
+async function prewarmOneBetterPoster(
+  item: MediaItem,
+  settings: BetterPosterSettings,
+  overrides?: BetterPosterOverrides,
+) {
+  try {
+    const base = readHomeCardArtwork("poster", item.type, item.id, item.poster);
+    let imdb = extractImdbId(item.id);
+    if (!imdb) {
+      const tmdbId = parseTmdbId(item.id);
+      if (tmdbId == null) return;
+      imdb = await withTimeout(
+        resolveTmdbToImdb(betterMetaTypeFor(item.type), tmdbId).catch(() => null),
+        PREWARM_RESOLVE_BUDGET_MS,
+      ).catch(() => null);
+      if (!imdb) return;
+    }
+    const url = applyBetterPosterToUrl(base, imdb, settings, overrides);
+    if (!url || url === base || !isBetterPosterUrl(url)) return;
+    await verifyBetterPosterUrl(url).catch(() => false);
+  } catch { /* prewarm best-effort: nunca rompe el arranque */ }
 }
 
 function preloadStartupImage(url: string) {
@@ -1170,17 +1438,26 @@ function preloadStartupImage(url: string) {
 
 export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
   const queryClient = useQueryClient();
-  const [tmdbReady, setTmdbReady] = useState(() => Boolean(getTmdbApiKey()));
+  // TMDB siempre disponible: key propia en directo o proxy del servidor.
+  const [tmdbReady] = useState(true);
+  // Fuerza recomputar rowsSignature (incluye ajustes BetterPosters) al cambiarlos.
+  const [posterVersion, setPosterVersion] = useState(0);
 
   useEffect(() => {
-    if (!tmdbReady) {
-      let cancelled = false;
-      getTmdbApiKeyAsync().then(() => { if (!cancelled) setTmdbReady(true); });
-      return () => { cancelled = true; };
-    }
-  }, [tmdbReady]);
+    const refresh = () => setPosterVersion(version => version + 1);
+    window.addEventListener(BETTER_POSTER_CHANGED_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(BETTER_POSTER_CHANGED_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
-  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
+  const rowsSignature = useMemo(
+    () => enabledAddonSignature(addons, contentOrientation),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [addons, contentOrientation, posterVersion],
+  );
   const currentHeroSignature = heroSignature();
   const prevSignatureRef = useRef<string | undefined>(undefined);
 
@@ -1198,7 +1475,11 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
 
   const rowsQuery = useQuery({
     queryKey: homeCatalogKeys.rows(rowsSignature),
-    queryFn: () => fetchHomeRows(addons, contentOrientation),
+    // La query emite una fase parcial (filas base) a mitad de camino para
+    // pintar sin esperar al anime ni al enrich; el resultado final la reemplaza.
+    queryFn: () => fetchHomeRows(addons, contentOrientation, phased => {
+      queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), phased);
+    }),
     enabled: tmdbReady,
     initialData: initialRows,
     initialDataUpdatedAt: initialRows ? useCacheStore.getState().home?.rowsUpdatedAt : undefined,
@@ -1221,10 +1502,12 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   });
 
   useEffect(() => {
-    if (rowsQuery.data) {
+    // No persistir la fase parcial (llega con isFetching=true); solo el
+    // resultado final, para no congelar filas sin logos en el arranque.
+    if (rowsQuery.data && !rowsQuery.isFetching) {
       useCacheStore.getState().setHomeRows(rowsQuery.data, rowsSignature);
     }
-  }, [rowsQuery.data, rowsSignature]);
+  }, [rowsQuery.data, rowsQuery.isFetching, rowsSignature]);
 
   useEffect(() => {
     if (heroQuery.data) {
@@ -1237,6 +1520,17 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
       prefetchHomeData(queryClient, addons, contentOrientation);
     }
   }, [addons, queryClient, contentOrientation, tmdbReady]);
+
+  // Calienta en background el último episodio emitido de las series
+  // completadas: es lo que permite ocultar vistos con episodios nuevos
+  // como única excepción. Barato si la caché está fresca.
+  useEffect(() => {
+    if (!tmdbReady) return;
+    void refreshWatchedSeriesCache();
+    const refresh = () => { void refreshWatchedSeriesCache(); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [tmdbReady]);
 
   const rows = rowsQuery.data ?? [];
   const heroItems = useMemo(

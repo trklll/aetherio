@@ -1,13 +1,15 @@
 import { useEffect, useRef } from "react";
+import type { PlayerFeedbackKind } from "./PlayerActionFeedback";
 
 interface KeyboardShortcutHandlers {
   togglePlay: () => void;
   jump: (offset: number) => void;
   applyVolume: (value: number) => void;
-  wakeControls: () => void;
+  flash: (kind: PlayerFeedbackKind, extra?: { deltaSeconds?: number; volume?: number }) => void;
   startSpaceAcceleration: () => boolean;
   stopSpaceAcceleration: () => void;
   volume: number;
+  playing: boolean;
   enabled?: boolean;
 }
 
@@ -15,29 +17,32 @@ export function usePlayerKeyboardShortcuts({
   togglePlay,
   jump,
   applyVolume,
-  wakeControls,
+  flash,
   startSpaceAcceleration,
   stopSpaceAcceleration,
   volume,
+  playing,
   enabled = true,
 }: KeyboardShortcutHandlers) {
   const handlersRef = useRef({
     togglePlay,
     jump,
     applyVolume,
-    wakeControls,
+    flash,
     startSpaceAcceleration,
     stopSpaceAcceleration,
     volume,
+    playing,
   });
   handlersRef.current = {
     togglePlay,
     jump,
     applyVolume,
-    wakeControls,
+    flash,
     startSpaceAcceleration,
     stopSpaceAcceleration,
     volume,
+    playing,
   };
   const spacePressedRef = useRef(false);
   const spaceAcceleratingRef = useRef(false);
@@ -49,12 +54,25 @@ export function usePlayerKeyboardShortcuts({
       const target = event.target as HTMLElement | null;
       if (target) {
         const tag = target.tagName.toLowerCase();
-        if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) return;
+        // Solo se cede el teclado al contexto de edición de texto. Los
+        // sliders (input range: volumen y timeline) NO se excluyen: las
+        // flechas los mueven de forma nativa sin seek ni OSD, y el foco se
+        // queda en ellos tras arrastrarlos — de ahí que el signo de
+        // adelante/atrás saliera "a veces sí, a veces no". Al dejarlos pasar,
+        // cada rama hace preventDefault y dispara seek + flash siempre.
+        const type = tag === "input" ? (target as HTMLInputElement).type.toLowerCase() : "";
+        const isTextEntry =
+          tag === "textarea" ||
+          tag === "select" ||
+          target.isContentEditable ||
+          (tag === "input" && type !== "range");
+        if (isTextEntry) return;
       }
 
       if (event.key === " " || event.code === "Space") {
         event.preventDefault();
-        handlersRef.current.wakeControls();
+        // Espacio: solo OSD al soltar (toggle) o aceleración al mantener.
+        // No despierta la barra — el feedback visual lo da el icono central.
         if (spacePressedRef.current || event.repeat) return;
         spacePressedRef.current = true;
         spaceTimerRef.current = window.setTimeout(() => {
@@ -67,28 +85,30 @@ export function usePlayerKeyboardShortcuts({
       if (event.key === "ArrowRight") {
         event.preventDefault();
         handlersRef.current.jump(10);
-        handlersRef.current.wakeControls();
+        handlersRef.current.flash("forward", { deltaSeconds: 10 });
         return;
       }
 
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         handlersRef.current.jump(-10);
-        handlersRef.current.wakeControls();
+        handlersRef.current.flash("rewind", { deltaSeconds: -10 });
         return;
       }
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        handlersRef.current.applyVolume(handlersRef.current.volume + 0.05);
-        handlersRef.current.wakeControls();
+        const next = handlersRef.current.volume + 0.05;
+        handlersRef.current.applyVolume(next);
+        handlersRef.current.flash("volume", { volume: Math.min(2, Math.max(0, next)) });
         return;
       }
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        handlersRef.current.applyVolume(handlersRef.current.volume - 0.05);
-        handlersRef.current.wakeControls();
+        const next = handlersRef.current.volume - 0.05;
+        handlersRef.current.applyVolume(next);
+        handlersRef.current.flash("volume", { volume: Math.min(2, Math.max(0, next)) });
       }
     };
 
@@ -104,9 +124,10 @@ export function usePlayerKeyboardShortcuts({
       if (wasAccelerating) {
         handlersRef.current.stopSpaceAcceleration();
       } else if (toggleOnShortPress) {
+        const wasPlaying = handlersRef.current.playing;
         handlersRef.current.togglePlay();
+        handlersRef.current.flash(wasPlaying ? "pause" : "play");
       }
-      handlersRef.current.wakeControls();
     };
 
     const onKeyUp = (event: KeyboardEvent) => {

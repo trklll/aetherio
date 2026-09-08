@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getApiKeys, getTheIntroDbToken, tmdbFetch } from "../../config/apiKeys";
+import { getApiKeys, getIntroDbProxyBase, getTheIntroDbToken, tmdbFetch } from "../../config/apiKeys";
 import { invokeCommand } from "../../runtime/platform";
 import type { StreamQuery } from "../../types/stream";
 
@@ -223,15 +223,16 @@ function normalizeTheIntroDbSegment(segment: TheIntroDbSegment | null | undefine
 }
 
 async function loadTheIntroDbSegments(query: StreamQuery): Promise<SkipSegment[]> {
-  // Solo se usa para OUTROS (créditos) de películas y series. Requiere el token Bearer.
+  // Solo se usa para OUTROS (créditos) de películas y series. Con token
+  // propio se va directo; sin él, por el proxy del servidor (sin token).
   const token = getTheIntroDbToken();
-  if (!token) return [];
+  const useProxy = !token;
   const imdbId = await resolveImdbId(query);
   if (!imdbId) return [];
   const isMovie = query.type === "movie";
   if (!isMovie && (!query.season || !query.episode)) return [];
 
-  const url = new URL(`${THEINTRODB_BASE}/media`);
+  const url = new URL(`${useProxy ? getIntroDbProxyBase() : THEINTRODB_BASE}/media`);
   url.searchParams.set("imdb_id", imdbId);
   if (!isMovie) {
     url.searchParams.set("season", String(query.season));
@@ -242,7 +243,9 @@ async function loadTheIntroDbSegments(query: StreamQuery): Promise<SkipSegment[]
   let httpStatus = 0;
   try {
     const response = await fetch(url.toString(), {
-      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      headers: useProxy
+        ? { Accept: "application/json" }
+        : { Accept: "application/json", Authorization: `Bearer ${token}` },
     });
     httpStatus = response.status;
     if (!response.ok) {

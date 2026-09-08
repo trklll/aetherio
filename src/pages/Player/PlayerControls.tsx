@@ -17,6 +17,7 @@ import {
   RotateCw,
   Sparkles,
   TimerReset,
+  Users,
   Volume2,
   VolumeX,
   X,
@@ -24,6 +25,8 @@ import {
 import type { SelectOption, VideoScaleMode } from "./types";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
+import PartyPanel from "../../party/PartyPanel";
+import type { PartyMedia } from "../../party/protocol";
 import { getContextGlassStyle } from "../../components/ui/glassSurface";
 import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
@@ -79,6 +82,16 @@ interface PlayerControlsProps {
   activeSidePanel: "episodes" | "sources" | null;
   hasEpisodeOptions: boolean;
   controlsLocked: boolean;
+  /** Sala de espera Party: bloquea transporte pero deja volumen y Party vivos. */
+  lobbyMode: boolean;
+  showPartyButton: boolean;
+  partyConnected: boolean;
+  partyPeerCount: number;
+  partyPeerNames: string[];
+  partyCurrentMedia: PartyMedia | null;
+  partyCurrentTitle: string;
+  partyStreamFailed: boolean;
+  onPartyRetryStream: () => void;
   canGoPrevEpisode: boolean;
   canGoNextEpisode: boolean;
   canChangeSource: boolean;
@@ -129,6 +142,15 @@ export default function PlayerControls({
   activeSidePanel,
   hasEpisodeOptions,
   controlsLocked,
+  lobbyMode,
+  showPartyButton,
+  partyConnected,
+  partyPeerCount,
+  partyPeerNames,
+  partyCurrentMedia,
+  partyCurrentTitle,
+  partyStreamFailed,
+  onPartyRetryStream,
   canGoPrevEpisode,
   canGoNextEpisode,
   canChangeSource,
@@ -167,6 +189,8 @@ export default function PlayerControls({
   const episodeAlphaRef = useRef({ v: 0 });
   const subtitleAlphaRef = useRef({ v: 0 });
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // Lobby Party: el transporte lo gobierna el anfitrión; volumen y Party siguen vivos.
+  const transportLocked = controlsLocked || lobbyMode;
   const subtitleBlurRefreshKey = useMemo(
     () => `${selectedSubtitleValue}|${subtitlesLoading ? "loading" : "ready"}|${subtitleOptions.map(option => option.value).join("\u0000")}`,
     [selectedSubtitleValue, subtitleOptions, subtitlesLoading],
@@ -510,6 +534,14 @@ export default function PlayerControls({
               <span className="tracking-[0.01em] leading-[1.4]">{title}</span>
             </>
           ) : null}
+          {partyConnected ? (
+            <span className="flex min-w-0 items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/12 px-2.5 py-1 text-xs font-bold text-white/85">
+              <Users size={13} className="shrink-0 text-white/70" />
+              <span className="truncate">
+                en Party {partyPeerNames.length > 0 ? `con ${partyPeerNames.slice(0, 4).join(", ")}${partyPeerNames.length > 4 ? ` y ${partyPeerNames.length - 4} más` : ""}` : ""}
+              </span>
+            </span>
+          ) : null}
         </div>
 
         <div className="mb-3.5 flex items-center gap-3">
@@ -521,10 +553,10 @@ export default function PlayerControls({
             step={1}
             value={Math.min(currentTime, duration || currentTime)}
             onChange={event => onSeek(Number(event.target.value))}
-            disabled={!duration}
+            disabled={!duration || transportLocked}
             style={{
-              pointerEvents: controlsLocked ? "none" : "auto",
-              opacity: controlsLocked ? 0.42 : 1,
+              pointerEvents: transportLocked ? "none" : "auto",
+              opacity: transportLocked ? 0.42 : 1,
               "--player-progress": `${duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0}%`,
             } as CSSProperties}
             className="player-timeline flex-1 disabled:opacity-35"
@@ -534,13 +566,13 @@ export default function PlayerControls({
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2.5">
-            <IconButton label="Retroceder 10 segundos" disabled={controlsLocked} onClick={() => runControlAction(() => onJump(-10))}>
+            <IconButton label="Retroceder 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(-10))}>
               <RotateCcw size={19} />
             </IconButton>
-            <IconButton label={playing ? "Pausar" : "Reproducir"} disabled={controlsLocked} onClick={() => runControlAction(onTogglePlay)} large>
+            <IconButton label={playing ? "Pausar" : "Reproducir"} disabled={transportLocked} onClick={() => runControlAction(onTogglePlay)} large>
               {playing ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" />}
             </IconButton>
-            <IconButton label="Avanzar 10 segundos" disabled={controlsLocked} onClick={() => runControlAction(() => onJump(10))}>
+            <IconButton label="Avanzar 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(10))}>
               <RotateCw size={19} />
             </IconButton>
             <div className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/12 px-2.5 py-2">
@@ -576,7 +608,7 @@ export default function PlayerControls({
               options={[{ value: "", label: "Sin audio" }, ...audioOptions]}
               onChange={onAudioChange}
               open={openMenu === "audio"}
-              disabled={controlsLocked}
+              disabled={transportLocked}
               onToggle={() => setOpenMenu(value => value === "audio" ? null : "audio")}
               onClose={() => setOpenMenu(null)}
             />
@@ -585,7 +617,7 @@ export default function PlayerControls({
               selectedSubtitleValue={selectedSubtitleValue}
               subtitleOptions={[{ value: "", label: subtitlesLoading ? "Cargando subtítulos..." : "Apagado" }, ...subtitleOptions]}
               open={openMenu === "subtitles"}
-              disabled={controlsLocked}
+              disabled={transportLocked}
               subtitleDelayMs={subtitleDelayMs}
               subtitleScalePercent={subtitleScalePercent}
               subtitleVerticalPercent={subtitleVerticalPercent}
@@ -605,7 +637,7 @@ export default function PlayerControls({
               options={speedOptions.map(option => ({ value: option, label: `${option}x` }))}
               onChange={onSpeedChange}
               open={openMenu === "speed"}
-              disabled={controlsLocked}
+              disabled={transportLocked}
               onToggle={() => setOpenMenu(value => value === "speed" ? null : "speed")}
               onClose={() => setOpenMenu(null)}
             />
@@ -616,14 +648,14 @@ export default function PlayerControls({
               options={videoProfileOptions}
               onChange={onVideoProfileChange}
               open={openMenu === "video-enhancements"}
-              disabled={controlsLocked}
+              disabled={transportLocked}
               onToggle={() => setOpenMenu(value => value === "video-enhancements" ? null : "video-enhancements")}
               onClose={() => setOpenMenu(null)}
             />
 
             <IconButton
               label={videoScaleMode === "crop" ? "Recortar" : "Original"}
-              disabled={controlsLocked}
+              disabled={transportLocked}
               onClick={() => runControlAction(onToggleVideoScale)}
             >
               <Crop size={18} />
@@ -631,7 +663,7 @@ export default function PlayerControls({
             {canChangeSource ? (
               <IconButton
                 label={activeSidePanel === "sources" ? "Cerrar fuentes" : "Fuentes"}
-                disabled={controlsLocked}
+                disabled={transportLocked}
                 onClick={() => runControlAction(onToggleSourcePanel)}
               >
                 <Radio size={18} />
@@ -641,7 +673,7 @@ export default function PlayerControls({
             {showPanelToggle && (
               <button
                 onClick={() => runControlAction(onToggleEpisodePanel)}
-                disabled={controlsLocked}
+                disabled={transportLocked}
                 className={`flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition ${
                   activeSidePanel === "episodes"
                     ? "border-white/[0.11] bg-white/18 text-white"
@@ -659,19 +691,33 @@ export default function PlayerControls({
                 <IconButton
                   label="Episodio anterior"
                   onClick={() => runControlAction(() => onNavigateEpisode("prev"))}
-                  disabled={controlsLocked || !canGoPrevEpisode}
+                  disabled={transportLocked || !canGoPrevEpisode}
                 >
                   <ChevronLeft size={18} />
                 </IconButton>
                 <IconButton
                   label="Episodio siguiente"
                   onClick={() => runControlAction(() => onNavigateEpisode("next"))}
-                  disabled={controlsLocked || !canGoNextEpisode}
+                  disabled={transportLocked || !canGoNextEpisode}
                 >
                   <ChevronRight size={18} />
                 </IconButton>
               </>
             )}
+
+            {showPartyButton ? (
+              <PartyMenu
+                open={openMenu === "party"}
+                onToggle={() => setOpenMenu(value => value === "party" ? null : "party")}
+                onClose={() => setOpenMenu(null)}
+                connected={partyConnected}
+                peerCount={partyPeerCount}
+                currentMedia={partyCurrentMedia}
+                currentTitle={partyCurrentTitle}
+                streamFailed={partyStreamFailed}
+                onRetryStream={onPartyRetryStream}
+              />
+            ) : null}
 
           </div>
         </div>
@@ -1160,6 +1206,221 @@ function VideoEnhancementMenu({
         placement="above-end"
         items={items}
       />
+    </div>
+  );
+}
+
+function PartyMenu({
+  open,
+  onToggle,
+  onClose,
+  connected,
+  peerCount,
+  currentMedia,
+  currentTitle,
+  streamFailed,
+  onRetryStream,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  connected: boolean;
+  peerCount: number;
+  currentMedia: PartyMedia | null;
+  currentTitle: string;
+  streamFailed: boolean;
+  onRetryStream: () => void;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(open);
+  const [position, setPosition] = useState<{ left: number; top: number }>({ left: 0, top: 0 });
+  const MENU_WIDTH = 480;
+
+  // §7 — anclado al botón (above-end, como los demás menús de la barra), nunca centrado.
+  useEffect(() => {
+    if (!open || !mounted || !buttonRef.current || !menuRef.current) return;
+    const updatePosition = () => {
+      const anchor = buttonRef.current;
+      const el = menuRef.current;
+      if (!anchor || !el) return;
+      const aRect = anchor.getBoundingClientRect();
+      const menuWidth = MENU_WIDTH;
+      const menuHeight = el.offsetHeight || 440;
+      const margin = 10;
+      let left = aRect.right - menuWidth;
+      if (left < margin) left = Math.min(window.innerWidth - menuWidth - margin, Math.max(margin, aRect.right - menuWidth));
+      if (left + menuWidth > window.innerWidth - margin) left = window.innerWidth - menuWidth - margin;
+      const controlsTop = document
+        .querySelector<HTMLElement>("[data-player-controls-glass]")
+        ?.getBoundingClientRect().top;
+      const upperBoundary = controlsTop === undefined ? aRect.top : Math.min(aRect.top, controlsTop);
+      const top = Math.max(margin, upperBoundary - menuHeight - 12);
+      setPosition({ left, top });
+    };
+    updatePosition();
+    const t = window.setTimeout(updatePosition, 40);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open, mounted]);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const el = menuRef.current;
+    if (!el) {
+      setMounted(false);
+      return;
+    }
+    gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.to(el, { opacity: 0, duration: 0.18, ease: "power1.out", overwrite: "auto", onComplete: () => setMounted(false) });
+      return;
+    }
+    // §3/§4 spring exit anchored, interruptible
+    const anchor = buttonRef.current;
+    if (anchor) {
+      const aRect = anchor.getBoundingClientRect();
+      const mRect = el.getBoundingClientRect();
+      const origin = anchorTransformOrigin(aRect, mRect.left, mRect.top, mRect.width, mRect.height);
+      gsap.set(el, { transformOrigin: origin });
+    }
+    springTo(el, {
+      opacity: 0,
+      y: 8,
+      scale: 0.98,
+      filter: "blur(6px)",
+    } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.28 });
+    gsap.delayedCall(0.30, () => { if (!open) setMounted(false); });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !mounted || !menuRef.current) return;
+    const el = menuRef.current;
+    // §7 anchor origin to trigger button
+    const anchor = buttonRef.current;
+    if (anchor) {
+      const aRect = anchor.getBoundingClientRect();
+      const mRect = el.getBoundingClientRect();
+      const origin = anchorTransformOrigin(aRect, mRect.left, mRect.top, mRect.width, mRect.height);
+      gsap.set(el, { transformOrigin: origin });
+    }
+    gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: 0 });
+      gsap.to(el, { opacity: 1, duration: 0.2, ease: "power1.out", overwrite: "auto" });
+      return;
+    }
+    gsap.set(el, { opacity: 0, y: 10, scale: 0.98, filter: "blur(8px)" });
+    springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.36 });
+  }, [open, mounted]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (menuRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(target)) return;
+      onClose();
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [onClose, open]);
+
+  return (
+    <div className="relative" data-player-menu data-menu-id="party">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onToggle}
+        onPointerDown={e => {
+          gsap.killTweensOf(e.currentTarget);
+          gsap.to(e.currentTarget, { scale: 0.96, duration: 0.1, ease: "power2.out", overwrite: "auto" });
+        }}
+        onPointerUp={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        onPointerLeave={e => gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" })}
+        className={`relative flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition will-change-transform active:scale-[0.96] ${
+          open || connected ? "border-white/[0.12] bg-white/18" : "border-white/[0.07] bg-white/10 hover:bg-white/15"
+        }`}
+        style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
+        title={connected ? "Party: sala activa" : "Party: ver juntos"}
+        aria-label={connected ? "Party: sala activa" : "Party: ver juntos"}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Users size={17} />
+        {connected && peerCount > 0 ? (
+          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] font-black text-black">
+            {peerCount}
+          </span>
+        ) : null}
+      </button>
+      {mounted
+        ? createPortal(
+            <div
+              ref={menuRef}
+              data-player-party-panel-glass
+              data-player-floating-panel-glass
+              role="dialog"
+              aria-label="Party"
+              className="fixed z-[60] flex w-[min(480px,calc(100vw-32px))] flex-col overflow-hidden rounded-[24px] text-white will-change-transform"
+              style={{
+                ...getContextGlassStyle(),
+                left: position.left,
+                top: position.top,
+                width: "min(480px, calc(100vw - 32px))",
+                maxHeight: "calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top, 0px) - 86px)",
+                minHeight: 320,
+                willChange: "transform, opacity, filter",
+                transform: "translateZ(0)",
+              }}
+            >
+              <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <Users size={18} className="shrink-0 text-white/72" />
+                  <div className="min-w-0">
+                    <h3 className="text-[15px] font-semibold tracking-[-0.01em] text-white">Party</h3>
+                    <p className="truncate text-xs text-white/48">
+                      {connected ? `${peerCount} en la sala` : (currentTitle || "Ver juntos")}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/64 gsap-transition hover:bg-white/10 hover:text-white"
+                  aria-label="Cerrar Party"
+                  title="Cerrar"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col p-5">
+                <PartyPanel
+                  currentMedia={currentMedia}
+                  currentTitle={currentTitle}
+                  streamFailed={streamFailed}
+                  onRetryStream={onRetryStream}
+                />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

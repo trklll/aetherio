@@ -6,6 +6,7 @@ import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
+import { applyBetterPosterToUrl, extractImdbId } from "../../config/betterPosters";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 
@@ -14,7 +15,7 @@ const PAGE_LIMIT = 20;
 const MAX_ITEMS = 240;
 
 const HORIZONTAL_CARD = { width: 302, height: 196 };
-const VERTICAL_CARD = { width: 207, height: 312 };
+const VERTICAL_CARD = { width: 197, height: 296 };
 
 function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500") {
   if (!url) return url;
@@ -22,9 +23,12 @@ function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500
 }
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
+  const upgradedPoster = upgradeTmdbImage(item.poster, "w500");
+  const better = applyBetterPosterToUrl(upgradedPoster, extractImdbId(item.id));
   return {
     ...item,
-    poster: upgradeTmdbImage(item.poster, "w500"),
+    poster: better ?? upgradedPoster,
+    originalPoster: better && better !== upgradedPoster ? upgradedPoster : item.originalPoster,
     background: upgradeTmdbImage(item.background, "w780"),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w500")),
   };
@@ -242,9 +246,18 @@ function CatalogGridCard({
   posterLayout: "horizontal" | "vertical";
 }) {
   const navigate = useNavigate();
-  const image = posterLayout === "vertical"
+  // Aunque esta vista no está ruteada hoy, el póster puede ser una URL
+  // BTTTR horneada por normalizeMediaItem: si falla, volver al original
+  // en vez de dejar la card en negro.
+  const [failed, setFailed] = useState(false);
+  const base = posterLayout === "vertical"
     ? item.poster ?? item.background ?? ""
     : item.background ?? item.poster ?? "";
+  const fallback = item.originalPoster && item.originalPoster !== base
+    ? item.originalPoster
+    : undefined;
+  useEffect(() => { setFailed(false); }, [base]);
+  const image = failed && fallback ? fallback : base;
   const logo = sanitizeLogoUrl(item.logo);
   const openDetail = () => {
     writeDetailMediaMeta({
@@ -267,7 +280,7 @@ function CatalogGridCard({
       style={{ position: "relative", width, height, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", contentVisibility: "auto", containIntrinsicSize: `${width}px ${height}px` }}
     >
       {image ? (
-        <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        <img src={image} alt={item.name} loading="lazy" decoding="async" onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
       ) : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top,rgba(0,0,0,0.86) 0%,rgba(0,0,0,0.12) 62%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 10px 10px" }}>

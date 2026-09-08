@@ -164,6 +164,11 @@ export function readWatchedHistoryEntries(): ContinueWatchingEntry[] {
 
 let _cachedPlaybackEntries: ContinueWatchingEntry[] | null = null;
 
+/** Limpia la caché en memoria del estado de reproducción (pensado para tests). */
+export function resetPlaybackStateCacheForTests() {
+  _cachedPlaybackEntries = null;
+}
+
 export function readPlaybackStateEntries(): ContinueWatchingEntry[] {
   if (_cachedPlaybackEntries) return _cachedPlaybackEntries;
   const byKey = new Map<string, ContinueWatchingEntry>();

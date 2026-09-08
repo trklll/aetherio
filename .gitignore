@@ -20,9 +20,12 @@ src-tauri/target
 # Local tooling, reference checkouts, and generated test output
 .codegraph/
 .playwright-cli/
+.codex/
 output/
 refs_/
 website/.wrangler/
+party-server/.wrangler/
+party-server/node_modules/
 
 # Generated provider bundle (rebuilt by npm scripts)
 public/provider-runtime-deps.js
@@ -34,12 +37,26 @@ vite.config.d.ts
 
 # MPV runtime downloaded by scripts/install-mpv.ps1
 src-tauri/bin/mpv/libmpv-2.dll
+src-tauri/bin/mpv/*.dll
+src-tauri/bin/mpv/*.exe
 
 # Local command output accidentally created as a file
 src-tauri/2
 
 # Native build crash reports
 hs_err_pid*.log
+
+# Agentic / AI assistant working files (local-only, not part of the app)
+.agents/
+skills-lock.json
+.continue/
+
+# Local dumps, notes and experiments (never commit)
+project-snapshot*.txt
+comando.txt
+plans/
+re_lab/
+stageweb.jpg
 
 # Editor directories and files
 .vscode/*

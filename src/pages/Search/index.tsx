@@ -6,11 +6,49 @@ import { useAddonStore } from "../../store/addonStore";
 import { useMediaSearch } from "../../hooks/useMediaSearch";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import type { UnifiedSearchResult } from "../../utils/searchProviders";
+import { isBetterPosterUrl } from "../../config/betterPosters";
+import { resolveBetterPosterSync } from "../../hooks/useBetterPoster";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 
 const POSTER_CARD = { width: 207, height: 312 };
 const ROW_GAP = 22;
 const TOP_RESULTS_LIMIT = 3;
+// btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
+// sin error: mismo presupuesto que en Home/Catálogo antes de volver al base.
+const SEARCH_POSTER_FALLBACK_TIMEOUT_MS = 15_000;
+
+/**
+ * Muestra la URL BetterPosters pero vuelve al póster base si falla o se
+ * cuelga. Sin esto, cualquier 404/429 de btttr.cc dejaba la card en negro.
+ */
+function usePosterWithFallback(betterUrl: string | undefined, baseUrl: string | undefined) {
+  const [failed, setFailed] = useState(false);
+  const loadedRef = useRef(false);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  useEffect(() => {
+    setFailed(false);
+    loadedRef.current = false;
+  }, [betterUrl]);
+  useEffect(() => {
+    if (!isBetterPosterUrl(betterUrl) || !baseUrl || betterUrl === baseUrl || failed) return;
+    // La imagen puede estar ya completa (caché) con onLoad anterior a este
+    // efecto: consultar el elemento evita degradar pósters sanos.
+    const el = imgRef.current;
+    if (el && el.currentSrc === betterUrl && el.complete && el.naturalWidth > 0) {
+      loadedRef.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!loadedRef.current) setFailed(true);
+    }, SEARCH_POSTER_FALLBACK_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [betterUrl, baseUrl, failed]);
+  const markLoaded = () => { loadedRef.current = true; };
+  const markFailed = () => {
+    if (baseUrl && baseUrl !== betterUrl) setFailed(true);
+  };
+  return { src: failed && baseUrl ? baseUrl : (betterUrl ?? baseUrl ?? ""), imgRef, markLoaded, markFailed };
+}
 
 export default function SearchPage() {
   const [params] = useSearchParams();
@@ -158,7 +196,11 @@ function SectionHead({ title, inset = true }: { title: string; inset?: boolean }
 }
 
 function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
-  const poster = item.poster ?? item.background;
+  const base = item.poster ?? item.background ?? undefined;
+  const poster = usePosterWithFallback(
+    resolveBetterPosterSync(item.id, item.externalIds?.imdb, base),
+    base,
+  );
   return (
     <button
       type="button"
@@ -179,8 +221,8 @@ function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: ()
       }}
     >
       <div style={{ width: 48, height: 72, flexShrink: 0, overflow: "hidden", borderRadius: 6, background: "rgba(255,255,255,0.08)" }}>
-        {poster ? (
-          <img src={poster} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        {poster.src ? (
+          <img ref={poster.imgRef} src={poster.src} alt="" loading="lazy" decoding="async" onLoad={poster.markLoaded} onError={poster.markFailed} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         ) : null}
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
@@ -329,7 +371,11 @@ function SearchRowArrow({
 
 function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
   const cardRef = useRef<HTMLButtonElement>(null);
-  const poster = item.poster ?? item.background;
+  const base = item.poster ?? item.background ?? undefined;
+  const poster = usePosterWithFallback(
+    resolveBetterPosterSync(item.id, item.externalIds?.imdb, base),
+    base,
+  );
 
   return (
     <button
@@ -361,12 +407,15 @@ function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen:
         gsap.set(cardRef.current, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
       }}
     >
-      {poster ? (
+      {poster.src ? (
         <img
-          src={poster}
+          ref={poster.imgRef}
+          src={poster.src}
           alt={item.name ?? ""}
           loading="lazy"
           decoding="async"
+          onLoad={poster.markLoaded}
+          onError={poster.markFailed}
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
         />
       ) : (
