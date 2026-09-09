@@ -4,7 +4,7 @@
 // mismo contenido y contraseña. El video nunca depende del servidor: si cae,
 // cada uno sigue viendo en local y solo se pierde el sync.
 
-const DEFAULT_SERVER = "https://party.aetherio.workers.dev";
+const DEFAULT_SERVER = "https://aetherio-party.aetherio.workers.dev";
 const LAST_GOOD_KEY = "aetherio-party-server";
 
 export function getPartyServers(): string[] {

@@ -22,7 +22,7 @@ VITE_PARTY_SERVER_URL=https://aetherio-party.<tu-cuenta>.workers.dev
 VITE_PARTY_SERVER_URLS=https://party.tu-dominio.dev,https://aetherio-party.otro.workers.dev
 ```
 
-Sin esas variables la app usa `https://party.aetherio.workers.dev` por defecto.
+Sin esas variables la app usa `https://aetherio-party.aetherio.workers.dev` por defecto.
 
 ## API
 
