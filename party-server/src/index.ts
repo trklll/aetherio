@@ -134,6 +134,15 @@ interface Peer {
   clientId?: string;
 }
 
+/** Lo que sobrevive a una evicción del DO dentro de cada socket hibernado. */
+interface SocketAttachment {
+  peerId: string;
+  name: string;
+  joinedAt: number;
+  clientId?: string;
+  identity?: string;
+}
+
 // Si el anfitrión se desconecta sin cerrar (cuelgue, app muerta), la sala
 // espera su regreso este tiempo y luego MUERE (sin migrar el dueño).
 const OWNER_GRACE_MS = 20_000;
@@ -153,6 +162,12 @@ export class PartyRoom implements DurableObject {
   private destroyTimer: ReturnType<typeof setTimeout> | null = null;
   private claimed = false;
   private hydrated = false;
+  /**
+   * El constructor re-corre en cada despertar (tras evicción la memoria
+   * muere pero los sockets hibernados sobreviven): hasta reconciliar, el
+   * mapa `peers` y `ownerId` no son fiables.
+   */
+  private reconciled = false;
 
   constructor(private state: DurableObjectState) {}
 
@@ -167,6 +182,93 @@ export class PartyRoom implements DurableObject {
     this.ownerLeftAt = (await this.state.storage.get<number>("ownerLeftAt")) ?? null;
   }
 
+  /** Entrada única con memoria fiable: hidrata + aplica gracia + resucita hibernados. */
+  private async ensureLive(): Promise<void> {
+    const firstTouch = !this.reconciled;
+    this.reconciled = true;
+    await this.hydrate();
+    if (this.ownerGraceExpired()) this.destroyRoom();
+    if (firstTouch) await this.reconcileHibernatedSockets();
+  }
+
+  /**
+   * Tras una evicción, `peers`/`ownerId` están vacíos pero puede haber
+   * sockets hibernados vivos y la sala seguir reclamada en storage. Sin
+   * reconstruir desde ellos, cada miembro conserva su último estado
+   * ("1 en la sala · anfitrión") y el siguiente en conectar roba la
+   * propiedad: dos anfitriones con el mismo código.
+   */
+  private async reconcileHibernatedSockets(): Promise<void> {
+    if (!this.claimed || this.peers.size > 0) return;
+    let live: WebSocket[] = [];
+    try {
+      live = this.state.getWebSockets();
+    } catch {
+      live = [];
+    }
+    if (live.length === 0) return;
+    // La gracia del anfitrión pudo vencer mientras el DO dormía.
+    if (this.ownerGraceExpired()) {
+      this.destroyRoom();
+      return;
+    }
+    for (const socket of live) {
+      let attachment: SocketAttachment | null = null;
+      try {
+        attachment = socket.deserializeAttachment() as SocketAttachment | null;
+      } catch {
+        attachment = null;
+      }
+      if (!attachment || typeof attachment.peerId !== "string" || !attachment.peerId) continue;
+      const name = typeof attachment.name === "string" && attachment.name ? attachment.name : "Invitado";
+      const joinedAt = Number.isFinite(attachment.joinedAt) ? attachment.joinedAt : Date.now();
+      const peer: Peer = { id: attachment.peerId, name, joinedAt, socket };
+      if (typeof attachment.clientId === "string" && attachment.clientId) peer.clientId = attachment.clientId;
+      if (typeof attachment.identity === "string" && attachment.identity) peer.identity = attachment.identity;
+      this.peers.set(socket, peer);
+    }
+    if (this.peers.size === 0) return;
+    // Dueño: el persistido si su socket sobrevivió; si no, gracia rearmada
+    // o el miembro más antiguo (misma regla que al entrar a una sala viva).
+    let persistedOwner: string | null = null;
+    try {
+      persistedOwner = (await this.state.storage.get<string>("ownerPeerId")) ?? null;
+    } catch {
+      persistedOwner = null;
+    }
+    const attachedIds = new Set([...this.peers.values()].map(peer => peer.id));
+    if (persistedOwner && attachedIds.has(persistedOwner)) {
+      this.ownerId = persistedOwner;
+    } else {
+      this.ownerId = null;
+      if (this.ownerClientId) {
+        if (!this.ownerLeftAt) {
+          this.ownerLeftAt = Date.now();
+          void this.state.storage.put("ownerLeftAt", this.ownerLeftAt);
+        }
+        // El timer en memoria murió con la evicción: rearmar la gracia.
+        if (this.destroyTimer) clearTimeout(this.destroyTimer);
+        const remaining = Math.max(0, OWNER_GRACE_MS - (Date.now() - (this.ownerLeftAt ?? Date.now())));
+        this.destroyTimer = setTimeout(() => {
+          this.destroyTimer = null;
+          this.destroyRoom();
+        }, remaining);
+      } else {
+        const oldest = [...this.peers.values()].sort((a, b) => a.joinedAt - b.joinedAt)[0];
+        this.setOwner(oldest.id);
+      }
+    }
+    // Re-sincronizar a todos los conectados (conteos + quién es dueño).
+    this.broadcastPeers();
+  }
+
+  /** Asignación de dueño (persiste para sobrevivir evicciones). */
+  private setOwner(peerId: string | null): void {
+    this.ownerId = peerId;
+    if (peerId) void this.state.storage.put("ownerPeerId", peerId);
+    else void this.state.storage.delete("ownerPeerId");
+  }
+
   /** La gracia venció (tras evicción del DO el timer en memoria muere: se evalúa perezoso). */
   private ownerGraceExpired(): boolean {
     return (
@@ -179,8 +281,7 @@ export class PartyRoom implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    await this.hydrate();
-    if (this.ownerGraceExpired()) this.destroyRoom();
+    await this.ensureLive();
 
     // Reclamo interno desde /party/create.
     if (url.pathname === "/__claim" && request.method === "POST") {
@@ -230,9 +331,9 @@ export class PartyRoom implements DurableObject {
     this.peers.set(server, peer);
     // Durante la gracia del anfitrión nadie roba la propiedad: solo el
     // anfitrión que vuelve (mismo clientId, ver "hello") la recupera.
-    if (!this.ownerId && !this.ownerClientId) this.ownerId = peerId;
+    if (!this.ownerId && !this.ownerClientId) this.setOwner(peerId);
 
-    server.serializeAttachment({ peerId });
+    server.serializeAttachment({ peerId, name, joinedAt: peer.joinedAt });
     this.send(server, {
       t: "welcome",
       peerId,
@@ -249,6 +350,7 @@ export class PartyRoom implements DurableObject {
   }
 
   async webSocketMessage(socket: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    await this.ensureLive();
     const peer = this.peers.get(socket);
     if (!peer || typeof raw !== "string") return;
     let msg: ClientMessage;
@@ -266,11 +368,18 @@ export class PartyRoom implements DurableObject {
         if (clientId) peer.clientId = clientId;
         if (this.ownerClientId && clientId && clientId === this.ownerClientId && !this.ownerId) {
           // El anfitrión volvió dentro de la gracia: recupera su sala.
-          this.ownerId = peer.id;
+          this.setOwner(peer.id);
           this.clearOwnerGrace();
         }
         const identity = sanitizeIdentity(msg.identity);
         if (identity) peer.identity = identity;
+        socket.serializeAttachment({
+          peerId: peer.id,
+          name: peer.name,
+          joinedAt: peer.joinedAt,
+          ...(peer.clientId ? { clientId: peer.clientId } : {}),
+          ...(peer.identity ? { identity: peer.identity } : {}),
+        });
         this.send(socket, {
           t: "welcome",
           peerId: peer.id,
@@ -362,10 +471,12 @@ export class PartyRoom implements DurableObject {
   }
 
   async webSocketClose(socket: WebSocket): Promise<void> {
+    await this.ensureLive();
     this.handleLeave(socket);
   }
 
   async webSocketError(socket: WebSocket): Promise<void> {
+    await this.ensureLive();
     this.handleLeave(socket);
   }
 
@@ -386,7 +497,7 @@ export class PartyRoom implements DurableObject {
     if (peer.id === this.ownerId) {
       // El anfitrión se fue: la sala MUERE (sin migración de dueño). Gracia
       // corta por si vuelve (mismo clientId); si no, se destruye.
-      this.ownerId = null;
+      this.setOwner(null);
       this.ownerClientId = peer.clientId ?? null;
       this.ownerLeftAt = Date.now();
       void this.state.storage.put("ownerClientId", this.ownerClientId ?? "");
@@ -420,6 +531,15 @@ export class PartyRoom implements DurableObject {
     this.clearOwnerGrace();
     // Limpiar el mapa ANTES de cerrar: los onclose reentrantes no hacen nada.
     const sockets = [...this.peers.keys()];
+    // Tras una evicción puede haber sockets hibernados vivos que la memoria
+    // ya no conoce: avisarles también para que no se pudran como fantasmas.
+    try {
+      for (const socket of this.state.getWebSockets()) {
+        if (!sockets.includes(socket)) sockets.push(socket);
+      }
+    } catch {
+      // Sin hibernación disponible.
+    }
     this.peers.clear();
     for (const socket of sockets) {
       try {
@@ -434,6 +554,7 @@ export class PartyRoom implements DurableObject {
       }
     }
     this.ownerId = null;
+    void this.state.storage.delete("ownerPeerId");
     this.media = null;
     this.isProtected = false;
     this.probe = "";
