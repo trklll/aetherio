@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ExternalLink, SkipForward } from "lucide-react";
+import { ArrowLeft, ExternalLink, LoaderCircle, SkipForward } from "lucide-react";
 import {
   matchesPreferredLanguage,
   resolvePreferredLanguage,
@@ -2710,7 +2710,10 @@ function retryPartyStream() {
 
 // Aplicar la fuente del anfitrión: misma fuente exacta en todos los dispositivos.
 function applyPartyStreamOffer(event: PartyStreamEvent) {
-  if (!stream || isTrailerStream || showUpNext) return;
+  // Invitado recién llegado (sin stream propio): la oferta del anfitrión ES su
+  // fuente — no hace falta tener una propia para aceptarla.
+  const guestNoStream = !stream && !partyIsOwner;
+  if ((!stream && !guestNoStream) || isTrailerStream || showUpNext) return;
   if (event.offer.target === partyFailedTargetRef.current) return;
   if (partyRoomKey && partyQueryKey && partyRoomKey !== partyQueryKey) return;
   const myTarget = getPlaybackTarget(stream);
@@ -2725,6 +2728,31 @@ function applyPartyStreamOffer(event: PartyStreamEvent) {
   partyStreamSwitchAtRef.current = Date.now();
   partyNoteRemote();
   setPartyStreamFailed(false);
+  // Invitado sin stream previo: encajar metadatos del medio para que el
+  // player cargue con identidad (título/arte) aunque no venga del picker.
+  if (guestNoStream) {
+    setSelectedMediaName(prev => prev || (event.offer.label || mediaTitle));
+    try {
+      const savedMeta = sessionStorage.getItem(SELECTED_MEDIA_META_KEY);
+      if (savedMeta) {
+        const parsed = JSON.parse(savedMeta) as { name?: string; background?: string; poster?: string; logo?: string; resumeTime?: number };
+        if (!parsed.name) {
+          parsed.name = mediaTitle;
+          sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify(parsed));
+        }
+      } else {
+        sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
+          name: mediaTitle,
+          background: selectedMediaBackground,
+          poster: selectedMediaPoster,
+          logo: selectedMediaLogo,
+          resumeTime: 0,
+        }));
+      }
+    } catch {
+      // Metadatos best-effort: el stream del grupo es lo importante.
+    }
+  }
   setStream(partyOfferToMediaStream(event.offer, event.from));
 }
 
@@ -3269,6 +3297,32 @@ if (isIframeStream && playbackTarget) {
 }
 
 if (!stream) {
+  // Invitado en sala: su fuente es la del anfitrión; si aún no llegó, esperarla
+  // (lobby/cargando) en vez de "No hay una fuente seleccionada".
+  if (partyStatus === "connected" && !partyIsOwner) {
+    return (
+      <div className="relative flex h-screen items-center justify-center overflow-hidden bg-black text-white">
+        {partyLobbyBackdrop ? (
+          <img
+            src={partyLobbyBackdrop}
+            alt=""
+            decoding="async"
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center opacity-30 grayscale"
+          />
+        ) : null}
+        <div className="pointer-events-none absolute inset-0 bg-black/60" />
+        <div className="relative z-10 flex flex-col items-center gap-4">
+          <LoaderCircle size={34} className="animate-spin text-white/70" />
+          <p className="text-sm font-semibold text-white/70">
+            {partyRoomKey && partyQueryKey && partyRoomKey !== partyQueryKey
+              ? "La sala cambió de contenido, cargando…"
+              : "Conectado a la sala, esperando la fuente del anfitrión…"}
+          </p>
+          {partyRoomCode ? <p className="text-xs font-bold tracking-[0.25em] text-white/40">{partyRoomCode}</p> : null}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex h-screen flex-col items-center justify-center gap-4 bg-black text-white">
       <p className="text-white/64">No hay una fuente seleccionada.</p>

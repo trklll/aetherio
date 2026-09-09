@@ -751,6 +751,26 @@ export default function EpisodiePage() {
   playStreamRef.current = playStream;
   allStreamsRef.current = allStreams;
 
+  // Invitado Party: directo al Player con la identidad del medio (la fuente
+  // exacta del anfitrión llega por la sala y se aplica ahí).
+  const goToPlayerForParty = useCallback(() => {
+    if (!query) return;
+    try {
+      const resume = getExactResumeForQuery(query);
+      sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
+        name: meta?.name ?? query.id,
+        logo: meta?.logo ?? "",
+        background: ensureOriginalTmdbImage(meta?.background) ?? meta?.episodeStill ?? meta?.poster ?? "",
+        poster: meta?.poster ?? "",
+        resumeKey: resume?.key,
+        resumeTime: 0,
+      }));
+    } catch {
+      // Metadatos best-effort.
+    }
+    navigate(`/player?${buildPlayerSearch(params)}`);
+  }, [query, meta, params, navigate]);
+
   function playStream(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) {
     if (!query) return;
     const resume = getExactResumeForQuery(query);
@@ -959,6 +979,7 @@ export default function EpisodiePage() {
                 reloadScrapedStreams();
               }}
               onSelect={handleSelectStream}
+              onGuestJoined={goToPlayerForParty}
             />
           </div>
         </section>
@@ -1300,6 +1321,7 @@ function SourcePickerPanel({
   onSourceChange,
   onSelect,
   onReload,
+  onGuestJoined,
 }: {
   title: string;
   loading: boolean;
@@ -1315,6 +1337,7 @@ function SourcePickerPanel({
   onSourceChange: (source: string | null) => void;
   onSelect: (streamId: string) => void;
   onReload: () => void;
+  onGuestJoined: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -1346,6 +1369,14 @@ function SourcePickerPanel({
     }
     onSelect(streamId);
   }
+
+  // Invitado conectado: directo al Player. La fuente exacta del anfitrión
+  // llega por la sala y se carga ahí (bajo el lobby hasta "Empezar").
+  const partyGuestConnected = partyMode === "guest" && party.status === "connected" && !party.isOwner;
+  useEffect(() => {
+    if (!partyGuestConnected) return;
+    onGuestJoined();
+  }, [partyGuestConnected, onGuestJoined]);
 
   function handleGuestJoin() {
     if (!isCompleteRoomCode(partyCode)) return;
