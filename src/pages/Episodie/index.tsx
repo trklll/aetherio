@@ -180,9 +180,35 @@ export default function EpisodiePage() {
     const target = partyGuestMedia;
     navigate(`/episode?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}&autoplay=1`);
   }, [partyMode, party.status, party.isOwner, partyGuestMedia, partyGuestMediaKey, partyQueryKey, navigate]);
+
+  // Invitado Party: directo al Player con la identidad del medio (la fuente
+  // exacta del anfitrión llega por la sala y se aplica ahí). Debe vivir ANTES
+  // de los returns condicionales: es un hook y su presencia no puede variar
+  // entre renders. `meta` se lee via ref (aún sin declarar en este punto).
+  const partyMetaRef = useRef<EpisodePageMeta | null>(null);
+  const goToPlayerForParty = useCallback(() => {
+    if (!query) return;
+    try {
+      const resume = getExactResumeForQuery(query);
+      const currentMeta = partyMetaRef.current;
+      sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
+        name: currentMeta?.name ?? query.id,
+        logo: currentMeta?.logo ?? "",
+        background: ensureOriginalTmdbImage(currentMeta?.background) ?? currentMeta?.episodeStill ?? currentMeta?.poster ?? "",
+        poster: currentMeta?.poster ?? "",
+        resumeKey: resume?.key,
+        resumeTime: 0,
+      }));
+    } catch {
+      // Metadatos best-effort.
+    }
+    navigate(`/player?${buildPlayerSearch(params)}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query?.type, query?.id, query?.season, query?.episode, params, navigate]);
   // Cancelacion del auto-resolve estilo NuvioTV: atras/ESC en el loader revela el picker manual.
   const [autoResolveCancelled, setAutoResolveCancelled] = useState(false);
   const [meta, setMeta] = useState<EpisodePageMeta | null>(() => initialCachedMeta);
+  partyMetaRef.current = meta;
   const [metaReady, setMetaReady] = useState(() => Boolean(initialCachedMeta));
   const [selectedStreamId, setSelectedStreamId] = useState("");
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
@@ -750,26 +776,6 @@ export default function EpisodiePage() {
 
   playStreamRef.current = playStream;
   allStreamsRef.current = allStreams;
-
-  // Invitado Party: directo al Player con la identidad del medio (la fuente
-  // exacta del anfitrión llega por la sala y se aplica ahí).
-  const goToPlayerForParty = useCallback(() => {
-    if (!query) return;
-    try {
-      const resume = getExactResumeForQuery(query);
-      sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
-        name: meta?.name ?? query.id,
-        logo: meta?.logo ?? "",
-        background: ensureOriginalTmdbImage(meta?.background) ?? meta?.episodeStill ?? meta?.poster ?? "",
-        poster: meta?.poster ?? "",
-        resumeKey: resume?.key,
-        resumeTime: 0,
-      }));
-    } catch {
-      // Metadatos best-effort.
-    }
-    navigate(`/player?${buildPlayerSearch(params)}`);
-  }, [query, meta, params, navigate]);
 
   function playStream(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) {
     if (!query) return;
