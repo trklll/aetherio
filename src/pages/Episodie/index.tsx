@@ -38,7 +38,7 @@ import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
 import { getSourceLogo, getStreamAddonLogo } from "../../utils/sourceLogos.ts";
 import { useParty } from "../../party/PartyContext.tsx";
-import { normalizeRoomCode, isCompleteRoomCode, type PartyMedia } from "../../party/protocol.ts";
+import { normalizeRoomCode, isCompleteRoomCode, isEncryptedPayload, partyMediaKey, type PartyMedia } from "../../party/protocol.ts";
 import ContextMenu from "../../components/ui/ContextMenu.tsx";
 import { pickBestMatchingSource, type AutoNextSourceHint } from "../../utils/autoNextSource.ts";
 import { consumeAutoResolveBackPress, registerAutoResolve } from "../../utils/autoResolveGuard.ts";
@@ -154,6 +154,32 @@ export default function EpisodiePage() {
   const autoSelectedKeyRef = useRef("");
   // Modo Party elegido en el panel de fuentes (bloquea autoplay mientras se elige).
   const [partyMode, setPartyMode] = useState<null | "guest" | "host">(null);
+  const party = useParty();
+  const partyFollowedKeyRef = useRef("");
+  // Invitado en sala: seguir automáticamente el contenido del grupo. Sin
+  // esto, el "Empezar para todos" del anfitrión no saca al invitado de la ficha.
+  const partyGuestMediaRaw = party.status === "connected" && !party.isOwner
+    ? party.lastMediaEvent?.media ?? null
+    : null;
+  const partyGuestMedia = partyGuestMediaRaw && !isEncryptedPayload(partyGuestMediaRaw) ? partyGuestMediaRaw : null;
+  const partyGuestMediaKey = partyGuestMedia ? partyMediaKey(partyGuestMedia) : "";
+  const partyQueryKey = query ? partyMediaKey({ type: query.type, id: query.id, season: query.season, episode: query.episode }) : "";
+  // La sala ya trae contenido para ESTA ficha: desbloquear el autoplay.
+  const partyGuestFollowReady = partyMode === "guest" && partyGuestMediaKey !== "" && partyGuestMediaKey === partyQueryKey;
+
+  useEffect(() => {
+    partyFollowedKeyRef.current = "";
+  }, [party.roomCode]);
+
+  // Seguir al grupo a otra ficha (espejo del Player): navegar con autoplay.
+  useEffect(() => {
+    if (partyMode !== "guest" || party.status !== "connected" || party.isOwner) return;
+    if (!partyGuestMedia || !partyGuestMediaKey || partyGuestMediaKey === partyQueryKey) return;
+    if (partyGuestMediaKey === partyFollowedKeyRef.current) return;
+    partyFollowedKeyRef.current = partyGuestMediaKey;
+    const target = partyGuestMedia;
+    navigate(`/episode?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}&autoplay=1`);
+  }, [partyMode, party.status, party.isOwner, partyGuestMedia, partyGuestMediaKey, partyQueryKey, navigate]);
   // Cancelacion del auto-resolve estilo NuvioTV: atras/ESC en el loader revela el picker manual.
   const [autoResolveCancelled, setAutoResolveCancelled] = useState(false);
   const [meta, setMeta] = useState<EpisodePageMeta | null>(() => initialCachedMeta);
@@ -216,7 +242,7 @@ export default function EpisodiePage() {
   // automatica, primera fuente y reutilizar enlace). Sincrono para poder
   // mostrar el loader estilo NuvioTV antes de que lleguen los streams.
   const autoResolveIntent = useMemo(() => {
-    if (!query || returnedFromPlayer || partyMode) return false;
+    if (!query || returnedFromPlayer || (partyMode && !partyGuestFollowReady)) return false;
     if (autoplayRequested) return true;
     if (playbackPreferences.sourceSelectionMode === "first") return true;
     if (!playbackPreferences.reuseLastLink) return false;
@@ -229,6 +255,7 @@ export default function EpisodiePage() {
     autoplayRequested,
     continueRequested,
     partyMode,
+    partyGuestFollowReady,
     playbackPreferences.lastLinkCacheHours,
     playbackPreferences.reuseLastLink,
     playbackPreferences.sourceSelectionMode,
@@ -512,16 +539,18 @@ export default function EpisodiePage() {
   useEffect(() => {
     if (!query || returnedFromPlayer || loading || scrapedLoading || !metaReady || !allStreams.length) return;
     // En modo Party (invitado/anfitrión) la fuente se elige a mano: no autoplay.
-    if (partyMode) return;
+    // Excepción: invitado cuya sala ya trae contenido para esta ficha (seguir al grupo).
+    if (partyMode && !partyGuestFollowReady) return;
     // Auto-resolve cancelado por el usuario (atras/ESC en el loader): picker manual.
     if (autoResolveCancelled) return;
     const cached = getPreferredCachedStream(allStreams, query, playbackPreferences);
     const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
-    const shouldAutoPlay = continueRequested
-      ? playbackPreferences.reuseLastLink && Boolean(nextStream)
-      : autoplayRequested
-        || playbackPreferences.sourceSelectionMode === "first"
-        || Boolean(playbackPreferences.sourceSelectionMode === "manual" && cached);
+    const shouldAutoPlay = partyGuestFollowReady
+      || (continueRequested
+        ? playbackPreferences.reuseLastLink && Boolean(nextStream)
+        : autoplayRequested
+          || playbackPreferences.sourceSelectionMode === "first"
+          || Boolean(playbackPreferences.sourceSelectionMode === "manual" && cached));
     if (!shouldAutoPlay) return;
 
     if (!nextStream) return;
@@ -550,17 +579,19 @@ export default function EpisodiePage() {
     streamId,
     allStreams,
     partyMode,
+    partyGuestFollowReady,
   ]);
 
   // Replica sincronica de la decision del efecto de autoplay: con streams
   // listos, ¿el autoplay dispararia? Si no, se revela el picker con error/reintento.
   const wouldAutoPlayNow = useMemo(() => {
-    if (!query || returnedFromPlayer || partyMode || autoResolveCancelled) return false;
+    if (!query || returnedFromPlayer || (partyMode && !partyGuestFollowReady) || autoResolveCancelled) return false;
     if (!allStreams.length) return false;
     const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
     if (!nextStream) return false;
     if (continueRequested) return playbackPreferences.reuseLastLink;
-    return autoplayRequested
+    return partyGuestFollowReady
+      || autoplayRequested
       || playbackPreferences.sourceSelectionMode === "first"
       || Boolean(playbackPreferences.sourceSelectionMode === "manual" && getPreferredCachedStream(allStreams, query, playbackPreferences));
   }, [
@@ -570,6 +601,7 @@ export default function EpisodiePage() {
     continueRequested,
     originalLanguage,
     partyMode,
+    partyGuestFollowReady,
     playbackPreferences,
     query,
     returnedFromPlayer,
