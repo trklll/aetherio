@@ -180,6 +180,7 @@ export class PartyRoom implements DurableObject {
     this.media = (await this.state.storage.get<PartyMedia | { enc: string }>("media")) ?? null;
     this.ownerClientId = (await this.state.storage.get<string>("ownerClientId")) ?? null;
     this.ownerLeftAt = (await this.state.storage.get<number>("ownerLeftAt")) ?? null;
+    this.lobbyWaiting = (await this.state.storage.get<boolean>("lobbyWaiting")) ?? false;
   }
 
   /** Entrada única con memoria fiable: hidrata + aplica gracia + resucita hibernados. */
@@ -399,6 +400,7 @@ export class PartyRoom implements DurableObject {
         if (peer.id !== this.ownerId) return;
         if (msg.state !== "waiting" && msg.state !== "started") return;
         this.lobbyWaiting = msg.state === "waiting";
+        void this.state.storage.put("lobbyWaiting", this.lobbyWaiting);
         this.broadcast({ t: "lobby", state: msg.state, from: peer.id, at: now }, socket);
         break;
       }
@@ -564,6 +566,7 @@ export class PartyRoom implements DurableObject {
     void this.state.storage.put("protected", false);
     void this.state.storage.put("probe", "");
     void this.state.storage.put("media", null);
+    void this.state.storage.put("lobbyWaiting", false);
   }
 
   private info(peer: Peer): PeerInfo {

@@ -48,6 +48,8 @@ type RoomAny = {
   peers: Map<unknown, { id: string; name: string; joinedAt: number; socket: FakeSocket; clientId?: string }>;
   ownerId: string | null;
   claimed: boolean;
+  lobbyWaiting: boolean;
+  hydrate(): Promise<void>;
   handleLeave(socket: unknown): void;
   destroyRoom(): void;
   webSocketMessage(socket: unknown, raw: string): Promise<void> | void;
@@ -287,5 +289,34 @@ describe("evicción del DO con sockets hibernados", () => {
 
     expect(room.ownerId).toBe("owner-2");
     expect(state.store.get("ownerPeerId")).toBe("owner-2");
+  });
+
+  it("lobby waiting sobrevive a una evicción (el invitado tardío sigue retenido)", async () => {
+    const state = mockState();
+    const room = seedRoom(state);
+    const host = makeSocket();
+    joinPeer(room, host, "owner-1", "Anfitrión", "client-host");
+
+    await room.webSocketMessage(host, JSON.stringify({ t: "lobby", state: "waiting" }));
+    expect(state.store.get("lobbyWaiting")).toBe(true);
+
+    // Evicción: la memoria muere pero el lobby persiste en storage.
+    const after = new PartyRoom(state as never) as unknown as RoomAny;
+    expect(after.lobbyWaiting).toBe(false);
+    await after.hydrate();
+    expect(after.lobbyWaiting).toBe(true);
+  });
+
+  it("destroyRoom limpia lobbyWaiting persistido", async () => {
+    const state = mockState();
+    const room = seedRoom(state);
+    const host = makeSocket();
+    joinPeer(room, host, "owner-1", "Anfitrión", "client-host");
+
+    await room.webSocketMessage(host, JSON.stringify({ t: "lobby", state: "waiting" }));
+    room.destroyRoom();
+
+    expect(state.store.get("lobbyWaiting")).toBe(false);
+    expect(state.store.get("claimed")).toBe(false);
   });
 });

@@ -95,6 +95,28 @@ export function buildShareableOffer(stream: MediaStream | null): { offer?: Party
   return { offer };
 }
 
+/** Motivo legible de por qué una fuente no se puede compartir en la sala. */
+export function describeUnshareableReason(reason: UnshareableReason | undefined): string {
+  switch (reason) {
+    case "sin stream":
+      return "aún no hay fuente cargada";
+    case "archivo local":
+      return "es un archivo local de este dispositivo";
+    case "iframe":
+      return "solo se ve en este dispositivo (reproductor web)";
+    case "no portable":
+      return "no es un enlace portable";
+    case "torrent privado":
+      return "es un torrent privado";
+    case "magnet con credenciales":
+      return "el magnet trae credenciales";
+    case "destino inválido":
+      return "el enlace no es válido o es demasiado largo";
+    default:
+      return "no es compartible";
+  }
+}
+
 /** Reconstruye un MediaStream reproducible desde una oferta del grupo. */
 export function partyOfferToMediaStream(offer: PartyStreamOffer, from: string): MediaStream {
   return {

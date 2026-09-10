@@ -54,7 +54,7 @@ import { useSkipIntro } from "./useSkipIntro";
 import { shouldShowMovieRecommendation, shouldShowNextEpisodeCard } from "./nextEpisodeRules";
 import { useParty } from "../../party/PartyContext";
 import { partyMediaKey, type PartyStreamEvent } from "../../party/protocol";
-import { buildShareableOffer, partyOfferToMediaStream } from "../../party/streamShare";
+import { buildShareableOffer, describeUnshareableReason, partyOfferToMediaStream } from "../../party/streamShare";
 import SubtitleSyncDialog from "./SubtitleSyncDialog";
 import { appleEase, gsap } from "../../utils/motion";
 import { getUpNextMiniRect } from "../../utils/upnextMiniRect";
@@ -273,6 +273,8 @@ export default function PlayerPage() {
   const partyConnectedAtRef = useRef(0);
   // ---- Party mismo-stream: puntero compartido (URL/magnet del grupo) ----
   const [partyStreamFailed, setPartyStreamFailed] = useState(false);
+  // ---- Party espera de la fuente del anfitrión: aviso tras 12s + salida.
+  const [partyWaitExceeded, setPartyWaitExceeded] = useState(false);
   const partyLastSharedTargetRef = useRef("");
   const partyAppliedOfferAtRef = useRef(0);
   const partyAppliedOfferTargetRef = useRef("");
@@ -2460,6 +2462,17 @@ const {
 const partyQueryKey = query ? `${query.type}:${query.id}:${query.season ?? ""}:${query.episode ?? ""}` : "";
 const partyRoomKey = partyMediaKey(partyMedia);
 partyLobbyRef.current = partyLobby;
+// Espera de la fuente del anfitrión: aviso tras 12s + salida (efecto aquí
+// porque necesita partyStatus/partyIsOwner/stream ya declarados).
+useEffect(() => {
+  const waiting = partyStatus === "connected" && !partyIsOwner && !stream;
+  if (!waiting) {
+    setPartyWaitExceeded(false);
+    return;
+  }
+  const timer = window.setTimeout(() => setPartyWaitExceeded(true), 12_000);
+  return () => window.clearTimeout(timer);
+}, [partyStatus, partyIsOwner, stream]);
 // Presencia Discord (debajo de party a propósito: usa su estado).
 useDiscordPresence({
   enabled: playbackPreferences.enableDiscordRichPresence && !androidPlayback,
@@ -2613,7 +2626,9 @@ useEffect(() => {
   partySendMedia({ type: query.type, id: query.id, season: query.season, episode: query.episode, title: mediaTitle });
 }, [partyStatus, partyQueryKey, query, mediaTitle, partySendMedia]);
 
-// Seguir al grupo: la sala cambió de contenido y no fui yo.
+// Seguir al grupo: la sala cambió de contenido y no fui yo. Directo al
+// Player con el contenido de la sala (la fuente del anfitrión se aplica ahí;
+// nunca se resuelve fuente propia para seguir).
 useEffect(() => {
   const event = partyLastMediaEvent;
   if (partyStatus !== "connected" || !event?.media) return;
@@ -2622,7 +2637,22 @@ useEffect(() => {
   if (!key || key === partyQueryKey) return;
   partyJustFollowedKeyRef.current = key;
   const target = event.media;
-  navigate(`/episode?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}&autoplay=1`);
+  try {
+    sessionStorage.removeItem(SELECTED_STREAM_KEY);
+    sessionStorage.removeItem(AVAILABLE_STREAMS_KEY);
+    sessionStorage.removeItem(DIRECT_STREAM_FALLBACKS_KEY);
+    sessionStorage.setItem(SELECTED_ENGINE_KEY, "mpv");
+    sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
+      name: ("title" in target && target.title) || target.id,
+      logo: "",
+      background: "",
+      poster: "",
+      resumeTime: 0,
+    }));
+  } catch {
+    // best-effort
+  }
+  navigate(`/player?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`);
 }, [partyStatus, partyLastMediaEvent, partySelfId, partyQueryKey, navigate]);
 
 function partyCanBroadcast(): boolean {
@@ -2639,6 +2669,7 @@ function partyCanBroadcast(): boolean {
 useEffect(() => {
   if (partyStatus !== "idle") return;
   partyLastSharedTargetRef.current = "";
+  partyShareWarnedRef.current = "";
   partyAppliedOfferAtRef.current = 0;
   partyAppliedOfferTargetRef.current = "";
   partyFailedTargetRef.current = "";
@@ -2651,12 +2682,23 @@ useEffect(() => {
 
 // Solo el anfitrión comparte su stream (misma URL/magnet para todos). Nunca
 // se comparte el objeto entero: solo el destino reproducible + cabeceras saneadas.
+const partyShareWarnedRef = useRef("");
 useEffect(() => {
   if (partyStatus !== "connected" || !stream || isTrailerStream) return;
   if (!partyIsOwner) return;
   if (!partyQueryKey || !partyRoomKey || partyQueryKey !== partyRoomKey) return;
-  const { offer } = buildShareableOffer(stream);
-  if (!offer || offer.target === partyLastSharedTargetRef.current) return;
+  const { offer, reason } = buildShareableOffer(stream);
+  if (!offer) {
+    // Visible: sin esto el anfitrión nunca sabe por qué los invitados no
+    // reciben su fuente (una sola vez por sala+fuente+motivo).
+    const warnKey = `${partyRoomCode}:${reason ?? "?"}:${getPlaybackTarget(stream)}`;
+    if (partyShareWarnedRef.current !== warnKey) {
+      partyShareWarnedRef.current = warnKey;
+      partyNotify(`Esta fuente no se puede compartir en la sala: ${describeUnshareableReason(reason)}.`);
+    }
+    return;
+  }
+  if (offer.target === partyLastSharedTargetRef.current) return;
   partyLastSharedTargetRef.current = offer.target;
   partySendStream(offer);
 }, [partyStatus, stream, isTrailerStream, partyIsOwner, partyQueryKey, partyRoomKey, partySendStream]);
@@ -2689,12 +2731,25 @@ useEffect(() => {
   if (!partyQueryKey || !partyRoomKey || partyQueryKey !== partyRoomKey) return;
   const groupTarget = partyLastStreamOffer?.offer.target;
   if (stream.addonId !== "party" && getPlaybackTarget(stream) !== groupTarget) return;
-  const { offer } = buildShareableOffer(stream);
-  if (!offer) return;
+  const { offer, reason } = buildShareableOffer(stream);
+  if (!offer) {
+    const warnKey = `${partyRoomCode}:${reason ?? "?"}:${getPlaybackTarget(stream)}`;
+    if (partyShareWarnedRef.current !== warnKey) {
+      partyShareWarnedRef.current = warnKey;
+      partyNotify(`Esta fuente no se puede compartir en la sala: ${describeUnshareableReason(reason)}.`);
+    }
+    return;
+  }
   partyLastSharedTargetRef.current = offer.target;
   partySendStream(offer);
+  // Foto del estado para el recién llegado: sin esto arranca solo desde su
+  // propio resume hasta el próximo control del anfitrión (o nunca, si está
+  // en pausa). En lobby no: ahí manda la secuencia de arranque.
+  if (!partyLobbyRef.current) {
+    partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current));
+  }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [partyPeers, partyIsOwner, partyStatus, stream, isTrailerStream, partyQueryKey, partyRoomKey]);
+}, [partyPeers, partyIsOwner, partyStatus, stream, isTrailerStream, partyQueryKey, partyRoomKey, playing]);
 
 // Reintentar la fuente del anfitrión cuando no abrió en este dispositivo.
 function retryPartyStream() {
@@ -3319,6 +3374,14 @@ if (!stream) {
               : "Conectado a la sala, esperando la fuente del anfitrión…"}
           </p>
           {partyRoomCode ? <p className="text-xs font-bold tracking-[0.25em] text-white/40">{partyRoomCode}</p> : null}
+          {partyWaitExceeded ? (
+            <p className="max-w-[300px] text-center text-xs leading-5 text-white/45">
+              Si tarda demasiado, el anfitrión puede no estar compartiendo su fuente.
+            </p>
+          ) : null}
+          <button onClick={goBack} className="liquid-glass mt-1 rounded-md px-5 py-2 text-sm font-bold">
+            Volver
+          </button>
         </div>
       </div>
     );
@@ -3739,6 +3802,13 @@ if (!stream) {
                   className="gsap-transition mt-2.5 w-full rounded-full bg-white px-4 py-2 text-xs font-black text-black hover:bg-white/86 active:scale-[0.97]"
                 >
                   Reintentar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { const streamsPath = getStreamsPath(); if (streamsPath) navigate(streamsPath); }}
+                  className="gsap-transition mt-2 w-full rounded-full border border-white/12 px-4 py-2 text-xs font-black text-white/70 hover:bg-white/10 hover:text-white active:scale-[0.98]"
+                >
+                  Usar mi propia fuente
                 </button>
               </div>
             ) : null}
