@@ -26,6 +26,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const activeScrollKeyRef = useRef(makeScrollKey(loc.pathname, loc.search));
   const backChromeRef = useRef<HTMLDivElement>(null);
   const actionChromeRef = useRef<HTMLDivElement>(null);
+  const partyChromeRef = useRef<HTMLDivElement>(null);
   const mouseBackAtRef = useRef(0);
   const [playerChromeVisible, setPlayerChromeVisible] = useState(true);
   const [playerTransparent, setPlayerTransparent] = useState(false);
@@ -109,6 +110,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // Window controls visibility: independent zone (top-right corner) + scroll hide
   // When scrolled, controlsVisible is false unless controlsZone is true (hover)
   const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : (controlsZone || !scrolled);
+  // Party button (top-left, no back button): same hide-on-scroll as window controls.
+  const partyVisible = controlsZone || backZone || !scrolled;
 
   const androidRuntime = isAndroidRuntime();
 
@@ -147,6 +150,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
       springTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeOut });
     }
   }, [controlsVisible]);
+
+  useEffect(() => {
+    const el = partyChromeRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: partyVisible ? 1 : 0, y: 0, scale: 1, filter: "blur(0px)" });
+      el.style.pointerEvents = partyVisible ? "auto" : "none";
+      return;
+    }
+    el.style.pointerEvents = partyVisible ? "auto" : "none";
+    if (partyVisible) {
+      gsap.set(el, { y: -8, scale: 0.96, filter: "blur(6px)" });
+      springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeIn });
+    } else {
+      springTo(el, { opacity: 0, y: -10, scale: 0.97, filter: "blur(6px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: motionTimings.chromeOut });
+    }
+  }, [partyVisible]);
 
   useEffect(() => {
     function clearHideTimer(ref: React.MutableRefObject<number | null>) {
@@ -445,6 +466,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </div>
         ) : !isPlayer ? (
           <div
+            ref={partyChromeRef}
             className="absolute"
             style={{
               left: "var(--app-safe-x)",
@@ -501,7 +523,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {children}
       </div>
       <PartyPendingJoinHandler onJoinFailed={() => setPartyModalOpen(true)} />
-      {partyModalOpen ? <HomePartyModal open onClose={() => setPartyModalOpen(false)} /> : null}
+      <HomePartyModal open={partyModalOpen} onClose={() => setPartyModalOpen(false)} />
     </div>
   );
 }

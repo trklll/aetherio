@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Check, Copy, Link2, LogOut, Users, X } from "lucide-react";
+import { gsap, springTo, prefersReducedMotion } from "../utils/motion.ts";
+import { getContextGlassStyle } from "../components/ui/glassSurface.ts";
 import { useParty } from "./PartyContext";
 import { getStoredAccount } from "../auth/authClient";
 import {
@@ -173,6 +175,62 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // Montaje con salida animada (patrón ContextMenu): enter spring + exit blur.
+  const [mounted, setMounted] = useState(open);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const card = cardRef.current;
+    const backdrop = backdropRef.current;
+    if (!card || !backdrop) {
+      setMounted(false);
+      return;
+    }
+    gsap.killTweensOf([card, backdrop]);
+    if (prefersReducedMotion()) {
+      gsap.to([card, backdrop], {
+        opacity: 0,
+        duration: 0.18,
+        ease: "power1.out",
+        overwrite: "auto",
+        onComplete: () => setMounted(false),
+      });
+      return;
+    }
+    springTo(backdrop, { opacity: 0 } as unknown as gsap.TweenVars, { duration: 0.22, damping: 1.0 });
+    springTo(card, {
+      opacity: 0,
+      y: 8,
+      scale: 0.97,
+      filter: "blur(6px)",
+    } as unknown as gsap.TweenVars, { duration: 0.24, damping: 1.0 });
+    gsap.delayedCall(0.26, () => {
+      if (!open) setMounted(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !mounted) return;
+    const card = cardRef.current;
+    const backdrop = backdropRef.current;
+    if (!card || !backdrop) return;
+    gsap.killTweensOf([card, backdrop]);
+    if (prefersReducedMotion()) {
+      gsap.set([card, backdrop], { opacity: 0 });
+      gsap.to([card, backdrop], { opacity: 1, duration: 0.2, ease: "power1.out", overwrite: "auto" });
+      return;
+    }
+    gsap.set(backdrop, { opacity: 0 });
+    gsap.set(card, { opacity: 0, y: 8, scale: 0.97, filter: "blur(6px)" });
+    gsap.to(backdrop, { opacity: 1, duration: 0.25, ease: "power1.out", overwrite: "auto" });
+    springTo(card, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { duration: 0.36, damping: 1.0 });
+  }, [open, mounted]);
+
   const handleJoin = useCallback(() => {
     const code = normalizeRoomCode(codeInput);
     if (!isCompleteRoomCode(code)) return;
@@ -191,20 +249,31 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
     }
   }, []);
 
-  if (!open) return null;
+  if (!mounted) return null;
   const inviteLink = party.roomCode ? buildPartyInviteLink(party.roomCode, party.roomServer) : null;
+  const glassStyle = getContextGlassStyle();
 
   return (
-    <div
-      className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Ver juntos (Party)"
-    >
+    <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4">
       <div
-        className="w-full max-w-[380px] overflow-hidden rounded-[24px] border border-white/10 bg-[#171719] shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
+        ref={backdropRef}
+        className="absolute inset-0 bg-black/60"
+        style={{ backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
+        onClick={onClose}
+      />
+      <div
+        ref={cardRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ver juntos (Party)"
         onClick={event => event.stopPropagation()}
+        className="relative w-full max-w-[380px] overflow-hidden"
+        style={{
+          ...glassStyle,
+          borderRadius: 24,
+          willChange: "transform, opacity, filter",
+          transform: "translateZ(0)",
+        }}
       >
         <div className="flex items-center justify-between px-5 pt-4">
           <div>
