@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Check, Send, LogOut, ArrowRightLeft } from "lucide-react";
+import { Copy, Check, Link2, Send, LogOut, ArrowRightLeft } from "lucide-react";
 import { useParty } from "./PartyContext";
 import { getPartyServers, isCompleteRoomCode, normalizeRoomCode, serverHost, type PartyMedia } from "./protocol";
+import { buildPartyInviteLink } from "./invite";
 import { getStoredAccount } from "../auth/authClient";
 
 interface PartyPanelProps {
@@ -33,6 +34,7 @@ export default function PartyPanel({ currentMedia, currentTitle, streamFailed, o
   const [creating, setCreating] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -74,6 +76,18 @@ export default function PartyPanel({ currentMedia, currentTitle, streamFailed, o
       await navigator.clipboard.writeText(party.roomCode);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Portapapeles no disponible.
+    }
+  }
+
+  async function handleCopyLink() {
+    const link = buildPartyInviteLink(party.roomCode, party.roomServer);
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedLink(true);
+      window.setTimeout(() => setCopiedLink(false), 1500);
     } catch {
       // Portapapeles no disponible.
     }
@@ -213,6 +227,15 @@ export default function PartyPanel({ currentMedia, currentTitle, streamFailed, o
                 aria-label="Copiar código"
               >
                 {copied ? <Check size={16} /> : <Copy size={16} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCopyLink()}
+                className="gsap-transition flex h-9 w-9 items-center justify-center rounded-full border border-white/12 text-white/70 hover:bg-white/12 hover:text-white active:scale-90"
+                aria-label="Copiar link de invitación"
+                title="Copiar link de invitación"
+              >
+                {copiedLink ? <Check size={16} /> : <Link2 size={16} />}
               </button>
               {party.isOwner ? (
                 <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-bold text-white/70">Anfitrión</span>

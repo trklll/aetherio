@@ -2440,6 +2440,7 @@ useEffect(() => {
 const {
   status: partyStatus,
   roomCode: partyRoomCode,
+  roomServer: partyRoomServer,
   selfId: partySelfId,
   peers: partyPeers,
   media: partyMedia,
@@ -2493,6 +2494,8 @@ useDiscordPresence({
   partyIsOwner,
   partyPeerCount: partyPeers.length,
   partyPeerNames: partyPeers.map(peer => peer.name),
+  partyRoomCode: partyRoomCode,
+  partyRoomServer: partyRoomServer,
 });
 // Miembros (que no soy yo) congelados ahora mismo: hay que esperarlos.
 const partyWaitingFor = partyStatus === "connected"

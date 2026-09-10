@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import BackButton from "./BackButton";
 import TopNav from "./TopNav";
 import WindowControls from "./WindowControls";
+import HomePartyModal, { PartyHomeButton, PartyPendingJoinHandler } from "../../party/HomePartyModal";
 import { toggleWindowFullscreen } from "../../utils/windowControls";
 import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
@@ -28,6 +29,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const mouseBackAtRef = useRef(0);
   const [playerChromeVisible, setPlayerChromeVisible] = useState(true);
   const [playerTransparent, setPlayerTransparent] = useState(false);
+  const [partyModalOpen, setPartyModalOpen] = useState(false);
   const [backZone, setBackZone] = useState(false);
   const [controlsZone, setControlsZone] = useState(false);
   const backHideTimerRef = useRef<number | null>(null);
@@ -429,7 +431,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         style={{ height: "var(--app-shell-nav-height)", paddingTop: "var(--app-safe-top)" }}
         data-tauri-drag-region
       >
-        {showBack && (
+        {showBack ? (
           <div
             ref={backChromeRef}
             className="absolute"
@@ -441,7 +443,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
           >
             <BackButton onClick={goBack} />
           </div>
-        )}
+        ) : !isPlayer ? (
+          <div
+            className="absolute"
+            style={{
+              left: "var(--app-safe-x)",
+              top: "var(--app-safe-top)",
+            }}
+          >
+            <PartyHomeButton onOpen={() => setPartyModalOpen(true)} />
+          </div>
+        ) : null}
 
         {!hideNav && (
           <div
@@ -488,6 +500,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       >
         {children}
       </div>
+      <PartyPendingJoinHandler onJoinFailed={() => setPartyModalOpen(true)} />
+      {partyModalOpen ? <HomePartyModal open onClose={() => setPartyModalOpen(false)} /> : null}
     </div>
   );
 }

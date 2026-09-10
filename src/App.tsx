@@ -55,6 +55,7 @@ import {
 } from "./integrations/aniList.ts";
 import { startDiscordRichPresence, stopDiscordRichPresence } from "./integrations/discordPresence.ts";
 import { PartyProvider } from "./party/PartyContext.tsx";
+import { parsePartyJoinDeepLink, writePendingPartyJoin } from "./party/invite.ts";
 import {
   getPlaybackPreferences,
   PLAYBACK_PREFERENCES_CHANGED_EVENT,
@@ -230,6 +231,14 @@ export default function App() {
 
     const handleUrls = async (urls: string[] | null | undefined) => {
       for (const url of urls ?? []) {
+        const partyInvite = parsePartyJoinDeepLink(url);
+        if (partyInvite) {
+          // Link de invitación a una sala: se guarda y Home lo consume
+          // (auto-unirse + directo al reproductor con la fuente del grupo).
+          writePendingPartyJoin(partyInvite);
+          if (!disposed) navigate("/home");
+          continue;
+        }
         if (isOpenUrl(url)) {
           // Deep links de los botones del RPC de Discord: aetherio://open/detail/{type}/{id}
           navigate(buildOpenPath(url) ?? "/home");

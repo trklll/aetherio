@@ -19,6 +19,7 @@ import {
   setDiscordActivity,
   clearDiscordActivity,
 } from "../integrations/discordPresence";
+import { buildPartyInviteLink } from "../party/invite";
 
 export interface DiscordPresenceInput {
   /** True when the user has enabled Rich Presence in Settings. */
@@ -57,6 +58,10 @@ export interface DiscordPresenceInput {
   partyPeerCount: number;
   /** Party: nombres de los demás miembros. */
   partyPeerNames: string[];
+  /** Party: código de la sala (para el link de invitación). */
+  partyRoomCode?: string;
+  /** Party: servidor de la sala (para el link de invitación). */
+  partyRoomServer?: string;
 }
 
 function formatTimestamp(seconds: number): string {
@@ -77,9 +82,15 @@ function buildEpisodeLabel(query: StreamQuery | null, episodeName?: string): str
   return label;
 }
 
-function buildActionButtons(query: StreamQuery | null) {
+function buildActionButtons(query: StreamQuery | null, invite: { code: string; server: string } | null) {
   const target = query && query.id ? `${query.type}/${query.id}` : "";
   const deepLink = target ? `aetherio://open/detail/${target}` : "aetherio://open";
+  // En sala: el primer botón es la invitación (link https que abre la app en
+  // la sala). Sin sala: los botones existentes al detalle.
+  if (invite) {
+    const joinLink = buildPartyInviteLink(invite.code, invite.server);
+    if (joinLink) return [{ label: "Unirse a la sala", url: joinLink }, { label: "Ver en Aetherio", url: deepLink }];
+  }
   return [
     { label: "Más detalles", url: deepLink },
     { label: "Ver en Aetherio", url: deepLink },
@@ -121,11 +132,14 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
   useEffect(() => {
     if (!input.enabled) return;
     const title = input.mediaName || input.stream?.name || input.stream?.title || "Reproduciendo";
-    const buttons = buildActionButtons(input.query);
+    const invite = input.partyConnected && input.partyRoomCode
+      ? { code: input.partyRoomCode, server: input.partyRoomServer ?? "" }
+      : null;
+    const buttons = buildActionButtons(input.query, invite);
 
     // Party: sala de espera (aún sin reproducir: sin timestamps).
     if (input.partyConnected && input.partyLobby && !input.isTrailer) {
-      const signature = `party-lobby:${input.partyIsOwner ? "owner" : "guest"}:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${input.partyPeerCount}`;
+      const signature = `party-lobby:${input.partyIsOwner ? "owner" : "guest"}:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${input.partyPeerCount}:${input.partyRoomCode ?? ""}`;
       if (signature === lastSignatureRef.current) return;
       lastSignatureRef.current = signature;
       void setDiscordActivity({
@@ -148,10 +162,11 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
       : "";
 
     let signature: string;
+    const partyRoomSuffix = input.partyConnected && input.partyRoomCode ? `:room${input.partyRoomCode}` : "";
     if (input.playing) {
-      signature = `playing:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${Math.floor(input.currentTime)}:party${input.partyConnected ? input.partyPeerNames.join(",") : "-"}`;
+      signature = `playing:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${Math.floor(input.currentTime)}:party${input.partyConnected ? input.partyPeerNames.join(",") : "-"}${partyRoomSuffix}`;
     } else {
-      signature = `paused:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${formatTimestamp(input.currentTime)}:party${input.partyConnected ? input.partyPeerNames.join(",") : "-"}`;
+      signature = `paused:${input.query?.id}:${input.query?.season}:${input.query?.episode}:${formatTimestamp(input.currentTime)}:party${input.partyConnected ? input.partyPeerNames.join(",") : "-"}${partyRoomSuffix}`;
     }
 
     if (signature === lastSignatureRef.current) return;
@@ -204,6 +219,8 @@ export function useDiscordPresence(input: DiscordPresenceInput) {
     input.partyIsOwner,
     input.partyPeerCount,
     input.partyPeerNames,
+    input.partyRoomCode,
+    input.partyRoomServer,
   ]);
 
   // Hard clear when the stream is gone (e.g. navigating away mid-playback).

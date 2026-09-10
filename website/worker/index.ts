@@ -2,6 +2,7 @@ import { handleAuthRequest, type AuthEnv } from "./auth";
 import { handleReleaseRequest, type ReleaseEnv } from "./releases";
 import { handleProxyRequest, type ProxyEnv } from "./tmdb";
 import { handleAwardsRequest, type AwardsApiEnv } from "./awards/api";
+import { parseJoinPath, partyJoinPageResponse, sanitizeJoinServer } from "./party-join";
 import { runImport, weeklyTargets } from "./awards/import";
 import { resolvePeopleBatch } from "./awards/people";
 
@@ -33,6 +34,12 @@ export default {
 
     const releaseResponse = await handleReleaseRequest(request, env, url);
     if (releaseResponse) return releaseResponse;
+
+    // Invitación a sala Party: /join/ABC123[?server=...] abre la app.
+    const joinCode = parseJoinPath(url.pathname);
+    if (joinCode) {
+      return partyJoinPageResponse(joinCode, sanitizeJoinServer(url.searchParams.get("server")));
+    }
 
     // La web está oculta temporalmente: la SPA no se sirve, solo la API.
     if (url.pathname.startsWith("/api/")) {
