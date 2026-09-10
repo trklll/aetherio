@@ -100,8 +100,8 @@ const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
 // cuenta como seek manual, tolerancia de deriva y periodo de re-sync.
 const PARTY_ECHO_WINDOW_MS = 1500;
 const PARTY_SEEK_JUMP_S = 3;
-const PARTY_DRIFT_TOLERANCE_S = 2.5;
-const PARTY_DRIFT_INTERVAL_MS = 12_000;
+const PARTY_DRIFT_TOLERANCE_S = 1.0;
+const PARTY_DRIFT_INTERVAL_MS = 6_000;
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 interface MpvAutocropResult {
@@ -2927,7 +2927,11 @@ useEffect(() => {
   }
   partyLastAppliedControlAtRef.current = event.at;
   partyNoteRemote();
-  const position = Math.max(0, event.position);
+  // Al dar play, el emisor siguió avanzando durante el tránsito del mensaje:
+  // compensar con el tiempo transcurrido desde el sello del servidor.
+  // En pausa/seek la posición es exacta y no se compensa.
+  const transitS = event.kind === "play" && Number.isFinite(event.at) ? Math.max(0, (Date.now() - event.at) / 1000) : 0;
+  const position = Math.max(0, event.position + transitS);
   if (event.kind === "seek") {
     seek(position);
     return;

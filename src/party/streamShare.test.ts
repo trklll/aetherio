@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildShareableOffer,
   describeUnshareableReason,
+  partyOfferToMediaStream,
   type UnshareableReason,
 } from "./streamShare";
 import type { MediaStream } from "../types/stream";
@@ -53,5 +54,34 @@ describe("buildShareableOffer", () => {
     const { offer } = buildShareableOffer(stream);
     expect(offer?.target).toBe("https://cdn.example.com/video/1080p.m3u8");
     expect(offer?.kind).toBe("https");
+  });
+
+  it("incluye los subtítulos de la fuente saneados", () => {
+    const stream = {
+      id: "s4",
+      url: "https://cdn.example.com/video/1080p.m3u8",
+      subtitles: [
+        { url: "https://cdn.example.com/subs/es.srt", lang: "es", title: "Español" },
+        { url: "magnet:?xt=urn:btih:abc", lang: "fr" },
+        { url: "https://cdn.example.com/subs/es.srt", lang: "es" },
+        { url: "", lang: "it" },
+      ],
+    } as unknown as MediaStream;
+    const { offer } = buildShareableOffer(stream);
+    expect(offer?.subtitles).toEqual([{ url: "https://cdn.example.com/subs/es.srt", lang: "es", title: "Español" }]);
+  });
+
+  it("reconstruye el stream del grupo con sus subtítulos", () => {
+    const rebuilt = partyOfferToMediaStream(
+      {
+        target: "https://cdn.example.com/video/1080p.m3u8",
+        kind: "https",
+        label: "Grupo",
+        subtitles: [{ url: "https://cdn.example.com/subs/es.srt", lang: "es" }],
+      },
+      "owner-1",
+    );
+    expect(rebuilt.addonId).toBe("party");
+    expect(rebuilt.subtitles).toEqual([{ url: "https://cdn.example.com/subs/es.srt", lang: "es", title: undefined }]);
   });
 });

@@ -35,6 +35,7 @@ interface PartyStreamOffer {
   fileIdx?: number;
   headers?: Record<string, unknown>;
   label?: string;
+  subtitles?: Array<{ url: string; lang?: string; title?: string }>;
 }
 
 interface PartyMedia {
@@ -624,6 +625,8 @@ function sanitizeIdentity(raw: unknown): string {
 
 const MAX_STREAM_TARGET_LEN = 4096;
 const MAX_STREAM_HEADERS = 10;
+const MAX_STREAM_SUBTITLES = 8;
+const MAX_STREAM_SUBTITLE_URL_LEN = 512;
 const MAX_ENC_LEN = 8192;
 
 function isEncEnvelope(raw: unknown): raw is { enc: string } {
@@ -674,6 +677,25 @@ function sanitizeStreamOffer(raw: unknown): PartyStreamOffer | null {
       if (cleanKey && cleanValue) headers[cleanKey] = cleanValue;
     }
     if (Object.keys(headers).length > 0) offer.headers = headers;
+  }
+  // Subtítulos de la fuente (los comparte el anfitrión; el invitado elige idioma).
+  if (Array.isArray(input.subtitles)) {
+    const subtitles: Array<{ url: string; lang?: string; title?: string }> = [];
+    for (const item of input.subtitles) {
+      if (subtitles.length >= MAX_STREAM_SUBTITLES) break;
+      if (!item || typeof item !== "object") continue;
+      const raw = item as Record<string, unknown>;
+      const url = typeof raw.url === "string" ? raw.url.trim() : "";
+      if (!url || !/^https?:/i.test(url) || url.length > MAX_STREAM_SUBTITLE_URL_LEN) continue;
+      const entry: { url: string; lang?: string; title?: string } = { url };
+      const lang = typeof raw.lang === "string" ? raw.lang.trim().slice(0, 16) : "";
+      if (lang) entry.lang = lang;
+      const title = typeof raw.title === "string" ? raw.title.trim().slice(0, 64) : "";
+      if (title) entry.title = title;
+      if (subtitles.some(existing => existing.url === url)) continue;
+      subtitles.push(entry);
+    }
+    if (subtitles.length > 0) offer.subtitles = subtitles;
   }
   return offer;
 }

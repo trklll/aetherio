@@ -7,6 +7,8 @@ import type { PartyStreamOffer } from "./protocol";
 const SHAREABLE_HEADERS = new Set(["referer", "user-agent", "origin", "accept", "accept-language", "range"]);
 const MAX_TARGET_LEN = 4096;
 const MAX_HEADERS = 10;
+const MAX_SHARED_SUBTITLES = 8;
+const MAX_SHARED_SUBTITLE_URL_LEN = 512;
 
 function isPrivateTorrent(hints: Record<string, unknown>): boolean {
   const value = hints.private;
@@ -92,7 +94,31 @@ export function buildShareableOffer(stream: MediaStream | null): { offer?: Party
   if (typeof stream.fileIdx === "number" && Number.isFinite(stream.fileIdx)) offer.fileIdx = stream.fileIdx;
   if (Object.keys(headers).length > 0) offer.headers = headers;
   if (label) offer.label = label;
+  const sharedSubtitles = sanitizeSharedSubtitles(stream.subtitles);
+  if (sharedSubtitles.length > 0) offer.subtitles = sharedSubtitles;
   return { offer };
+}
+
+/** Subtítulos portables de la fuente: solo https directas, con topes. */
+export function sanitizeSharedSubtitles(subtitles: unknown): Array<{ url: string; lang?: string; title?: string }> {
+  if (!Array.isArray(subtitles)) return [];
+  const clean: Array<{ url: string; lang?: string; title?: string }> = [];
+  for (const item of subtitles) {
+    if (clean.length >= MAX_SHARED_SUBTITLES) break;
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const url = typeof raw.url === "string" ? raw.url.trim() : "";
+    if (!url || !/^https?:/i.test(url) || url.length > MAX_SHARED_SUBTITLE_URL_LEN) continue;
+    const entry: { url: string; lang?: string; title?: string } = { url };
+    const lang = typeof raw.lang === "string" ? raw.lang.trim().slice(0, 16)
+      : typeof raw.language === "string" ? raw.language.trim().slice(0, 16) : "";
+    if (lang) entry.lang = lang;
+    const title = typeof raw.title === "string" ? raw.title.trim().slice(0, 64) : "";
+    if (title) entry.title = title;
+    if (clean.some(existing => existing.url === url)) continue;
+    clean.push(entry);
+  }
+  return clean;
 }
 
 /** Motivo legible de por qué una fuente no se puede compartir en la sala. */
@@ -131,5 +157,8 @@ export function partyOfferToMediaStream(offer: PartyStreamOffer, from: string): 
       filename: offer.label,
       ...(offer.headers ? { headers: offer.headers } : {}),
     },
+    ...(offer.subtitles?.length
+      ? { subtitles: offer.subtitles.map(item => ({ url: item.url, lang: item.lang, title: item.title })) }
+      : {}),
   };
 }

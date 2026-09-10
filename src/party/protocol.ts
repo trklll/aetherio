@@ -51,6 +51,11 @@ export interface PartyStreamOffer {
   /** Solo cabeceras saneadas (allowlist, sin credenciales). */
   headers?: Record<string, string>;
   label?: string;
+  /**
+   * Subtítulos que trae la fuente (los "Subtítulos del stream"): el invitado
+   * los aplica con su selección automática de idioma. Solo URLs https.
+   */
+  subtitles?: Array<{ url: string; lang?: string; title?: string }>;
 }
 
 export interface PartyStreamEvent {

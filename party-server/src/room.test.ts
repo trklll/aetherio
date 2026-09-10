@@ -319,4 +319,57 @@ describe("evicción del DO con sockets hibernados", () => {
     expect(state.store.get("lobbyWaiting")).toBe(false);
     expect(state.store.get("claimed")).toBe(false);
   });
+
+  it("la oferta del anfitrión llega al invitado con subtítulos y topes", async () => {
+    const state = mockState();
+    const room = seedRoom(state);
+    const host = makeSocket();
+    const guest = makeSocket();
+    joinPeer(room, host, "owner-1", "Anfitrión", "client-host");
+    joinPeer(room, guest, "guest-1", "Invitado", "client-guest");
+
+    await room.webSocketMessage(host, JSON.stringify({
+      t: "stream",
+      offer: {
+        target: "https://cdn.example.com/video/1080p.m3u8",
+        kind: "https",
+        label: "Grupo",
+        headers: { Referer: "https://www.cineby.at/", "X-Evil": "drop" },
+        subtitles: [
+          { url: "https://cdn.example.com/subs/es.srt", lang: "es", title: "Español" },
+          { url: "nota://local", lang: "es" },
+        ],
+      },
+    }));
+
+    const received = guest.sent.map(raw => JSON.parse(raw)).filter(msg => msg.t === "stream");
+    expect(received).toHaveLength(1);
+    expect(received[0].from).toBe("owner-1");
+    expect(received[0].offer.target).toBe("https://cdn.example.com/video/1080p.m3u8");
+    expect(received[0].offer.subtitles).toEqual([{ url: "https://cdn.example.com/subs/es.srt", lang: "es", title: "Español" }]);
+    // El servidor solo valida forma/tamaño (el allowlist fino lo hace el
+    // cliente al compartir): ambas cabeceras pasan el relay.
+    expect(received[0].offer.headers).toEqual({ Referer: "https://www.cineby.at/", "X-Evil": "drop" });
+  });
+
+  it("el servidor retransmite marcando el emisor (el cliente filtra por dueño)", async () => {
+    const state = mockState();
+    const room = seedRoom(state);
+    const host = makeSocket();
+    const guest = makeSocket();
+    joinPeer(room, host, "owner-1", "Anfitrión", "client-host");
+    joinPeer(room, guest, "guest-1", "Invitado", "client-guest");
+    host.sent = [];
+    guest.sent = [];
+
+    // El servidor retransmite todo stream; el filtrado por dueño lo hace el cliente.
+    await room.webSocketMessage(guest, JSON.stringify({
+      t: "stream",
+      offer: { target: "https://evil.example.com/x.mp4", kind: "https" },
+    }));
+
+    const toHost = host.sent.map(raw => JSON.parse(raw)).filter(msg => msg.t === "stream");
+    expect(toHost).toHaveLength(1);
+    expect(toHost[0].from).toBe("guest-1");
+  });
 });
