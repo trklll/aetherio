@@ -98,25 +98,38 @@ export function PartyPendingJoinHandler({ onJoinFailed }: { onJoinFailed: () => 
   return null;
 }
 
-/** Botón de entrada a Party para el chrome superior izquierdo. */
+/** Botón de entrada a Party: gemelo visual de la píldora TopNav (mismo material). */
 export function PartyHomeButton({ onOpen }: { onOpen: () => void }) {
   const party = useParty();
   const connected = party.status === "connected";
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="gsap-transition relative flex h-10 w-10 items-center justify-center rounded-full border border-white/12 bg-black/40 text-white/80 backdrop-blur-md hover:bg-white/12 hover:text-white active:scale-90"
-      title={connected ? `Party: en sala ${party.roomCode}` : "Party: ver juntos"}
-      aria-label={connected ? "Party: en sala" : "Party: ver juntos"}
+    <div
+      className="relative liquid-glass-pill flex items-center min-w-0"
+      style={{
+        boxShadow: "0 3px 14px rgba(0,0,0,0.38)",
+        padding: "6px",
+        transform: "scale(1.1)",
+        transformOrigin: "left top",
+      }}
     >
-      <Users size={17} />
+      <button
+        type="button"
+        onClick={onOpen}
+        className={`rounded-full flex items-center justify-center shrink-0 hover:scale-105 gsap-transition ${
+          connected ? "bg-atv-selected text-white" : "text-atv-secondary hover:text-white hover:bg-atv-hover"
+        }`}
+        style={{ width: 32, height: 32 }}
+        title={connected ? `Party: en sala ${party.roomCode}` : "Party: ver juntos"}
+        aria-label={connected ? "Party: en sala" : "Party: ver juntos"}
+      >
+        <Users size={17} />
+      </button>
       {connected && party.peers.length > 0 ? (
         <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-0.5 text-[10px] font-black text-black">
           {party.peers.length}
         </span>
       ) : null}
-    </button>
+    </div>
   );
 }
 
