@@ -19,7 +19,7 @@ import {
   setDiscordActivity,
   clearDiscordActivity,
 } from "../integrations/discordPresence";
-import { buildPartyInviteLink } from "../party/invite";
+import { buildPartyJoinDeepLink } from "../party/invite";
 
 export interface DiscordPresenceInput {
   /** True when the user has enabled Rich Presence in Settings. */
@@ -85,10 +85,10 @@ function buildEpisodeLabel(query: StreamQuery | null, episodeName?: string): str
 function buildActionButtons(query: StreamQuery | null, invite: { code: string; server: string } | null) {
   const target = query && query.id ? `${query.type}/${query.id}` : "";
   const deepLink = target ? `aetherio://open/detail/${target}` : "aetherio://open";
-  // En sala: el primer botón es la invitación (link https que abre la app en
-  // la sala). Sin sala: los botones existentes al detalle.
+  // En sala: el primer botón abre la app directo en la sala (deep link, como
+  // los demás botones), sin pasar por la página web.
   if (invite) {
-    const joinLink = buildPartyInviteLink(invite.code, invite.server);
+    const joinLink = buildPartyJoinDeepLink(invite.code, invite.server);
     if (joinLink) return [{ label: "Unirse a la sala", url: joinLink }, { label: "Ver en Aetherio", url: deepLink }];
   }
   return [
