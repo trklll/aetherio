@@ -7,6 +7,11 @@
   "preview_urls": true,
   "vars": {
     "OAUTH_CALLBACK_ORIGIN": "https://trkll.aetherio.workers.dev"
+    // Limites del proxy de TMDB/IntroDB, en "limite:segundos". Opcionales:
+    // si no se definen valen 120:30 (API) y 300:30 (imagenes). Ver
+    // worker/rateLimit.ts.
+    // "TMDB_RATE_LIMIT": "120:30",
+    // "TMDB_IMAGE_RATE_LIMIT": "300:30"
   },
   "d1_databases": [
     {

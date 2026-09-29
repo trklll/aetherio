@@ -1,6 +1,7 @@
 import { handleAuthRequest, type AuthEnv } from "./auth";
 import { handleReleaseRequest, type ReleaseEnv } from "./releases";
 import { handleProxyRequest, type ProxyEnv } from "./tmdb";
+import { handleJikanRequest } from "./jikan";
 import { handleAwardsRequest, type AwardsApiEnv } from "./awards/api";
 import { parseJoinPath, partyJoinPageResponse, sanitizeJoinServer } from "./party-join";
 import { runImport, weeklyTargets } from "./awards/import";
@@ -31,6 +32,9 @@ export default {
     // viaja al cliente.
     const proxyResponse = await handleProxyRequest(request, env);
     if (proxyResponse) return proxyResponse;
+
+    const jikanResponse = await handleJikanRequest(request);
+    if (jikanResponse) return jikanResponse;
 
     const releaseResponse = await handleReleaseRequest(request, env, url);
     if (releaseResponse) return releaseResponse;
