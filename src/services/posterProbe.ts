@@ -1,11 +1,11 @@
 /**
- * Verificación offscreen de pósters BTTTR antes de mostrarlos.
+ * VerificaciÃ³n offscreen de pÃ³sters SpatialPosters antes de mostrarlos.
  *
- * Contexto: btttr.cc genera los pósters bajo demanda y puede tardar segundos
- * (o fallar con 404/429 si no conoce el título). Si el `<img>` visible apunta
- * directamente a la URL BTTTR, la card se queda en negro (fondo #1c1c1e) todo
- * ese tiempo. Para evitarlo, `useBetterPoster` mantiene el póster base (TMDB)
- * hasta que esta verificación confirma que la URL BTTTR carga: solo entonces
+ * Contexto: la instancia de SpatialPosters genera los pÃ³sters bajo demanda y puede tardar segundos
+ * (o fallar con 404/429 si no conoce el tÃ­tulo). Si el `<img>` visible apunta
+ * directamente a la URL SpatialPosters, la card se queda en negro (fondo #1c1c1e) todo
+ * ese tiempo. Para evitarlo, `useSpatialPoster` mantiene el pÃ³ster base (TMDB)
+ * hasta que esta verificaciÃ³n confirma que la URL SpatialPosters carga: solo entonces
  * se hace el swap. Si falla o agota el presupuesto, se conserva el base.
  *
  * - `verifiedUrls`: las URLs que ya cargaron una vez no se re-verifican.
@@ -15,12 +15,12 @@
 
 export type PosterImageLoader = (url: string) => Promise<void>;
 
-export const VERIFY_POSTER_TIMEOUT_MS = 20_000;
-export const VERIFY_POSTER_FAIL_TTL_MS = 5 * 60 * 1000;
-// Sin límite, un arranque en frío dispara cientos de verificaciones a la vez
-// y satura la conexión (6 por host) y al propio btttr.cc: todo tarda más.
+export const POSTER_PROBE_TIMEOUT_MS = 20_000;
+export const POSTER_PROBE_FAIL_TTL_MS = 5 * 60 * 1000;
+// Sin lÃ­mite, un arranque en frÃ­o dispara cientos de verificaciones a la vez
+// y satura la conexiÃ³n (6 por host) y al propio la instancia de SpatialPosters: todo tarda mÃ¡s.
 // Un solo punto de estrangulamiento para probes de cards y prewarm.
-export const VERIFY_POSTER_MAX_CONCURRENT = 6;
+export const POSTER_PROBE_MAX_CONCURRENT = 6;
 
 const verifiedUrls = new Set<string>();
 const inFlight = new Map<string, Promise<boolean>>();
@@ -29,7 +29,7 @@ let verifyActive = 0;
 const verifyQueue: Array<() => void> = [];
 
 function verifyDrain() {
-  while (verifyActive < VERIFY_POSTER_MAX_CONCURRENT && verifyQueue.length) {
+  while (verifyActive < POSTER_PROBE_MAX_CONCURRENT && verifyQueue.length) {
     verifyQueue.shift()?.();
   }
 }
@@ -62,8 +62,8 @@ function timeoutAsFalse(ms: number): Promise<boolean> {
   });
 }
 
-/** Limpia todo el estado del módulo. Pensado para tests; no usar en la app. */
-export function resetBetterPosterVerifyState() {
+/** Limpia todo el estado del mÃ³dulo. Pensado para tests; no usar en la app. */
+export function resetPosterProbeState() {
   verifiedUrls.clear();
   inFlight.clear();
   failedAt.clear();
@@ -71,32 +71,32 @@ export function resetBetterPosterVerifyState() {
   verifyQueue.length = 0;
 }
 
-/** ¿Esta URL BTTTR ya demostró que carga? (lectura síncrona, sin red). */
-export function isBetterPosterVerified(url: string): boolean {
+/** Â¿Esta URL SpatialPosters ya demostrÃ³ que carga? (lectura sÃ­ncrona, sin red). */
+export function isPosterVerified(url: string): boolean {
   return verifiedUrls.has(url);
 }
 
-export interface VerifyBetterPosterOptions {
-  /** Presupuesto máximo por verificación. Por defecto VERIFY_POSTER_TIMEOUT_MS. */
+export interface VerifyPosterOptions {
+  /** Presupuesto mÃ¡ximo por verificaciÃ³n. Por defecto POSTER_PROBE_TIMEOUT_MS. */
   timeoutMs?: number;
   /** Cargador inyectable (tests). Por defecto un `Image` offscreen. */
   loadImage?: PosterImageLoader;
 }
 
 /**
- * Devuelve true si la URL carga (o ya había cargado antes). Devuelve false
- * si falla, si agota `timeoutMs` o si falló hace menos de
- * VERIFY_POSTER_FAIL_TTL_MS. Nunca lanza.
+ * Devuelve true si la URL carga (o ya habÃ­a cargado antes). Devuelve false
+ * si falla, si agota `timeoutMs` o si fallÃ³ hace menos de
+ * POSTER_PROBE_FAIL_TTL_MS. Nunca lanza.
  */
-export function verifyBetterPosterUrl(
+export function verifyPosterUrl(
   url: string | undefined | null,
-  options?: VerifyBetterPosterOptions,
+  options?: VerifyPosterOptions,
 ): Promise<boolean> {
   if (!url) return Promise.resolve(false);
   if (verifiedUrls.has(url)) return Promise.resolve(true);
   const failedTimestamp = failedAt.get(url);
   if (failedTimestamp != null) {
-    if (Date.now() - failedTimestamp < VERIFY_POSTER_FAIL_TTL_MS) {
+    if (Date.now() - failedTimestamp < POSTER_PROBE_FAIL_TTL_MS) {
       return Promise.resolve(false);
     }
     failedAt.delete(url);
@@ -104,7 +104,7 @@ export function verifyBetterPosterUrl(
   const pending = inFlight.get(url);
   if (pending) return pending;
 
-  const timeoutMs = options?.timeoutMs ?? VERIFY_POSTER_TIMEOUT_MS;
+  const timeoutMs = options?.timeoutMs ?? POSTER_PROBE_TIMEOUT_MS;
   const load = options?.loadImage ?? defaultLoadImage;
   const task = new Promise<boolean>(resolve => {
     const run = () => {

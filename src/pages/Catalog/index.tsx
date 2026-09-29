@@ -5,13 +5,16 @@ import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
-import { applyBetterPosterToUrl, extractImdbId, isBetterPosterUrl } from "../../config/betterPosters";
-import { useBetterPoster } from "../../hooks/useBetterPoster";
+import SpatialPosterImage from "../../components/SpatialPosterImage";
+import { applySpatialPosterToUrl, extractTmdbId, isSpatialPosterUrl } from "../../config/spatialPosters";
+import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
+import { buildDetailPath } from "../../utils/bigPictureDetail";
+import "../BigPicture/BigPictureGenre.css";
 
 const IMG = "https://image.tmdb.org/t/p";
 const PAGE_LIMIT = 20;
@@ -24,7 +27,7 @@ function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
   const upgradedPoster = upgradeTmdbImage(item.poster, "w500");
-  const better = applyBetterPosterToUrl(upgradedPoster, extractImdbId(item.id));
+  const better = applySpatialPosterToUrl(upgradedPoster, extractTmdbId(item.id), item.type);
   return {
     ...item,
     poster: better ?? upgradedPoster,
@@ -32,6 +35,49 @@ function normalizeMediaItem(item: MediaItem): MediaItem {
     background: upgradeTmdbImage(item.background, "w780"),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "w500")),
   };
+}
+
+function normalizeCatalogTitle(title: string, type: string, addonId: string) {
+  const catalogTitle = (title.trim() || "Catálogo").replace(/\s*-\s*(?:Pel[ií]culas|Series|Anime)$/i, "").trim() || "Catálogo";
+  const normalizedType = type.toLowerCase();
+  const typeLabel = normalizedType === "movie"
+    ? "Películas"
+    : normalizedType === "series" || normalizedType === "tv"
+      ? "Series"
+      : normalizedType === "anime"
+        ? "Anime"
+        : type.trim().charAt(0).toUpperCase() + type.trim().slice(1);
+  const lower = catalogTitle.toLowerCase();
+  const isMediaTop = normalizedType === "movie" || normalizedType === "series" || normalizedType === "tv";
+  if (isMediaTop && (lower === "tendencias" || lower === "trending" || lower === "en tendencia" || lower.startsWith("top ") || /^(?:Pel[ií]culas|Series) en tendencia$/i.test(catalogTitle))) {
+    return `Top ${typeLabel}`;
+  }
+  const naturalTypeTitle = /^(?:Pel[ií]culas nuevas|Series nuevas|Anime nuevo) de \d{4}$/i.test(catalogTitle)
+    || /^(?:Pel[ií]culas|Series) popular(?:es)?$/i.test(catalogTitle)
+    || /^Anime (?:en tendencia|en emisión|recomendado por la comunidad|más queridas del momento|que viene|popular)$/i.test(catalogTitle);
+  if (normalizedType === "anime") {
+    if (lower === "las más queridas del momento" || lower === "anime más queridas del momento" || lower === "los animes más queridos del momento") return "Los animes más queridos del momento";
+    if (lower === "lo que viene" || lower === "anime que viene" || lower === "próximos animes a estrenar") return "Próximos animes a estrenar";
+  }
+  if (naturalTypeTitle) return catalogTitle;
+
+  const isNativeCatalog = addonId === "aetherio-starter" || addonId === "tmdb";
+  if (!isNativeCatalog) {
+    return typeLabel ? `${catalogTitle} - ${typeLabel}` : catalogTitle;
+  }
+
+  const pluralSuffix = typeLabel === "Películas" || typeLabel === "Series" ? "es" : "";
+  if (lower === "popular") return `${typeLabel} popular${pluralSuffix}`;
+  if (lower === "tendencias" || lower === "trending") return `${typeLabel} en tendencia`;
+  if (/^(Netflix|Disney\+|HBO Max|Prime Video|Apple TV\+)$/i.test(catalogTitle)) return `${catalogTitle}: ${typeLabel}`;
+
+  const newYear = catalogTitle.match(/^New\s*-\s*(\d{4})$/i);
+  if (newYear) {
+    if (normalizedType === "movie") return `Películas nuevas de ${newYear[1]}`;
+    if (normalizedType === "series" || normalizedType === "tv") return `Series nuevas de ${newYear[1]}`;
+    if (normalizedType === "anime") return `Anime nuevo de ${newYear[1]}`;
+  }
+  return catalogTitle;
 }
 
 function readExtraParams(value: string | null) {
@@ -189,14 +235,35 @@ function useGridEntrance(containerRef: React.RefObject<HTMLElement | null>, deps
   }, deps);
 }
 
-export default function CatalogPage() {
+function scrollCatalogShellToTop() {
+  document
+    .querySelector<HTMLElement>("[data-aetherio-big-picture] [data-aetherio-scroll-shell]")
+    ?.scrollTo({ top: 0, behavior: "auto" });
+}
+
+function snapCatalogTopIfFirstRow(el: HTMLElement) {
+  const shell = document.querySelector<HTMLElement>(
+    "[data-aetherio-big-picture] [data-aetherio-scroll-shell]",
+  );
+  const grid = el.closest<HTMLElement>(".bp-genre__grid");
+  if (!shell || !grid) return;
+  const gridTop = grid.getBoundingClientRect().top;
+  const elTop = el.getBoundingClientRect().top;
+  if (elTop - gridTop > 120 || shell.scrollTop <= 0) return;
+  window.setTimeout(() => {
+    tweenTo(shell, { scrollTop: 0 }, 0.28);
+  }, 0);
+}
+
+export default function CatalogPage({ bigPicture = false }: { bigPicture?: boolean }) {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const addons = useAddonStore(state => state.addons);
   const addonId = params.get("addon") ?? "";
   const type = params.get("type") ?? "";
   const catalogId = params.get("catalog") ?? "";
-  const title = params.get("title") ?? "Catálogo";
+  const rawTitle = params.get("title") ?? "Catálogo";
+  const title = useMemo(() => normalizeCatalogTitle(rawTitle, type, addonId), [rawTitle, type, addonId]);
   const extraParams = useMemo(() => readExtraParams(params.get("extras")), [params]);
   const addon = useMemo(() => addons.find(item => item.id === addonId), [addonId, addons]);
   const { gradient } = useProfileGradient();
@@ -314,22 +381,98 @@ export default function CatalogPage() {
     };
   }, [addon, addonId, catalogId, extraParams, type]);
 
+  useEffect(() => {
+    if (!bigPicture) return;
+    scrollCatalogShellToTop();
+  }, [bigPicture, cacheKey]);
+
+  useEffect(() => {
+    if (!bigPicture) return;
+    const shell = document.querySelector<HTMLElement>(
+      "[data-aetherio-big-picture] [data-aetherio-scroll-shell]",
+    );
+    if (!shell) return;
+    let timer = 0;
+    const snapZone = 140;
+    const onScroll = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (shell.scrollTop > 0 && shell.scrollTop < snapZone) {
+          tweenTo(shell, { scrollTop: 0 }, 0.25);
+        }
+      }, 150);
+    };
+    shell.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      shell.removeEventListener("scroll", onScroll);
+    };
+  }, [bigPicture]);
+
+  useEffect(() => {
+    if (!bigPicture || loading || items.length === 0) return;
+    const timer = window.setTimeout(() => {
+      document.querySelector<HTMLElement>("[data-bp-catalog-primary]")?.focus({ preventScroll: true });
+    }, 70);
+    return () => window.clearTimeout(timer);
+  }, [bigPicture, items.length, loading]);
+
+  if (bigPicture) {
+    return (
+      <div className="bp-genre" data-bp-genre>
+        <div className="bp-genre__header">
+          <h1 className="bp-genre__title">{title}</h1>
+          <p className="bp-genre__subtitle" aria-live="polite">
+            {loading ? "Cargando…" : `${items.length} títulos`}
+          </p>
+        </div>
+        {loading ? (
+          <div className="bp-genre__grid" aria-hidden="true">
+            {Array.from({ length: 12 }).map((_, index) => <div key={index} className="bp-genre__skeleton" />)}
+          </div>
+        ) : error ? (
+          <p className="bp-genre__status">{error}</p>
+        ) : items.length === 0 ? (
+          <p className="bp-genre__status">No se encontraron títulos para esta row.</p>
+        ) : (
+          <div className="bp-genre__grid">
+            {items.map((item, index) => (
+              <CatalogGridCard
+                key={`${item.id}-${index}`}
+                item={item}
+                type={item.type || type}
+                bigPicture
+                index={index}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <PageContainer>
       <div className="relative flex min-h-full flex-col" style={{ padding: "24px var(--app-safe-x) 56px" }}>
-        <div data-catalog-header style={{ marginBottom: 26, display: "flex", alignItems: "center", gap: 14 }}>
+        <div data-catalog-header style={{ marginBottom: 30, display: "flex", alignItems: "center", gap: 14, padding: "0 8px" }}>
           <button
             type="button"
             onClick={() => navigate(-1)}
             aria-label="Volver"
             title="Volver"
-            style={{ width: 40, height: 40, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}
+            onPointerDown={event => {
+              if (event.button !== 0) return;
+              tweenTo(event.currentTarget, { scale: 0.94 }, 0.1);
+            }}
+            onPointerUp={event => tweenTo(event.currentTarget, { scale: 1 }, 0.22)}
+            onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1 }, 0.22)}
+            style={{ width: 40, height: 40, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, boxShadow: "0 8px 20px rgba(0,0,0,0.16)", willChange: "transform" }}
           >
             <ChevronLeft size={19} />
           </button>
-          <div style={{ textAlign: "center", flex: 1 }}>
-            <h1 style={{ fontSize: 32, fontWeight: 900, color: "#fff", lineHeight: 1.1 }}>{title}</h1>
-            <p style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
+          <div style={{ textAlign: "center", flex: 1, minWidth: 0 }}>
+            <h1 style={{ fontSize: 32, fontWeight: 900, color: "#fff", lineHeight: 1.1, letterSpacing: "-0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</h1>
+            <p aria-live="polite" style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
               {loading ? "Cargando..." : `${items.length} títulos`}
             </p>
           </div>
@@ -355,6 +498,7 @@ export default function CatalogPage() {
               key={`${item.id}-${index}`}
               item={item}
               type={item.type || type}
+              bigPicture={bigPicture}
             />
           ))}
         </div>
@@ -363,23 +507,23 @@ export default function CatalogPage() {
   );
 }
 
-function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
+function CatalogGridCard({ item, type, bigPicture, index = 0 }: { item: MediaItem; type: string; bigPicture: boolean; index?: number }) {
   const navigate = useNavigate();
-  const resolved = useBetterPoster(item.id, type, item.poster);
+  const resolved = useSpatialPoster(item.id, type, item.poster, false, undefined, item.originalPoster);
   const poster = resolved.url ?? item.poster;
   const fallback = resolved.original ?? item.originalPoster;
   const [failed, setFailed] = useState(false);
   const loadedRef = useRef(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => { setFailed(false); loadedRef.current = false; }, [resolved.url]);
-  // btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
+  // SpatialPosters genera pósters bajo demanda y a veces la petición se queda colgada
   // sin error: si en 15s no cargó, caer al póster original.
   // (Sin reset de loadedRef aquí: ya se resetea al cambiar resolved.url;
   // resetear aquí degradaba imágenes en caché cuyo onLoad corrió antes.)
   // Al armar se consulta el <img>: con BTTTR verificado suele estar completo
   // y su onLoad puede haber corrido antes que los efectos.
   useEffect(() => {
-    if (!isBetterPosterUrl(poster) || !fallback || failed) return;
+    if (!isSpatialPosterUrl(poster) || !fallback || failed) return;
     const el = imgRef.current;
     if (el && el.currentSrc === poster && el.complete && el.naturalWidth > 0) {
       loadedRef.current = true;
@@ -390,7 +534,7 @@ function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
     }, 15000);
     return () => window.clearTimeout(timer);
   }, [poster, fallback, failed]);
-  const image = failed && fallback ? fallback : (poster ?? item.background ?? "");
+  const image = resolved.pending ? "" : failed && fallback ? fallback : (poster ?? item.background ?? "");
   const openDetail = () => {
     writeDetailMediaMeta({
       id: item.id,
@@ -402,29 +546,54 @@ function CatalogGridCard({ item, type }: { item: MediaItem; type: string }) {
       description: item.description,
       year: item.year,
     });
-    navigate(`/detail/${encodeURIComponent(type)}/${encodeURIComponent(item.id)}`);
+    navigate(buildDetailPath(type, item.id, undefined, bigPicture ? "/big-picture" : "/home"));
   };
+
+  if (bigPicture) {
+    return (
+      <div className="bp-genre__cell" style={{ ["--bp-genre-i" as string]: Math.min(index, 11) }}>
+        <button
+          type="button"
+          data-bp-catalog-primary={index === 0 ? true : undefined}
+          className="bp-genre__poster"
+          aria-label={`${item.name}${item.year ? `, ${item.year}` : ""}`}
+          onFocus={event => snapCatalogTopIfFirstRow(event.currentTarget)}
+          onClick={openDetail}
+        >
+          {image ? (
+            <SpatialPosterImage ref={imgRef} src={image} alt="" loading="lazy" decoding="async" onLoad={() => { loadedRef.current = true; }} onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          ) : (
+            <span className="bp-genre__fallback">{item.name}</span>
+          )}
+        </button>
+        <p className="bp-genre__name" title={item.name}>{item.name}</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ width: 180 }} data-grid-entrance>
       <button
         type="button"
+        aria-label={`Abrir ${item.name}`}
         onClick={openDetail}
-        onMouseEnter={event => tweenTo(event.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32)}
-        onMouseLeave={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
+        onMouseEnter={event => tweenTo(event.currentTarget, { scale: 1.025, y: -2, zIndex: 5 }, 0.28)}
+        onMouseLeave={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.28)}
         onPointerDown={event => {
           if (event.button !== 0) return;
-          tweenTo(event.currentTarget, { scale: 0.95, y: 0 });
+          tweenTo(event.currentTarget, { scale: 0.97, y: 0 });
         }}
-        onPointerUp={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
-        onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
-        style={{ position: "relative", width: 207, height: 312, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
+        onPointerUp={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.28)}
+        onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.28)}
+        style={{ position: "relative", width: 207, height: 312, borderRadius: 14, overflow: "hidden", background: "linear-gradient(145deg, #24262b, #121317)", border: "1px solid rgba(255,255,255,0.08)", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 14px 34px rgba(0,0,0,0.22)", willChange: "transform" }}
       >
         {image ? (
-          <img ref={imgRef} src={image} alt={item.name} loading="lazy" decoding="async" onLoad={() => { loadedRef.current = true; }} onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : null}
+          <SpatialPosterImage ref={imgRef} src={image} alt={item.name} loading="lazy" decoding="async" onLoad={() => { loadedRef.current = true; }} onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center", color: "rgba(255,255,255,0.6)", fontSize: 14, fontWeight: 700, lineHeight: 1.3 }}>{item.name}</span>
+        )}
       </button>
-      <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
+      <div style={{ marginTop: 9, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
         {item.name}
       </div>
     </div>

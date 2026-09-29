@@ -1,4 +1,6 @@
 import { getScopedStorageKey, LOCAL_PROFILES_CHANGED_EVENT } from "./localProfiles";
+import { getSpatialPosterSettings, spatialPosterSignature } from "../config/spatialPosters";
+import { preloadArtworkImage, preloadPosterArtwork } from "../services/posterArtworkCache";
 
 export type HomeCardArtworkMode = "background" | "poster" | "logo";
 
@@ -61,6 +63,12 @@ export function writeHomeCardArtwork(
     window.dispatchEvent(new CustomEvent(HOME_CARD_ARTWORK_CHANGED_EVENT, {
       detail: { mode, type, id, url },
     }));
+    if (mode === "poster") {
+      const settings = getSpatialPosterSettings();
+      void preloadPosterArtwork(url, settings, spatialPosterSignature(settings));
+    } else {
+      void preloadArtworkImage(url);
+    }
   } catch {
     // User-selected card artwork is best-effort.
   }

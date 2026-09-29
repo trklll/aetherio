@@ -9,7 +9,7 @@ export interface MediaItem {
   /** Alternate localized/original titles used only for robust media searches. */
   searchAliases?: string[];
   poster?: string;
-  /** Póster original (TMDB/Cinemeta) antes de aplicar BetterPosters. Sirve como fallback si btttr.cc falla. */
+  /** Póster original (TMDB/Cinemeta) antes de aplicar SpatialPosters. Sirve como fallback si la instancia falla. */
   originalPoster?: string;
   background?: string;
   logo?: string;

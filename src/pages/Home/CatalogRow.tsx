@@ -1,5 +1,5 @@
 ﻿import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { BookmarkMinus, BookmarkPlus, Check, ChevronRight, Image as ImageIcon } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
 import type { HomePosterLayout } from "../../config/homePreferences";
@@ -17,17 +17,23 @@ import {
 } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { getPosterTagColor, pickSamplablePosterUrl } from "../../utils/posterTagColor";
-import { isBetterPosterUrl } from "../../config/betterPosters";
-import { useBetterPoster } from "../../hooks/useBetterPoster";
+import SpatialPosterImage from "../../components/SpatialPosterImage";
+import { isSpatialPosterUrl } from "../../config/spatialPosters";
+import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { readHiddenMediaKeys } from "../../services/watchedVisibility";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
+import { useBigPictureActive } from "../../navigation/spatialNav.ts";
+import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
+import { buildDetailPath, isBigPictureLocation } from "../../utils/bigPictureDetail.ts";
+import { preloadArtwork } from "../../utils/shellPreview";
+import type { ShellPreviewRequest } from "../../utils/shellPreview";
 import CardArtworkPicker from "./CardArtworkPicker";
 
-const HORIZONTAL_CARD = { width: 386, height: 225 };
-const VERTICAL_CARD = { width: 197, height: 296 };
+const HORIZONTAL_CARD = { width: 425, height: 248 };
+const VERTICAL_CARD = { width: 217, height: 326 };
 const RANKED_CARD = { width: 277, height: 296 };
 const RANKED_DOUBLE_CARD = { width: 327, height: 296 };
 const RANKED_POSTER = { width: 197, height: 296, singleLeft: 80, doubleLeft: 130 };
@@ -36,20 +42,52 @@ const RANKED_GAP = 10;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
 
-function homeRailTitle(title: string, type: string) {
-  const catalogTitle = title.trim() || "Catalogo";
-  if (/\s-\s(Pel[ií]culas|Series|Anime)$/i.test(catalogTitle)) return catalogTitle;
+function homeRailTitle(title: string, type: string, includeType = true) {
+  const catalogTitle = (title.trim() || "Catalogo").replace(/\s*-\s*(?:Pel[ií]culas|Series|Anime)$/i, "").trim() || "Catalogo";
+  const normalizedType = type.toLowerCase();
   const typeLabel = (() => {
-    switch (type.toLowerCase()) {
+    switch (normalizedType) {
       case "movie":
         return "Películas";
       case "series":
       case "tv":
         return "Series";
+      case "anime":
+        return "Anime";
       default:
         return type.charAt(0).toUpperCase() + type.slice(1);
     }
   })();
+  const lower = catalogTitle.toLowerCase();
+  const isMediaTop = normalizedType === "movie" || normalizedType === "series" || normalizedType === "tv";
+  if (isMediaTop && (lower === "tendencias" || lower === "trending" || lower === "en tendencia" || lower.startsWith("top ") || /^(?:Pel[ií]culas|Series) en tendencia$/i.test(catalogTitle))) {
+    return `Top ${typeLabel}`;
+  }
+  const naturalTypeTitle = /^(?:Pel[ií]culas nuevas|Series nuevas|Anime nuevo) de \d{4}$/i.test(catalogTitle)
+    || /^(?:Pel[ií]culas|Series) popular(?:es)?$/i.test(catalogTitle)
+    || /^Anime (?:en tendencia|en emisión|recomendado por la comunidad|más queridas del momento|que viene|popular)$/i.test(catalogTitle);
+  if (naturalTypeTitle) return catalogTitle;
+
+  const pluralSuffix = typeLabel === "Películas" || typeLabel === "Series" ? "es" : "";
+  if (lower === "popular") return `${typeLabel} popular${pluralSuffix}`;
+  if (/^(Netflix|Disney\+|HBO Max|Prime Video|Apple TV\+)$/i.test(catalogTitle)) return `${catalogTitle}: ${typeLabel}`;
+
+  const newYear = catalogTitle.match(/^New\s*-\s*(\d{4})$/i);
+  if (newYear) {
+    const year = newYear[1];
+    if (normalizedType === "movie") return `Películas nuevas de ${year}`;
+    if (normalizedType === "series" || normalizedType === "tv") return `Series nuevas de ${year}`;
+    if (normalizedType === "anime") return `Anime nuevo de ${year}`;
+  }
+  if (!includeType) {
+    if (lower === "en emisión") return "Anime en emisión";
+    if (lower === "la comunidad lo recomienda") return "Anime recomendado por la comunidad";
+    if (lower === "las más queridas del momento" || lower === "anime más queridas del momento" || lower === "los animes más queridos del momento") return "Los animes más queridos del momento";
+    if (lower === "lo que viene" || lower === "anime que viene" || lower === "próximos animes a estrenar") return "Próximos animes a estrenar";
+    if (lower === "las que están arrasando") return "Anime en tendencia";
+    if (lower === "fenómenos populares") return "Anime popular";
+    return catalogTitle;
+  }
   return `${catalogTitle} - ${typeLabel}`;
 }
 
@@ -63,10 +101,12 @@ interface CatalogRowProps {
   disableHeaderNavigation?: boolean;
   titleOverride?: string;
   persistHomeScroll?: boolean;
+  onOpenPreview?: (request: ShellPreviewRequest) => void;
 }
 
-function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true }: CatalogRowProps) {
+function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true, onOpenPreview }: CatalogRowProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const rafRef = useRef<number | null>(null);
   const measureTimerRef = useRef<number | null>(null);
   const showLeftRef = useRef(false);
@@ -78,7 +118,11 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
   const [watchedVersion, setWatchedVersion] = useState(0);
-  const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type), [row.name, row.type, titleOverride]);
+  const [viewMoreFocused, setViewMoreFocused] = useState(false);
+  // En picture los heads no son seleccionables (como en el TV nativo).
+  const bigPicture = useBigPictureActive();
+  const nativeRow = row.addonId === "aetherio-starter" || row.addonId === "tmdb";
+  const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type, !nativeRow), [nativeRow, row.name, row.type, titleOverride]);
   const ranked = useMemo(() => isTopFormatRow(row), [row]);
   const maxCards = ranked ? 10 : 200;
   // Vistos fuera: los completados sin episodios nuevos no ocupan las rows
@@ -90,7 +134,11 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
       .slice(0, maxCards),
     [row.items, maxCards, hiddenMediaKeys, row.type],
   );
+  const showViewMore = rowItems.length > 0;
+  const showHeaderViewMore = !bigPicture && !hideHeader && rowItems.length > 0;
+  const rowKey = makeRowKey(row.addonId, row.catalogId, row.type);
   const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
+  const viewMoreSize = Math.min(cardSize.width, cardSize.height, 160);
   const virtualWindow = useHorizontalVirtualWindow({
     itemCount: rowItems.length,
     itemWidth: cardSize.width,
@@ -111,17 +159,32 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
       .map(entry => entry.mediaKey),
   ), [watchedVersion]);
   const openCatalog = useCallback(() => {
-    const params = new URLSearchParams({
-      addon: row.addonId,
-      type: row.type,
-      catalog: row.catalogId,
-      title,
-    });
-    if (row.extraParams && Object.keys(row.extraParams).length) {
-      params.set("extras", JSON.stringify(row.extraParams));
+    try {
+      const params = new URLSearchParams({
+        addon: String(row.addonId ?? ""),
+        type: String(row.type ?? ""),
+        catalog: String(row.catalogId ?? ""),
+        title: String(title ?? ""),
+      });
+      if (row.extraParams && typeof row.extraParams === "object" && Object.keys(row.extraParams).length) {
+        try {
+          params.set("extras", JSON.stringify(row.extraParams));
+        } catch {
+          // extraParams no serializables: navegar igual sin ellos.
+        }
+      }
+      const catalogPath = bigPicture ? "/big-picture/catalog" : "/catalog";
+      const url = `${catalogPath}?${params.toString()}`;
+      try {
+        navigate(url);
+      } catch {
+        window.location.assign(url);
+      }
+    } catch {
+      // Ningún dato de row debe dejar el header muerto sin feedback.
+      window.location.assign(bigPicture ? "/big-picture/catalog" : "/catalog");
     }
-    navigate(`/catalog?${params.toString()}`);
-  }, [navigate, row.addonId, row.catalogId, row.extraParams, row.type, title]);
+  }, [bigPicture, navigate, row.addonId, row.catalogId, row.extraParams, row.type, title]);
 
   const applyArrowState = useCallback((nextLeft: boolean, nextRight: boolean) => {
     if (showLeftRef.current !== nextLeft) {
@@ -223,15 +286,41 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   if (rowItems.length === 0) return null;
 
   return (
-        <section style={{ paddingLeft: 0, paddingRight: 0, marginBottom: -24 }}>
+    <section data-row-key={rowKey} data-row-count={rowItems.length + (showViewMore ? 1 : 0)} style={{ paddingLeft: 0, paddingRight: 0, marginBottom: -24 }}>
       {!hideHeader ? (
-        <button
-          onClick={disableHeaderNavigation ? undefined : openCatalog}
-          style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14, background: "none", border: "none", cursor: disableHeaderNavigation ? "default" : "pointer", paddingLeft: 48, paddingRight: 48 }}
+        bigPicture ? (
+          <div
+            data-row-header
+            style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 4, marginBottom: 14, paddingLeft: "var(--app-gutter-x)", paddingRight: "var(--app-gutter-x)" }}
+          >
+            <span style={{ fontSize: 20, lineHeight: 1.1, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--home-h, rgba(255,255,255,0.78))", textShadow: "0 2px 12px rgba(0,0,0,0.38)" }}>{title}</span>
+          </div>
+        ) : (
+        <div
+          data-row-header
+          style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 12, marginBottom: 14, paddingLeft: "var(--app-gutter-x)", paddingRight: "var(--app-gutter-x)" }}
         >
-          <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>{title}</span>
-          {!disableHeaderNavigation ? <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} /> : null}
-        </button>
+          <button
+            type="button"
+            onClick={disableHeaderNavigation ? undefined : openCatalog}
+            style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, flex: 1, background: "none", border: "none", color: "inherit", cursor: disableHeaderNavigation ? "default" : "pointer", padding: 0, textAlign: "left" }}
+          >
+            <span style={{ fontSize: 20, fontWeight: 700, color: "var(--home-h, rgba(255,255,255,0.6))" }}>{title}</span>
+            {!disableHeaderNavigation ? <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} /> : null}
+          </button>
+          {showHeaderViewMore ? (
+            <button
+              type="button"
+              onClick={openCatalog}
+              aria-label={`Ver más: ${title}`}
+              style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, height: 30, padding: "0 11px", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 999, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.62)", cursor: "pointer", fontSize: 12, fontWeight: 700, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
+            >
+              Ver más
+              <ChevronRight size={13} />
+            </button>
+          ) : null}
+        </div>
+        )
       ) : null}
 
       <div
@@ -277,6 +366,8 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
         <div
           ref={scrollRef}
           className="scroll-row"
+          data-row-scroller
+          data-focus-center
           style={{
             display: "flex",
             gap: 0,
@@ -285,8 +376,8 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
             marginTop: embedded ? -12 : -18,
             marginLeft: 0,
             marginRight: 0,
-            paddingLeft: embedded ? 0 : 48,
-            paddingRight: embedded ? 0 : 48,
+            paddingLeft: embedded ? 0 : "var(--app-gutter-x)",
+            paddingRight: embedded ? 0 : "var(--app-gutter-x)",
             paddingTop: ROW_SHADOW_TOP_GUTTER + 8,
             paddingBottom: ROW_SHADOW_BOTTOM_GUTTER + 8,
             scrollbarWidth: "none",
@@ -295,9 +386,13 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
           {beforeWidth > 0 ? <div aria-hidden="true" style={{ flex: `0 0 ${beforeWidth}px` }} /> : null}
           {visibleItems.map((item, offset) => {
             const idx = visibleStart + offset;
+            const itemDetailPath = buildDetailPath(row.type, item.id, undefined, location.pathname);
             return (
               <div
                 key={`${item.id}-${row.catalogId}-${idx}`}
+                data-row-card
+                data-item-index={idx}
+                data-detail-path={itemDetailPath}
                 onClickCapture={() => {
                   if (!persistHomeScroll) return;
                   const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
@@ -308,7 +403,6 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 }}
                 style={{
                   flex: "0 0 auto",
-                  paddingLeft: idx === 0 ? 10 : 0,
                   marginRight: idx === rowItems.length - 1 ? 0 : ranked ? RANKED_GAP : HORIZONTAL_GAP,
                 }}
               >
@@ -318,11 +412,93 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                   posterLayout={posterLayout}
                   watched={watchedMediaKeys.has(buildMediaKey(row.type, item.id))}
                   rank={ranked ? idx + 1 : undefined}
+                  onOpenPreview={onOpenPreview ? request => {
+                    const items = rowItems.map((rowItem, index) => {
+                      const background = resolveDetailBackground(row.type, rowItem.id, rowItem.background);
+                      writeDetailMediaMeta({
+                        id: rowItem.id,
+                        type: row.type,
+                        name: rowItem.name,
+                        poster: rowItem.poster,
+                        background,
+                        logo: rowItem.logo,
+                        description: rowItem.description,
+                        year: rowItem.year,
+                      });
+                      return {
+                        detailPath: buildDetailPath(row.type, rowItem.id, undefined, location.pathname),
+                        title: rowItem.name,
+                        background,
+                        cardElement: index === idx ? request.cardElement : scrollRef.current?.querySelector<HTMLElement>(
+                          `[data-item-index="${index}"] [data-row-card]`,
+                        ) ?? null,
+                        restoreFocus: () => {
+                          const rail = scrollRef.current;
+                          if (!rail?.isConnected) return;
+                          // Virtualized cards must be brought back into the DOM before focus.
+                          rail.scrollTo({ left: index * (cardSize.width + (ranked ? RANKED_GAP : HORIZONTAL_GAP)), behavior: "instant" });
+                          window.setTimeout(() => {
+                            if (!rail.isConnected || document.querySelector("[data-shell-preview]")) return;
+                            rail.querySelector<HTMLElement>(`[data-item-index="${index}"] [data-row-card]`)?.focus({ preventScroll: true });
+                          }, 80);
+                        },
+                      };
+                    });
+                    onOpenPreview({ ...request, items, initialIndex: idx });
+                  } : undefined}
                 />
               </div>
             );
           })}
           {afterWidth > 0 ? <div aria-hidden="true" style={{ flex: `0 0 ${afterWidth}px` }} /> : null}
+          {showViewMore ? (
+            <button
+              type="button"
+              data-row-card
+              data-item-index={rowItems.length}
+              data-row-view-more
+              aria-label={`Ver más: ${title}`}
+              onClick={openCatalog}
+              onFocus={() => setViewMoreFocused(true)}
+              onBlur={() => setViewMoreFocused(false)}
+              onMouseEnter={event => tweenTo(event.currentTarget, { scale: 1.025, y: -2 }, 0.28)}
+              onMouseLeave={event => tweenTo(event.currentTarget, { scale: 1, y: 0 }, 0.28)}
+              onPointerDown={event => {
+                if (event.button !== 0) return;
+                tweenTo(event.currentTarget, { scale: 0.97, y: 0 }, 0.1);
+              }}
+              onPointerUp={event => tweenTo(event.currentTarget, { scale: 1, y: 0 }, 0.24)}
+              onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0 }, 0.24)}
+              style={{
+                flex: `0 0 ${viewMoreSize}px`,
+                width: viewMoreSize,
+                height: viewMoreSize,
+                alignSelf: "center",
+                marginLeft: HORIZONTAL_GAP,
+                border: `1px solid ${viewMoreFocused ? "rgba(255,255,255,0.12)" : "transparent"}`,
+                borderRadius: 16,
+                background: viewMoreFocused ? "linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.035))" : "transparent",
+                color: "rgba(255,255,255,0.82)",
+                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 12,
+                boxShadow: viewMoreFocused ? "0 16px 40px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.08)" : "none",
+                backdropFilter: viewMoreFocused ? "blur(18px) saturate(140%)" : "none",
+                WebkitBackdropFilter: viewMoreFocused ? "blur(18px) saturate(140%)" : "none",
+                transition: "background 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
+                willChange: "transform",
+              }}
+            >
+              <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Ver más</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4, color: "rgba(255,255,255,0.48)", fontSize: 12, fontWeight: 600, opacity: viewMoreFocused ? 1 : 0, transform: viewMoreFocused ? "translateY(0)" : "translateY(4px)", transition: "opacity 180ms ease, transform 180ms ease" }}>
+                Explorar
+                <ChevronRight size={14} />
+              </span>
+            </button>
+          ) : null}
         </div>
 
         <div
@@ -364,8 +540,9 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   );
 }
 
-const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, watched, rank }: { item: MediaItem; type: string; posterLayout: HomePosterLayout; watched: boolean; rank?: number }) {
+const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, watched, rank, onOpenPreview }: { item: MediaItem; type: string; posterLayout: HomePosterLayout; watched: boolean; rank?: number; onOpenPreview?: (request: ShellPreviewRequest) => void }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const cardRef = useRef<HTMLDivElement>(null);
   const scheduleEligible = supportsAiringSchedule(type, item.id);
   const [scheduleNearViewport, setScheduleNearViewport] = useState(false);
@@ -379,7 +556,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const [inLibrary, setInLibrary] = useState(() => isInLibrary(type, item.id));
   const [, setArtworkVersion] = useState(0);
   const [logoFailed, setLogoFailed] = useState(false);
-  // Si el póster BetterPosters falla (offline, 404, rate-limit), volver al original TMDB/Cinemeta.
+  // Si el póster SpatialPosters falla (offline, 404, rate-limit), volver al original TMDB/Cinemeta.
   const [posterFailed, setPosterFailed] = useState(false);
   const posterLoadedRef = useRef(false);
   const detailBackground = resolveDetailBackground(type, item.id, item.background);
@@ -388,21 +565,23 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const artworkMode: HomeCardArtworkMode = effectivePosterLayout === "vertical" ? "poster" : "background";
   const cardBackground = readHomeCardArtwork("background", type, item.id, detailBackground);
   const cardPoster = readHomeCardArtwork("poster", type, item.id, item.poster);
-  // Override manual del usuario → no tocar. Solo se resuelve BetterPosters en vertical.
-  const hasCustomPoster = Boolean(cardPoster && cardPoster !== item.poster);
+  // Override manual del usuario → no tocar. Solo se resuelve SpatialPosters en vertical.
+  const hasCustomPoster = Boolean(readHomeCardArtwork("poster", type, item.id) || cardPoster && cardPoster !== item.poster);
   // En formato top el número grande ya indica el puesto: pósters sin badges #Hoy.
   // Con horario de emisión ("Cada domingo") el badge nuestro pisa al #Hoy de
   // BTTTR: se pide el póster sin trend tags para que solo se vea el nuestro.
-  const posterOverrides = ranked || airingSchedule ? { trendTags: false } : undefined;
-  const resolvedPoster = useBetterPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides);
+  const posterOverrides = ranked || airingSchedule ? { rankingBadges: false } : undefined;
+  const resolvedPoster = useSpatialPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides, item.originalPoster);
   const verticalPoster = resolvedPoster.url ?? cardPoster;
   const fallbackPoster = item.originalPoster ?? resolvedPoster.original;
   const image = effectivePosterLayout === "vertical"
     ? verticalPoster ?? cardBackground ?? ""
     : cardBackground ?? cardPoster ?? "";
-  const displayImage = effectivePosterLayout === "vertical" && posterFailed && fallbackPoster
-    ? fallbackPoster
-    : image;
+  const displayImage = effectivePosterLayout === "vertical" && resolvedPoster.pending
+    ? ""
+    : effectivePosterLayout === "vertical" && posterFailed && fallbackPoster
+      ? fallbackPoster
+      : image;
   const customLogo = sanitizeLogoUrl(readHomeCardArtwork("logo", type, item.id));
   const logo = customLogo || sanitizeLogoUrl(item.logo);
   const showLogo = Boolean(logo && !logoFailed);
@@ -420,6 +599,32 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   }, [airingSchedule, cardPoster, item.originalPoster, item.poster]);
   const doubleDigitRank = ranked && rank >= 10;
   const rankedPosterLeft = doubleDigitRank ? RANKED_POSTER.doubleLeft : RANKED_POSTER.singleLeft;
+  // En picture la card es foco espacial con la misma animación del hover.
+  const bigPicture = useBigPictureActive();
+  // Al enfocar/pasar sobre la card se precalientan los bytes finales del
+  // backdrop: si el usuario abre la shell, la imagen ya está en caché.
+  const warmArtwork = useCallback(() => {
+    preloadArtwork(detailBackground);
+  }, [detailBackground]);
+  const enterRanked = (target: HTMLDivElement) => {
+    tweenTo(target, { y: -4, zIndex: 5 });
+    const poster = target.querySelector<HTMLElement>("[data-ranked-poster]");
+    const artwork = target.querySelector<HTMLElement>("[data-card-artwork]");
+    const number = target.querySelector<HTMLElement>("[data-rank-number]");
+    gsap.set(poster, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
+    tweenTo(artwork, { scale: 1.04 });
+    tweenTo(number, { x: -3 });
+  };
+  const leaveRanked = (target: HTMLDivElement) => {
+    tweenTo(target, { y: 0, zIndex: 1 });
+    const poster = target.querySelector<HTMLElement>("[data-ranked-poster]");
+    const artwork = target.querySelector<HTMLElement>("[data-card-artwork]");
+    const number = target.querySelector<HTMLElement>("[data-rank-number]");
+    gsap.set(poster, { boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)" });
+    tweenTo(artwork, { scale: 1 });
+    tweenTo(number, { x: 0 });
+  };
+
   const cardSize = ranked
     ? doubleDigitRank ? RANKED_DOUBLE_CARD : RANKED_CARD
     : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
@@ -434,10 +639,22 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       description: item.description,
       year: item.year,
     });
+    const detailPath = buildDetailPath(type, item.id, undefined, location.pathname);
+    if (isBigPictureLocation(location.pathname) && onOpenPreview) {
+      onOpenPreview({ detailPath, title: item.name, cardElement: cardRef.current });
+      return;
+    }
     setSharedElementName(type, item.id);
     captureCardRect(cardRef.current);
-    navigate(`/detail/${encodeURIComponent(type)}/${encodeURIComponent(item.id)}`);
-  }, [detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, navigate, type]);
+    navigate(detailPath);
+  }, [detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, location.pathname, navigate, onOpenPreview, type]);
+
+  // En picture el anticlick no existe: A/Enter corto abre, mantenido (500ms)
+  // abre las opciones tras pulsación larga.
+  const longPress = useLongPressAction(bigPicture, {
+    onActivate: openDetail,
+    onLongPress: () => setMenuOpen(true),
+  });
 
   useEffect(() => {
     if (!scheduleEligible || scheduleNearViewport) return;
@@ -481,7 +698,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     posterLoadedRef.current = false;
   }, [item.poster, resolvedPoster.url]);
 
-  // btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
+  // SpatialPosters genera pósters bajo demanda y a veces la petición se queda colgada
   // sin error: si en 15s no cargó, caer al póster original.
   // (No se resetea posterLoadedRef aquí: el reset vive en el efecto que
   // observa cambios de URL; resetear aquí degradaba imágenes ya cargadas
@@ -491,7 +708,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   // ANTES que los efectos — sin este cheque el timer la degradaba igual.
   const imgElRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
-    if (!isBetterPosterUrl(displayImage) || !fallbackPoster) return;
+    if (!isSpatialPosterUrl(displayImage) || !fallbackPoster) return;
     const el = imgElRef.current;
     if (el && el.currentSrc === displayImage && el.complete && el.naturalWidth > 0) {
       posterLoadedRef.current = true;
@@ -552,7 +769,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const isHorizontal = effectivePosterLayout !== "vertical" && !ranked;
   // Los pósters BTTTR no se pueden cambiar; solo cuando cae al fallback
   // (TMDB o nuestro) se permite elegir póster.
-  const canChangeCardArtwork = artworkMode !== "poster" || !isBetterPosterUrl(displayImage);
+  const canChangeCardArtwork = artworkMode !== "poster" || !isSpatialPosterUrl(displayImage);
 
   const artworkControls = (
     <>
@@ -628,27 +845,30 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     return (
       <div
         ref={cardRef}
-        onClick={openDetail}
+        onClick={event => {
+          if ((event.target as HTMLElement).closest("[data-aetherio-context-menu]")) {
+            event.stopPropagation();
+            return;
+          }
+          openDetail();
+        }}
         onContextMenu={openArtworkMenu}
         aria-label={`${rank}. ${item.name}`}
+        data-row-card
+        data-long-press
+        tabIndex={bigPicture ? 0 : onOpenPreview ? -1 : undefined}
+        role={bigPicture ? "button" : undefined}
+        onKeyDown={bigPicture ? longPress.onKeyDown : undefined}
+        onKeyUp={bigPicture ? longPress.onKeyUp : undefined}
+        onFocus={bigPicture ? e => { warmArtwork(); enterRanked(e.currentTarget); } : undefined}
+        onBlur={bigPicture ? e => leaveRanked(e.currentTarget) : undefined}
         style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, cursor: "pointer", willChange: "transform" }}
         onMouseEnter={e => {
-          tweenTo(e.currentTarget, { y: -4, zIndex: 5 });
-          const poster = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-ranked-poster]");
-          const artwork = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-card-artwork]");
-          const number = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-rank-number]");
-          gsap.set(poster, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
-          tweenTo(artwork, { scale: 1.04 });
-          tweenTo(number, { x: -3 });
+          warmArtwork();
+          enterRanked(e.currentTarget);
         }}
         onMouseLeave={e => {
-          tweenTo(e.currentTarget, { y: 0, zIndex: 1 });
-          const poster = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-ranked-poster]");
-          const artwork = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-card-artwork]");
-          const number = (e.currentTarget as HTMLDivElement).querySelector<HTMLElement>("[data-rank-number]");
-          gsap.set(poster, { boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)" });
-          tweenTo(artwork, { scale: 1 });
-          tweenTo(number, { x: 0 });
+          leaveRanked(e.currentTarget);
         }}
       >
         <div
@@ -712,8 +932,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             </div>
           ) : null}
           {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact background={tagBackground} /> : null}
-          {image ? (
-            <img
+          {displayImage ? (
+            <SpatialPosterImage
               data-card-artwork
               ref={imgElRef}
               src={displayImage}
@@ -733,6 +953,14 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
 
   const [hovered, setHovered] = useState(false);
   const titleRef = useRef<HTMLDivElement>(null);
+  const enterCard = (target: HTMLDivElement) => {
+    setHovered(true);
+    tweenTo(target, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
+  };
+  const leaveCard = (target: HTMLDivElement) => {
+    setHovered(false);
+    tweenTo(target, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+  };
 
   useEffect(() => {
     const el = titleRef.current;
@@ -748,16 +976,30 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     <div style={{ flexShrink: 0, width: cardSize.width }}>
       <div
         ref={cardRef}
-        onClick={openDetail}
+        onClick={event => {
+          if ((event.target as HTMLElement).closest("[data-aetherio-context-menu]")) {
+            event.stopPropagation();
+            return;
+          }
+          openDetail();
+        }}
         onContextMenu={openArtworkMenu}
+        data-row-card
+        data-long-press
+        aria-label={bigPicture ? item.name : undefined}
+        tabIndex={bigPicture ? 0 : onOpenPreview ? -1 : undefined}
+        role={bigPicture ? "button" : undefined}
+        onKeyDown={bigPicture ? longPress.onKeyDown : undefined}
+        onKeyUp={bigPicture ? longPress.onKeyUp : undefined}
+        onFocus={bigPicture ? e => { warmArtwork(); enterCard(e.currentTarget); } : undefined}
+        onBlur={bigPicture ? e => leaveCard(e.currentTarget) : undefined}
         style={{ position: "relative", zIndex: 1, width: cardSize.width, height: cardSize.height, borderRadius: 12, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", border: "1px solid rgba(225,230,238,0.10)", willChange: "transform" }}
         onMouseEnter={e => {
-          setHovered(true);
-          tweenTo(e.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
+          warmArtwork();
+          enterCard(e.currentTarget);
         }}
         onMouseLeave={e => {
-          setHovered(false);
-          tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+          leaveCard(e.currentTarget);
         }}
       >
         {effectiveWatched ? (
@@ -781,10 +1023,10 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
           </div>
         ) : null}
-        {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} background={tagBackground} /> : null}
-        {image ? <img ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
+         {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} background={tagBackground} /> : null}
+         {displayImage ? <SpatialPosterImage ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
-        {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
+         {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
           {showLogo ? (
             <img src={logo} alt={item.name}
               decoding="async"

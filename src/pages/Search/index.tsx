@@ -6,20 +6,21 @@ import { useAddonStore } from "../../store/addonStore";
 import { useMediaSearch } from "../../hooks/useMediaSearch";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import type { UnifiedSearchResult } from "../../utils/searchProviders";
-import { isBetterPosterUrl } from "../../config/betterPosters";
-import { resolveBetterPosterSync } from "../../hooks/useBetterPoster";
+import SpatialPosterImage from "../../components/SpatialPosterImage";
+import { isSpatialPosterUrl } from "../../config/spatialPosters";
+import { resolveSpatialPosterSync } from "../../hooks/useSpatialPoster";
 import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
 
 const POSTER_CARD = { width: 207, height: 312 };
 const ROW_GAP = 22;
 const TOP_RESULTS_LIMIT = 3;
-// btttr.cc genera pósters bajo demanda y a veces la petición se queda colgada
+// SpatialPosters genera pósters bajo demanda y a veces la petición se queda colgada
 // sin error: mismo presupuesto que en Home/Catálogo antes de volver al base.
 const SEARCH_POSTER_FALLBACK_TIMEOUT_MS = 15_000;
 
 /**
- * Muestra la URL BetterPosters pero vuelve al póster base si falla o se
- * cuelga. Sin esto, cualquier 404/429 de btttr.cc dejaba la card en negro.
+ * Muestra la URL SpatialPosters pero vuelve al póster base si falla o se
+ * cuelga. Sin esto, cualquier 404/429 de la instancia dejaba la card en negro.
  */
 function usePosterWithFallback(betterUrl: string | undefined, baseUrl: string | undefined) {
   const [failed, setFailed] = useState(false);
@@ -30,7 +31,7 @@ function usePosterWithFallback(betterUrl: string | undefined, baseUrl: string | 
     loadedRef.current = false;
   }, [betterUrl]);
   useEffect(() => {
-    if (!isBetterPosterUrl(betterUrl) || !baseUrl || betterUrl === baseUrl || failed) return;
+    if (!isSpatialPosterUrl(betterUrl) || !baseUrl || betterUrl === baseUrl || failed) return;
     // La imagen puede estar ya completa (caché) con onLoad anterior a este
     // efecto: consultar el elemento evita degradar pósters sanos.
     const el = imgRef.current;
@@ -189,7 +190,7 @@ function ResultSection({
 function SectionHead({ title, inset = true }: { title: string; inset?: boolean }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, padding: inset ? "0 48px" : 0, marginBottom: 14 }}>
-      <h2 style={{ fontSize: 17, fontWeight: 700, color: "#fff", lineHeight: 1 }}>{title}</h2>
+      <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff", lineHeight: 1 }}>{title}</h2>
       <ChevronRight size={15} style={{ color: "rgba(255,255,255,0.4)", marginTop: 1 }} />
     </div>
   );
@@ -198,7 +199,7 @@ function SectionHead({ title, inset = true }: { title: string; inset?: boolean }
 function TopResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen: () => void }) {
   const base = item.poster ?? item.background ?? undefined;
   const poster = usePosterWithFallback(
-    resolveBetterPosterSync(item.id, item.externalIds?.imdb, base),
+    resolveSpatialPosterSync(item.id, item.type, base),
     base,
   );
   return (
@@ -373,7 +374,7 @@ function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen:
   const cardRef = useRef<HTMLButtonElement>(null);
   const base = item.poster ?? item.background ?? undefined;
   const poster = usePosterWithFallback(
-    resolveBetterPosterSync(item.id, item.externalIds?.imdb, base),
+    resolveSpatialPosterSync(item.id, item.type, base),
     base,
   );
 
@@ -407,23 +408,23 @@ function PosterResultCard({ item, onOpen }: { item: UnifiedSearchResult; onOpen:
         gsap.set(cardRef.current, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
       }}
     >
-      {poster.src ? (
-        <img
-          ref={poster.imgRef}
-          src={poster.src}
-          alt={item.name ?? ""}
-          loading="lazy"
-          decoding="async"
-          onLoad={poster.markLoaded}
-          onError={poster.markFailed}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      ) : (
-        <span style={{ display: "grid", height: "100%", placeItems: "center", padding: 18, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
-          {item.name ?? "Sin imagen"}
-        </span>
-      )}
-    </button>
+       {poster.src ? (
+         <SpatialPosterImage
+           ref={poster.imgRef}
+           src={poster.src}
+           alt={item.name ?? ""}
+           loading="lazy"
+           decoding="async"
+           onLoad={poster.markLoaded}
+           onError={poster.markFailed}
+           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+         />
+       ) : (
+         <span style={{ display: "grid", height: "100%", placeItems: "center", padding: 18, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
+           {item.name ?? "Sin imagen"}
+         </span>
+       )}
+     </button>
   );
 }
 

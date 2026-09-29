@@ -40,6 +40,7 @@ import {
   saveHomePreferences,
   sortHomeCatalogRows,
   useHomePreferences,
+  type BothContentPreference,
   type ContentOrientation,
   type HomePreferences,
 } from "../../config/homePreferences";
@@ -49,14 +50,17 @@ import {
   savePlaybackPreferences,
   type PlaybackPreferences,
 } from "../../config/playbackPreferences";
+import { useSeekrApiKey } from "../../config/useSeekrApiKey";
 import {
-  BETTER_POSTER_LANGUAGE_OPTIONS,
-  BETTER_POSTER_RATING_SOURCE_OPTIONS,
-  getBetterPosterSettings,
-  saveBetterPosterSettings,
-  type BetterPosterRatingSource,
-  type BetterPosterSettings,
-} from "../../config/betterPosters";
+  getSpatialPosterSettings,
+  saveSpatialPosterSettings,
+  SPATIAL_BADGE_STYLE_OPTIONS,
+  SPATIAL_LANG_OPTIONS,
+  SPATIAL_QUALITY_OPTIONS,
+  SPATIAL_RANKING_BADGE_STYLE_OPTIONS,
+  SPATIAL_REGION_OPTIONS,
+  type SpatialPosterSettings,
+} from "../../config/spatialPosters";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
@@ -93,10 +97,11 @@ import {
   type OAuthProvider,
 } from "../../auth/authClient";
 import { openExternalUrl } from "../../runtime/platform";
+import { isBigPictureLocation } from "../../utils/bigPictureDetail";
 import packageJson from "../../../package.json";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "trakt" | "mdblist" | "discord";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "trakt" | "mdblist" | "discord" | "seekr";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 type SavedSections = {
   profile: boolean;
@@ -134,7 +139,7 @@ export default function SettingsPage() {
   const [keys, setKeys] = useState<ApiKeys>(() => getApiKeys());
   const [mdbList, setMdbList] = useState<MdbListSettings>(() => getMdbListSettings());
   const [playback, setPlayback] = useState<PlaybackPreferences>(() => getPlaybackPreferences());
-  const [betterPosters, setBetterPosters] = useState<BetterPosterSettings>(() => getBetterPosterSettings());
+  const [spatialPosters, setSpatialPosters] = useState<SpatialPosterSettings>(() => getSpatialPosterSettings());
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => getInitialTab(location.search));
   const [accountView, setAccountView] = useState<AccountView>(() => getInitialAccountView(location.search));
   const [designView, setDesignView] = useState<DesignView>("overview");
@@ -160,7 +165,7 @@ export default function SettingsPage() {
     setKeys(getApiKeys());
     setMdbList(getMdbListSettings());
     setPlayback(getPlaybackPreferences());
-    setBetterPosters(getBetterPosterSettings());
+    setSpatialPosters(getSpatialPosterSettings());
   }, []);
 
   useEffect(() => {
@@ -204,7 +209,10 @@ export default function SettingsPage() {
     setActiveTab(tab);
     setAccountView("overview");
     setDesignView("overview");
-    navigate(`/settings?tab=${tab}`, { replace: true });
+    // En Big Picture los ajustes viven en /big-picture/settings: conservar
+    // el prefijo para no salir del modo inmersivo.
+    const base = isBigPictureLocation() ? "/big-picture/settings" : "/settings";
+    navigate(`${base}?tab=${tab}`, { replace: true });
   }
 
   function updateKey(name: keyof ApiKeys, value: string) {
@@ -245,10 +253,10 @@ export default function SettingsPage() {
     setSaved(current => ({ ...current, mdblist: true }));
   }
 
-  function updateBetterPosters(patch: Partial<BetterPosterSettings>) {
-    setBetterPosters(current => {
+  function updateSpatialPosters(patch: Partial<SpatialPosterSettings>) {
+    setSpatialPosters(current => {
       const next = { ...current, ...patch };
-      saveBetterPosterSettings(next);
+      saveSpatialPosterSettings(next);
       return next;
     });
     setSaved(current => ({ ...current, design: true }));
@@ -425,8 +433,8 @@ export default function SettingsPage() {
               onPreferencesChange={updateHomePreferences}
               onToggleCatalog={toggleCatalog}
               onMoveCatalog={moveCatalog}
-              betterPosters={betterPosters}
-              onBetterPostersChange={updateBetterPosters}
+              spatialPosters={spatialPosters}
+              onSpatialPostersChange={updateSpatialPosters}
             />
           ) : null}
 
@@ -434,7 +442,7 @@ export default function SettingsPage() {
             <AddonsPanel
               installedCount={addons.length}
               enabledCount={addons.filter(addon => addon.enabled).length}
-              onOpenAddons={() => navigate("/addons")}
+              onOpenAddons={() => navigate(isBigPictureLocation() ? "/big-picture/addons" : "/addons")}
             />
           ) : null}
 
@@ -670,6 +678,7 @@ async function startTraktConnection() {
           <NavRow title="TheIntroDB" description="Timestamps de créditos (outros) para disparar Up Next en películas y series." onClick={() => onViewChange("theintrodb")} />
           <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
           <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estás viendo en Aetherio." onClick={() => onViewChange("discord")} />
+          <NavRow title="Seekr" description="Previsualizaciones de escenas en la barra del reproductor." onClick={() => onViewChange("seekr")} />
         </PillBlock>
       </PanelScaffold>
     );
@@ -725,6 +734,10 @@ async function startTraktConnection() {
         </div>
       </PanelScaffold>
     );
+  }
+
+  if (view === "seekr") {
+    return <SeekrPanel onBack={() => onViewChange("integrations")} />;
   }
 
   if (view === "mdblist") {
@@ -859,7 +872,7 @@ return (
           </>
         ) : null}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
-        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt y Discord." onClick={() => onViewChange("integrations")} />
+        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt, Discord y Seekr." onClick={() => onViewChange("integrations")} />
       </PillBlock>
     </PanelScaffold>
   );
@@ -930,6 +943,91 @@ function MdbListPanel({
           {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
 
+      </div>
+    </PanelScaffold>
+  );
+}
+
+function SeekrPanel({ onBack }: { onBack: () => void }) {
+  const { apiKey, ready, save, clear } = useSeekrApiKey();
+  const [draft, setDraft] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const persist = async () => {
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    try {
+      await save(draft);
+      setDraft("");
+      setStatus("Clave guardada en el almacén seguro.");
+    } catch (cause) {
+      setError(describeUnknownError(cause, "No se pudo guardar la clave de Seekr."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    try {
+      await clear();
+      setDraft("");
+      setStatus("Clave eliminada de este equipo.");
+    } catch (cause) {
+      setError(describeUnknownError(cause, "No se pudo eliminar la clave de Seekr."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <PanelScaffold title="Seekr" onBack={onBack}>
+      <div className="grid gap-5">
+        <PillBlock title="CLAVE DE API">
+          <PillRow
+            title="API Key"
+            titleAction={(
+              <a
+                href="https://seekr.tv"
+                target="_blank"
+                rel="noreferrer"
+                onClick={event => { event.preventDefault(); void openExternalUrl("https://seekr.tv"); }}
+                className="text-xs font-bold text-white/62 underline underline-offset-2 gsap-transition hover:text-white"
+              >
+                Obtener API
+              </a>
+            )}
+            description="Muestra miniaturas de cada escena al arrastrar la barra del reproductor. Se guarda en el almacén seguro de Windows, no en el archivo de preferencias."
+          >
+            <input
+              type="password"
+              value={draft}
+              onChange={event => setDraft(event.target.value)}
+              placeholder={ready && apiKey ? "•••••••• (guardada)" : "Pega aquí tu API key de Seekr"}
+              disabled={!ready}
+              className="w-full rounded-full border border-white/18 bg-white px-4 py-2.5 text-sm text-black outline-none gsap-transition placeholder:text-black/45 focus:border-white/34"
+            />
+          </PillRow>
+        </PillBlock>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <ActionButton onClick={() => void persist()} icon={<Save size={15} />} disabled={busy || !ready || !draft.trim()}>
+            Guardar clave
+          </ActionButton>
+          <ActionButton onClick={() => void remove()} icon={<Trash2 size={15} />} disabled={busy || !ready || !apiKey}>
+            Eliminar
+          </ActionButton>
+          {status ? <span className="text-sm text-white/54">{status}</span> : null}
+        </div>
+        {error ? <p className="text-sm font-semibold text-red-300">{error}</p> : null}
+        <p className="text-xs text-white/36">
+          Sin clave, la barra del reproductor sigue funcionando igual; solo se ocultan las miniaturas de escenas.
+        </p>
       </div>
     </PanelScaffold>
   );
@@ -1146,8 +1244,8 @@ function DesignPanel({
   onPreferencesChange,
   onToggleCatalog,
   onMoveCatalog,
-  betterPosters,
-  onBetterPostersChange,
+  spatialPosters,
+  onSpatialPostersChange,
 }: {
   view: DesignView;
   preferences: HomePreferences;
@@ -1158,8 +1256,8 @@ function DesignPanel({
   onPreferencesChange: (patch: Partial<HomePreferences>) => void;
   onToggleCatalog: (row: CatalogRowData) => void;
   onMoveCatalog: (row: CatalogRowData, direction: "left" | "right") => void;
-  betterPosters: BetterPosterSettings;
-  onBetterPostersChange: (patch: Partial<BetterPosterSettings>) => void;
+  spatialPosters: SpatialPosterSettings;
+  onSpatialPostersChange: (patch: Partial<SpatialPosterSettings>) => void;
 }) {
   if (view === "home-screen") {
     return (
@@ -1174,6 +1272,17 @@ function DesignPanel({
             <p className="mt-3 text-xs text-white/36">Prioriza el contenido elegido sin ocultar los demás catálogos.</p>
           </section>
 
+          {preferences.contentOrientation === "both" ? (
+            <section>
+              <SectionLabel>¿Con qué preferencia?</SectionLabel>
+              <BothPreferenceControl
+                value={preferences.bothPreference}
+                onChange={bothPreference => onPreferencesChange({ bothPreference })}
+              />
+              <p className="mt-3 text-xs text-white/36">Si eliges Anime, los catálogos de anime se muestran primero y viceversa.</p>
+            </section>
+          ) : null}
+
           <PillBlock>
             <ToggleRow
               title="Posters horizontales"
@@ -1183,54 +1292,130 @@ function DesignPanel({
             />
           </PillBlock>
 
-          <PillBlock title="PÓSTERS BETTERPOSTERS (BTTTR.CC)">
-            <ToggleRow
-              title="Usar BetterPosters"
-              description="Pósters con etiquetas de género, rating y tendencias. Activado por defecto; si falla una imagen se usa el póster original."
-              checked={betterPosters.enabled}
-              onChange={checked => onBetterPostersChange({ enabled: checked })}
+          <PillBlock title="SPATIALPOSTERS">
+            <TextInputRow
+              title="URL de la instancia"
+              description={spatialPosters.instanceUrl
+                ? "Conectando con tu instancia de SpatialPosters."
+                : "Sin configurar: los pósters usan las imágenes originales de TMDB."}
+              value={spatialPosters.instanceUrl}
+              maxLength={300}
+              placeholder="http://localhost:3000"
+              onChange={value => onSpatialPostersChange({ instanceUrl: value })}
             />
             <ToggleRow
-              title="Etiquetas de tendencia"
-              description="Trending, Nuevo, IMDb #3."
-              checked={betterPosters.trendTags}
-              onChange={checked => onBetterPostersChange({ trendTags: checked })}
-            />
-            <ToggleRow
-              title="Género en el póster"
-              description="Etiqueta de género en la parte inferior."
-              checked={betterPosters.showGenre}
-              onChange={checked => onBetterPostersChange({ showGenre: checked })}
-            />
-            <ToggleRow
-              title="Rating en el póster"
-              description="Estrella con puntuación en la parte inferior."
-              checked={betterPosters.showRating}
-              onChange={checked => onBetterPostersChange({ showRating: checked })}
-            />
-            <ToggleRow
-              title="Sellos de calidad"
-              description="Insignias 4K, Dolby Vision, Atmos."
-              checked={betterPosters.qualityTags}
-              onChange={checked => onBetterPostersChange({ qualityTags: checked })}
-            />
-            <ToggleRow
-              title="Clasificación por edad"
-              description="PG-13, TV-MA, R."
-              checked={betterPosters.ageRating}
-              onChange={checked => onBetterPostersChange({ ageRating: checked })}
+              title="Usar SpatialPosters"
+              description="Pósters con etiquetas de género, año, rating, ranking y logo de distribuidora. Si una imagen falla se usa el póster original de TMDB."
+              checked={spatialPosters.enabled}
+              onChange={checked => onSpatialPostersChange({ enabled: checked })}
             />
             <SelectRow
-              title="Fuente del rating"
-              value={betterPosters.ratingSource}
-              options={BETTER_POSTER_RATING_SOURCE_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
-              onChange={value => onBetterPostersChange({ ratingSource: value as BetterPosterRatingSource })}
+              title="Región"
+              description="Afecta el ranking de JustWatch, los logos y la metadata."
+              value={spatialPosters.region}
+              options={SPATIAL_REGION_OPTIONS}
+              onChange={value => onSpatialPostersChange({ region: value as SpatialPosterSettings["region"] })}
             />
             <SelectRow
               title="Idioma del póster"
-              value={betterPosters.lang}
-              options={BETTER_POSTER_LANGUAGE_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
-              onChange={value => onBetterPostersChange({ lang: value })}
+              value={spatialPosters.lang}
+              options={SPATIAL_LANG_OPTIONS}
+              onChange={value => onSpatialPostersChange({ lang: value as SpatialPosterSettings["lang"] })}
+            />
+            <ToggleRow
+              title="Etiquetas de info"
+              description="Género, año y rating sobre el póster."
+              checked={spatialPosters.globalBadges}
+              onChange={checked => onSpatialPostersChange({ globalBadges: checked })}
+            />
+            <ToggleRow
+              title="Género"
+              checked={spatialPosters.badgeGenre}
+              onChange={checked => onSpatialPostersChange({ badgeGenre: checked })}
+            />
+            <ToggleRow
+              title="Año"
+              checked={spatialPosters.badgeYear}
+              onChange={checked => onSpatialPostersChange({ badgeYear: checked })}
+            />
+            <ToggleRow
+              title="Rating"
+              checked={spatialPosters.badgeRating}
+              onChange={checked => onSpatialPostersChange({ badgeRating: checked })}
+            />
+            <SelectRow
+              title="Estilo de etiqueta"
+              value={spatialPosters.badgeStyle}
+              options={SPATIAL_BADGE_STYLE_OPTIONS}
+              onChange={value => onSpatialPostersChange({ badgeStyle: value as SpatialPosterSettings["badgeStyle"] })}
+            />
+            <ToggleRow
+              title="Etiquetas de ranking"
+              description="Insignia #N del Top 20 de JustWatch y Top 10 de streaming."
+              checked={spatialPosters.rankingBadges}
+              onChange={checked => onSpatialPostersChange({ rankingBadges: checked })}
+            />
+            <SelectRow
+              title="Estilo de ranking"
+              value={spatialPosters.rankingBadgeStyle}
+              options={SPATIAL_RANKING_BADGE_STYLE_OPTIONS}
+              onChange={value => onSpatialPostersChange({ rankingBadgeStyle: value as SpatialPosterSettings["rankingBadgeStyle"] })}
+            />
+            <ToggleRow
+              title="Sellos de calidad"
+              description="4K, HDR, Dolby Vision, IMAX."
+              checked={spatialPosters.qualityBadges}
+              onChange={checked => onSpatialPostersChange({ qualityBadges: checked })}
+            />
+            <SelectRow
+              title="Calidad a destacar"
+              value={spatialPosters.manualQuality}
+              options={SPATIAL_QUALITY_OPTIONS}
+              onChange={value => onSpatialPostersChange({ manualQuality: value as SpatialPosterSettings["manualQuality"] })}
+            />
+            <ToggleRow
+              title="Logo de la distribuidora"
+              checked={spatialPosters.networkLogo}
+              onChange={checked => onSpatialPostersChange({ networkLogo: checked })}
+            />
+            <SelectRow
+              title="Lado del ribbon"
+              value={spatialPosters.ribbonSide}
+              options={[{ value: "left", label: "Izquierda" }, { value: "right", label: "Derecha" }]}
+              onChange={value => onSpatialPostersChange({ ribbonSide: value as SpatialPosterSettings["ribbonSide"] })}
+            />
+            <ToggleRow
+              title="Desenfoque inferior"
+              checked={spatialPosters.blurEnabled}
+              onChange={checked => onSpatialPostersChange({ blurEnabled: checked })}
+            />
+            <RangeRow suffix=""
+              title="Intensidad del desenfoque"
+              value={spatialPosters.blurIntensity}
+              min={1}
+              max={40}
+              onChange={value => onSpatialPostersChange({ blurIntensity: value })}
+            />
+            <RangeRow suffix=""
+              title="Atenuación"
+              value={spatialPosters.blurFade}
+              min={0}
+              max={100}
+              onChange={value => onSpatialPostersChange({ blurFade: value })}
+            />
+            <RangeRow suffix=""
+              title="Oscuridad"
+              value={spatialPosters.blurDarkness}
+              min={0}
+              max={100}
+              onChange={value => onSpatialPostersChange({ blurDarkness: value })}
+            />
+            <RangeRow suffix=""
+              title="Altura del degradado"
+              value={spatialPosters.gradientHeight}
+              min={5}
+              max={100}
+              onChange={value => onSpatialPostersChange({ gradientHeight: value })}
             />
           </PillBlock>
 
@@ -1332,6 +1517,31 @@ function ContentOrientationControl({ value, onChange }: { value: ContentOrientat
   );
 }
 
+function BothPreferenceControl({ value, onChange }: { value: BothContentPreference; onChange: (value: BothContentPreference) => void }) {
+  const options: Array<{ value: BothContentPreference; label: string }> = [
+    { value: "anime", label: "Anime" },
+    { value: "movies-series", label: "Series y películas" },
+  ];
+
+  return (
+    <div className="grid gap-2 rounded-[26px] border border-white/10 bg-white/[0.055] p-2 sm:grid-cols-2">
+      {options.map(option => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={clsx(
+            "gsap-transition rounded-full px-4 py-3 text-sm font-black",
+            value === option.value ? "bg-white text-black" : "text-white/54 hover:bg-white/10 hover:text-white",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function AddonsPanel({ installedCount, enabledCount, onOpenAddons }: { installedCount: number; enabledCount: number; onOpenAddons: () => void }) {
   return (
     <PanelScaffold title="Complementos">
@@ -1388,6 +1598,16 @@ function PlaybackPanel({
           <SelectRow title="Idioma de audio secundario" value={playback.secondAudioLanguage} options={LANGUAGE_OPTIONS} onChange={value => onPlaybackChange("secondAudioLanguage", value)} />
           <SelectRow title="Idioma de subtítulos preferido" value={playback.preferredSubtitleLanguage} options={LANGUAGE_OPTIONS} onChange={value => onPlaybackChange("preferredSubtitleLanguage", value)} />
           <SelectRow title="Idioma de subtítulos secundario" value={playback.secondSubtitleLanguage} options={LANGUAGE_OPTIONS} onChange={value => onPlaybackChange("secondSubtitleLanguage", value)} />
+          <SelectRow
+            title="Sincronización automática de subtítulos"
+            value={playback.autoSubtitleSync}
+            options={[
+              { value: "learned", label: "Solo títulos ya sincronizados" },
+              { value: "on", label: "Todos los títulos" },
+              { value: "off", label: "Nunca" },
+            ]}
+            onChange={value => onPlaybackChange("autoSubtitleSync", value as PlaybackPreferences["autoSubtitleSync"])}
+          />
         </PillBlock>
 
         <PillBlock title="SELECCION DE STREAM">
@@ -1473,7 +1693,7 @@ function PlaybackPanel({
           {playback.nextEpisodeThresholdMode === "minutes" ? (
             <RangeRow
               title="Minutos antes del final"
-              description="Pasar automáticamente al siguiente episodio cuando queden estos minutos. Igual que NuvioTV (0-3.5 min)."
+              description="Pasar automáticamente al siguiente episodio cuando queden estos minutos (0-3.5 min)."
               value={playback.nextEpisodeThresholdMinutesBeforeEnd}
               min={0}
               max={3.5}
@@ -1484,7 +1704,7 @@ function PlaybackPanel({
           ) : (
             <RangeRow
               title="Porcentaje de umbral"
-              description="Pasar automáticamente al siguiente episodio cuando la reproducción alcance este porcentaje. Si hay outro detectado y termina pegado al final, se dispara al empezar los créditos (igual que NuvioTV)."
+              description="Pasar automáticamente al siguiente episodio cuando la reproducción alcance este porcentaje. Si hay outro detectado y termina pegado al final, se dispara al empezar los créditos."
               value={playback.nextEpisodeThresholdPercent}
               min={97}
               max={100}
@@ -1503,7 +1723,7 @@ function PlaybackPanel({
           />
           <RangeRow
             title="Umbral de película"
-            description="Mostrar la recomendación cuando la película alcance este porcentaje (igual que NuvioTV: 80-100%). Si hay créditos detectados, se dispara al empezar los créditos."
+              description="Mostrar la recomendación cuando la película alcance este porcentaje (80-100%). Si hay créditos detectados, se dispara al empezar los créditos."
             value={playback.postPlayMovieThresholdPercent}
             min={80}
             max={100}
@@ -1733,9 +1953,9 @@ function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: () =>
   );
 }
 
-function SelectRow({ title, value, options, onChange }: { title: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
+function SelectRow({ title, description, value, options, onChange }: { title: string; description?: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
   return (
-    <PillRow title={title}>
+    <PillRow title={title} description={description}>
       <select
         value={value}
         onChange={event => onChange(event.target.value)}
@@ -1743,6 +1963,21 @@ function SelectRow({ title, value, options, onChange }: { title: string; value: 
       >
         {options.map(option => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}
       </select>
+    </PillRow>
+  );
+}
+
+function TextInputRow({ title, description, value, maxLength, placeholder, onChange }: { title: string; description?: string; value: string; maxLength: number; placeholder: string; onChange: (value: string) => void }) {
+  return (
+    <PillRow title={title} description={description}>
+      <input
+        type="text"
+        value={value}
+        maxLength={maxLength}
+        placeholder={placeholder}
+        onChange={event => onChange(event.target.value)}
+        className="w-[240px] rounded-full border border-white/12 bg-[#171719] px-4 py-2.5 text-sm font-semibold text-white outline-none placeholder:text-white/30 gsap-transition focus:border-white/34"
+      />
     </PillRow>
   );
 }
@@ -1869,6 +2104,7 @@ function getInitialAccountView(search: string): AccountView {
   if (tab === "services") return "integrations";
   if (tab === "trakt") return "trakt";
   if (tab === "mdblist") return "mdblist";
+  if (tab === "seekr") return "seekr";
   return "overview";
 }
 

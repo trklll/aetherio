@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, Image as ImageIcon, X } from "lucide-react";
+import { Check } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
-import { buildBetterPosterUrl } from "../../config/betterPosters";
+import {
+  buildSpatialPosterUrl,
+  getSpatialPosterSettings,
+  isSpatialPostersConfigured,
+} from "../../config/spatialPosters";
+import { GAMEPAD_ACTION_EVENT } from "../../hooks/useGamepad";
 import type { MediaItem } from "../../types/ui";
 import type { HomeCardArtworkMode } from "../../utils/homeCardArtwork";
 import { tweenTo } from "../../utils/motion";
+import { getContextGlassStyle } from "../../components/ui/glassSurface";
 
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
@@ -14,6 +20,14 @@ interface ArtworkOption {
   preview: string;
   label: string;
   score: number;
+  empty?: boolean;
+}
+
+export interface CardArtworkPickerOption {
+  url: string;
+  label: string;
+  preview?: string;
+  empty?: boolean;
 }
 
 interface CardArtworkPickerProps {
@@ -22,6 +36,11 @@ interface CardArtworkPickerProps {
   type: string;
   mode: HomeCardArtworkMode;
   currentUrl?: string;
+  extraOptions?: CardArtworkPickerOption[];
+  fetchTmdbOptions?: boolean;
+  emptyOptionLabel?: string;
+  titleOverride?: string;
+  descriptionOverride?: string;
   onSelect: (url: string) => void;
   onClose: () => void;
 }
@@ -75,12 +94,13 @@ async function resolveTmdbId(item: MediaItem, type: string) {
   return null;
 }
 
-function betterPosterOption(item: MediaItem): ArtworkOption | null {
-  const imdb = imdbId(item.id);
-  if (!imdb) return null;
+function spatialPosterOption(tmdbId: number, type: string): ArtworkOption | null {
+  const settings = getSpatialPosterSettings();
+  if (!isSpatialPostersConfigured(settings)) return null;
   try {
-    const url = buildBetterPosterUrl(imdb);
-    return { url, preview: url, label: "BetterPosters", score: Number.MAX_SAFE_INTEGER - 1 };
+    const url = buildSpatialPosterUrl(tmdbId, type, settings);
+    if (!url) return null;
+    return { url, preview: url, label: "SpatialPosters", score: Number.MAX_SAFE_INTEGER - 1 };
   } catch {
     return null;
   }
@@ -117,10 +137,16 @@ export default function CardArtworkPicker({
   type,
   mode,
   currentUrl,
+  extraOptions,
+  fetchTmdbOptions = true,
+  emptyOptionLabel,
+  titleOverride,
+  descriptionOverride,
   onSelect,
   onClose,
 }: CardArtworkPickerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const optionRefs = useRef(new Map<string, HTMLButtonElement>());
   const [options, setOptions] = useState<ArtworkOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -128,11 +154,34 @@ export default function CardArtworkPicker({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape" && event.key !== "Esc" && event.key !== "Backspace" && event.code !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    const onGamepadAction = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id !== "back") return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+    };
   }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open || !options.length) return;
+    const focusUrl = options.find(option => option.url === currentUrl)?.url ?? options[0].url;
+    const frame = window.requestAnimationFrame(() => {
+      if (panelRef.current?.contains(document.activeElement)) return;
+      optionRefs.current.get(focusUrl)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentUrl, open, options]);
 
   useEffect(() => {
     if (!open) return;
@@ -147,15 +196,32 @@ export default function CardArtworkPicker({
       setLoading(true);
       setError("");
       const initial = optionFromUrl(currentUrl, "Actual");
-      setOptions(uniqueOptions([initial]));
+      const supplied = (extraOptions ?? []).map((option, index): ArtworkOption => ({
+        url: option.url,
+        preview: option.preview ?? option.url,
+        label: option.label || `Opción ${index + 1}`,
+        score: Number.MAX_SAFE_INTEGER - index,
+        empty: option.empty,
+      }));
+      const emptyOption = emptyOptionLabel
+        ? { url: "", preview: "", label: emptyOptionLabel, score: Number.MAX_SAFE_INTEGER, empty: true }
+        : null;
+      const baseOptions = uniqueOptions([emptyOption, initial, ...supplied]);
+      setOptions(baseOptions);
+
+      if (!fetchTmdbOptions) {
+        if (!baseOptions.length) setError("No hay imágenes disponibles para este medio.");
+        setLoading(false);
+        return;
+      }
 
       try {
-        // Opción BetterPosters (solo pósters con IMDb id): va primero para poder
-        // volver al póster con etiquetas aunque el default cambie.
-        const betterOption = mode === "poster" ? betterPosterOption(item) : null;
-        if (betterOption && !cancelled) setOptions(uniqueOptions([initial, betterOption]));
         const tmdbId = await resolveTmdbId(item, type);
         if (!tmdbId) throw new Error("No se pudo identificar este medio en TMDB.");
+        // Opción SpatialPosters: va primera para poder volver al póster con
+        // etiquetas aunque el default cambie.
+        const spatialOption = mode === "poster" ? spatialPosterOption(tmdbId, type) : null;
+        if (spatialOption && !cancelled) setOptions(uniqueOptions([initial, spatialOption]));
         let data = await tmdbFetch<any>(`/${tmdbMediaType(type)}/${tmdbId}/images`, {
           params: { include_image_language: "es,en,null" },
         });
@@ -176,7 +242,7 @@ export default function CardArtworkPicker({
           .sort((a, b) => b.score - a.score)
           .slice(0, 36);
         if (!cancelled) {
-          const merged = uniqueOptions([initial, betterOption, ...fetched]);
+          const merged = uniqueOptions([emptyOption, initial, ...supplied, spatialOption, ...fetched]);
           setOptions(merged);
           if (!merged.length) setError("TMDB no devolvió imágenes para este medio.");
         }
@@ -189,14 +255,14 @@ export default function CardArtworkPicker({
 
     void loadOptions();
     return () => { cancelled = true; };
-  }, [currentUrl, item, mode, open, type]);
+  }, [currentUrl, emptyOptionLabel, extraOptions, fetchTmdbOptions, item, mode, open, type]);
 
-  const title = mode === "poster" ? "Póster de la card" : mode === "logo" ? "Logo de la card" : "Fondo de la card";
-  const description = mode === "poster"
-    ? "Elige el póster vertical que se mostrará en las rows del Home."
+  const title = titleOverride ?? (mode === "poster" ? "Póster de la card" : mode === "logo" ? "Logo de la card" : "Fondo de la card");
+  const description = descriptionOverride ?? (mode === "poster"
+    ? `Escoge el póster para ${item.name}`
     : mode === "logo"
-    ? "Elige el logo que se mostrará en las cards del Home."
-    : "Elige el fondo horizontal que se mostrará en las rows del Home.";
+    ? `Escoge el logo para ${item.name}`
+    : `Escoge el fondo para ${item.name}`);
   const gridStyle = useMemo(() => mode === "poster"
     ? { gridTemplateColumns: "repeat(auto-fill, minmax(138px, 1fr))" }
     : mode === "logo"
@@ -223,34 +289,29 @@ export default function CardArtworkPicker({
     >
       <div
         ref={panelRef}
-        className="liquid-glass-dark"
+        className="artwork-picker__panel"
+        data-aetherio-context-menu
+        data-artwork-picker
+        data-spatial-modal
+        role="dialog"
+        aria-modal="true"
+        aria-label={description}
         onClick={event => event.stopPropagation()}
         style={{
+          ...getContextGlassStyle(),
           width: "min(920px, calc(100vw - 80px))",
           maxHeight: "min(78vh, 680px)",
           overflowY: "auto",
           position: "relative",
-          borderRadius: 20,
+          borderRadius: 16,
           padding: 28,
-          boxShadow: "0 26px 90px rgba(0,0,0,0.62)",
           opacity: 0,
           transform: "scale(0.985)",
         }}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Cerrar selector"
-          style={{ position: "absolute", top: 14, right: 14, width: 30, height: 30, border: "none", borderRadius: 999, background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.68)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-        >
-          <X size={16} />
-        </button>
-        <div style={{ paddingRight: 42, marginBottom: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <ImageIcon size={18} style={{ color: "rgba(255,255,255,0.72)" }} />
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#fff" }}>{title}</h2>
-          </div>
-          <p style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.5, color: "rgba(255,255,255,0.58)" }}>{item.name} · {description}</p>
+        <div style={{ marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#fff" }}>{title}</h2>
+          <p style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.5, color: "rgba(255,255,255,0.58)" }}>{description}</p>
         </div>
 
         {loading && !options.length ? (
@@ -266,6 +327,10 @@ export default function CardArtworkPicker({
               <button
                 key={`${option.url}-${index}`}
                 type="button"
+                ref={element => {
+                  if (element) optionRefs.current.set(option.url, element);
+                  else optionRefs.current.delete(option.url);
+                }}
                 onClick={() => onSelect(option.url)}
                 style={{
                   position: "relative",
@@ -280,7 +345,11 @@ export default function CardArtworkPicker({
                   boxShadow: active ? "0 0 0 2px rgba(255,255,255,0.14)" : "none",
                 }}
               >
-                <img src={option.preview} alt="" loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                {option.empty ? (
+                  <div style={{ position: "absolute", inset: 0, background: "linear-gradient(145deg, rgba(255,255,255,0.12), rgba(0,0,0,0.42))" }} />
+                ) : (
+                  <img src={option.preview} alt="" loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                )}
                 <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.72), transparent 46%)" }} />
                 <div style={{ position: "absolute", left: 10, right: 10, bottom: 9, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.9)" }}>{option.label}</span>

@@ -6,8 +6,10 @@ import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
-import { applyBetterPosterToUrl, extractImdbId } from "../../config/betterPosters";
+import SpatialPosterImage from "../../components/SpatialPosterImage";
+import { applySpatialPosterToUrl, extractTmdbId } from "../../config/spatialPosters";
 import { sanitizeLogoUrl } from "../../utils/artwork";
+import { buildDetailPath } from "../../utils/bigPictureDetail";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 
 const IMG = "https://image.tmdb.org/t/p";
@@ -24,7 +26,7 @@ function upgradeTmdbImage(url: string | undefined, size: "w780" | "w500" = "w500
 
 function normalizeMediaItem(item: MediaItem): MediaItem {
   const upgradedPoster = upgradeTmdbImage(item.poster, "w500");
-  const better = applyBetterPosterToUrl(upgradedPoster, extractImdbId(item.id));
+  const better = applySpatialPosterToUrl(upgradedPoster, extractTmdbId(item.id), item.type);
   return {
     ...item,
     poster: better ?? upgradedPoster,
@@ -270,7 +272,7 @@ function CatalogGridCard({
       description: item.description,
       year: item.year,
     });
-    navigate(`/detail/${encodeURIComponent(type)}/${encodeURIComponent(item.id)}`);
+    navigate(buildDetailPath(type, item.id));
   };
 
   return (
@@ -279,10 +281,10 @@ function CatalogGridCard({
       onClick={openDetail}
       style={{ position: "relative", width, height, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", contentVisibility: "auto", containIntrinsicSize: `${width}px ${height}px` }}
     >
-      {image ? (
-        <img src={image} alt={item.name} loading="lazy" decoding="async" onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-      ) : null}
-      {posterLayout !== "vertical" ? <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top,rgba(0,0,0,0.86) 0%,rgba(0,0,0,0.12) 62%,transparent 100%)", pointerEvents: "none" }} /> : null}
+       {image ? (
+         <SpatialPosterImage src={image} alt={item.name} loading="lazy" decoding="async" onError={() => { if (fallback) setFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+       ) : null}
+       {posterLayout !== "vertical" ? <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top,rgba(0,0,0,0.86) 0%,rgba(0,0,0,0.12) 62%,transparent 100%)", pointerEvents: "none" }} /> : null}
       {posterLayout !== "vertical" ? <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 10px 10px" }}>
         {logo ? (
           <img src={logo} alt={item.name} loading="lazy" decoding="async" style={{ maxHeight: 28, maxWidth: 142, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 4 }} />

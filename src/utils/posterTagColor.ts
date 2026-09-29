@@ -1,13 +1,16 @@
 /**
  * Color sólido para el tag de horario ("Cada domingo") con el mismo rol que
- * el tag #Hoy de BTTTR: tinte oscuro extraído de la franja superior del
- * póster, como hace btttr con la paleta de la película.
+ * el tag #Hoy de SpatialPosters: tinte oscuro extraído de la franja superior del
+ * póster, con la misma paleta de la película.
  *
- * - Solo muestrea image.tmdb.org (sirve CORS; cualquier otra fuente teñiría
- *   el canvas y se cae al fallback).
+ * - El muestreo pasa por el proxy de imágenes del servidor, que añade CORS
+ *   (image.tmdb.org no envía Access-Control-Allow-Origin y el canvas quedaría
+ *   teñido). Sin proxy, cualquier otra fuente teñiría el canvas y se cae al
+ *   fallback.
  * - Nunca lanza: ante cualquier duda devuelve null y el llamador usa el
  *   fallback sólido neutro.
  */
+import { getTmdbImageProxyUrl } from "../config/apiKeys";
 
 const cache = new Map<string, string>();
 const inflight = new Map<string, Promise<string | null>>();
@@ -16,7 +19,7 @@ function isTmdbImageUrl(url: string | undefined | null): url is string {
   return Boolean(url && /https:\/\/image\.tmdb\.org\/t\/p\//i.test(url));
 }
 
-/** Primera URL muestreable entre las candidatas (original TMDB antes que BTTTR). */
+/** Primera URL muestreable entre las candidatas (original TMDB antes que SpatialPosters). */
 export function pickSamplablePosterUrl(...candidates: Array<string | undefined | null>): string | null {
   return candidates.find(isTmdbImageUrl) ?? null;
 }
@@ -47,8 +50,7 @@ function sampleTopStripColor(url: string): Promise<string | null> {
     const timer = window.setTimeout(() => finish(null), 8000);
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => {
-      window.clearTimeout(timer);
+    img.onload = () => {      window.clearTimeout(timer);
       try {
         const naturalW = img.naturalWidth || 1;
         const naturalH = img.naturalHeight || 1;
@@ -96,6 +98,7 @@ function sampleTopStripColor(url: string): Promise<string | null> {
       window.clearTimeout(timer);
       finish(null);
     };
-    img.src = url;
+    // image.tmdb.org no envía CORS: muestrear a través del proxy del servidor.
+    img.src = getTmdbImageProxyUrl(url) ?? url;
   });
 }
