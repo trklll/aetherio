@@ -55,6 +55,7 @@ import {
   getSpatialPosterSettings,
   saveSpatialPosterSettings,
   SPATIAL_BADGE_STYLE_OPTIONS,
+  DEFAULT_SPATIAL_POSTER_INSTANCE_URL,
   SPATIAL_LANG_OPTIONS,
   SPATIAL_QUALITY_OPTIONS,
   SPATIAL_RANKING_BADGE_STYLE_OPTIONS,
@@ -1296,16 +1297,16 @@ function DesignPanel({
             <TextInputRow
               title="URL de la instancia"
               description={spatialPosters.instanceUrl
-                ? "Conectando con tu instancia de SpatialPosters."
-                : "Sin configurar: los pósters usan las imágenes originales de TMDB."}
+                ? "Ya viene apuntando a tu instancia local. Cambiala solo si la moviste a otra máquina o puerto."
+                : "Sin instancia: los pósters usan las imágenes originales de TMDB."}
               value={spatialPosters.instanceUrl}
               maxLength={300}
-              placeholder="http://localhost:3000"
+              placeholder={DEFAULT_SPATIAL_POSTER_INSTANCE_URL}
               onChange={value => onSpatialPostersChange({ instanceUrl: value })}
             />
             <ToggleRow
               title="Usar SpatialPosters"
-              description="Pósters con etiquetas de género, año, rating, ranking y logo de distribuidora. Si una imagen falla se usa el póster original de TMDB."
+              description="Pósters con etiquetas de género, año, rating, ranking y logo de distribuidora. Si la instancia no está corriendo, se usan los pósters originales de TMDB."
               checked={spatialPosters.enabled}
               onChange={checked => onSpatialPostersChange({ enabled: checked })}
             />

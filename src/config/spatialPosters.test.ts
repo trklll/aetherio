@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   applySpatialPosterToUrl,
   buildSpatialPosterUrl,
+  DEFAULT_SPATIAL_POSTER_INSTANCE_URL,
   DEFAULT_SPATIAL_POSTER_SETTINGS,
   extractTmdbId,
+  getSpatialPosterSettings,
   isSpatialPosterUrl,
   isSpatialPostersConfigured,
   normalizeInstanceUrl,
@@ -11,6 +13,15 @@ import {
   spatialPosterType,
   type SpatialPosterSettings,
 } from "./spatialPosters";
+import { probeSpatialInstance, resetSpatialAvailability } from "../services/spatialInstance";
+
+// Sin esto, getSpatialPosterSettings() leeria el localStorage de un test previo,
+// y la disponibilidad de la instancia (cache a nivel de modulo) se filtraria
+// de un describe al siguiente.
+beforeEach(() => {
+  try { localStorage.clear(); } catch { /* sin DOM */ }
+  resetSpatialAvailability();
+});
 
 const BASE: SpatialPosterSettings = {
   ...DEFAULT_SPATIAL_POSTER_SETTINGS,
@@ -20,6 +31,60 @@ const BASE: SpatialPosterSettings = {
 function paramsOf(url: string | undefined): URLSearchParams {
   return new URL(url!).searchParams;
 }
+
+describe("plug and play", () => {
+  it("viene con la instancia local por defecto: no hay nada que configurar", () => {
+    expect(DEFAULT_SPATIAL_POSTER_SETTINGS.enabled).toBe(true);
+    expect(DEFAULT_SPATIAL_POSTER_SETTINGS.instanceUrl).toBe(DEFAULT_SPATIAL_POSTER_INSTANCE_URL);
+    expect(DEFAULT_SPATIAL_POSTER_INSTANCE_URL).toBe("http://localhost:3000");
+    // Y con los defaults tal cual ya produce una URL utilizable.
+    expect(isSpatialPostersConfigured(DEFAULT_SPATIAL_POSTER_SETTINGS)).toBe(true);
+    expect(buildSpatialPosterUrl(155, "movie", DEFAULT_SPATIAL_POSTER_SETTINGS))
+      .toContain("http://localhost:3000/api/poster/movie/155?");
+  });
+
+  it("un ajuste guardado sin instanceUrl cae al default, no queda apagado", () => {
+    // Ajustes viejos o de otro perfil no deben dejar la app sin posters.
+    expect(getSpatialPosterSettings()).toEqual(DEFAULT_SPATIAL_POSTER_SETTINGS);
+  });
+});
+
+describe("instancia caida", () => {
+  it("no emite ninguna URL si ya sabemos que la instancia esta caida", async () => {
+    // Cubre TODOS los llamadores: hook, Home, Catalog, Detail y el picker.
+    const down = (async () => { throw new TypeError("Failed to fetch"); }) as typeof fetch;
+    await expect(probeSpatialInstance(BASE.instanceUrl, down)).resolves.toBe(false);
+
+    expect(buildSpatialPosterUrl(155, "movie", BASE)).toBeUndefined();
+    expect(applySpatialPosterToUrl("https://img.tmdb.org/x.jpg", 155, "movie", BASE))
+      .toBe("https://img.tmdb.org/x.jpg");
+  });
+
+  it("vuelve a emitir URLs cuando la instancia se levanta", async () => {
+    const down = (async () => { throw new TypeError("Failed to fetch"); }) as typeof fetch;
+    const up = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+    await probeSpatialInstance(BASE.instanceUrl, down);
+    expect(buildSpatialPosterUrl(155, "movie", BASE)).toBeUndefined();
+
+    // La caída se cachea 20 s a propósito: no se wantalear el puerto. Pasado
+    // ese TTL el siguiente sondeo reintenta y, si responde, se reactiva solo.
+    resetSpatialAvailability();
+    await probeSpatialInstance(BASE.instanceUrl, up);
+    expect(buildSpatialPosterUrl(155, "movie", BASE)).toContain("/api/poster/movie/155?");
+  });
+
+  it("durante el TTL de caída no vuelve a tocar el puerto", async () => {
+    let attempts = 0;
+    const counted = (async () => {
+      attempts += 1;
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+    await probeSpatialInstance(BASE.instanceUrl, counted);
+    await probeSpatialInstance(BASE.instanceUrl, counted);
+    await probeSpatialInstance(BASE.instanceUrl, counted);
+    expect(attempts).toBe(1);
+  });
+});
 
 describe("normalizeInstanceUrl", () => {
   it("añade esquema y quita el slash final", () => {

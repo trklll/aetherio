@@ -4,11 +4,16 @@ import {
   extractTmdbId,
   isSpatialPosterUrl,
   isSpatialPostersConfigured,
+  normalizeInstanceUrl,
   spatialPosterSignature,
   useSpatialPosterSettings,
   type SpatialPosterOverrides,
   type SpatialPosterSettings,
 } from "../config/spatialPosters.ts";
+import {
+  getKnownSpatialAvailability,
+  probeSpatialInstance,
+} from "../services/spatialInstance.ts";
 import {
   getReadyPosterArtwork,
   isPosterArtworkFailed,
@@ -51,8 +56,28 @@ export function useSpatialPoster(
 
   const enabled = isSpatialPostersConfigured(settings) && !disabled;
   const tmdbId = enabled ? extractTmdbId(mediaId) : null;
+  const instanceUrl = enabled ? normalizeInstanceUrl(settings.instanceUrl) : "";
 
-  const targetUrl = enabled && tmdbId
+  // La instancia puede no estar levantada. Si ya lo sabemos, apagamos el
+  // pipeline al instante (sin un probe por cada poster); si no, se sondea una
+  // vez y el resultado se comparte entre todas las cards.
+  const knownUp = instanceUrl ? getKnownSpatialAvailability(instanceUrl) : null;
+  const [up, setUp] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!instanceUrl || knownUp !== null) return;
+    let cancelled = false;
+    void probeSpatialInstance(instanceUrl).then(ok => { if (!cancelled) setUp(ok); });
+    return () => { cancelled = true; };
+  }, [instanceUrl, knownUp]);
+  // Mientras no se sepa, se usa el póster de TMDB. Ser pesimista a propósito:
+  // si la instancia está caída así no sale ni una petición fallida hacia un
+  // puerto muerto, en vez de pintar 300 URLs rotas y que cada onError las
+  // vaya corrigiendo una por una. Con la instancia arriba el sondeo es rápido
+  // y el intercambio de TMDB a SpatialPosters es invisible (misma arte).
+  const instanceUp = knownUp ?? up;
+  const usable = Boolean(instanceUrl) && instanceUp === true;
+
+  const targetUrl = usable && tmdbId
     ? applySpatialPosterToUrl(basePosterUrl, tmdbId, mediaType, settings, overrides)
     : basePosterUrl;
   const isSpatial = isSpatialPosterUrl(targetUrl);
@@ -69,7 +94,7 @@ export function useSpatialPoster(
     return () => { cancelled = true; };
   }, [failedTarget, isSpatial, readyTarget, settings, signature, targetUrl, verification?.url]);
 
-  if (!enabled || !tmdbId || !isSpatial) {
+  if (!enabled || !tmdbId || !usable || !isSpatial) {
     return { url: basePosterUrl, original: undefined, pending: false };
   }
   if (targetUrl) {

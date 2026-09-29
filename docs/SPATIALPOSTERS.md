@@ -83,6 +83,15 @@ LOG_LEVEL=info
 
 > **Requisito:** sin `TMDB_BASE_URL` ni `TMDB_API_KEY` la ruta de póster responde **503**
 > (`TMDB API key is missing`) y los catálogos de ranking vienen vacíos.
+>
+> La clave real nunca está en la máquina del usuario: vive como secret del Worker y el
+> descriptor descarta cualquier `api_key` que llegue en el request. Por eso el valor del
+> `.env.local` es un texto fijo y no un secreto.
+>
+> Verificado en producción (versión `efc88f50`): 20 identificadores de prueba → **0× 401**.
+> Los que no existen devuelven el 404 real de TMDB y los que solo existen en el namespace
+> alterno (p. ej. `movie/400001`) se encuentran, porque el reintento movie↔TV ya lleva las
+> credenciales del servidor. Antes ese reintento salía sin ellas y devolvía 401.
 
 Para añadir caché persistente (Upstash, plan gratis) sin tocar el `.env.local`:
 
@@ -94,12 +103,30 @@ npm run posters:setup
 
 ## Conectar con Aetherio
 
-**Ajustes → SPATIALPOSTERS → URL de la instancia**, escribe `http://localhost:3000`.
-El ajuste es por perfil.
+**No hay que configurar nada.** Aetherio ya viene apuntando a `http://localhost:3000`, que es
+justo donde `npm run posters:start` levanta la instancia. Instalación, arranque y posters.
 
-Mientras la URL esté vacía el pipeline queda **completamente apagado**: Aetherio usa los
-pósters originales de TMDB, no hace prewarm y no espera nada en el arranque. No es un
-error de configuración, es el estado por defecto.
+El campo **Ajustes → SPATIALPOSTERS → URL de la instancia** sigue editable solo para el caso
+de que la muevas a otra máquina o puerto (NAS, otra PC, un contenedor). El ajuste es por
+perfil, pero el default ya funciona en todos.
+
+### Detección de instancia caída
+
+Como la instancia es un proceso aparte, puede no estar corriendo. Aetherio lo detecta y se
+apaga solo, sin pedir un solo póster:
+
+- Al arrancar hace **un** `GET {instancia}/manifest.json`. Es barato, no llama a TMDB, no pide
+  credenciales y viene con `Access-Control-Allow-Origin: *`.
+- Si responde, se activa el pipeline. Si no, Aetherio se queda con los pósters de TMDB y **no
+  emite ninguna URL** de la instancia: el corte está en `buildSpatialPosterUrl`, que es el
+  único punto por el que pasan el hook, las filas de Home, Catalog, Detail y el selector
+  manual.
+- TTL: 60 s si está arriba, 20 s si está caída. Con la caída cacheada no se vuelve a tocar el
+  puerto; al vencer el TTL el siguiente sondeo reintenta, así que **si levantás la instancia
+  con la app abierta, Aetherio se reconnecta solo**, sin reiniciar.
+
+Medido: con la instancia apagada, Home hizo **1 petición** a `localhost:3000` (el sondeo) y
+**0 peticiones** de pósters, en vez de ~300 URLs rotas.
 ## Parámetros que usa Aetherio
 
 Emitidos siempre: `lang` y `region` (el upstream cae en `it`/`IT` si no se especifican).

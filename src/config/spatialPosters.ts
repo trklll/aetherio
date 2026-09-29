@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getKnownSpatialAvailability } from "../services/spatialInstance.ts";
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 /**
@@ -33,7 +34,8 @@ export interface SpatialPosterSettings {
   enabled: boolean;
   /**
    * Base URL de la instancia autoalojada del usuario, sin slash final.
-   * Vacío = SpatialPosters no configurado: Aetherio usa los pósters de TMDB.
+   * Viene por defecto apuntando a la instancia local (`npm run posters:start`),
+   * asi que no hay nada que configurar para usar SpatialPosters.
    */
   instanceUrl: string;
   region: SpatialRegion;
@@ -144,9 +146,12 @@ const NUMERIC_BOUNDS = {
   logoOffsetY: { min: -100, max: 100, fallback: 0 },
 } as const;
 
+/** Instancia por defecto: la que levanta `npm run posters:start`. */
+export const DEFAULT_SPATIAL_POSTER_INSTANCE_URL = "http://localhost:3000";
+
 export const DEFAULT_SPATIAL_POSTER_SETTINGS: SpatialPosterSettings = {
   enabled: true,
-  instanceUrl: "",
+  instanceUrl: DEFAULT_SPATIAL_POSTER_INSTANCE_URL,
   region: "MX",
   lang: "es",
   globalBadges: true,
@@ -362,6 +367,11 @@ export function buildSpatialPosterUrl(
   const s = settings ?? getSpatialPosterSettings();
   const base = normalizeInstanceUrl(s.instanceUrl);
   if (!isSpatialPostersConfigured(s) || !tmdbId) return undefined;
+  // Ultimo filtro y unico que cubre todos los llamadores (hook, filas de Home,
+  // Catalog, Detail y el picker manual): si ya sabemos que la instancia esta
+  // caida, no se emite ninguna URL. Devolver undefined hace que cada consumidor
+  // se quede con su póster original de TMDB, sin tocar sus 5 call sites.
+  if (base && getKnownSpatialAvailability(base) === false) return undefined;
 
   const type = spatialPosterType(mediaType);
   const params = new URLSearchParams();

@@ -2,31 +2,30 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getTmdbApiKey, tmdbFetch } from "../config/apiKeys.ts";
 import {
-  applyBetterPosterToUrl,
-  BETTER_POSTER_CHANGED_EVENT,
-  betterPosterSignature,
-  extractImdbId,
-  getBetterPosterSettings,
-  isBetterPosterUrl,
-  type BetterPosterOverrides,
-  type BetterPosterSettings,
-} from "../config/betterPosters.ts";
-import {
-  betterMetaTypeFor,
-  parseTmdbId,
-  resolveTmdbToImdb,
-} from "../services/betterPosterResolve.ts";
-import { verifyBetterPosterUrl } from "../services/betterPosterVerify.ts";
+  applySpatialPosterToUrl,
+  extractTmdbId,
+  getSpatialPosterSettings,
+  isSpatialPostersConfigured,
+  normalizeInstanceUrl,
+  spatialPosterSignature,
+  SPATIAL_POSTER_CHANGED_EVENT,
+  type SpatialPosterOverrides,
+  type SpatialPosterSettings,
+} from "../config/spatialPosters.ts";
+import { probeSpatialInstance, resetSpatialAvailability } from "../services/spatialInstance.ts";
+import { clearSpatialRankCache, fetchSpatialRankMap, spatialRankOf } from "../services/spatialRank.ts";
+import { preloadArtworkImage, preloadPosterArtwork } from "../services/posterArtworkCache.ts";
 import { isTopFormatRow } from "../utils/topRows.ts";
 import { getMdbListSettings } from "../config/mdblist.ts";
 import {
+  fetchAnilistDiscover,
   fetchAnilistTopAnime,
   fetchAnilistAiringAnime,
   probeAnilist,
   resolveAnilistToTmdb,
 } from "../services/anilist.ts";
 import {
-  fetchJikanTopAiring,
+  fetchJikanTopMovies,
   fetchJikanUpcoming,
   fetchJikanTopFavorites,
   fetchJikanMostPopular,
@@ -38,14 +37,15 @@ import {
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
 import { HOME_CACHE_MAX_AGE, isFreshHomeCache, useCacheStore } from "../store/cacheStore.ts";
-import { homeImagePreloadConcurrency, isLowEndDevice } from "../utils/hardware.ts";
+import { homeImagePreloadConcurrency } from "../utils/hardware.ts";
 import type { CatalogRowData, MediaItem } from "../types/ui.ts";
-import { matchesContentOrientation, type ContentOrientation } from "../config/homePreferences.ts";
+import { DEFAULT_HOME_PREFERENCES, matchesContentOrientation, type BothContentPreference, type ContentOrientation } from "../config/homePreferences.ts";
 import { sanitizeLogoUrl } from "../utils/artwork.ts";
 import { dedupeAnimeHomeRows } from "../utils/animeRows.ts";
 import { readHiddenMediaKeys, refreshWatchedSeriesCache } from "../services/watchedVisibility.ts";
 import { resolveDetailBackground } from "../utils/mediaMetadata.ts";
 import { readHomeCardArtwork } from "../utils/homeCardArtwork.ts";
+import { getContinueWatchingRows } from "../utils/continueWatching.ts";
 import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
 
 const HERO_GROUP_FETCH_LIMIT = 7;
@@ -53,16 +53,18 @@ const HERO_TOTAL_LIMIT = 15;
 const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v25";
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v27";
 const HOME_BACKGROUND_IMAGE_SIZE = "w1280" as const;
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v5";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
 const HOME_RAIL_ITEM_LIMIT = 20;
+const HOME_CATALOG_REQUEST_TIMEOUT_MS = 15_000;
 const CINEMETA_HOST = "v3-cinemeta.strem.io";
 const CINEMETA_RESOLVE_CONCURRENCY = 8;
 
-// Rails cuyo orden sigue el ranking "Hoy" de BetterPosters (coincide con los
-// badges #N baked en los pósters). El resto de rails conserva su orden propio.
+// Rails cuyo orden sigue el ranking Top 20 de JustWatch de SpatialPosters
+// (coincide con los badges #N renderizados en los pósters). El resto de rails
+// conserva su orden propio.
 const RANK_SORTED_RAIL_IDS = new Set([
   "tmdb.top_movie",
   "tmdb.top_series",
@@ -70,46 +72,8 @@ const RANK_SORTED_RAIL_IDS = new Set([
   "tmdb.trending_series",
 ]);
 
-const BTTTR_RANK_TTL_MS = 1000 * 60 * 60;
 // Tiempo máximo que el ranking puede retrasar una fila (el resto sigue en background).
 const RANK_BUDGET_MS = 5000;
-const btttrRankCache = new Map<string, { at: number; map: Map<string, number> }>();
-
-/**
- * Mapa imdbId (minúsculas) → posición del ranking "Hoy" de btttr.cc, leído de
- * sus catálogos públicos (misma fuente que los badges #N de los pósters).
- */
-async function fetchBtttrRankMap(kind: "movie" | "series"): Promise<Map<string, number>> {
-  const now = Date.now();
-  const hit = btttrRankCache.get(kind);
-  if (hit && now - hit.at < BTTTR_RANK_TTL_MS) return hit.map;
-  const url = kind === "movie"
-    ? "https://btttr.cc/catalog/movie/tmdb-today.json"
-    : "https://btttr.cc/catalog/series/tmdb-today-shows.json";
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`rank catalog ${response.status}`);
-  const data = await response.json() as any;
-  const metas = Array.isArray(data?.metas) ? data.metas : [];
-  const map = new Map<string, number>();
-  metas.forEach((meta: any, index: number) => {
-    const id = String(meta?.id ?? "").toLowerCase();
-    if (!id || map.has(id)) return;
-    const rank = Number(meta?._rank);
-    map.set(id, Number.isFinite(rank) && rank > 0 ? rank : index + 1);
-  });
-  btttrRankCache.set(kind, { at: now, map });
-  return map;
-}
-
-async function rankOfItem(item: MediaItem, rankMap: Map<string, number>): Promise<number | null> {
-  const direct = extractImdbId(item.id)?.toLowerCase();
-  if (direct) return rankMap.get(direct) ?? null;
-  const tmdbId = parseTmdbId(item.id);
-  if (tmdbId == null) return null;
-  const resolved = await resolveTmdbToImdb(betterMetaTypeFor(item.type), tmdbId).catch(() => null);
-  if (!resolved) return null;
-  return rankMap.get(resolved.toLowerCase()) ?? null;
-}
 
 /**
  * Ordena por ranking ascendente e intercala los no rankeados ("Recién
@@ -145,20 +109,17 @@ function sortByRankWithInterleave(
   return merged;
 }
 
-async function sortRailByBtttrRank(items: MediaItem[], type: string): Promise<MediaItem[]> {
+async function sortRailBySpatialRank(items: MediaItem[], type: string): Promise<MediaItem[]> {
   if (items.length < 2) return items;
   const kind = type.toLowerCase() === "movie" ? "movie" : "series";
   // Presupuesto acotado: el ranking nunca debe retrasar el pintado de la fila.
-  // Lo que no se resuelva a tiempo queda como no-rankeado (intercalado) y las
-  // resoluciones pendientes siguen en segundo plano para próximas cargas.
+  // Lo que no se resuelva a tiempo queda como no-rankeado (intercalado).
   const rankMap = await withTimeout(
-    fetchBtttrRankMap(kind as "movie" | "series").catch(() => null),
+    fetchSpatialRankMap(kind as "movie" | "series").catch(() => null),
     RANK_BUDGET_MS,
   ).catch(() => null);
   if (!rankMap || !rankMap.size) return items;
-  const ranks = await Promise.all(
-    items.map(item => withTimeout(rankOfItem(item, rankMap).catch(() => null), RANK_BUDGET_MS).catch(() => null)),
-  );
+  const ranks = items.map(item => spatialRankOf(extractTmdbId(item.id), rankMap));
   if (ranks.every(rank => rank == null)) return items;
   return sortByRankWithInterleave(items, ranks);
 }
@@ -171,6 +132,18 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([promise, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
   });
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 interface HomeCatalogRequest {
@@ -211,16 +184,16 @@ function normalizeMediaItem(item: MediaItem): MediaItem {
   // rápido incluso en redes lentas; los originales de varios MB retrasaban
   // la primera pintura y alargaban los huecos negros.
   const upgraded = upgradeTmdbImage(basePoster, "w500");
-  // El override manual del usuario siempre gana: no aplicar BetterPosters encima.
+  // El override manual del usuario siempre gana: no aplicar SpatialPosters encima.
   const hasCustom = Boolean(customPoster && customPoster !== item.poster);
-  const better = hasCustom
+  const spatial = hasCustom
     ? upgraded
-    : applyBetterPosterToUrl(upgraded, extractImdbId(item.id));
+    : applySpatialPosterToUrl(upgraded, extractTmdbId(item.id), item.type);
   return {
     ...item,
-    poster: better ?? upgraded,
-    // Si BetterPosters falla (offline, 404, rate-limit), el <img> vuelve al original.
-    originalPoster: better && better !== upgraded ? upgraded : item.originalPoster,
+    poster: spatial ?? upgraded,
+    // Si SpatialPosters falla (offline, 404, rate-limit), el <img> vuelve al original.
+    originalPoster: spatial && spatial !== upgraded ? upgraded : item.originalPoster,
     background: upgradeTmdbImage(readHomeCardArtwork("background", item.type, item.id, detailBackground), HOME_BACKGROUND_IMAGE_SIZE),
     logo: sanitizeLogoUrl(upgradeTmdbImage(item.logo, "original")),
   };
@@ -254,12 +227,16 @@ function hashValue(value: string) {
   return String(hash);
 }
 
-function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
+function enabledAddonSignature(
+  addons: InstalledAddon[],
+  contentOrientation: ContentOrientation = "both",
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
+) {
   const catalogAddons = addons.filter(addon => (
     addon.enabled && Array.isArray(addon.manifest?.catalogs) && addon.manifest.catalogs.length > 0
   ));
-  const orientationTag = `|orient:${contentOrientation}`;
-  const posterTag = `|bp:${betterPosterSignature()}`;
+  const orientationTag = `|orient:${contentOrientation}:${bothPreference}`;
+  const posterTag = `|sp:${spatialPosterSignature()}`;
   // El ranking "Hoy" y sus badges cambian a diario: la firma incluye el día
   // para que el orden se regenere cada día en el primer arranque.
   const dayTag = `|d:${todayKey()}`;
@@ -283,19 +260,52 @@ function enabledAddonSignature(addons: InstalledAddon[], contentOrientation: Con
     .join("||")}${orientationTag}${posterTag}${dayTag}`;
 }
 
-function homeRailTitle(title: string | undefined, type: string) {
-  const catalogTitle = (title ?? "").trim() || "Catalogo";
+function homeRailTitle(title: string | undefined, type: string, includeType = true) {
+  const catalogTitle = ((title ?? "").trim() || "Catalogo").replace(/\s*-\s*(?:Pel[ií]culas|Series|Anime)$/i, "").trim() || "Catalogo";
+  const normalizedType = type.toLowerCase();
   const typeLabel = (() => {
-    switch (type.toLowerCase()) {
+    switch (normalizedType) {
       case "movie":
         return "Películas";
       case "series":
       case "tv":
         return "Series";
+      case "anime":
+        return "Anime";
       default:
         return type.charAt(0).toUpperCase() + type.slice(1);
     }
   })();
+  const lower = catalogTitle.toLowerCase();
+  const isMediaTop = normalizedType === "movie" || normalizedType === "series" || normalizedType === "tv";
+  if (isMediaTop && (lower === "tendencias" || lower === "trending" || lower === "en tendencia" || lower.startsWith("top ") || /^(?:Pel[ií]culas|Series) en tendencia$/i.test(catalogTitle))) {
+    return `Top ${typeLabel}`;
+  }
+  const naturalTypeTitle = /^(?:Pel[ií]culas nuevas|Series nuevas|Anime nuevo) de \d{4}$/i.test(catalogTitle)
+    || /^(?:Pel[ií]culas|Series) popular(?:es)?$/i.test(catalogTitle)
+    || /^Anime (?:en tendencia|en emisión|recomendado por la comunidad|más queridas del momento|que viene|popular)$/i.test(catalogTitle);
+  if (naturalTypeTitle) return catalogTitle;
+
+  const pluralSuffix = typeLabel === "Películas" || typeLabel === "Series" ? "es" : "";
+  if (lower === "popular") return `${typeLabel} popular${pluralSuffix}`;
+  if (/^(Netflix|Disney\+|HBO Max|Prime Video|Apple TV\+)$/i.test(catalogTitle)) return `${catalogTitle}: ${typeLabel}`;
+
+  const newYear = catalogTitle.match(/^New\s*-\s*(\d{4})$/i);
+  if (newYear) {
+    const year = newYear[1];
+    if (normalizedType === "movie") return `Películas nuevas de ${year}`;
+    if (normalizedType === "series" || normalizedType === "tv") return `Series nuevas de ${year}`;
+    if (normalizedType === "anime") return `Anime nuevo de ${year}`;
+  }
+  if (!includeType) {
+    if (lower === "en emisión") return "Anime en emisión";
+    if (lower === "la comunidad lo recomienda") return "Anime recomendado por la comunidad";
+    if (lower === "las más queridas del momento" || lower === "anime más queridas del momento" || lower === "los animes más queridos del momento") return "Los animes más queridos del momento";
+    if (lower === "lo que viene" || lower === "anime que viene" || lower === "próximos animes a estrenar") return "Próximos animes a estrenar";
+    if (lower === "las que están arrasando") return "Anime en tendencia";
+    if (lower === "fenómenos populares") return "Anime popular";
+    return catalogTitle;
+  }
   return `${catalogTitle} - ${typeLabel}`;
 }
 
@@ -670,6 +680,7 @@ function mergeHeroItems(
   tmdbItems: MediaItem[] = [],
   rows: CatalogRowData[] = [],
   contentOrientation: ContentOrientation = "both",
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
 ) {
   const candidates: MediaItem[] = [];
   const seen = new Set<string>();
@@ -707,10 +718,9 @@ function mergeHeroItems(
 
   const sorted = candidates.sort((a, b) => heroRandomValue(a) - heroRandomValue(b));
   if (contentOrientation === "both") {
-    return [
-      ...sorted.filter(item => item.type.toLowerCase() !== "anime").slice(0, 5),
-      ...sorted.filter(item => item.type.toLowerCase() === "anime").slice(0, 5),
-    ];
+    const anime = sorted.filter(item => item.type.toLowerCase() === "anime").slice(0, 5);
+    const base = sorted.filter(item => item.type.toLowerCase() !== "anime").slice(0, 5);
+    return bothPreference === "anime" ? [...anime, ...base] : [...base, ...anime];
   }
 
   const animeOnly = contentOrientation === "anime";
@@ -727,6 +737,7 @@ export async function fetchHomeRows(
   addons: InstalledAddon[],
   contentOrientation: ContentOrientation = "both",
   onPhase?: (rows: CatalogRowData[]) => void,
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
 ) {
   const enabledAddons = addons.filter(addon => addon.enabled);
   const cinemetaResolutionCache = new Map<string, Promise<MediaItem | null>>();
@@ -737,9 +748,11 @@ export async function fetchHomeRows(
       .flatMap((cat: any) => homeRequests(cat).map(async (request): Promise<CatalogRowData | null> => {
       try {
         const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
-        const response = await fetch(catalogEndpoint(base, request.catalog.type, request.catalog.id, request.extraParams));
-        if (!response.ok) return null;
-        const data = await response.json();
+        const data = await fetchJsonWithTimeout(
+          catalogEndpoint(base, request.catalog.type, request.catalog.id, request.extraParams),
+          HOME_CATALOG_REQUEST_TIMEOUT_MS,
+        );
+        if (!data) return null;
         const seen = new Set<string>();
         const normalizedItems = isCinemetaAddon(addon)
           ? await normalizeCinemetaItems(data.metas ?? [], request.catalog.type, cinemetaResolutionCache, limitCinemetaResolution)
@@ -757,7 +770,11 @@ export async function fetchHomeRows(
           addonName: addon.name,
           catalogId: request.catalog.id,
           type: request.catalog.type,
-          name: homeRailTitle(homeCatalogTitle(addon, request.catalog, request.title), request.catalog.type),
+          name: homeRailTitle(
+            homeCatalogTitle(addon, request.catalog, request.title),
+            request.catalog.type,
+            addon.id !== "aetherio-starter" && addon.id !== "tmdb",
+          ),
           subtitle: addon.name,
           extraParams: request.extraParams,
           items,
@@ -822,7 +839,7 @@ export async function fetchHomeRows(
 
     const validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
 
-    const balanced = buildBothModeRows(baseRows, validAnimeRows);
+    const balanced = buildBothModeRows(baseRows, validAnimeRows, bothPreference);
     const allEnriched = await enrichAllItemsWithLogos(balanced.flatMap(row => row.items));
     let offset = 0;
     return balanced.map(row => {
@@ -924,11 +941,11 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
       })
       .slice(0, HOME_RAIL_ITEM_LIMIT);
     if (!unsorted.length) return null;
-    // Popular/Tendencias siguen el ranking "Hoy" de BetterPosters (#N del badge),
-    // con no-rankeados ("Recién Añadida", resto) intercalados. Además esto
-    // precalienta la caché tmdb→imdb y los pósters resuelven al instante.
+    // Popular/Tendencias siguen el Top 20 de JustWatch de SpatialPosters
+    // (coincide con el badge #N renderizado en el póster), con no-rankeados
+    // ("Recién Añadida", resto) intercalados.
     const items = RANK_SORTED_RAIL_IDS.has(request.id)
-      ? await sortRailByBtttrRank(unsorted, request.type).catch(() => unsorted)
+      ? await sortRailBySpatialRank(unsorted, request.type).catch(() => unsorted)
       : unsorted;
     if (!items.length) return null;
     return {
@@ -936,7 +953,7 @@ async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
       addonName: "Aetherio",
       catalogId: request.id,
       type: request.type,
-      name: request.title,
+      name: homeRailTitle(request.title, request.type, false),
       subtitle: "Actualizado con TMDB",
       items,
     } satisfies CatalogRowData;
@@ -971,15 +988,17 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
   // Order defines dedupe precedence: lower wins.
   const anilistEntries: AnimeEntry[] = [
     { id: "mal.airing_anime", title: "En emisión", fetch: fetchAnilistAiringAnime, kind: "current", tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90) }, order: 1 },
+    { id: "mal.trending_anime", title: "Animes en tendencia", fetch: () => fetchAnilistDiscover({ sort: "TRENDING_DESC" }), kind: "other", tmdb: { sort_by: "popularity.desc" }, order: 8 },
+    { id: "mal.top_rated_anime", title: "Los animes mejor valorados", fetch: () => fetchAnilistDiscover({ sort: "SCORE_DESC" }), kind: "top", tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" }, order: 9 },
     { id: "mal.top_anime", title: "Los reyes del anime", fetch: fetchAnilistTopAnime, kind: "top", tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" }, order: 5 },
   ];
 
   const jikanEntries: AnimeEntry[] = [
     { id: "jikan.recommendations", title: "La comunidad lo recomienda", fetch: fetchJikanRecommendations, kind: "other", order: 2, tmdb: { sort_by: "vote_average.desc", "vote_count.gte": "200" } },
-    { id: "jikan.top_favorites", title: "Las más queridas del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 3, tmdb: { sort_by: "vote_count.desc" } },
-    { id: "jikan.upcoming", title: "Lo que viene", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
-    { id: "jikan.top_airing", title: "Las que están arrasando", fetch: fetchJikanTopAiring, kind: "current", order: 6, tmdb: { sort_by: "vote_count.desc", "air_date.gte": isoDate(-90), "air_date.lte": isoDate(90), "vote_count.gte": "5" } },
+    { id: "jikan.top_favorites", title: "Los animes más queridos del momento", fetch: fetchJikanTopFavorites, kind: "top", order: 3, tmdb: { sort_by: "vote_count.desc" } },
+    { id: "jikan.upcoming", title: "Próximos animes a estrenar", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
     { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "other", order: 7, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
+    { id: "jikan.top_movies", title: "Películas anime más populares", fetch: fetchJikanTopMovies, kind: "top", order: 10, tmdb: { sort_by: "popularity.desc" } },
   ];
 
   // Si AniList/Jikan están caídos (habitual: APIs gratuitas), no se queman
@@ -1046,7 +1065,12 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
   return dedupeAnimeHomeRows(allResults);
 }
 
-function buildBothModeRows(baseRows: CatalogRowData[], animeRows: CatalogRowData[]): CatalogRowData[] {
+function buildBothModeRows(
+  baseRows: CatalogRowData[],
+  animeRows: CatalogRowData[],
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
+): CatalogRowData[] {
+  if (bothPreference === "anime") return [...animeRows, ...baseRows];
   return [...baseRows, ...animeRows];
 }
 
@@ -1215,8 +1239,13 @@ function cachedHero(signature: string) {
   }));
 }
 
-export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
-  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
+export function prefetchHomeData(
+  queryClient: QueryClient,
+  addons: InstalledAddon[],
+  contentOrientation: ContentOrientation = "both",
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
+) {
+  const rowsSignature = enabledAddonSignature(addons, contentOrientation, bothPreference);
   const currentHeroSignature = heroSignature();
   const home = useCacheStore.getState().home;
   const rows = cachedRows(rowsSignature);
@@ -1235,7 +1264,7 @@ export function prefetchHomeData(queryClient: QueryClient, addons: InstalledAddo
     // aunque el anime/enrich siga en vuelo.
     queryFn: () => fetchHomeRows(addons, contentOrientation, phased => {
       queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), phased);
-    }),
+    }, bothPreference),
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
   });
@@ -1252,15 +1281,26 @@ export async function warmHomeStartup(
   queryClient: QueryClient,
   addons: InstalledAddon[],
   contentOrientation: ContentOrientation = "both",
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
   onImages?: () => void,
+  onProgress?: (progress: number) => void,
 ) {
   // Siembra caché persistida y arranca el fetch con fases (las fases pintan
   // vía setQueryData aunque el anime/enrich siga en vuelo).
-  const rowsSignature = enabledAddonSignature(addons, contentOrientation);
+  const rowsSignature = enabledAddonSignature(addons, contentOrientation, bothPreference);
   const currentHeroSignature = heroSignature();
   const home = useCacheStore.getState().home;
   const rows = cachedRows(rowsSignature);
   const hero = cachedHero(currentHeroSignature);
+
+  // Un solo sondeo, antes de nada: si SpatialPosters no esta levantado se
+  // apaga el pipeline de posters de una vez en vez de fallar una vez por
+  // poster. No bloquea el arranque (el prewarm lo espera, no esto).
+  const posterSettings = getSpatialPosterSettings();
+  if (isSpatialPostersConfigured(posterSettings)) {
+    void probeSpatialInstance(normalizeInstanceUrl(posterSettings.instanceUrl));
+  }
+
   if (rows) {
     queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), rows, { updatedAt: home?.rowsUpdatedAt });
   }
@@ -1271,7 +1311,7 @@ export async function warmHomeStartup(
     queryKey: homeCatalogKeys.rows(rowsSignature),
     queryFn: () => fetchHomeRows(addons, contentOrientation, phased => {
       queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), phased);
-    }),
+    }, bothPreference),
     staleTime: HOME_ROWS_STALE_TIME,
     gcTime: HOME_GC_TIME,
   });
@@ -1281,182 +1321,146 @@ export async function warmHomeStartup(
     staleTime: HOME_HERO_STALE_TIME,
     gcTime: HOME_GC_TIME,
   });
-  // El splash NO espera al pipeline completo: en cuanto hay filas (fase 1,
-  // caché o resultado final) se calienta lo visible y se suelta. El resto
-  // (anime, enrich, héroe) termina en background y la home lo pinta al llegar.
-  void Promise.allSettled([rowsPromise, heroPromise]);
-  await waitForInitialRows(queryClient, homeCatalogKeys.rows(rowsSignature), STARTUP_ROWS_BUDGET_MS);
+  await Promise.allSettled([rowsPromise, heroPromise]);
+  onProgress?.(0.55);
 
   const readyRows = queryClient.getQueryData<CatalogRowData[]>(homeCatalogKeys.rows(rowsSignature)) ?? [];
   const heroSource = queryClient.getQueryData<MediaItem[]>(homeCatalogKeys.hero(heroSignature())) ?? [];
-  const heroItems = mergeHeroItems(heroSource, readyRows, contentOrientation);
+  const heroItems = mergeHeroItems(heroSource, readyRows, contentOrientation, bothPreference);
 
   onImages?.();
-  // Solo lo visible bloquea la salida del splash (antes se esperaban TODAS
-  // las imágenes: cientos de descargas antes de entrar). Además se precalientan
-  // las URLs BTTTR finales: sin esto el warmup cargaba pósters TMDB que el
-  // render sustituía por BTTTR fríos nada más entrar (todo negro otra vez).
-  const visibleUrls = collectVisibleImageUrls(readyRows, heroItems);
+  const backgroundUrls = collectHomeDetailBackgroundUrls(readyRows, heroItems);
   await Promise.allSettled([
-    prewarmVisibleBetterPosters(readyRows),
-    preloadImageUrls(visibleUrls),
+    prewarmHomePosters(readyRows),
+    preloadImageUrls(backgroundUrls),
   ]);
-
-  // El resto de imágenes sigue en background sin bloquear la entrada.
-  if (!isLowEndDevice()) {
-    void (async () => {
-      try {
-        const seen = new Set(visibleUrls);
-        const rest = collectStarterHomeImageUrls(readyRows, heroItems).filter(url => !seen.has(url));
-        await preloadImageUrls(rest);
-      } catch { /* best-effort */ }
-    })();
-  } else {
-    void Promise.allSettled(collectStarterHomeImageUrls(readyRows, heroItems).map(preloadStartupImage));
-  }
-  preloadHomeImages(readyRows.slice(0, 4), heroItems);
+  onProgress?.(1);
 }
 
-/** Espera a que haya filas (fase o final) sin colgar el splash eternamente. */
-async function waitForInitialRows(
-  queryClient: QueryClient,
-  key: ReturnType<typeof homeCatalogKeys.rows>,
-  budgetMs: number,
-) {
-  const startedAt = Date.now();
-  for (;;) {
-    const data = queryClient.getQueryData<CatalogRowData[]>(key) ?? [];
-    if (data.length) return true;
-    if (Date.now() - startedAt >= budgetMs) return false;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-}
-
-const STARTUP_ROWS_BUDGET_MS = 30_000;
-
-/** URLs de lo que se ve al entrar: héroe + primeras filas (acota el splash). */
-function collectVisibleImageUrls(rows: CatalogRowData[], heroItems: MediaItem[]) {
+/** Fondos de Home y de detalle para cada medio precargado. */
+function collectHomeDetailBackgroundUrls(rows: CatalogRowData[], heroItems: MediaItem[]) {
   const urls = new Set<string>();
-  for (const item of heroItems.slice(0, 4)) {
+  for (const item of heroItems) {
     if (item.background) urls.add(item.background);
-    if (item.logo) urls.add(item.logo);
-    if (item.poster) urls.add(item.poster);
+    const detailBackground = resolveDetailBackground(item.type, item.id, item.background);
+    if (detailBackground) urls.add(detailBackground);
   }
-  for (const row of rows.slice(0, PREWARM_VISIBLE_ROWS)) {
-    for (const item of row.items.slice(0, PREWARM_VISIBLE_ITEMS)) {
+  for (const row of rows) {
+    for (const item of row.items) {
+      const detailBackground = resolveDetailBackground(item.type, item.id, item.background);
       const background = readHomeCardArtwork(
         "background",
         item.type,
         item.id,
-        resolveDetailBackground(item.type, item.id, item.background) ?? item.background,
+        detailBackground ?? item.background,
       );
-      const poster = readHomeCardArtwork("poster", item.type, item.id, item.poster);
       if (background) urls.add(background);
-      if (poster) urls.add(poster);
-      if (item.logo) urls.add(item.logo);
+      if (detailBackground) urls.add(detailBackground);
     }
+  }
+  for (const entry of getContinueWatchingRows()) {
+    const background = readHomeCardArtwork("background", entry.type, entry.id, entry.background);
+    const detailBackground = resolveDetailBackground(entry.type, entry.id, entry.background);
+    if (entry.episodeStill) urls.add(entry.episodeStill);
+    if (background) urls.add(background);
+    if (detailBackground) urls.add(detailBackground);
   }
   return [...urls];
 }
 
-const PREWARM_VISIBLE_ROWS = 6;
-const PREWARM_VISIBLE_ITEMS = 10;
-const PREWARM_BUDGET_MS = 20_000;
-const PREWARM_RESOLVE_BUDGET_MS = 8_000;
-
 /**
- * Precalienta las URLs BTTTR finales de las cards visibles (verificación
- * offscreen con el limitador compartido): al entrar, el hook las encuentra
- * ya verificadas y pinta BTTTR al instante en vez de ola TMDB→BTTTR.
+ * Presupuesto del prewarm. `warmHomeStartup` espera a esta promesa, y
+ * SpatialPosters renderiza bajo demanda (sharp es CPU-bound) con un limitador
+ * de 6 descargas por host: sin tope, un arranque con muchas filas quedaría
+ * esperando la cola de renders. Lo que no quepa se verifica igual de forma perezosa
+ * cuando la card entra en pantalla.
  */
-async function prewarmVisibleBetterPosters(rows: CatalogRowData[]) {
-  const settings = getBetterPosterSettings();
-  if (!settings.enabled) return;
-  const jobs: Array<Promise<unknown>> = [];
-  for (const row of rows.slice(0, PREWARM_VISIBLE_ROWS)) {
-    const overrides = isTopFormatRow(row) ? { trendTags: false } : undefined;
-    for (const item of row.items.slice(0, PREWARM_VISIBLE_ITEMS)) {
-      jobs.push(prewarmOneBetterPoster(item, settings, overrides));
+const PREWARM_BUDGET_MS = 6_000;
+
+/** Calienta el poster final de todos los medios de las filas cargadas. */
+async function prewarmHomePosters(rows: CatalogRowData[]) {
+  const settings = getSpatialPosterSettings();
+  if (!isSpatialPostersConfigured(settings)) return;
+  // Si la instancia no está levantada no se intenta ni un póster: el pipeline
+  // queda en los de TMDB y no se gastan los 6 s del presupuesto.
+  if (!await probeSpatialInstance(normalizeInstanceUrl(settings.instanceUrl))) return;
+  const signature = spatialPosterSignature(settings);
+  const jobs: Array<() => Promise<void>> = [];
+  for (const row of rows) {
+    const overrides = isTopFormatRow(row) ? { rankingBadges: false } : undefined;
+    for (const item of row.items) {
+      jobs.push(() => prewarmOnePoster(item, settings, signature, overrides));
     }
   }
-  await withTimeout(Promise.allSettled(jobs), PREWARM_BUDGET_MS).catch(() => undefined);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(12, jobs.length) }, async () => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      await job();
+    }
+  });
+  await withTimeout(
+    Promise.allSettled(workers),
+    PREWARM_BUDGET_MS,
+  ).catch(() => undefined);
 }
 
-async function prewarmOneBetterPoster(
+async function prewarmOnePoster(
   item: MediaItem,
-  settings: BetterPosterSettings,
-  overrides?: BetterPosterOverrides,
+  settings: SpatialPosterSettings,
+  signature: string,
+  overrides?: SpatialPosterOverrides,
 ) {
   try {
-    const base = readHomeCardArtwork("poster", item.type, item.id, item.poster);
-    let imdb = extractImdbId(item.id);
-    if (!imdb) {
-      const tmdbId = parseTmdbId(item.id);
-      if (tmdbId == null) return;
-      imdb = await withTimeout(
-        resolveTmdbToImdb(betterMetaTypeFor(item.type), tmdbId).catch(() => null),
-        PREWARM_RESOLVE_BUDGET_MS,
-      ).catch(() => null);
-      if (!imdb) return;
+    const custom = readHomeCardArtwork("poster", item.type, item.id);
+    const base = custom ?? item.poster;
+    if (!base) return;
+    if (custom) {
+      await preloadPosterArtwork(base, settings, signature);
+      return;
     }
-    const url = applyBetterPosterToUrl(base, imdb, settings, overrides);
-    if (!url || url === base || !isBetterPosterUrl(url)) return;
-    await verifyBetterPosterUrl(url).catch(() => false);
+    const tmdbId = extractTmdbId(item.id);
+    const candidate = tmdbId
+      ? applySpatialPosterToUrl(base, tmdbId, item.type, settings, overrides)
+      : base;
+    if (candidate && await preloadPosterArtwork(candidate, settings, signature)) return;
+    const fallback = item.originalPoster ?? base;
+    if (fallback && fallback !== candidate) await preloadPosterArtwork(fallback, settings, signature);
   } catch { /* prewarm best-effort: nunca rompe el arranque */ }
 }
 
-function preloadStartupImage(url: string) {
-  return new Promise<void>(resolve => {
-    const image = new Image();
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      resolve();
-    };
-    const timeout = window.setTimeout(finish, 8_000);
-    image.onload = () => {
-      // On weak hardware, `image.decode()` blocks the main thread for every
-      // large artwork and freezes the Home during warm-up. Let the browser
-      // decode lazily instead so the UI stays responsive.
-      if (isLowEndDevice()) {
-        finish();
-        return;
-      }
-      if (typeof image.decode !== "function") {
-        finish();
-        return;
-      }
-      void image.decode().catch(() => undefined).finally(finish);
-    };
-    image.onerror = finish;
-    image.decoding = "async";
-    image.src = url;
-  });
-}
 
-export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: ContentOrientation = "both") {
+export function useHomeCatalogs(
+  addons: InstalledAddon[],
+  contentOrientation: ContentOrientation = "both",
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
+  enabled = true,
+) {
   const queryClient = useQueryClient();
   // TMDB siempre disponible: key propia en directo o proxy del servidor.
-  const [tmdbReady] = useState(true);
-  // Fuerza recomputar rowsSignature (incluye ajustes BetterPosters) al cambiarlos.
+  const tmdbReady = enabled;
+  // Fuerza recomputar rowsSignature (incluye ajustes SpatialPosters) al cambiarlos.
   const [posterVersion, setPosterVersion] = useState(0);
 
   useEffect(() => {
-    const refresh = () => setPosterVersion(version => version + 1);
-    window.addEventListener(BETTER_POSTER_CHANGED_EVENT, refresh);
+    const refresh = () => {
+      // Cambiar la instancia invalida el sondeo de disponibilidad de la anterior.
+      resetSpatialAvailability();
+      clearSpatialRankCache();
+      setPosterVersion(version => version + 1);
+    };
+    window.addEventListener(SPATIAL_POSTER_CHANGED_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(BETTER_POSTER_CHANGED_EVENT, refresh);
+      window.removeEventListener(SPATIAL_POSTER_CHANGED_EVENT, refresh);
       window.removeEventListener("storage", refresh);
     };
   }, []);
 
   const rowsSignature = useMemo(
-    () => enabledAddonSignature(addons, contentOrientation),
+    () => enabledAddonSignature(addons, contentOrientation, bothPreference),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addons, contentOrientation, posterVersion],
+    [addons, contentOrientation, bothPreference, posterVersion],
   );
   const currentHeroSignature = heroSignature();
   const prevSignatureRef = useRef<string | undefined>(undefined);
@@ -1479,7 +1483,7 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
     // pintar sin esperar al anime ni al enrich; el resultado final la reemplaza.
     queryFn: () => fetchHomeRows(addons, contentOrientation, phased => {
       queryClient.setQueryData(homeCatalogKeys.rows(rowsSignature), phased);
-    }),
+    }, bothPreference),
     enabled: tmdbReady,
     initialData: initialRows,
     initialDataUpdatedAt: initialRows ? useCacheStore.getState().home?.rowsUpdatedAt : undefined,
@@ -1517,9 +1521,9 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
 
   useEffect(() => {
     if (tmdbReady) {
-      prefetchHomeData(queryClient, addons, contentOrientation);
+      prefetchHomeData(queryClient, addons, contentOrientation, bothPreference);
     }
-  }, [addons, queryClient, contentOrientation, tmdbReady]);
+  }, [addons, queryClient, contentOrientation, bothPreference, tmdbReady]);
 
   // Calienta en background el último episodio emitido de las series
   // completadas: es lo que permite ocultar vistos con episodios nuevos
@@ -1534,8 +1538,8 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
 
   const rows = rowsQuery.data ?? [];
   const heroItems = useMemo(
-    () => mergeHeroItems(heroQuery.data ?? [], rows, contentOrientation),
-    [contentOrientation, heroQuery.data, rows],
+    () => mergeHeroItems(heroQuery.data ?? [], rows, contentOrientation, bothPreference),
+    [bothPreference, contentOrientation, heroQuery.data, rows],
   );
   const usingStarterRows = rows.length > 0 && rows.every(row => row.addonId === "aetherio-starter");
 
@@ -1552,8 +1556,9 @@ export function useHomeCatalogs(addons: InstalledAddon[], contentOrientation: Co
   return {
     rows,
     heroItems,
-    loading: (rowsQuery.isLoading && !rowsQuery.data)
-      || (usingStarterRows && heroQuery.isLoading && !heroQuery.data),
+    // Las filas son la condición mínima para pintar Home. El héroe puede
+    // resolverse después y no debe cubrir una biblioteca ya disponible.
+    loading: rowsQuery.isLoading && !rowsQuery.data,
   };
 }
 
@@ -1620,32 +1625,7 @@ async function preloadImageUrls(urls: string[]) {
     while (index < urls.length) {
       const url = urls[index];
       index += 1;
-      await preloadImage(url);
+      await preloadArtworkImage(url);
     }
   }));
-}
-
-function preloadImage(url: string) {
-  return new Promise<void>(resolve => {
-    const image = new Image();
-    let settled = false;
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    image.decoding = "async";
-    image.onload = () => {
-      if (isLowEndDevice()) {
-        done();
-        return;
-      }
-      const decode = image.decode?.();
-      if (decode) void decode.then(done).catch(done);
-      else done();
-    };
-    image.onerror = () => done();
-    image.src = url;
-    if (image.complete && image.naturalWidth > 0) done();
-  });
 }
