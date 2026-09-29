@@ -112,8 +112,44 @@ pub struct PosterServerStatus {
     pub ready: bool,
     pub pid: Option<u32>,
     pub port: u16,
+    /// El usuario configuro la cache persistente en Cloudflare R2.
+    pub r2_enabled: bool,
     /// Para diagnostico cuando algo falla (recurso no empaquetado, etc).
     pub detail: Option<String>,
+}
+
+/// Credenciales de la cache persistente en Cloudflare R2.
+///
+/// Vienen del almacen de credenciales de Windows, no del binario. Si faltan,
+/// el server arranca igual y SpatialPosters sigue con su cache en memoria: R2
+/// es una mejora, no un requisito.
+fn r2_credentials() -> (bool, Vec<(&'static str, String)>) {
+    let read = |key: &str| {
+        crate::secure_credentials::read_credential(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+
+    // Las tres piezas hacen falta: sin account+access+secret no hay firma
+    // SigV4 valida, y R2 a medias es peor que no tenerlo.
+    let (Some(account), Some(access), Some(secret)) = (
+        read("r2-account-id"),
+        read("r2-access-key-id"),
+        read("r2-secret-access-key"),
+    ) else {
+        return (false, Vec::new());
+    };
+
+    let bucket = read("r2-bucket-name").unwrap_or_else(|| "spatialposters".to_string());
+    (
+        true,
+        vec![
+            ("R2_ACCOUNT_ID", account),
+            ("R2_ACCESS_KEY_ID", access),
+            ("R2_SECRET_ACCESS_KEY", secret),
+            ("R2_BUCKET_NAME", bucket),
+        ],
+    )
 }
 
 /// Carpetas donde puede estar el runtime empaquetado.
@@ -198,6 +234,7 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<PosterServerStatus, Strin
             ready: true,
             pid: None,
             port: PORT,
+            r2_enabled: r2_credentials().0,
             detail: Some("ya hay un servidor de posters escuchando en el puerto".into()),
         });
     }
@@ -227,7 +264,10 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<PosterServerStatus, Strin
                 .to_string(),
         )?;
 
-    let child = Command::new(&node)
+    let (r2_enabled, r2_env) = r2_credentials();
+
+    let mut command = Command::new(&node);
+    command
         .arg("server.js")
         .current_dir(&app_dir)
         .env("PORT", PORT.to_string())
@@ -240,9 +280,15 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<PosterServerStatus, Strin
         .env("NEXT_TELEMETRY_DISABLED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("No se pudo lanzar Node: {e}"))?;
+        .stderr(Stdio::null());
+
+    // Cache persistente de posters. Si el usuario no la configuro, el server
+    // arranca igual con su cache en memoria.
+    for (key, value) in r2_env {
+        command.env(key, value);
+    }
+
+    let child = command.spawn().map_err(|e| format!("No se pudo lanzar Node: {e}"))?;
 
     let pid = child.id();
     attach_to_kill_on_close_job(&child);
@@ -256,9 +302,10 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<PosterServerStatus, Strin
             return Ok(PosterServerStatus {
                 running: true,
                 ready: true,
-                pid: Some(pid),
-                port: PORT,
-                detail: None,
+            pid: Some(pid),
+            port: PORT,
+            r2_enabled,
+            detail: None,
             });
         }
         // Si el proceso murio, no esperemos los 20 s de ahi para nada.
@@ -292,6 +339,7 @@ pub fn status() -> PosterServerStatus {
         ready,
         pid,
         port: PORT,
+        r2_enabled: r2_credentials().0,
         detail: None,
     }
 }

@@ -1,13 +1,21 @@
-import { invokeCommand, isAndroidRuntime, isTauriRuntime } from "../runtime/platform";
+import { invokeCommand, isTauriRuntime } from "../runtime/platform";
 
-export type SecureCredentialKey = "account-session" | "anilist-access-token";
+export type SecureCredentialKey =
+  | "account-session"
+  | "anilist-access-token"
+  | "seekr-api-key"
+  // Cache persistente de posters en Cloudflare R2. Da lectura y escritura sobre
+  // el bucket, asi que va al almacen de credenciales y no al binario.
+  | "r2-account-id"
+  | "r2-access-key-id"
+  | "r2-secret-access-key"
+  | "r2-bucket-name";
 
 const CREDENTIAL_STORE_ERROR_MESSAGE =
   "No se pudo acceder al almacén seguro de Windows. Abre Aetherio desde tu sesión normal de usuario e inténtalo de nuevo.";
 
 function usesWindowsCredentialManager() {
   return isTauriRuntime()
-    && !isAndroidRuntime()
     && typeof navigator !== "undefined"
     && /windows/i.test(navigator.userAgent);
 }

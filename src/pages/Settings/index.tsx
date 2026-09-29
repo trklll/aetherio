@@ -62,6 +62,12 @@ import {
   SPATIAL_REGION_OPTIONS,
   type SpatialPosterSettings,
 } from "../../config/spatialPosters";
+import {
+  POSTER_CACHE_MESSAGES,
+  readPosterCacheConfig,
+  savePosterCacheConfig,
+  type PosterCacheConfig,
+} from "../../services/posterCacheConfig";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
 import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
@@ -1418,6 +1424,7 @@ function DesignPanel({
               max={100}
               onChange={value => onSpatialPostersChange({ gradientHeight: value })}
             />
+            <PosterCacheBlock />
           </PillBlock>
 
           <section>
@@ -1980,6 +1987,120 @@ function TextInputRow({ title, description, value, maxLength, placeholder, onCha
         className="w-[240px] rounded-full border border-white/12 bg-[#171719] px-4 py-2.5 text-sm font-semibold text-white outline-none placeholder:text-white/30 gsap-transition focus:border-white/34"
       />
     </PillRow>
+  );
+}
+
+/**
+ * Cache persistente de posters en Cloudflare R2.
+ *
+ * Opcional a proposito: sin esto SpatialPosters funciona igual, solo que
+ * arranca en frio pidiendo ~260 posters a TMDB cada vez que se abre la app.
+ */
+function PosterCacheBlock() {
+  const [config, setConfig] = useState<PosterCacheConfig | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void readPosterCacheConfig().then(value => { if (alive) setConfig(value); });
+    return () => { alive = false; };
+  }, []);
+
+  const configured = Boolean(config?.accountId && config?.accessKeyId && config?.secretAccessKey);
+
+  async function save() {
+    if (!config) return;
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      await savePosterCacheConfig(config);
+      setConfig(await readPosterCacheConfig());
+      setEditing(false);
+      setSaved(true);
+    } catch {
+      setError(POSTER_CACHE_MESSAGES.store);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!config) return null;
+
+  return (
+    <div className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <p className="text-sm font-black tracking-tight text-white">Caché persistente (R2)</p>
+        <span className="text-[11px] font-bold uppercase tracking-wide text-white/40">
+          {configured ? "Activa" : "Opcional"}
+        </span>
+      </div>
+      <p className="mb-3 text-xs leading-relaxed text-white/55">
+        Sin esto, cada arranque vuelve a descargar y renderizar todos los pósters desde
+        TMDB, y eso tarda unos 35 segundos. Con un bucket de Cloudflare R2 quedan
+        guardados entre arranques: la primera vez carga, después aparecen al instante.
+        Las credenciales se guardan en el almacén seguro de Windows, no en la app.
+      </p>
+
+      {editing ? (
+        <div className="grid gap-2">
+          {([
+            ["Account ID", "accountId", "El ID de tu cuenta de Cloudflare"],
+            ["Access Key ID", "accessKeyId", "Viene en R2 → Manage API tokens"],
+            ["Secret Access Key", "secretAccessKey", "Solo se muestra una vez al crearlo"],
+            ["Bucket", "bucketName", "Nombre del bucket R2"],
+          ] as const).map(([title, key, hint]) => (
+            <label key={key} className="grid gap-1">
+              <span className="text-[11px] font-bold uppercase tracking-wide text-white/45">{title}</span>
+              <input
+                type="text"
+                value={config[key]}
+                placeholder={hint}
+                onChange={event => setConfig({ ...config, [key]: event.target.value })}
+                className="w-full rounded-full border border-white/12 bg-[#171719] px-4 py-2.5 text-sm font-semibold text-white outline-none placeholder:text-white/25 gsap-transition focus:border-white/34"
+              />
+            </label>
+          ))}
+          {error ? <p className="text-xs font-semibold text-red-300">{error}</p> : null}
+          <div className="mt-1 flex gap-2">
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="rounded-full bg-white px-5 py-2.5 text-sm font-black text-black disabled:opacity-55 gsap-transition hover:bg-white/82"
+            >
+              {saving ? "Guardando..." : "Guardar"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setEditing(false); setError(""); setConfig({ ...config }); }}
+              className="rounded-full border border-white/14 px-5 py-2.5 text-sm font-black text-white gsap-transition hover:bg-white/10"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-semibold text-white/50">
+            {configured
+              ? `Bucket "${config.bucketName}" · guardando los pósters entre arranques.`
+              : "No configurada. Los pósters se regeneran en cada arranque."}
+          </p>
+          <button
+            type="button"
+            onClick={() => { setEditing(true); setSaved(false); }}
+            className="shrink-0 rounded-full border border-white/14 px-5 py-2.5 text-sm font-black text-white gsap-transition hover:bg-white/10"
+          >
+            {configured ? "Cambiar" : "Configurar"}
+          </button>
+        </div>
+      )}
+      {saved ? <p className="mt-2 text-xs font-semibold text-emerald-300">Guardado. Reiniciá Aetherio para que el servidor lo use.</p> : null}
+    </div>
   );
 }
 
