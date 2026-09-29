@@ -27,19 +27,32 @@ SpatialPosters (AGPL-3.0) se mantiene en su propio programa.
 dentro de Aetherio como recursos: al abrir la app el server arranca solo, y al
 cerrarla se apaga. El usuario no instala Node, no clona nada, no configura URLs.
 
-Esto vale para `npm run posters:stage` una vez (para generar los recursos) y para
-cada build de la app:
+El build de release lo hace solo: `beforeBuildCommand` en `tauri.conf.json` es
+`npm run build && npm run posters:stage`, así que no hay forma de empaquetar Aetherio
+sin los posters. Para relanzarlo a mano:
 
 ```bash
-npm run posters:stage      # empaqueta server standalone + node.exe como recursos
+npm run posters:stage
 ```
 
-Lo que se genera (y **no** se commitea, son ~60 MB y 2300+ archivos):
+Qué genera (y **no** se commitea: ~60 MB y 2300+ archivos):
 
 ```
 src-tauri/resources/spatialposters/   -> build standalone de Next.js (41 MB)
 src-tauri/resources/bin/node.exe      -> runtime Node portable (83 MB)
 ```
+
+El script es idempotente y detecta antigüedad, así que llamarlo de más no cuesta nada:
+
+| Situación | Qué hace | Medido |
+|---|---|---|
+| Todo al día | no hace nada | ~3 s |
+| Cambió un `.ts` de SpatialPosters | recompila y vuelve a copiar | ~25 s |
+| `-Force` | rehace todo | ~2 min |
+
+"Ya existe" no cuenta como "está al día": si el source de SpatialPosters cambió, se
+recompila. Sin esto la app seguiría sirviendo el server viejo indefinidamente y nadie
+se enteraría.
 
 Detalle importante: el tracer de `output: standalone` de Next copia el `.node` de
 sharp pero **no** las DLL de libvips. En el proyecto original eso no se nota porque

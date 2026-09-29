@@ -76,10 +76,56 @@ if ((Test-Path -LiteralPath $NodeExe) -and -not $Force) {
     Write-Ok "node.exe $((& $NodeExe -v).Trim())"
 }
 
-# ---------------------------------------------------------------- Build de Next
+# ------------------------------------------------- ¿Hay que recompilar?
+# "Ya existe" no es sinonimo de "esta al dia". Si el source cambio (un commit
+# de SpatialPosters, un .env.local nuevo) hay que rehacer el build, o la app
+# sigue sirviendo el server viejo sin que nadie se entere.
+function Get-NewestSourceWrite {
+    $newest = [datetime]::MinValue
+    $now = [datetime]::UtcNow
+
+    # Codigo fuente completo: cualquier .ts/.tsx/.js/.mjs bajo src.
+    $srcDir = Join-Path $Source "src"
+    if (Test-Path -LiteralPath $srcDir) {
+        Get-ChildItem -LiteralPath $srcDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in @(".ts", ".tsx", ".js", ".mjs", ".json") } |
+            ForEach-Object { if ($_.LastWriteTimeUtc -gt $newest) { $newest = $_.LastWriteTimeUtc } }
+    }
+
+    # Config de raiz: next.config.ts, package.json, tsconfig.json... Se listan
+    # por extension y no por nombre, asi que un next.config.ts nuevo no se
+    # escapa por olvidarse en esta lista.
+    Get-ChildItem -LiteralPath $Source -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".ts", ".tsx", ".js", ".mjs", ".json") } |
+        ForEach-Object { if ($_.LastWriteTimeUtc -gt $newest) { $newest = $_.LastWriteTimeUtc } }
+
+    # node_modules no se mira: se rearma entero con npm ci, no archivo por archivo.
+    return $newest
+}
+
 $standalone = Join-Path $Source ".next\standalone\server.js"
-if (-not (Test-Path -LiteralPath $standalone)) {
-    Write-Step "Compilando SpatialPosters (standalone) - puede tardar un par de minutos"
+$staged = Join-Path $ServerDir "server.js"
+$needsBuild = $true
+$reason = "no hay build standalone"
+
+if (Test-Path -LiteralPath $standalone) {
+    $needsBuild = $false
+    $reason = "el build ya esta al dia"
+    $newest = Get-NewestSourceWrite
+    $newestUtc = (Get-Item -LiteralPath $standalone).LastWriteTimeUtc
+    if ($newest -ne [datetime]::MinValue -and $newest -gt $newestUtc.AddSeconds(1)) {
+        $needsBuild = $true
+        $reason = "el source cambio despues del ultimo build"
+    }
+}
+
+if ($Force) {
+    $needsBuild = $true
+    $reason = "se pidio -Force"
+}
+
+if ($needsBuild) {
+    Write-Step "Compilando SpatialPosters (standalone) - $reason; puede tardar un par de minutos"
     Push-Location $Source
     try {
         & npm run build --if-present
@@ -87,11 +133,25 @@ if (-not (Test-Path -LiteralPath $standalone)) {
     } finally {
         Pop-Location
     }
+} else {
+    Write-Ok "Build standalone al dia ($reason)"
 }
+
 if (-not (Test-Path -LiteralPath $standalone)) {
     Write-Fail "No se encontró .next\standalone\server.js tras el build."
 }
-Write-Ok "Build standalone presente"
+
+# El staging tambien se saltea si el destino esta mas nuevo que el origen: en un
+# build de release es solo copiar 60 MB, pero en `tauri dev` se llama cada vez.
+if ((-not $Force) -and (Test-Path -LiteralPath $staged)) {
+    $stagedUtc = (Get-Item -LiteralPath $staged).LastWriteTimeUtc
+    $builtUtc = (Get-Item -LiteralPath $standalone).LastWriteTimeUtc
+    if ($stagedUtc -ge $builtUtc) {
+        Write-Ok "Recursos ya actualizados, no hace falta volver a copiar"
+        Write-Step "Listo"
+        exit 0
+    }
+}
 
 # ---------------------------------------------------------------- staging
 # Next standalone no trae ni .next/static ni public: hay que copiarlos al lado
