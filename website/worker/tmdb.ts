@@ -40,13 +40,27 @@ const TMDB_IMAGE_CACHE_TTL_SECONDS = 30 * 24 * 3600;
 const MAX_PATH_LENGTH = 256;
 
 /**
- * Techos por defecto. El de JSON va holgado a proposito: una carga de Home ya
- * paceda a unas 4 peticiones/s, asi que 120/30s deja margen para toda la
- * navegacion normal y solo corta a quien se-sale. Las imagenes van mas
- * amplias porque van cacheadas 30 dias y no gastan cuota de API.
+ * Techos por defecto.
+ *
+ * Antes eran 120/30s para JSON y 300/30s para imagenes, y ambos se rompian con
+ * un arranque en frio de SpatialPosters: el server pide ~260 posters de golpe y
+ * cada poster prueba 2-4 imagenes distintas buscando el mejor encuadre, o sea
+ * del orden de 800 peticiones de imagen en unos segundos. Medido en produccion:
+ * 218 posters ok y 40 con "TMDB fetch failed: 429".
+ *
+ * Los valores de ahora se justifican contra el limite real de TMDB (~40-50
+ * req/s), no contra lo que "funciona": 1200/30s son exactamente 40/s, el techo
+ * que la propia TMDB tolera, asi que el limite sigue frenando a un bucle
+ * runaway sin pedirle a upstream mas de lo que da. Si TMDB bajara su techo esto
+ * habria que bajar con el (los dos numeros son sobreescritura por variable de
+ * entorno: TMDB_RATE_LIMIT y TMDB_IMAGE_RATE_LIMIT).
+ *
+ * El arreglo de raiz no es este numero: es que la cache de SpatialPosters es
+ * solo en memoria, asi que el arranque en frio se repite en cada inicio de la
+ * app. Con cache persistente (Upstash) esto deja de importar.
  */
-const DEFAULT_API_RATE: RateLimitRule = { limit: 120, windowMs: 30_000 };
-const DEFAULT_IMAGE_RATE: RateLimitRule = { limit: 300, windowMs: 30_000 };
+export const DEFAULT_API_RATE: RateLimitRule = { limit: 400, windowMs: 30_000 };
+export const DEFAULT_IMAGE_RATE: RateLimitRule = { limit: 1200, windowMs: 30_000 };
 
 // Rutas TMDB: letras, dígitos, /, - y _. Sin puntos (bloquea "..").
 const TMDB_PATH_PATTERN = /^\/[A-Za-z0-9_\-/]*$/;
@@ -93,6 +107,31 @@ function rateLimitExceeded(retryAfterSeconds: number): Response {
       },
     },
   );
+}
+
+/**
+ * Espera de los reintentos ante 429/5xx del upstream. Corta a proposito: el
+ * objetivo es absorber el pico de un arranque en frio, no sostener un bucle de
+ * reintentos (justo lo que este proxy existe para impedir).
+ */
+const UPSTREAM_RETRY_DELAYS_MS = [350, 1100];
+
+/**
+ * Reintenta un fetch cuando el UPSTREAM responde 429 o 5xx.
+ *
+ * Solo envuelve la llamada a TMDB, nunca la decision del limiter: si el limite
+ * propio se agota no se reintenta aqui (la ventana de 30 s no se va a abrir
+ * reintentando), eso lo ve el cliente por su cuenta.
+ */
+async function fetchUpstreamWithRetry(input: string, init?: RequestInit): Promise<Response> {
+  let response = await fetch(input, init);
+  for (const delayMs of UPSTREAM_RETRY_DELAYS_MS) {
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable) break;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    response = await fetch(input, init);
+  }
+  return response;
 }
 
 /** Limite de la API segun env, con el valor por defecto como red de seguridad. */
@@ -195,7 +234,7 @@ async function proxyTmdbImage(clientUrl: URL, request: Request, env: ProxyEnv): 
   const decision = checkRateLimit(clientRateKey(request, "image"), imageRateRule(env));
   if (!decision.allowed) return rateLimitExceeded(decision.retryAfterSeconds);
   try {
-    upstreamResponse = await fetch(upstream.toString());
+    upstreamResponse = await fetchUpstreamWithRetry(upstream.toString());
   } catch {
     return jsonError("Imagen TMDB no disponible.", 502);
   }
@@ -287,7 +326,7 @@ async function fetchJsonCached(
 
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(upstream.toString(), {
+    upstreamResponse = await fetchUpstreamWithRetry(upstream.toString(), {
       headers: { Accept: "application/json", ...authHeaders },
     });
   } catch {

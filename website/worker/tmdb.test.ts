@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleProxyRequest } from "./tmdb";
+import { DEFAULT_API_RATE, handleProxyRequest } from "./tmdb";
 import { resetRateLimits } from "./rateLimit";
 
 const ENV = { TMDB_API_KEY: "server-key", INTRODB_TOKEN: "intro-token" };
@@ -225,19 +225,22 @@ describe("proxy: limitacion de tasa", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("acepta el limite por variable de entorno y cae al default si es invalida", async () => {
-    const fetchMock = vi.fn(async () => okJson({ id: 1 }));
-    vi.stubGlobal("fetch", fetchMock);
-    // Configuracion rota: el proxy debe seguir protegido con el default (120/30s).
-    const env = { ...ENV, TMDB_RATE_LIMIT: "no-es-un-numero" };
-    const ip = "198.51.100.6";
-    for (let i = 0; i < 120; i += 1) {
-      const res = await handleProxyRequest(reqFromIp(`/api/tmdb/movie/${i}`, ip), env);
-      expect(res?.status).toBe(200);
-    }
-    expect((await handleProxyRequest(reqFromIp("/api/tmdb/movie/999", ip), env))?.status).toBe(429);
-    expect(fetchMock).toHaveBeenCalledTimes(120);
-  });
+    it("acepta el limite por variable de entorno y cae al default si es invalida", async () => {
+      const fetchMock = vi.fn(async () => okJson({ id: 1 }));
+      vi.stubGlobal("fetch", fetchMock);
+      // Configuracion rota: el proxy debe seguir protegido con el default. Se
+      // lee la constante y no un numero fijo, para que este test no se rompa
+      // cada vez que se ajusta el techo.
+      const env = { ...ENV, TMDB_RATE_LIMIT: "no-es-un-numero" };
+      const ip = "198.51.100.6";
+      const defaultLimit = DEFAULT_API_RATE.limit;
+      for (let i = 0; i < defaultLimit; i += 1) {
+        const res = await handleProxyRequest(reqFromIp(`/api/tmdb/movie/${i}`, ip), env);
+        expect(res?.status).toBe(200);
+      }
+      expect((await handleProxyRequest(reqFromIp("/api/tmdb/movie/999", ip), env))?.status).toBe(429);
+      expect(fetchMock).toHaveBeenCalledTimes(defaultLimit);
+    });
 });
 
 describe("proxy de imágenes TMDB", () => {
@@ -320,5 +323,74 @@ describe("proxy IntroDB", () => {
     const headers = (fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined)?.headers;
     expect(headers?.Authorization).toBe("Bearer intro-token");
     expect(upstream).not.toContain("intro-token");
+  });
+});
+
+describe("reintentos ante 429 del upstream", () => {
+  beforeEach(() => {
+    resetRateLimits();
+    vi.useRealTimers();
+  });
+
+  function imageResponse(): Response {
+    return new Response("bytes", { status: 200, headers: { "Content-Type": "image/jpeg" } });
+  }
+
+  it("reintenta la imagen y sale bien si el primer intento da 429", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? new Response("slow down", { status: 429 }) : imageResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await handleProxyRequest(req("/api/tmdb-image/w500/a.jpg"), ENV);
+    expect(res?.status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it("reintenta el JSON y propaga la respuesta buena", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? new Response("slow down", { status: 429 }) : okJson({ id: 550 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await handleProxyRequest(req("/api/tmdb/movie/550"), ENV);
+    expect(res?.status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it("no reintenta de mas: 3 rechazos y devuelve el 429", async () => {
+    const fetchMock = vi.fn(async () => new Response("slow down", { status: 429 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await handleProxyRequest(req("/api/tmdb-image/w500/a.jpg"), ENV);
+    expect(res?.status).toBe(429);
+    // 1 intento + 2 reintentos, y para. Un bucle infinito seria justo lo que
+    // este proxy existe para impedir.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("no reintenta un 404: no es transitorio", async () => {
+    const fetchMock = vi.fn(async () => new Response("nope", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await handleProxyRequest(req("/api/tmdb-image/w500/a.jpg"), ENV);
+    expect(res?.status).toBe(404);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("el 429 del limite propio no se reintenta (la ventana no se abre)", async () => {
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const env = { ...ENV, TMDB_IMAGE_RATE_LIMIT: "1:30" };
+    const ip = "198.51.100.20";
+
+    expect((await handleProxyRequest(reqFromIp("/api/tmdb-image/w500/a.jpg", ip), env))?.status).toBe(200);
+    // El segundo choca con el limite y sale 429 sin tocar upstream.
+    expect((await handleProxyRequest(reqFromIp("/api/tmdb-image/w500/b.jpg", ip), env))?.status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
