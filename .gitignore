@@ -73,3 +73,14 @@ Thumbs.db
 *.temp
 *.bak
 *.orig
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# SpatialPosters empaquetado (runtime Node + server standalone).
+# Se genera con "npm run posters:stage"; son ~60 MB y 2300+ archivos.
+src-tauri/resources/spatialposters/
+src-tauri/resources/bin/

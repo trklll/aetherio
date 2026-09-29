@@ -13,6 +13,7 @@ import {
   type SpatialPosterSettings,
 } from "../config/spatialPosters.ts";
 import { probeSpatialInstance, resetSpatialAvailability } from "../services/spatialInstance.ts";
+import { ensurePosterServer } from "../services/posterServer.ts";
 import { clearSpatialRankCache, fetchSpatialRankMap, spatialRankOf } from "../services/spatialRank.ts";
 import { preloadArtworkImage, preloadPosterArtwork } from "../services/posterArtworkCache.ts";
 import { isTopFormatRow } from "../utils/topRows.ts";
@@ -1293,6 +1294,11 @@ export async function warmHomeStartup(
   const rows = cachedRows(rowsSignature);
   const hero = cachedHero(currentHeroSignature);
 
+  // El servidor de posters viaja con la app: se levanta solo. Va primero y sin
+  // await para no retrasar el arranque; el prewarm de abajo si lo espera, asi
+  // que el primer render con posters ya lo encuentra respondiendo.
+  void ensurePosterServer();
+
   // Un solo sondeo, antes de nada: si SpatialPosters no esta levantado se
   // apaga el pipeline de posters de una vez en vez de fallar una vez por
   // poster. No bloquea el arranque (el prewarm lo espera, no esto).
@@ -1381,7 +1387,9 @@ const PREWARM_BUDGET_MS = 6_000;
 async function prewarmHomePosters(rows: CatalogRowData[]) {
   const settings = getSpatialPosterSettings();
   if (!isSpatialPostersConfigured(settings)) return;
-  // Si la instancia no está levantada no se intenta ni un póster: el pipeline
+  // El server recien arrancado puede tardar un par de segundos en responder.
+  await ensurePosterServer();
+  // Si la instancia no esta levantada no se intenta ni un póster: el pipeline
   // queda en los de TMDB y no se gastan los 6 s del presupuesto.
   if (!await probeSpatialInstance(normalizeInstanceUrl(settings.instanceUrl))) return;
   const signature = spatialPosterSignature(settings);

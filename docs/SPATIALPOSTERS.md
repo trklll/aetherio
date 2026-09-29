@@ -23,12 +23,50 @@ SpatialPosters (AGPL-3.0) se mantiene en su propio programa.
 
 ## Levantar la instancia
 
-Un comando. El script hace todo: clona, instala, escribe la configuración **sin
-claves**, compila, arma el runtime standalone y arranca.
+**En la app ya no hay nada que hacer.** SpatialPosters y su runtime Node viajan
+dentro de Aetherio como recursos: al abrir la app el server arranca solo, y al
+cerrarla se apaga. El usuario no instala Node, no clona nada, no configura URLs.
+
+Esto vale para `npm run posters:stage` una vez (para generar los recursos) y para
+cada build de la app:
+
+```bash
+npm run posters:stage      # empaqueta server standalone + node.exe como recursos
+```
+
+Lo que se genera (y **no** se commitea, son ~60 MB y 2300+ archivos):
+
+```
+src-tauri/resources/spatialposters/   -> build standalone de Next.js (41 MB)
+src-tauri/resources/bin/node.exe      -> runtime Node portable (83 MB)
+```
+
+Detalle importante: el tracer de `output: standalone` de Next copia el `.node` de
+sharp pero **no** las DLL de libvips. En el proyecto original eso no se nota porque
+Node sube de `standalone/` hasta el `node_modules` completo de la raíz; al empaquetar
+no hay padre y el server muere con `ERR_DLOPEN_FAILED` (`/api/poster` → 500). Por eso
+el script copia los paquetes nativos enteros de sharp.
+
+### Ciclo de vida
+
+- **Arranca** con la app. El comando Rust `start_posters_server` lanza el proceso y
+  espera a que responda (hasta 20 s) antes de devolver, así el primer render con
+  posters ya lo encuentra vivo.
+- **Se apaga** con la app, y también si Aetherio **crashea**: el `node.exe` se asigna
+  a un Job Object de Windows con `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, así que el SO
+  lo mata aunque el proceso padre muera a la fuerza. Sin esto quedaba un node.exe
+  huérfano ocupando el puerto 3000 y ~200 MB de RAM para siempre.
+- Es **idempotente**: si ya hay algo escuchando en el puerto, no se relanza nada.
+- Si falla (recursos sin empaquetar, por ejemplo) **no rompe el arranque**: Aetherio
+  sigue con los pósters de TMDB.
+
+### Para desarrollo de SpatialPosters
+
+Estos comandos siguen existiendo para trabajar sobre el server por separado:
 
 ```bash
 npm run posters:setup     # primera vez (clonea, npm install, compila)
-npm run posters:start     # arranca
+npm run posters:start     # arranca standalone en :3000
 npm run posters           # estado + prueba real de un poster
 npm run posters:stop      # detiene
 ```
@@ -39,12 +77,9 @@ O directo:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\spatialposters.ps1 setup
 ```
 
-Para un amigo esto es **todo** lo que tiene que hacer. No crea claves, no edita
-archivos a mano, no copia configuración. Solo necesita Node 22+.
-
-Requisitos: **Node ≥ 22** (el script lo comprueba y falla con un mensaje claro).
-Instalación por defecto: `Projects\SpatialPosters`, como repo hermano. Cambiable con
-`-Path`.
+Para un amigo esto **no** hace falta: la app ya lo trae. Requisitos: **Node ≥ 22**
+(el script lo comprueba y falla con un mensaje claro). Instalación por defecto:
+`Projects\SpatialPosters`, como repo hermano. Cambiable con `-Path`.
 
 Desarrollo (rebuild automático):
 
@@ -103,12 +138,18 @@ npm run posters:setup
 
 ## Conectar con Aetherio
 
-**No hay que configurar nada.** Aetherio ya viene apuntando a `http://localhost:3000`, que es
-justo donde `npm run posters:start` levanta la instancia. Instalación, arranque y posters.
+**No hay que configurar nada.** Dos capas de plug and play:
 
-El campo **Ajustes → SPATIALPOSTERS → URL de la instancia** sigue editable solo para el caso
-de que la muevas a otra máquina o puerto (NAS, otra PC, un contenedor). El ajuste es por
+1. El server ya viene adentro y arranca solo con la app.
+2. Aetherio ya apunta a `http://localhost:3000`, que es el puerto que usa.
+
+El campo **Ajustes → SPATIALPOSTERS → URL de la instancia** sigue editable solo para
+el caso de que muevas el server a otra máquina o puerto (NAS, otra PC, un contenedor),
+o si prefieres correrlo por tu cuenta con `npm run posters:start`. El ajuste es por
 perfil, pero el default ya funciona en todos.
+
+Verificado con la configuración borrada de localStorage: 301 imágenes en Home, 203
+servidas por SpatialPosters, 0 rotas.
 
 ### Detección de instancia caída
 
