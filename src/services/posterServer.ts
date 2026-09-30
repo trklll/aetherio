@@ -23,22 +23,42 @@ const isTauri = () =>
 let started: Promise<PosterServerStatus | null> | null = null;
 
 /**
- * Arranca el server una sola vez por sesion.
+ * Arranca el server de posters una sola vez por sesion.
  *
  * Es idempotente en los dos lados: el comando Rust detecta que ya hay algo
  * escuchando en el puerto y no relanza nada. Si falla (recursos sin
  * empaquetar, por ejemplo) devuelve null en vez de romper el arranque: los
  * posters de Aetherio son un extra, no un requisito para abrir la app.
+ *
+ * `configuredUrl` es lo que el usuario tiene en Ajustes. Rust lo usa para
+ * decidir si pone su cache en medio: si la instancia se movio a otro lado, el
+ * cache se aparta.
  */
-export function ensurePosterServer(): Promise<PosterServerStatus | null> {
+export function ensurePosterServer(configuredUrl: string): Promise<PosterServerStatus | null> {
   if (!isTauri()) return Promise.resolve(null);
   if (!started) {
-    started = invoke<PosterServerStatus>("start_posters_server").catch(error => {
-      console.warn("[posters] no se pudo arrancar el servidor de posters:", error);
-      return null;
-    });
+    started = invoke<PosterServerStatus>("start_posters_server", { configuredUrl })
+      .catch(error => {
+        console.warn("[posters] no se pudo arrancar el servidor de posters:", error);
+        return null;
+      });
   }
   return started;
+}
+
+/**
+ * URL del proxy de cache, o null si no arranco.
+ *
+ * El puerto es efimero, asi que no puede estar escrito en los ajustes: se
+ * consulta en vivo. Devolver null deja la app usando la instancia directa.
+ */
+export async function getPosterCacheUrl(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    return await invoke<string | null>("poster_cache_url");
+  } catch {
+    return null;
+  }
 }
 
 export async function stopPosterServer(): Promise<void> {

@@ -5,12 +5,15 @@ import {
   DEFAULT_SPATIAL_POSTER_INSTANCE_URL,
   DEFAULT_SPATIAL_POSTER_SETTINGS,
   extractTmdbId,
+  getEffectiveInstanceUrl,
   getSpatialPosterSettings,
   isSpatialPosterUrl,
   isSpatialPostersConfigured,
   normalizeInstanceUrl,
+  setPosterCacheUrl,
   spatialPosterSignature,
   spatialPosterType,
+  usesDefaultInstance,
   type SpatialPosterSettings,
 } from "./spatialPosters";
 import { probeSpatialInstance, resetSpatialAvailability } from "../services/spatialInstance";
@@ -83,6 +86,43 @@ describe("instancia caida", () => {
     await probeSpatialInstance(BASE.instanceUrl, counted);
     await probeSpatialInstance(BASE.instanceUrl, counted);
     expect(attempts).toBe(1);
+  });
+});
+
+describe("proxy de cache en disco", () => {
+  beforeEach(() => setPosterCacheUrl(null));
+
+  it("sin proxy usa la instancia configurada", () => {
+    setPosterCacheUrl(null);
+    expect(getEffectiveInstanceUrl(BASE)).toBe(BASE.instanceUrl);
+  });
+
+  it("con proxy y instancia en su sitio, las URLs pasan por el proxy", () => {
+    setPosterCacheUrl("http://127.0.0.1:51234");
+    expect(getEffectiveInstanceUrl(DEFAULT_SPATIAL_POSTER_SETTINGS)).toBe("http://127.0.0.1:51234");
+  });
+
+  it("si el usuario movio la instancia, el proxy se aparta", () => {
+    setPosterCacheUrl("http://127.0.0.1:51234");
+    // Un NAS o otra PC: ahi los posters van directos a su instancia.
+    const movida = { ...BASE, instanceUrl: "http://192.168.1.10:3000" };
+    expect(getEffectiveInstanceUrl(movida)).toBe("http://192.168.1.10:3000");
+    expect(usesDefaultInstance(movida)).toBe(false);
+  });
+
+  it("el default y su variante con barra final cuentan como el mismo sitio", () => {
+    setPosterCacheUrl("http://127.0.0.1:51234");
+    const conBarra = { ...BASE, instanceUrl: "http://localhost:3000/" };
+    expect(getEffectiveInstanceUrl(conBarra)).toBe("http://127.0.0.1:51234");
+    expect(usesDefaultInstance(conBarra)).toBe(true);
+  });
+
+  it("apagar el proxy devuelve el control a la instancia", () => {
+    setPosterCacheUrl("http://127.0.0.1:51234");
+    setPosterCacheUrl(null);
+    expect(getEffectiveInstanceUrl(DEFAULT_SPATIAL_POSTER_SETTINGS)).toBe(
+      DEFAULT_SPATIAL_POSTER_INSTANCE_URL,
+    );
   });
 });
 

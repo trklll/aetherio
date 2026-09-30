@@ -10,7 +10,9 @@ import {
   Activity,
   Suspense,
   lazy,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +21,8 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { reloadAddonsForActiveProfile, useAddonStore } from "./store/addonStore.ts";
 import { rehydrateHomeCacheForActiveProfile } from "./store/cacheStore.ts";
+import { getSpatialPosterSettings, setPosterCacheUrl } from "./config/spatialPosters";
+import { ensurePosterServer, getPosterCacheUrl } from "./services/posterServer";
 import AppShell from "./components/layout/AppShell.tsx";
 import {
   createLocalProfile,
@@ -55,6 +59,7 @@ import {
 } from "./integrations/aniList.ts";
 import { startDiscordRichPresence, stopDiscordRichPresence } from "./integrations/discordPresence.ts";
 import { PartyProvider } from "./party/PartyContext.tsx";
+import GamepadWakeListener from "./components/gamepad/GamepadWakeListener.tsx";
 import { parsePartyJoinDeepLink, writePendingPartyJoin } from "./party/invite.ts";
 import {
   getPlaybackPreferences,
@@ -65,6 +70,14 @@ import {
   prepareLocalMediaPlayback,
   splitLocalFiles,
 } from "./utils/localMedia.ts";
+import {
+  getLastAppMode,
+  resolveAppModeForPath,
+  setLastAppMode,
+  shouldShowBigPictureBrandOnStartup,
+} from "./utils/appMode.ts";
+import { showBigPictureBrand } from "./utils/bigPictureTransition.ts";
+import { recordRouteVisit, resetEntrancePlayed } from "./utils/homeEntrance.ts";
 
 const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const PROCESSED_OAUTH_CALLBACKS_KEY = "aetherio-processed-oauth-callbacks-v1";
@@ -72,23 +85,26 @@ const processedTraktCallbacks = new Set<string>();
 const processedOAuthCallbacks = new Set<string>();
 
 const HomePage = lazy(() => import("./pages/Home"));
+const LiveSportsPage = lazy(() => import("./pages/LiveSports"));
 const LibraryPage = lazy(() => import("./pages/Library"));
 const AddonsPage = lazy(() => import("./pages/Addons"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
 const DetailPage = lazy(() => import("./pages/Detail"));
 const DetailSectionPage = lazy(() => import("./pages/Detail/DetailSectionPage"));
 const CatalogPage = lazy(() => import("./pages/Catalog"));
-const EpisodiePage = lazy(() => import("./pages/Episodie"));
+const EpisodeRouteRedirect = lazy(() => import("./pages/Episodie/EpisodeRouteRedirect"));
 const PlayerPage = lazy(() => import("./pages/Player"));
 const PersonPage = lazy(() => import("./pages/Person"));
 const EntityPage = lazy(() => import("./pages/Entity"));
 const SearchPage = lazy(() => import("./pages/Search"));
 const GenreListingPage = lazy(() => import("./pages/GenreListing"));
+const BigPicturePage = lazy(() => import("./pages/BigPicture"));
 const QuickStart = lazy(() => import("./pages/QuickStart"));
 const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
 
 const MAX_CACHED_PAGES = 16;
-const TRANSIENT_PAGE_PATHS = new Set(["/", "/episode", "/streams", "/player"]);
+const TRANSIENT_PAGE_PATHS = new Set(["/", "/episode", "/streams", "/player", "/big-picture"]);
+type StartupBrandState = "idle" | "pending" | "visible";
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -97,16 +113,70 @@ export default function App() {
   const [profileRevision, setProfileRevision] = useState(0);
   const hasProfile = hasActiveLocalProfile();
   const isCreatingProfile = location.pathname === "/quick-start/profile";
+  const returnToBigPicture = new URLSearchParams(location.search).get("from") === "big-picture";
+  const profileSelectionPath = getLastAppMode() === "big-picture"
+    ? "/profiles?from=big-picture"
+    : "/profiles";
   const [account, setAccount] = useState<AetherioUser | null | undefined>(() => getStoredAccount() ?? undefined);
   const [authRestored, setAuthRestored] = useState(false);
   const [localMode, setLocalMode] = useState(() => isLocalModeEnabled());
   const [authError, setAuthError] = useState("");
   const [startupReady, setStartupReady] = useState(false);
   const [startupStatus, setStartupStatus] = useState("Restaurando tu sesión");
+  const [startupBrandState, setStartupBrandState] = useState<StartupBrandState>(() =>
+    shouldShowBigPictureBrandOnStartup(location.pathname, getLastAppMode(), hasProfile)
+      ? "pending"
+      : "idle",
+  );
   const addons = useAddonStore(s => s.addons);
   const enabledAddons = useMemo(() => addons.filter(addon => addon.enabled), [addons]);
 
   useFullscreen();
+
+  const handleStartupComplete = useCallback(() => {
+    setStartupBrandState(current => current === "pending" ? "visible" : current);
+  }, []);
+
+  useEffect(() => {
+    if (startupBrandState !== "pending") return;
+    if (location.pathname === "/" || location.pathname === "/profiles") return;
+    setStartupBrandState("idle");
+  }, [location.pathname, startupBrandState]);
+
+  useLayoutEffect(() => {
+    if (startupBrandState !== "visible") return;
+    return showBigPictureBrand(() => setStartupBrandState("idle"));
+  }, [startupBrandState]);
+
+  // Recuerda de qué modo salió el usuario: cada navegación a una ruta
+  // estable consolida el modo (las transitorias como /, /profiles o
+  // /quick-start no sobrescriben).
+  useEffect(() => {
+    const mode = resolveAppModeForPath(location.pathname);
+    if (mode) setLastAppMode(mode);
+    recordRouteVisit(location.pathname);
+  }, [location.pathname]);
+
+  // El servidor de posters viaja dentro de la app, asi que se levanta al abrir
+  // y no cuando se llega a Home: si arrancara desde el warmup de catálogos,
+  // dejaria de correr mientras la app esta en el selector de perfiles, que es
+  // justo la primera pantalla que ve la persona. El cache en disco se pone
+  // despues, cuando ya se sabe el puerto.
+  useEffect(() => {
+    void ensurePosterServer(getSpatialPosterSettings().instanceUrl).then(async started => {
+      if (!started) return;
+      setPosterCacheUrl(await getPosterCacheUrl());
+    });
+  }, []);
+
+  // Al arrancar desde la raíz, restaura el último modo pasando primero por el
+  // selector de perfiles. Los deep links navegan fuera de "/" antes de que el
+  // startup esté listo, así que una intención explícita siempre gana.
+  useEffect(() => {
+    if (!startupReady || !hasProfile) return;
+    if (location.pathname !== "/") return;
+    navigate(profileSelectionPath, { replace: true });
+  }, [startupReady, hasProfile, location.pathname, navigate, profileSelectionPath]);
 
   useEffect(() => {
     let disposed = false;
@@ -168,14 +238,19 @@ export default function App() {
       }
 
       setStartupStatus("Cargando tu biblioteca");
-      await warmHomeStartup(queryClient, enabledAddons, getHomePreferences().contentOrientation, () => {
-        if (!disposed) setStartupStatus("Preparando imágenes");
-      });
+      const startupHomePrefs = getHomePreferences();
+      await warmHomeStartup(
+        queryClient,
+        enabledAddons,
+        startupHomePrefs.contentOrientation,
+        startupHomePrefs.bothPreference,
+        () => {
+          if (!disposed) setStartupStatus("Preparando imágenes");
+        },
+      );
       if (!disposed) {
-        if (currentProfiles.length > 1) {
-          navigate("/profiles", { replace: true });
-        }
         setStartupStatus("Todo listo");
+        navigate(profileSelectionPath, { replace: true });
         setStartupReady(true);
       }
     };
@@ -216,7 +291,8 @@ export default function App() {
 
   useEffect(() => {
     if (!hasProfile || !enabledAddons.length) return;
-    prefetchHomeData(queryClient, enabledAddons);
+    const homePrefs = getHomePreferences();
+    prefetchHomeData(queryClient, enabledAddons, homePrefs.contentOrientation, homePrefs.bothPreference);
   }, [enabledAddons, hasProfile, queryClient]);
 
   useEffect(() => {
@@ -254,6 +330,7 @@ export default function App() {
               setAccount(user);
               setLocalMode(false);
               setAuthError("");
+              setStartupReady(false);
               navigate(hasActiveLocalProfile() ? "/" : "/quick-start/profile", { replace: true });
             }
           } catch (error) {
@@ -337,7 +414,11 @@ export default function App() {
   }, [navigate]);
 
   const withStartup = (content: ReactNode) => (
-    <StartupExperience ready={startupReady} status={startupStatus}>
+    <StartupExperience
+      ready={startupReady}
+      status={startupStatus}
+      onComplete={handleStartupComplete}
+    >
       {content}
     </StartupExperience>
   );
@@ -354,11 +435,13 @@ export default function App() {
           setAccount(user);
           setLocalMode(false);
           setAuthError("");
+          setStartupReady(false);
         }}
         onContinueLocal={() => {
           setAccount(null);
           setLocalMode(true);
           setAuthError("");
+          setStartupReady(false);
         }}
       />,
     );
@@ -373,9 +456,10 @@ export default function App() {
           defaultName={account?.displayName?.trim() ?? ""}
           useFreshDefaults
           profileOnly
-          onComplete={destination => {
+          onComplete={() => {
             setProfileRevision(value => value + 1);
-            navigate(destination, { replace: true });
+            const restoreBigPicture = returnToBigPicture || getLastAppMode() === "big-picture";
+            navigate(restoreBigPicture ? "/profiles?from=big-picture" : "/profiles", { replace: true });
           }}
         />
       </Suspense>,
@@ -388,30 +472,59 @@ export default function App() {
 
   if (location.pathname === "/profiles") {
     return withStartup(
-      <Suspense fallback={<RouteFallback />}>
-        <ProfileSelection
-          onProfileSelected={async () => {
-            setProfileRevision(value => value + 1);
-            const nextEnabledAddons = reloadAddonsForActiveProfile().filter(addon => addon.enabled);
-            await rehydrateHomeCacheForActiveProfile();
-            queryClient.removeQueries({ queryKey: ["home"] });
-            await warmHomeStartup(
-              queryClient,
-              nextEnabledAddons,
-              getHomePreferences().contentOrientation,
-            );
-          }}
-        />
-      </Suspense>,
+      <PartyProvider>
+        <GamepadWakeListener />
+        <Suspense fallback={<RouteFallback />}>
+          <ProfileSelection
+            onProfileSelected={async (_profile, onProgress) => {
+              onProgress(8, "Preparando tu perfil…");
+              resetEntrancePlayed();
+              setProfileRevision(value => value + 1);
+              onProgress(20, "Cargando fuentes…");
+              const nextEnabledAddons = reloadAddonsForActiveProfile().filter(addon => addon.enabled);
+              onProgress(32, "Restaurando tu biblioteca…");
+              await rehydrateHomeCacheForActiveProfile();
+              queryClient.removeQueries({ queryKey: ["home"] });
+              const nextHomePrefs = getHomePreferences();
+              onProgress(45, "Cargando catálogo…");
+              await warmHomeStartup(
+                queryClient,
+                nextEnabledAddons,
+                nextHomePrefs.contentOrientation,
+                nextHomePrefs.bothPreference,
+                undefined,
+                progress => onProgress(45 + progress * 50, progress < 1 ? "Cargando catálogo…" : "Preparando imágenes…"),
+              );
+              onProgress(100, "Listo");
+            }}
+          />
+        </Suspense>
+      </PartyProvider>,
     );
   }
 
   const defaultRoute = "/home";
 
+  const isBigPicture = location.pathname.startsWith("/big-picture");
+
+  if (isBigPicture) {
+    return withStartup(
+      <PartyProvider>
+        <GamepadWakeListener />
+        <Suspense fallback={<RouteFallback />}>
+          <BigPicturePage />
+        </Suspense>
+      </PartyProvider>,
+    );
+  }
+
   return withStartup(
     <PartyProvider>
+      <GamepadWakeListener />
       <AppShell>
-        <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
+        {location.pathname !== "/home" ? (
+          <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
+        ) : null}
         <CachedPageRoutes key={profileRevision} location={location} defaultRoute={defaultRoute} />
       </AppShell>
     </PartyProvider>,
@@ -447,7 +560,7 @@ function CachedPageRoutes({
         return (
           <Activity key={cacheKey} mode={active ? "visible" : "hidden"} name={`page:${cacheKey}`}>
             <div
-              className="min-h-full aetherio-page-enter"
+              className={`min-h-full ${cachedLocation.pathname === "/home" ? "home-page-route-enter" : "aetherio-page-enter"}`}
               // Activity conserva el DOM de las rutas ocultas. Si la animación
               // de entrada se interrumpe al navegar, su opacity/transform
               // inline también se conserva y la página vuelve oscurecida.
@@ -461,7 +574,7 @@ function CachedPageRoutes({
       })}
 
       {!cacheCurrentPage && (
-        <div key={location.key} className="min-h-full aetherio-page-enter">
+        <div key={location.key} className={`min-h-full ${location.pathname === "/home" ? "home-page-route-enter" : "aetherio-page-enter"}`}>
           <PageRoutes location={location} defaultRoute={defaultRoute} />
         </div>
       )}
@@ -475,14 +588,16 @@ function PageRoutes({ location, defaultRoute }: { location: Location; defaultRou
       <Routes location={location}>
         <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
         <Route path="/home"              element={<HomePage />} />
+        <Route path="/live"              element={<LiveSportsPage />} />
+        <Route path="/live-sports"       element={<LiveSportsPage />} />
         <Route path="/library"           element={<LibraryPage />} />
         <Route path="/addons"            element={<AddonsPage />} />
         <Route path="/settings"          element={<SettingsPage />} />
         <Route path="/catalog"           element={<CatalogPage />} />
         <Route path="/detail/:type/:id"  element={<DetailPage />} />
         <Route path="/detail/:type/:id/:section" element={<DetailSectionPage />} />
-        <Route path="/episode"           element={<EpisodiePage />} />
-        <Route path="/streams"           element={<EpisodiePage />} />
+        <Route path="/episode"           element={<EpisodeRouteRedirect />} />
+        <Route path="/streams"           element={<EpisodeRouteRedirect />} />
         <Route path="/player"            element={<PlayerPage />} />
         <Route path="/person/:id"        element={<PersonPage />} />
         <Route path="/entity/:kind/:id"  element={<EntityPage />} />
@@ -538,6 +653,9 @@ function buildOpenPath(rawUrl: string): string | null {
     const url = new URL(rawUrl);
     if (url.protocol !== "aetherio:" || url.hostname !== "open") return null;
     const segments = url.pathname.split("/").filter(Boolean);
+    if (segments[0] === "big-picture") {
+      return "/big-picture";
+    }
     if (segments[0] === "detail" && segments[1] && segments[2]) {
       return `/detail/${encodeURIComponent(segments[1])}/${encodeURIComponent(segments.slice(2).join("/"))}`;
     }

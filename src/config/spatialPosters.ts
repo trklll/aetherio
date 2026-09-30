@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getKnownSpatialAvailability } from "../services/spatialInstance.ts";
+import { getKnownSpatialAvailability, resetSpatialAvailability } from "../services/spatialInstance.ts";
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 /**
@@ -148,6 +148,47 @@ const NUMERIC_BOUNDS = {
 
 /** Instancia por defecto: la que levanta `npm run posters:start`. */
 export const DEFAULT_SPATIAL_POSTER_INSTANCE_URL = "http://localhost:3000";
+
+/**
+ * Base del proxy de cache en disco, cuando Aetherio lo tiene levantado.
+ *
+ * El puerto del proxy es efimero, asi que vive aca en memoria y no en los
+ * ajustes. Se consulta al arrancar la app.
+ */
+let posterCacheBaseUrl: string | null = null;
+
+/** Avisa que hay un proxy de cache delante del servidor de posters. */
+export function setPosterCacheUrl(url: string | null): void {
+  const next = url ? normalizeInstanceUrl(url) : null;
+  if (next === posterCacheBaseUrl) return;
+  posterCacheBaseUrl = next;
+  // La disponibilidad se midio contra otra URL: hay que volver a preguntarle.
+  resetSpatialAvailability();
+}
+
+/**
+ * URL contra la que realmente se piden los posters.
+ *
+ * Si el usuario no movio la instancia, se usa el proxy de cache: el mismo
+ * resultado, pero con los posters guardados en disco entre arranques. Si la
+ * movio a otro lado, se respeta su eleccion y no se le interpone nada.
+ */
+export function getEffectiveInstanceUrl(settings?: SpatialPosterSettings): string {
+  const s = settings ?? getSpatialPosterSettings();
+  const configured = normalizeInstanceUrl(s.instanceUrl);
+  if (!posterCacheBaseUrl) return configured;
+  const isDefault =
+    !configured ||
+    configured.toLowerCase() === DEFAULT_SPATIAL_POSTER_INSTANCE_URL.toLowerCase();
+  return isDefault ? posterCacheBaseUrl : configured;
+}
+
+/** ¿La instancia sigue en su sitio, o el usuario la movio? */
+export function usesDefaultInstance(settings?: SpatialPosterSettings): boolean {
+  const configured = normalizeInstanceUrl((settings ?? getSpatialPosterSettings()).instanceUrl);
+  if (!configured) return true;
+  return configured.toLowerCase() === DEFAULT_SPATIAL_POSTER_INSTANCE_URL.toLowerCase();
+}
 
 export const DEFAULT_SPATIAL_POSTER_SETTINGS: SpatialPosterSettings = {
   enabled: true,
@@ -365,7 +406,7 @@ export function buildSpatialPosterUrl(
   overrides?: SpatialPosterOverrides,
 ): string | undefined {
   const s = settings ?? getSpatialPosterSettings();
-  const base = normalizeInstanceUrl(s.instanceUrl);
+  const base = getEffectiveInstanceUrl(s);
   if (!isSpatialPostersConfigured(s) || !tmdbId) return undefined;
   // Ultimo filtro y unico que cubre todos los llamadores (hook, filas de Home,
   // Catalog, Detail y el picker manual): si ya sabemos que la instancia esta

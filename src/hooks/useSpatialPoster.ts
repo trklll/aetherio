@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import {
   applySpatialPosterToUrl,
   extractTmdbId,
+  getEffectiveInstanceUrl,
   isSpatialPosterUrl,
   isSpatialPostersConfigured,
-  normalizeInstanceUrl,
   spatialPosterSignature,
   useSpatialPosterSettings,
   type SpatialPosterOverrides,
@@ -56,7 +56,7 @@ export function useSpatialPoster(
 
   const enabled = isSpatialPostersConfigured(settings) && !disabled;
   const tmdbId = enabled ? extractTmdbId(mediaId) : null;
-  const instanceUrl = enabled ? normalizeInstanceUrl(settings.instanceUrl) : "";
+  const instanceUrl = enabled ? getEffectiveInstanceUrl(settings) : "";
 
   // La instancia puede no estar levantada. Si ya lo sabemos, apagamos el
   // pipeline al instante (sin un probe por cada poster); si no, se sondea una

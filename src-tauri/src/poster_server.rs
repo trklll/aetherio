@@ -324,6 +324,43 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<PosterServerStatus, Strin
     ))
 }
 
+/// URL por defecto: la instancia local que levanta la propia app.
+const DEFAULT_INSTANCE_URL: &str = "http://localhost:3000";
+
+/// Normaliza a `host:puerto` para comparar dos URLs sin que estorben el
+/// esquema, la barra final o las mayusculas.
+fn host_port_of(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .strip_prefix("http://")
+        .or_else(|| url.trim().strip_prefix("https://"))?
+        .trim_end_matches('/');
+    (!rest.is_empty()).then(|| rest.to_ascii_lowercase())
+}
+
+/// ¿El usuario dejo la instancia donde viene, o la movio a otro lado?
+pub fn uses_default_instance(configured_url: &str) -> bool {
+    let configured = configured_url.trim();
+    if configured.is_empty() {
+        return true;
+    }
+    host_port_of(configured).as_deref() == host_port_of(DEFAULT_INSTANCE_URL).as_deref()
+}
+
+/// Arranca el cache de posters en disco cuando la instancia sigue en su sitio.
+///
+/// Si el usuario movio la instancia (NAS, otra PC, otro puerto) no metemos mano:
+/// se respeta su eleccion y sus posters no pasan por nuestro disco.
+pub fn start_cache_if_default<R: Runtime>(app: &AppHandle<R>, configured_url: &str) -> bool {
+    if !uses_default_instance(configured_url) {
+        return false;
+    }
+    let Some(dir) = app.path().app_data_dir().ok() else {
+        return false;
+    };
+    crate::poster_cache::start(dir.join("poster-cache")).is_ok()
+}
+
 pub fn stop() {
     stop_locked();
 }
@@ -415,14 +452,26 @@ mod tests {
 
 /// Levanta el server de posters. Idempotente: si ya responde, no hace nada.
 ///
+/// `configured_url` es lo que el usuario tiene en Ajustes. Se lo pasa el
+/// frontend para que Rust sepa si la instancia sigue en su sitio: si la movio
+/// a otro lado, el cache propio se aparta y respeta su eleccion.
+///
 /// Se expone como comando async para no bloquear el hilo de la UI mientras
 /// espera los primeros segundos de Node.
 #[tauri::command]
-pub async fn start_posters_server(app: tauri::AppHandle) -> Result<PosterServerStatus, String> {
+pub async fn start_posters_server(
+    app: tauri::AppHandle,
+    configured_url: String,
+) -> Result<PosterServerStatus, String> {
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || start(&handle))
+    let status = tauri::async_runtime::spawn_blocking(move || start(&handle))
         .await
-        .map_err(|e| format!("Fallo el arranque del server de posters: {e}"))?
+        .map_err(|e| format!("Fallo el arranque del server de posters: {e}"))??;
+
+    // El cache va despues: necesita que el server este vivo para poder ser su
+    // upstream, y si falla no importa, los posters siguen funcionando sin el.
+    start_cache_if_default(&app, &configured_url);
+    Ok(status)
 }
 
 #[tauri::command]
