@@ -1,16 +1,11 @@
 import type { MediaItem } from "../types/ui.ts";
 import { tmdbFetch } from "../config/apiKeys.ts";
+import { isJikanCircuitOpen, jikanRequest } from "./jikanClient.ts";
+import { pickTmdbSearchCandidate } from "../utils/tmdbIdentity.ts";
 
-const JIKAN_URL = "https://api.jikan.moe/v4";
 const JIKAN_RATE_GAP_MS = 150;
-const JIKAN_MAX_RETRIES_429 = 1;
-const JIKAN_MAX_RETRIES_504 = 0;
-const JIKAN_RETRY_BASE_MS = 500;
-const JIKAN_TIMEOUT_MS = 3000;
-const JIKAN_HEALTH_FAILURES_THRESHOLD = 2;
 const TMDB_FIND_CONCURRENCY = 3;
 
-let jikanHealthFailures = 0;
 let jikanDisabled = false;
 
 interface JikanImage {
@@ -78,57 +73,13 @@ function recommendationToItem(data: JikanRecommendationEntry): MediaItem & { _ma
 }
 
 async function jikanFetch<T>(path: string, params?: Record<string, string>): Promise<T | null> {
-  if (jikanDisabled) return null;
-  const url = new URL(`${JIKAN_URL}${path}`);
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value);
-    }
+  if (jikanDisabled || isJikanCircuitOpen()) return null;
+  const data = await jikanRequest<T>(path, params);
+  if (data === null && isJikanCircuitOpen() && !jikanDisabled) {
+    jikanDisabled = true;
+    console.warn("[JIKAN] cortacircuitos abierto — usando fallbacks TMDB");
   }
-  let attempt = 0;
-  let lastWas504 = false;
-  while (attempt <= JIKAN_MAX_RETRIES_429) {
-    try {
-      const response = await fetch(url.toString(), { signal: AbortSignal.timeout(JIKAN_TIMEOUT_MS) });
-      if (response.ok) {
-        jikanHealthFailures = 0;
-        return (await response.json()) as T;
-      }
-      if (response.status === 504 || response.status === 503) {
-        jikanHealthFailures++;
-        if (jikanHealthFailures >= JIKAN_HEALTH_FAILURES_THRESHOLD) {
-          jikanDisabled = true;
-          console.warn("[JIKAN] MAL down — skipping remaining Jikan fetches, using TMDB fallback");
-        }
-        if (lastWas504 || attempt >= JIKAN_MAX_RETRIES_504) return null;
-        lastWas504 = true;
-        await sleep(JIKAN_RETRY_BASE_MS);
-        attempt++;
-        continue;
-      }
-      if (response.status === 429) {
-        if (attempt < JIKAN_MAX_RETRIES_429) {
-          await sleep(JIKAN_RETRY_BASE_MS * Math.pow(2, attempt));
-          attempt++;
-          continue;
-        }
-      }
-      return null;
-    } catch {
-      jikanHealthFailures++;
-      if (jikanHealthFailures >= JIKAN_HEALTH_FAILURES_THRESHOLD) {
-        jikanDisabled = true;
-        console.warn("[JIKAN] network timeout — skipping remaining Jikan fetches, using TMDB fallback");
-      }
-      if (attempt < JIKAN_MAX_RETRIES_429) {
-        await sleep(JIKAN_RETRY_BASE_MS * Math.pow(2, attempt));
-        attempt++;
-        continue;
-      }
-      return null;
-    }
-  }
-  return null;
+  return data;
 }
 
 function dedupeByMalId<T extends MediaItem>(items: T[]): T[] {
@@ -270,16 +221,6 @@ interface TmdbSearchResultItem {
   popularity?: number;
 }
 
-function normalizeTitle(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-}
-
-function titlesMatch(searchTitle: string, result: TmdbSearchResultItem): boolean {
-  const norm = normalizeTitle(searchTitle);
-  const candidates = [result.name, result.title, result.original_name].filter(Boolean).map(s => normalizeTitle(s!));
-  return candidates.some(c => c === norm || c.includes(norm) || norm.includes(c));
-}
-
 async function searchTmdbByTitle(title: string, searchType: "tv" | "movie", year?: number): Promise<TmdbResolve | null> {
   const params: Record<string, string> = { query: title, language: "en-US", page: "1" };
   if (year) {
@@ -288,11 +229,13 @@ async function searchTmdbByTitle(title: string, searchType: "tv" | "movie", year
   try {
     const result = await tmdbFetch<{ results: TmdbSearchResultItem[] }>(`/search/${searchType}`, { params });
     if (!result?.results?.length) return null;
-    const matches = result.results.filter(r => titlesMatch(title, r));
-    const best = matches.length
-      ? matches.reduce((acc, r) => (r.popularity ?? 0) > (acc.popularity ?? 0) ? r : acc)
-      : result.results.reduce((acc, r) => (r.popularity ?? 0) > (acc.popularity ?? 0) ? r : acc);
-    if (!best) return null;
+    const selected = pickTmdbSearchCandidate(
+      result.results.map(item => ({ kind: searchType, item })),
+      title,
+      year,
+    );
+    const best = selected?.item;
+    if (!best?.id) return null;
     return {
       tmdbId: best.id,
       poster: best.poster_path ? `https://image.tmdb.org/t/p/w500${best.poster_path}` : undefined,
@@ -399,17 +342,18 @@ export async function runJikanSerial<T>(tasks: SerialTask<T>[]): Promise<T[]> {
   const results: T[] = [];
   let i = 0;
   while (i < tasks.length) {
-    const wasDisabled = jikanDisabled;
+    const wasDisabled = jikanDisabled || isJikanCircuitOpen();
     results.push(await tasks[i].fn());
     i++;
     // After Jikan is disabled, run remaining fallback tasks in parallel.
-    if (jikanDisabled && !wasDisabled) {
+    const nowDisabled = jikanDisabled || isJikanCircuitOpen();
+    if (nowDisabled && !wasDisabled) {
       const remaining = tasks.slice(i).map(t => t.fn());
       const rest = await Promise.all(remaining);
       results.push(...rest);
       break;
     }
-    if (i < tasks.length && !wasDisabled && !jikanDisabled) {
+    if (i < tasks.length && !wasDisabled && !nowDisabled) {
       await sleep(JIKAN_RATE_GAP_MS);
     }
   }

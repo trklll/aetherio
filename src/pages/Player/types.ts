@@ -32,11 +32,20 @@ export interface MpvStatusSnapshot {
   fileLoaded?: boolean | null;
   pausedForCache?: boolean | null;
   cacheBufferingState?: number | null;
+  cacheSpeedBytesPerSecond?: number | null;
+  demuxerCacheIdle?: boolean | null;
   chapter?: number | null;
   chapterList?: { title?: string; time?: number }[] | null;
   tracks?: MpvTrack[] | null;
   videoWidth?: number | null;
   videoHeight?: number | null;
+  /** El stream se ha terminado: en directo significa que la transmision cayo. */
+  eofReached?: boolean | null;
+  /**
+   * Segundos de video ya demultiplexados por delante del playhead. En un
+   * directo es la distancia al borde: `timePos + demuxerCacheDuration` ~= vivo.
+   */
+  demuxerCacheDuration?: number | null;
 }
 
 export interface MpvEventPayload {

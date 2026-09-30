@@ -1,3 +1,6 @@
+// WebRTC en desarrollo: API reservada para el signalling P2P (aún sin llamantes).
+#![allow(dead_code)]
+
 use std::time::Instant;
 
 use dashmap::DashMap;

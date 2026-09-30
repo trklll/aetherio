@@ -20,6 +20,22 @@ interface CacheEntry {
 }
 
 const responseCache = new Map<string, CacheEntry>();
+const inFlight = new Map<string, Promise<any>>();
+
+/** Una respuesta buena se puede reusar un rato: casi nada cambia en minutos. */
+const SUCCESS_TTL_MS = 300_000;
+/**
+ * Un fallo de red o un 5xx no mejora por insistir. Cachearlo es lo que corta
+ * la tormenta: sin esto, cada consumidor que reintenta vuelve a pedir lo
+ * mismo y los 180 titulos de anime se multiplican por los reintentos de cada uno.
+ */
+const FAILURE_TTL_MS = 60_000;
+/** 401/403: la credencial del proxy esta vencida o no esta puesta. Reintentar no la arregla. */
+const AUTH_FAILURE_TTL_MS = 300_000;
+/** 429: el upstream nos esta limitando. Margen extra para no reintentarle encima. */
+const RATE_LIMIT_TTL_MS = 120_000;
+/** Techo por peticion para que un fetch colgado no se quede ocupando un slot. */
+const REQUEST_TIMEOUT_MS = 12_000;
 
 function cleanExpiredCache() {
   const now = Date.now();
@@ -28,6 +44,21 @@ function cleanExpiredCache() {
       responseCache.delete(key);
     }
   }
+}
+
+function failureTtlFor(status: number): number {
+  if (status === 401 || status === 403) return AUTH_FAILURE_TTL_MS;
+  if (status === 429) return RATE_LIMIT_TTL_MS;
+  return FAILURE_TTL_MS;
+}
+
+/** Combina el signal del llamador con un techo de tiempo propio. */
+function withTimeout(signal: AbortSignal | null | undefined, ms: number): AbortSignal | undefined {
+  const timeout = AbortSignal.timeout(ms);
+  if (!signal) return timeout;
+  const anyOf = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyOf === "function") return anyOf([signal, timeout]);
+  return signal;
 }
 
 export interface ApiKeys {
@@ -57,6 +88,30 @@ export function getTheIntroDbToken(): string {
 /** Base del proxy IntroDB del servidor (inyecta el token del lado seguro). */
 export function getIntroDbProxyBase(): string {
   return `${AETHERIO_API_BASE}/api/introdb`;
+}
+
+const TMDB_IMAGE_PROXY_PREFIX = "/api/tmdb-image";
+const TMDB_IMAGE_PROXY_SIZE = /^(w92|w154|w185|w342|w500|w780|original)$/;
+const TMDB_IMAGE_PROXY_FILE = /^[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp)$/i;
+
+/**
+ * URL de una imagen TMDB servida por el proxy del servidor (añade CORS para
+ * poder muestrear píxeles en canvas). Devuelve null si no es una imagen TMDB
+ * válida.
+ */
+export function getTmdbImageProxyUrl(imageUrl: string | null | undefined): string | null {
+  if (!imageUrl) return null;
+  try {
+    const parsed = new URL(imageUrl);
+    if (parsed.hostname.toLowerCase() !== "image.tmdb.org") return null;
+    const match = parsed.pathname.match(/^\/t\/p\/([^/]+)\/([^/]+)$/);
+    if (!match) return null;
+    const [, size, file] = match;
+    if (!TMDB_IMAGE_PROXY_SIZE.test(size) || !TMDB_IMAGE_PROXY_FILE.test(file)) return null;
+    return `${AETHERIO_API_BASE}${TMDB_IMAGE_PROXY_PREFIX}/${size}/${file}`;
+  } catch {
+    return null;
+  }
 }
 
 export function getApiKeys(): ApiKeys {
@@ -144,24 +199,71 @@ export async function tmdbFetch<T = any>(path: string, init?: RequestInit & { pa
   const cacheKey = `${path}?${url.search}`;
   cleanExpiredCache();
   const cached = responseCache.get(cacheKey);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.data as T;
+  if (cached) {
+    if (Date.now() < cached.expiresAt) return cached.data as T;
+    responseCache.delete(cacheKey);
   }
 
   const { params: _params, ...fetchInit } = init ?? {};
-  const response = await fetch(url.toString(), {
-    ...fetchInit,
-    headers: {
-      "Accept": "application/json",
-      ...fetchInit.headers,
-    },
+
+  // Las peticiones con signal del llamador son cancelables (pantallas de
+  // detalle). No se comparten: que uno aborte no debe tumbar a los demas.
+  if (fetchInit.signal) {
+    return requestTmdb<T>(url, fetchInit, cacheKey);
+  }
+
+  // Varias filas del Home piden los mismos titulos a la vez. Compartir la
+  // peticion en vuelo hace que la segunda no vuelva a salir a la red.
+  const pending = inFlight.get(cacheKey);
+  if (pending) return pending as Promise<T | null>;
+
+  const request = requestTmdb<T>(url, fetchInit, cacheKey).finally(() => {
+    if (inFlight.get(cacheKey) === request) inFlight.delete(cacheKey);
   });
-  if (!response.ok) return null;
+  inFlight.set(cacheKey, request);
+  return request;
+}
+
+async function requestTmdb<T>(url: URL, fetchInit: RequestInit, cacheKey: string): Promise<T | null> {
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      ...fetchInit,
+      signal: withTimeout(fetchInit.signal, REQUEST_TIMEOUT_MS),
+      headers: {
+        "Accept": "application/json",
+        ...fetchInit.headers,
+      },
+    });
+  } catch {
+    responseCache.set(cacheKey, { data: null, expiresAt: Date.now() + FAILURE_TTL_MS });
+    return null;
+  }
+
+  if (!response.ok) {
+    // El proxy responde 429 con Retry-After cuando frena una rafaga. Respetarlo
+    // evita que el cliente siga insistiendo y prolongue el bloqueo.
+    const retryAfter = Number(response.headers.get("Retry-After"));
+    const ttl = response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, RATE_LIMIT_TTL_MS)
+      : failureTtlFor(response.status);
+    responseCache.set(cacheKey, { data: null, expiresAt: Date.now() + ttl });
+    if (import.meta.env.DEV && (response.status === 401 || response.status === 403)) {
+      console.warn(
+        `[TMDB] ${response.status} en ${url.pathname}: la credencial de TMDB del proxy ` +
+        `(${AETHERIO_API_BASE}) esta vencida o no esta configurada. ` +
+        `Se cachea el fallo ${AUTH_FAILURE_TTL_MS / 1000}s para no insistir.`,
+      );
+    }
+    return null;
+  }
+
   try {
     const data = await response.json() as T;
-    responseCache.set(cacheKey, { data, expiresAt: Date.now() + 300_000 });
+    responseCache.set(cacheKey, { data, expiresAt: Date.now() + SUCCESS_TTL_MS });
     return data;
   } catch {
+    responseCache.set(cacheKey, { data: null, expiresAt: Date.now() + FAILURE_TTL_MS });
     return null;
   }
 }

@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
 import { tweenTo, gsap } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
+import { GENRE_SHOWCASE_MOVE_EVENT, useBigPictureActive } from "../../navigation/spatialNav.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
 const POSTER_COUNT = 6;
@@ -165,11 +166,15 @@ async function fetchGenreData(
 
 function GenreShowcase() {
   const navigate = useNavigate();
-   const [activeIndex, setActiveIndex] = useState(0);
-   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-   const cardRef = useRef<HTMLDivElement>(null);
-   const labelRef = useRef<HTMLDivElement>(null);
-   const posterRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const labelRef = useRef<HTMLDivElement>(null);
+  const posterRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const checkOverlapRef = useRef<() => void>(() => {});
+  const backdropRef = useRef(null);
+  const labelTextRef = useRef(null);
+  const bigPicture = useBigPictureActive();
 
   const cachedGenreMap = readPageDataCache<Record<string, GenreData>>("genre-showcase", "v4");
   const { data: genreMap = cachedGenreMap ?? {} } = useQuery({
@@ -204,19 +209,26 @@ function GenreShowcase() {
          setActiveIndex(next);
          gsap.set(posterRefs.current.filter(Boolean), { opacity: 0, y: 8 });
          if (labelRef.current) gsap.set(labelRef.current, { opacity: 0, x: -12 });
-         setTimeout(() => {
+setTimeout(() => {
            posterRefs.current.forEach(el => { if (el) tweenTo(el, { opacity: 1, y: 0 }, 0.35); });
            if (labelRef.current) tweenTo(labelRef.current, { opacity: 1, x: 0 }, 0.4);
+           requestAnimationFrame(() => checkOverlapRef.current());
          }, 50);
        }, 300);
-    }, 6000);
+     }, 6000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [activeIndex]);
 
   const handleClick = useCallback(() => {
     if (cardRef.current) tweenTo(cardRef.current, { scale: 0.985 }, 0.12);
+    // En Big Picture la lista vive en /big-picture/genre (page 10-foot):
+    // /genre saldría del modo inmersivo (App.tsx solo captura /big-picture).
+    if (bigPicture) {
+      navigate(`/big-picture/genre?genre=${encodeURIComponent(currentGenre)}`);
+      return;
+    }
     navigate(`/genre?genre=${encodeURIComponent(currentGenre)}`);
-  }, [currentGenre, navigate]);
+  }, [bigPicture, currentGenre, navigate]);
 
   const handleArrow = useCallback((direction: number) => {
     const next = (activeIndex + direction + GENRES.length) % GENRES.length;
@@ -230,45 +242,114 @@ function GenreShowcase() {
       setTimeout(() => {
         posterRefs.current.forEach(el => { if (el) tweenTo(el, { opacity: 1, y: 0 }, 0.35); });
         if (labelRef.current) tweenTo(labelRef.current, { opacity: 1, x: 0 }, 0.4);
+        requestAnimationFrame(() => checkOverlapRef.current());
       }, 50);
     }, 300);
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, [activeIndex]);
+
+  useEffect(() => {
+    if (!bigPicture) return;
+    const onMove = (event: Event) => {
+      const direction = (event as CustomEvent<{ direction?: "left" | "right" }>).detail?.direction;
+      if (direction) handleArrow(direction === "right" ? 1 : -1);
+    };
+    window.addEventListener(GENRE_SHOWCASE_MOVE_EVENT, onMove);
+    return () => window.removeEventListener(GENRE_SHOWCASE_MOVE_EVENT, onMove);
+  }, [bigPicture, handleArrow]);
 
   useLayoutEffect(() => {
     const card = cardRef.current;
     const label = labelRef.current;
     if (!card || !label) return;
 
+    const entries = posterRefs.current.filter(Boolean) as HTMLDivElement[];
+
     function checkOverlap() {
-      const labelRect = label!.getBoundingClientRect();
-      const labelRight = labelRect.right;
-      for (const poster of posterRefs.current) {
-        if (!poster) continue;
+      const text = labelTextRef.current ?? label!;
+      const labelRight = text.getBoundingClientRect().right + 12;
+      for (const poster of entries) {
         const posterRect = poster.getBoundingClientRect();
-        const collides = posterRect.left < labelRight + 12;
-        gsap.to(poster, { opacity: collides ? 0 : 1, duration: 0.3, ease: "power2.out" });
+        const collides = posterRect.left < labelRight;
+        if (collides) {
+          poster.style.visibility = "hidden";
+          poster.style.pointerEvents = "none";
+          gsap.set(poster, { opacity: 0 });
+        } else {
+          poster.style.visibility = "";
+          poster.style.pointerEvents = "";
+          gsap.to(poster, { opacity: 1, duration: 0.3, ease: "power2.out" });
+        }
       }
     }
 
+    checkOverlapRef.current = checkOverlap;
+
     const ro = new ResizeObserver(() => checkOverlap());
     ro.observe(card);
+    ro.observe(label);
+    if (labelTextRef.current) ro.observe(labelTextRef.current);
+    entries.forEach(poster => ro.observe(poster));
     checkOverlap();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      checkOverlapRef.current = () => {};
+    };
   }, [activeIndex, currentData]);
+
+  useEffect(() => {
+    const img = backdropRef.current;
+    if (!img) return;
+    gsap.killTweensOf(img);
+    gsap.fromTo(
+      img,
+      { opacity: 0, scale: 1.14, filter: "blur(18px) brightness(0.35)" },
+      {
+        opacity: 1,
+        scale: 1.1,
+        filter: "blur(10px) brightness(0.5)",
+        duration: 1.1,
+        ease: "power2.out",
+        overwrite: true,
+      },
+    );
+  }, [activeIndex, currentData?.backdrop]);
 
   if (!currentData) return null;
 
   const hasPosters = currentData.posters.some(p => p);
 
   return (
-    <section style={{ paddingLeft: 48, paddingRight: 48, paddingTop: 8, paddingBottom: 28 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>Explorar géneros - Anime</span>
+    <section data-row-key="genre-showcase" data-row-count={1} style={{ paddingLeft: 48, paddingRight: 48, paddingTop: 8, paddingBottom: 28 }}>
+      <div data-row-header style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14 }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: "var(--home-h, rgba(255,255,255,0.6))" }}>Explorar géneros - Anime</span>
       </div>
       <div
         ref={cardRef}
         onClick={handleClick}
+        data-genre-showcase={bigPicture ? "true" : undefined}
+        data-row-card
+        data-item-index={0}
+        aria-label={bigPicture ? `Explorar género ${GENRE_LABELS[currentGenre] ?? currentGenre}` : undefined}
+        role={bigPicture ? "button" : undefined}
+        tabIndex={bigPicture ? 0 : undefined}
+        onKeyDown={bigPicture ? event => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleClick();
+          }
+        } : undefined}
+        onFocus={bigPicture ? event => {
+          const card = event.currentTarget as HTMLDivElement;
+          tweenTo(card, { scale: 1.012, y: -3, zIndex: 5 }, 0.28);
+          gsap.set(card, { boxShadow: "0 22px 56px rgba(0,0,0,0.62)" });
+        } : undefined}
+        onBlur={bigPicture ? event => {
+          const card = event.currentTarget as HTMLDivElement;
+          tweenTo(card, { scale: 1, y: 0, zIndex: 1 }, 0.28);
+          gsap.set(card, { boxShadow: "0 16px 48px rgba(0,0,0,0.5)" });
+        } : undefined}
         style={{
           position: "relative",
           width: "100%",
@@ -283,6 +364,7 @@ function GenreShowcase() {
         {currentData.backdrop ? (
           <>
             <img
+              ref={backdropRef}
               src={currentData.backdrop}
               alt=""
               style={{
@@ -293,7 +375,7 @@ function GenreShowcase() {
                 objectFit: "cover",
                 objectPosition: "top",
                 filter: "blur(10px) brightness(0.5)",
-                transform: "scale(1.1)",
+                willChange: "transform, opacity, filter",
               }}
             />
             <div
@@ -378,47 +460,49 @@ function GenreShowcase() {
           </div>
         ) : null}
 
-        <div
-          style={{
-            position: "absolute",
-            right: 24,
-            bottom: 16,
-            zIndex: 3,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <button
-            onClick={e => { e.stopPropagation(); handleArrow(-1); }}
-            aria-label="Género anterior"
+        {!bigPicture ? (
+          <div
             style={{
-              width: 36, height: 36, borderRadius: "50%",
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(255,255,255,0.06)",
-              color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", padding: 0,
+              position: "absolute",
+              right: 24,
+              bottom: 16,
+              zIndex: 3,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
             }}
           >
-            <ChevronLeft size={18} />
-          </button>
-          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 500, minWidth: 28, textAlign: "center" }}>
-            {activeIndex + 1}/{GENRES.length}
-          </span>
-          <button
-            onClick={e => { e.stopPropagation(); handleArrow(1); }}
-            aria-label="Género siguiente"
-            style={{
-              width: 36, height: 36, borderRadius: "50%",
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(255,255,255,0.06)",
-              color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", padding: 0,
-            }}
-          >
-            <ChevronRight size={18} />
-          </button>
-        </div>
+            <button
+              onClick={e => { e.stopPropagation(); handleArrow(-1); }}
+              aria-label="Género anterior"
+              style={{
+                width: 36, height: 36, borderRadius: "50%",
+                border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.06)",
+                color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", padding: 0,
+              }}
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 500, minWidth: 28, textAlign: "center" }}>
+              {activeIndex + 1}/{GENRES.length}
+            </span>
+            <button
+              onClick={e => { e.stopPropagation(); handleArrow(1); }}
+              aria-label="Género siguiente"
+              style={{
+                width: 36, height: 36, borderRadius: "50%",
+                border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.06)",
+                color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", padding: 0,
+              }}
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

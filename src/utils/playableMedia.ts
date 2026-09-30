@@ -65,10 +65,32 @@ export function isDirectMediaUrl(value: unknown): value is string {
   return HTTP_URL_RE.test(target) && !isLookupPageUrl(target) && MEDIA_EXTENSION_RE.test(target);
 }
 
+const UNPLAYABLE_FILE_HOST_RES = [
+  /(?:^|\.)1fichier\.com$/i,
+  /(?:^|\.)mega\.(?:nz|io|co\.nz)$/i,
+];
+
+/**
+ * File hosts whose pages can never resolve to a direct stream: 1Fichier
+ * blocks free programmatic downloads and Mega serves only encrypted API
+ * chunks. Their URLs must never count as playable — not even when a scraper
+ * optimistically flags them as resolved — so they never show up as sources.
+ */
+export function isUnplayableFileHostUrl(value: unknown): boolean {
+  const target = normalized(value);
+  if (!HTTP_URL_RE.test(target)) return false;
+  try {
+    return UNPLAYABLE_FILE_HOST_RES.some(re => re.test(new URL(target).hostname));
+  } catch {
+    return false;
+  }
+}
+
 function isDeclaredDirectUrl(stream: MediaStream): boolean {
   const target = normalized(stream.url);
   if (!target || !HTTP_URL_RE.test(target)) return false;
   if (isLookupPageUrl(target)) return false;
+  if (isUnplayableFileHostUrl(target)) return false;
 
   const hints = stream.behaviorHints as Record<string, unknown> | undefined;
   if (hints?.scraperPlayback === "iframe" || hints?.notWebReady === true) return false;
@@ -91,7 +113,7 @@ export function getDirectPlaybackUrl(stream: MediaStream | null | undefined): st
 
   return (stream.sources ?? [])
     .map(normalized)
-    .find(isDirectMediaUrl) ?? "";
+    .find(url => isDirectMediaUrl(url) && !isUnplayableFileHostUrl(url)) ?? "";
 }
 
 export function hasP2pPlayback(stream: MediaStream | null | undefined): boolean {

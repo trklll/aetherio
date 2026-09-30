@@ -2,6 +2,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { Check, Image as ImageIcon, Info, MinusCircle, Play } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { tmdbFetch } from "../../config/apiKeys";
+import { fetchTmdbArtwork } from "../../services/tmdbArtworkService";
 import ContextMenu from "../../components/ui/ContextMenu";
 import { useHorizontalVirtualWindow } from "../../hooks/useHorizontalVirtualWindow";
 import {
@@ -23,13 +24,16 @@ import {
 } from "../../utils/homeCardArtwork";
 import { readDetailMediaMeta, writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { scrollByGsap, tweenTo } from "../../utils/motion";
+import { useBigPictureActive } from "../../navigation/spatialNav.ts";
+import { buildDetailPath, buildEpisodePath } from "../../utils/bigPictureDetail.ts";
+import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
 import { syncTraktMarkedWatched, syncTraktRemovePlayback } from "../../trakt";
 import type { MediaItem } from "../../types/ui";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const IMG = "https://image.tmdb.org/t/p";
-const CARD_W = 386;
-const CARD_H = 225;
+const CARD_W = 425;
+const CARD_H = 248;
 const GAP = 18;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
@@ -289,7 +293,7 @@ export default function ContinueWatchingRow() {
         q.set("season", String(next.query.season));
         q.set("ep", String(next.query.episode));
         if (next.episodeName) q.set("epTitle", next.episodeName);
-        navigate(`/episode?${q.toString()}`);
+        navigate(buildEpisodePath(q.toString()));
         return;
       }
     }
@@ -299,7 +303,7 @@ export default function ContinueWatchingRow() {
     if (typeof entry.season === "number") q.set("season", String(entry.season));
     if (entry.episode) q.set("ep", String(entry.episode));
     if (entry.episodeName) q.set("epTitle", entry.episodeName);
-    navigate(`/episode?${q.toString()}`);
+    navigate(buildEpisodePath(q.toString()));
   }
 
   function removeWithAnimation(entry: ContinueWatchingEntry) {
@@ -317,9 +321,9 @@ export default function ContinueWatchingRow() {
   }
 
   return (
-    <section style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 0, marginBottom: -24 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: 48, paddingRight: 48 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>Continuar viendo</span>
+    <section data-row-key="continue-watching" data-row-count={items.length} style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 0, marginBottom: -24 }}>
+      <div data-row-header style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: "var(--app-gutter-x)", paddingRight: "var(--app-gutter-x)" }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: "var(--home-h, rgba(255,255,255,0.6))" }}>Continuar viendo</span>
       </div>
       <div
         style={{ position: "relative" }}
@@ -364,6 +368,8 @@ export default function ContinueWatchingRow() {
         <div
           ref={scrollRef}
           className="scroll-row"
+          data-row-scroller
+          data-focus-center
           style={{
             display: "flex",
             gap: 0,
@@ -372,8 +378,8 @@ export default function ContinueWatchingRow() {
             marginTop: -18,
             marginLeft: 0,
             marginRight: 0,
-            paddingLeft: 48,
-            paddingRight: 48,
+            paddingLeft: "var(--app-gutter-x)",
+            paddingRight: "var(--app-gutter-x)",
             paddingTop: ROW_SHADOW_TOP_GUTTER + 8,
             paddingBottom: ROW_SHADOW_BOTTOM_GUTTER + 8,
             scrollbarWidth: "none",
@@ -383,7 +389,7 @@ export default function ContinueWatchingRow() {
           {visibleItems.map((entry, offset) => {
             const index = virtualWindow.start + offset;
             return (
-              <div key={entry.key} style={{ flex: "0 0 auto", paddingLeft: index === 0 ? 10 : 0, marginRight: index === items.length - 1 ? 0 : GAP }}>
+              <div key={entry.key} data-row-card data-item-index={index} style={{ flex: "0 0 auto", marginRight: index === items.length - 1 ? 0 : GAP }}>
                 <ContinueCard
                   entry={entry}
                   removing={removingKeys.has(entry.key)}
@@ -437,12 +443,10 @@ export default function ContinueWatchingRow() {
 }
 
 async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
-  const initialType = entry.type === "movie" ? "movie" : "tv";
+  const initialType: "movie" | "tv" = entry.type === "movie" ? "movie" : "tv";
   let tmdbId = await resolveTmdbId(entry, initialType);
-  let tmdbType = initialType;
   if (!tmdbId && initialType === "tv") {
     tmdbId = await resolveTmdbId(entry, "movie");
-    tmdbType = "movie";
   }
   if (!tmdbId) {
     console.info("[AETHERIO:CONTINUE:ARTWORK] no TMDB match", {
@@ -455,31 +459,25 @@ async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
     return null;
   }
 
-  let [details, images] = await Promise.all([
-    tmdbFetch<{ title?: string; name?: string; backdrop_path?: string; poster_path?: string }>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES" } }),
-    entry.logo ? Promise.resolve(null) : tmdbFetch<{ logos?: unknown }>(`/${tmdbType}/${tmdbId}/images`, { params: { include_image_language: "es,en,null" } }),
-  ]);
-  if (!details && tmdbType === "tv") {
-    tmdbType = "movie";
-    [details, images] = await Promise.all([
-      tmdbFetch<{ title?: string; name?: string; backdrop_path?: string; poster_path?: string }>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES" } }),
-      entry.logo ? Promise.resolve(null) : tmdbFetch<{ logos?: unknown }>(`/${tmdbType}/${tmdbId}/images`, { params: { include_image_language: "es,en,null" } }),
-    ]);
-  }
-  const logoPath = entry.logo ? undefined : pickTmdbLogoPath(images?.logos);
+  // Una sola peticion por id (detalle + imagenes) y cacheada por el resolver
+  // compartido: antes esta fila hacia su propia pareja detalle/imagenes y su
+  // propio sondeo tv->movie, por encima de lo que ya habian pedido las filas
+  // de Home para el mismo titulo.
+  const artwork = await fetchTmdbArtwork(initialType, tmdbId);
+  const logoPath = entry.logo ? undefined : artwork?.logoPath;
   const episodeDetails = entry.type !== "movie" && entry.season && entry.episode
     ? await fetchTmdbEpisodeDetails(tmdbId, entry.season, entry.episode)
     : null;
   const seriesBackground = tmdbImage(episodeDetails?.still_path, "original")
-    ?? tmdbImage(details?.backdrop_path, "original");
+    ?? tmdbImage(artwork?.backdropPath, "original");
 
   return {
-    name: details?.title ?? details?.name ?? entry.name,
+    name: artwork?.title ?? entry.name,
     background: entry.type === "movie"
-      ? tmdbImage(details?.backdrop_path, "original")
+      ? tmdbImage(artwork?.backdropPath, "original")
       : seriesBackground,
     episodeStill: entry.type !== "movie" ? tmdbImage(episodeDetails?.still_path, "original") : undefined,
-    poster: tmdbImage(details?.poster_path, "original"),
+    poster: tmdbImage(artwork?.posterPath, "original"),
     logo: entry.logo ?? sanitizeLogoUrl(tmdbImage(logoPath, "original")),
     episodeName: episodeDetails?.name ?? entry.episodeName,
   };
@@ -655,15 +653,6 @@ function tmdbImage(path: string | undefined | null, size: "original" | "w780" | 
   return path ? `${IMG}/${size}${path}` : undefined;
 }
 
-function pickTmdbLogoPath(logos: unknown) {
-  if (!Array.isArray(logos)) return undefined;
-  const logo = logos.find((item: any) => item?.iso_639_1 === "es" && typeof item?.file_path === "string")
-    ?? logos.find((item: any) => item?.iso_639_1 === "en" && typeof item?.file_path === "string")
-    ?? logos.find((item: any) => item?.iso_639_1 === null && typeof item?.file_path === "string")
-    ?? logos.find((item: any) => typeof item?.file_path === "string");
-  return logo?.file_path;
-}
-
 const cardBaseStyle: React.CSSProperties = {
   position: "relative",
   zIndex: 1,
@@ -700,8 +689,8 @@ const bottomContentStyle: React.CSSProperties = {
 };
 
 const logoStyle: React.CSSProperties = {
-  maxHeight: 40,
-  maxWidth: 172,
+  maxHeight: 48,
+  maxWidth: 206.4,
   objectFit: "contain",
   filter: "drop-shadow(0 1px 8px rgba(0,0,0,0.95))",
   marginBottom: 17,
@@ -755,6 +744,21 @@ const episodeLabelStyle: React.CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+};
+
+const continueCaptionStyle: React.CSSProperties = {
+  marginTop: 8,
+  opacity: 0,
+  transform: "translateY(4px)",
+  fontSize: 13,
+  fontWeight: 500,
+  color: "#fff",
+  textAlign: "center",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  maxWidth: CARD_W,
+  padding: "0 2px",
 };
 
 const menuButtonStyle: React.CSSProperties = {
@@ -840,6 +844,57 @@ const ContinueCard = memo(function ContinueCard({
   const episodeLabel = entry.season && entry.episode
     ? `T${entry.season} E${entry.episode}${entry.episodeName ? ` - ${entry.episodeName}` : ""}`
     : "Película";
+  const [cardHovered, setCardHovered] = useState(false);
+  const captionRef = useRef<HTMLDivElement>(null);
+  // En picture la card es foco espacial con la misma animación del hover.
+  const bigPicture = useBigPictureActive();
+  // Sin anticlick en picture: A/Enter corto reanuda, mantenido abre opciones.
+  const longPress = useLongPressAction(bigPicture, {
+    onActivate: onClick,
+    onLongPress: () => setMenuOpen(true),
+  });
+  const enterCard = (target: HTMLDivElement) => {
+    setCardHovered(true);
+    if (removing) {
+      tweenTo(target, { scale: 0.96 });
+    } else {
+      tweenTo(target, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
+    }
+    const img = target.querySelector("img");
+    if (img) tweenTo(img, { scale: 1.04 });
+  };
+  const leaveCard = (target: HTMLDivElement) => {
+    setCardHovered(false);
+    if (removing) {
+      tweenTo(target, { scale: 0.96, y: 0 });
+    } else {
+      tweenTo(target, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+    }
+    const img = target.querySelector("img");
+    if (img) tweenTo(img, { scale: 1 });
+  };
+  // Texto bajo la card al pasar el mouse: película → nombre;
+  // serie/anime → capítulo enumerado + título (ej. "T1 E2 - El título").
+  const hoverCaption = entry.type === "movie"
+    ? entry.name
+    : [
+        entry.season && entry.episode
+          ? `T${entry.season} E${entry.episode}`
+          : entry.episode
+            ? `E${entry.episode}`
+            : "",
+        entry.episodeName?.trim() ? entry.episodeName : entry.name,
+      ].filter(Boolean).join(" - ");
+
+  useEffect(() => {
+    const el = captionRef.current;
+    if (!el) return;
+    if (cardHovered) {
+      tweenTo(el, { opacity: 1, y: 0 }, 0.25);
+    } else {
+      tweenTo(el, { opacity: 0, y: 8 }, 0.2);
+    }
+  }, [cardHovered]);
 
   useEffect(() => {
     if (!removing) {
@@ -883,35 +938,40 @@ const ContinueCard = memo(function ContinueCard({
   }
 
   return (
+    <div style={{ flexShrink: 0, width: CARD_W, marginRight: removing ? -CARD_W - GAP : 0 }}>
     <div
       ref={cardRef}
-      onClick={onClick}
+      onClick={event => {
+        // ContextMenu is a React portal, so its click can still bubble through
+        // this card even though it is rendered under document.body.
+        if ((event.target as HTMLElement).closest("[data-aetherio-context-menu]")) {
+          event.stopPropagation();
+          return;
+        }
+        onClick();
+      }}
       onContextMenu={event => {
         event.preventDefault();
         event.stopPropagation();
         setMenuOpen(true);
       }}
+      data-row-card
+      data-long-press
+      aria-label={bigPicture ? entry.name : undefined}
+      tabIndex={bigPicture ? 0 : undefined}
+      role={bigPicture ? "button" : undefined}
+      onKeyDown={bigPicture ? longPress.onKeyDown : undefined}
+      onKeyUp={bigPicture ? longPress.onKeyUp : undefined}
+      onFocus={bigPicture ? event => enterCard(event.currentTarget) : undefined}
+      onBlur={bigPicture ? event => leaveCard(event.currentTarget) : undefined}
       style={{
         ...cardBaseStyle,
-        marginRight: removing ? -CARD_W - GAP : 0,
       }}
        onMouseEnter={event => {
-         if (removing) {
-           tweenTo(event.currentTarget, { scale: 0.96 });
-         } else {
-           tweenTo(event.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
-         }
-         const img = event.currentTarget.querySelector("img");
-         if (img) tweenTo(img, { scale: 1.04 });
+         enterCard(event.currentTarget);
        }}
        onMouseLeave={event => {
-         if (removing) {
-           tweenTo(event.currentTarget, { scale: 0.96, y: 0 });
-         } else {
-           tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
-         }
-         const img = event.currentTarget.querySelector("img");
-         if (img) tweenTo(img, { scale: 1 });
+         leaveCard(event.currentTarget);
        }}
     >
       {artwork.image && <img
@@ -971,13 +1031,13 @@ const ContinueCard = memo(function ContinueCard({
           event.stopPropagation();
           setMenuOpen(value => !value);
         }}
-        style={menuButtonStyle}
+        style={bigPicture ? { ...menuButtonStyle, visibility: "hidden", pointerEvents: "none" } : menuButtonStyle}
       >
         ...
       </button>
       <ContextMenu
         open={menuOpen}
-        anchorRef={menuButtonRef}
+        anchorRef={bigPicture ? cardRef : menuButtonRef}
         avoidRef={cardRef}
         onClose={() => setMenuOpen(false)}
         width={204}
@@ -996,7 +1056,7 @@ const ContinueCard = memo(function ContinueCard({
                 ? "Ir al anime"
                 : "Ir a la serie",
             icon: <Info size={15} />,
-            onSelect: () => navigate(`/detail/${encodeURIComponent(entry.type)}/${encodeURIComponent(entry.id)}`),
+            onSelect: () => navigate(buildDetailPath(entry.type, entry.id)),
           },
         ]}
       />
@@ -1009,6 +1069,10 @@ const ContinueCard = memo(function ContinueCard({
         onSelect={applyCardBackground}
         onClose={() => setArtworkPickerOpen(false)}
       />
+    </div>
+    <div ref={captionRef} title={hoverCaption} style={continueCaptionStyle}>
+      {hoverCaption}
+    </div>
     </div>
   );
 });

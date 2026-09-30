@@ -136,6 +136,10 @@ function scrapedResultCacheTtl(streams: MediaStream[]) {
   return SCRAPED_CACHE_TTL_MS;
 }
 
+export function scrapedResultCacheable(streamCount: number) {
+  return streamCount > 0;
+}
+
 export function useScrapedStreams(query: StreamQuery | null, titleOverride?: string) {
   const sourcePreferences = useSourcePreferences();
   const preferencesKey = sourcePreferencesSignature(sourcePreferences);
@@ -216,7 +220,7 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
       if (!cancelled && pending === 0) {
         const finalStreams = [...batches.native, ...batches.providers, ...batches.mediaExtension]
           .filter(isPlayableMediaStream);
-        const cacheable = failures.length === 0 && finalStreams.length > 0;
+        const cacheable = scrapedResultCacheable(finalStreams.length);
         publish(cacheable);
         if (DEBUG_SCRAPERS) console.info("[AETHERIO:SCRAPERS] complete", {
           queryId: query.id,
@@ -410,8 +414,12 @@ export function useScrapedStreams(query: StreamQuery | null, titleOverride?: str
         ]);
         const cloudstreamResults = labelCloudstreamStreams(providerRuntimeResults, cloudstreamAdapters);
         if (cloudstreamResults.length) onCloudstreamStreams(cloudstreamResults);
-        if (providerFailureCount > 0) {
-          throw new Error(`${providerFailureCount} provider(s) directo(s) fallaron; no se almacenara el resultado parcial.`);
+        if (providerFailureCount > 0 && DEBUG_SCRAPERS) {
+          console.info("[AETHERIO:SCRAPERS] providers partial", {
+            queryId: query.id,
+            failedProviderCount: providerFailureCount,
+            streamCount: providerRuntimeResults.length,
+          });
         }
         return mergeStreams(cloudstreamResults, providerRuntimeResults);
       })

@@ -43,6 +43,12 @@ function Write-Warn($msg) { Write-Host "    !   $msg" -ForegroundColor Yellow }
 function Write-Fail($msg) { Write-Host "    X   $msg" -ForegroundColor Red; exit 1 }
 
 if (-not $Source) {
+    # En CI no existe el repo hermano: el workflow clona SpatialPosters y pasa
+    # la ruta por SPATIALPOSTERS_SOURCE. En local manda ese valor si esta
+    # puesto y, si no, el hermano del repo.
+    $Source = $env:SPATIALPOSTERS_SOURCE
+}
+if (-not $Source) {
     # Mismo default que spatialposters.ps1: hermano del repo de Aetherio.
     $Source = Join-Path $RepoRoot "..\SpatialPosters"
 }

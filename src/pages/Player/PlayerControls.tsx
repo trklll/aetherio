@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AudioLines,
@@ -13,6 +13,7 @@ import {
   Play,
   Plus,
   Radio,
+  Repeat,
   RotateCcw,
   RotateCw,
   Sparkles,
@@ -30,7 +31,13 @@ import type { PartyMedia } from "../../party/protocol";
 import { getContextGlassStyle } from "../../components/ui/glassSurface";
 import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
+ import { useSeekrApiKey } from "../../config/useSeekrApiKey";
+import type { SeekrContent } from "./seekPreview/seekr";
+import { useSeekrPreview } from "./seekPreview/useSeekrPreview";
 import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
+import SubtitleSyncDialog from "./SubtitleSyncDialog";
+import type { SubtitleSyncCue } from "./subtitleSync/parser";
+import type { SubtitleSyncStage } from "./subtitleSync/useSubtitleSync";
 
 type MpvBlurGeometry = {
   left: number;
@@ -60,6 +67,7 @@ interface PlayerControlsProps {
   active: boolean;
   currentMetaTitle: string;
   title: string;
+  seekrContent: SeekrContent | null;
   currentTime: number;
   duration: number;
   playing: boolean;
@@ -69,6 +77,8 @@ interface PlayerControlsProps {
   selectedSpeed: string;
   selectedVideoProfile: string;
   videoScaleMode: VideoScaleMode;
+  isLocalPlayback: boolean;
+  repeatEnabled: boolean;
   audioOptions: SelectOption[];
   subtitleOptions: SelectOption[];
   speedOptions: string[];
@@ -78,6 +88,30 @@ interface PlayerControlsProps {
   subtitleScalePercent: number;
   subtitleVerticalPercent: number;
   subtitleSyncOpen: boolean;
+  subtitleSyncLoading: boolean;
+  subtitleSyncError: string | null;
+  subtitleSyncCanUseManual: boolean;
+  subtitleSyncStage: SubtitleSyncStage | null;
+  subtitleSyncCues: SubtitleSyncCue[];
+  subtitleSyncCapturedVideoMs: number | null;
+  subtitleSyncTrackLabel: string;
+  nativeSurfaceVisible: boolean;
+  /**
+   * Reproduccion en directo: la barra de tiempo de VOD no aplica (no hay
+   * duracion conocida) y se sustituye por la ventana DVR con el borde marcado.
+   */
+  liveMode?: boolean;
+  liveLatencySeconds?: number;
+  liveAtEdge?: boolean;
+  liveDvrProgress?: number;
+  onGoLive?: () => void;
+  /** Variante Big Picture (/big-picture/player): layout sin guía de mando. */
+  bigPicture?: boolean;
+  /** Texto oscuro cuando el fondo/poster del reproductor es muy claro. */
+  lightBackground?: boolean;
+  /** Menú flotante activo, elevado a PlayerPage para que el mando (X) lo abra. */
+  openMenu: string | null;
+  onOpenMenuChange: (next: string | null) => void;
   showPanelToggle: boolean;
   activeSidePanel: "episodes" | "sources" | null;
   hasEpisodeOptions: boolean;
@@ -108,9 +142,15 @@ interface PlayerControlsProps {
   onSubtitleScaleChange: (next: number) => void;
   onSubtitleVerticalChange: (next: number) => void;
   onOpenSubtitleSync: () => void;
+  onCloseSubtitleSync: () => void;
+  onCaptureSubtitleSync: () => void;
+  onApplySubtitleSyncCue: (cueStartTimeMs: number) => void;
+  onUseManualSubtitleSync: () => void;
+  onPickSubtitleTrack: () => void;
   onSpeedChange: (value: string) => void;
   onVideoProfileChange: (value: string) => void;
   onToggleVideoScale: () => void;
+  onToggleRepeat: () => void;
   onToggleSourcePanel: () => void;
   onToggleEpisodePanel: () => void;
   onNavigateEpisode: (direction: "prev" | "next") => void;
@@ -120,6 +160,7 @@ export default function PlayerControls({
   active,
   currentMetaTitle,
   title,
+  seekrContent,
   currentTime,
   duration,
   playing,
@@ -129,6 +170,8 @@ export default function PlayerControls({
   selectedSpeed,
   selectedVideoProfile,
   videoScaleMode,
+  isLocalPlayback,
+  repeatEnabled,
   audioOptions,
   subtitleOptions,
   speedOptions,
@@ -138,6 +181,23 @@ export default function PlayerControls({
   subtitleScalePercent,
   subtitleVerticalPercent,
   subtitleSyncOpen,
+  subtitleSyncLoading,
+  subtitleSyncError,
+  subtitleSyncCanUseManual,
+  subtitleSyncStage,
+  subtitleSyncCues,
+  subtitleSyncCapturedVideoMs,
+  subtitleSyncTrackLabel,
+  nativeSurfaceVisible,
+  liveMode = false,
+  liveLatencySeconds = 0,
+  liveAtEdge = true,
+  liveDvrProgress = 1,
+  onGoLive,
+  bigPicture,
+  lightBackground = false,
+  openMenu,
+  onOpenMenuChange,
   showPanelToggle,
   activeSidePanel,
   hasEpisodeOptions,
@@ -167,9 +227,15 @@ export default function PlayerControls({
   onSubtitleScaleChange,
   onSubtitleVerticalChange,
   onOpenSubtitleSync,
+  onCloseSubtitleSync,
+  onCaptureSubtitleSync,
+  onApplySubtitleSyncCue,
+  onUseManualSubtitleSync,
+  onPickSubtitleTrack,
   onSpeedChange,
   onVideoProfileChange,
   onToggleVideoScale,
+  onToggleRepeat,
   onToggleSourcePanel,
   onToggleEpisodePanel,
   onNavigateEpisode,
@@ -188,9 +254,156 @@ export default function PlayerControls({
   const barAlphaRef = useRef({ v: 0 });
   const episodeAlphaRef = useRef({ v: 0 });
   const subtitleAlphaRef = useRef({ v: 0 });
-  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // openMenu vive en PlayerPage (el mando lo abre/cierra); aquí solo un
+  // adaptador compatible con los setOpenMenu funcionales existentes.
+  const setOpenMenu = (next: string | null | ((prev: string | null) => string | null)) => {
+    onOpenMenuChange(typeof next === "function" ? next(openMenu) : next);
+  };
+  // Guía de mando: visible solo con la barra activa y un gamepad conectado.
+  const [gamepadPresent, setGamepadPresent] = useState(false);
+  useEffect(() => {
+    const update = () => {
+      try {
+        const pads = typeof navigator !== "undefined" && "getGamepads" in navigator
+          ? navigator.getGamepads?.()
+          : null;
+        setGamepadPresent(
+          Boolean(pads && Array.from(pads).some(pad => Boolean(pad?.connected))),
+        );
+      } catch {
+        setGamepadPresent(false);
+      }
+    };
+    update();
+    window.addEventListener("gamepadconnected", update);
+    window.addEventListener("gamepaddisconnected", update);
+    const timer = window.setInterval(update, 2500);
+    return () => {
+      window.removeEventListener("gamepadconnected", update);
+      window.removeEventListener("gamepaddisconnected", update);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // Algunos WebView dejan marcas visuales anteriores cuando el mando cambia
+  // de foco muy rápido. En Big Picture la fuente de verdad es siempre el
+  // control que document.activeElement identifica en este instante.
+  useEffect(() => {
+    if (!bigPicture) return;
+    const root = controlsGlassRef.current;
+    if (!root) return;
+
+    const focusableSelector = [
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "a[href]",
+      "[role='button']:not([aria-disabled='true'])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    const clearBarFocus = () => {
+      root.querySelectorAll<HTMLElement>(".spatial-focus").forEach(element => {
+        element.classList.remove("spatial-focus");
+      });
+      root.querySelectorAll<HTMLElement>("[data-bar-active]").forEach(element => {
+        element.removeAttribute("data-bar-active");
+      });
+    };
+    const getActiveControl = () => {
+      const activeElement = document.activeElement;
+      if (!(activeElement instanceof HTMLElement) || !root.contains(activeElement)) return null;
+      const control = activeElement.matches(focusableSelector)
+        ? activeElement
+        : activeElement.closest<HTMLElement>(focusableSelector);
+      return control && root.contains(control) ? control : null;
+    };
+    const syncBarFocus = () => {
+      const active = getActiveControl();
+      clearBarFocus();
+      active?.setAttribute("data-bar-active", "true");
+    };
+
+    root.addEventListener("focusin", syncBarFocus);
+    root.addEventListener("focusout", syncBarFocus);
+    syncBarFocus();
+    const focusSyncTimer = window.setInterval(syncBarFocus, 100);
+    return () => {
+      root.removeEventListener("focusin", syncBarFocus);
+      root.removeEventListener("focusout", syncBarFocus);
+      window.clearInterval(focusSyncTimer);
+      clearBarFocus();
+    };
+  }, [bigPicture]);
+
   // Lobby Party: el transporte lo gobierna el anfitrión; volumen y Party siguen vivos.
   const transportLocked = controlsLocked || lobbyMode;
+  const { apiKey: seekrApiKey } = useSeekrApiKey();
+  const seekrPreview = useSeekrPreview({
+    apiKey: seekrApiKey,
+    content: seekrContent,
+    durationMs: Math.max(0, duration * 1_000),
+    enabled: !transportLocked && duration > 0,
+  });
+  const [seekPreviewTime, setSeekPreviewTime] = useState<number | null>(null);
+  const [seekPreviewVisible, setSeekPreviewVisible] = useState(false);
+  // El popup se dibuja FUERA de la barra: el contenedor de controles tiene
+  // overflow-hidden, asi que dentro se recortaba siempre. Se ancla en coordenadas
+  // de ventana y se monta con un portal.
+  const [seekPreviewAnchor, setSeekPreviewAnchor] = useState<{ left: number; bottom: number } | null>(null);
+  const seekPreviewTimerRef = useRef<number | null>(null);
+  const seekDraggingRef = useRef(false);
+  const timelineTrackRef = useRef<HTMLDivElement | null>(null);
+
+  const hideSeekPreviewSoon = () => {
+    if (seekPreviewTimerRef.current !== null) window.clearTimeout(seekPreviewTimerRef.current);
+    seekPreviewTimerRef.current = window.setTimeout(() => {
+      seekPreviewTimerRef.current = null;
+      if (!seekDraggingRef.current) {
+        setSeekPreviewVisible(false);
+        setSeekPreviewTime(null);
+        setSeekPreviewAnchor(null);
+      }
+    }, 1_500);
+  };
+
+  const showSeekPreview = (time: number) => {
+    const next = Math.max(0, Math.min(duration || time, time));
+    setSeekPreviewTime(next);
+    setSeekPreviewVisible(seekrPreview.available);
+    const rect = timelineTrackRef.current?.getBoundingClientRect();
+    if (rect && rect.width > 0) {
+      const ratio = duration > 0 ? Math.max(0, Math.min(1, next / duration)) : 0;
+      setSeekPreviewAnchor({
+        left: rect.left + rect.width * ratio,
+        // +24 en vez de +14: deja una banda clara entre la card y el timeline para
+        // que nunca llegue a pisar la barra de reproduccion.
+        bottom: window.innerHeight - rect.top + 24,
+      });
+    }
+    void seekrPreview.loadFrames(next);
+    if (seekPreviewTimerRef.current !== null) window.clearTimeout(seekPreviewTimerRef.current);
+    seekPreviewTimerRef.current = window.setTimeout(() => {
+      seekPreviewTimerRef.current = null;
+      if (!seekDraggingRef.current) {
+        setSeekPreviewVisible(false);
+        setSeekPreviewTime(null);
+        setSeekPreviewAnchor(null);
+      }
+    }, 1_500);
+  };
+
+  const previewTimeFromPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || duration <= 0) return currentTime;
+    return Math.max(0, Math.min(duration, ((event.clientX - rect.left) / rect.width) * duration));
+  };
+
+  useEffect(() => () => {
+    if (seekPreviewTimerRef.current !== null) window.clearTimeout(seekPreviewTimerRef.current);
+  }, []);
+
   const subtitleBlurRefreshKey = useMemo(
     () => `${selectedSubtitleValue}|${subtitlesLoading ? "loading" : "ready"}|${subtitleOptions.map(option => option.value).join("\u0000")}`,
     [selectedSubtitleValue, subtitleOptions, subtitlesLoading],
@@ -243,7 +456,7 @@ export default function PlayerControls({
 
   useEffect(() => () => {
     document.documentElement.style.removeProperty("--aetherio-player-controls-top");
-    void setNativeMpvControlsBlur(false);
+    void setNativeMpvControlsBlur(false).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -300,6 +513,8 @@ export default function PlayerControls({
   useEffect(() => {
     let disposed = false;
     let animationFrame = 0;
+    let nativeRetryTimer: number | null = null;
+    lastBlurGeometryRef.current = "";
 
     const flushLatestBlurCommand = () => {
       const command = pendingBlurCommandRef.current;
@@ -341,6 +556,7 @@ export default function PlayerControls({
     const buildGeometry = (): MpvBlurGeometry | null => {
       const glass = controlsGlassRef.current;
       if (!glass) return null;
+      const fullscreenSubtitleOverlay = Boolean(bigPicture && openMenu === "subtitles");
       const rect = glass.getBoundingClientRect();
       const episodePanel = activeSidePanel
         ? document.querySelector<HTMLElement>("[data-player-episode-panel-glass]")
@@ -371,7 +587,7 @@ export default function PlayerControls({
               cornerRadius: Math.round(28 * scale),
             }
           : undefined,
-        subtitlePanel: floatingRect
+        subtitlePanel: floatingRect && !fullscreenSubtitleOverlay
           ? {
               left: r(floatingRect.left),
               top: r(floatingRect.top),
@@ -459,6 +675,13 @@ export default function PlayerControls({
 
     // Commit inicial inmediato para que el primer frame ya tenga blur si toca
     commitBlur();
+    if (active && nativeSurfaceVisible) {
+      nativeRetryTimer = window.setTimeout(() => {
+        if (disposed) return;
+        lastBlurGeometryRef.current = "";
+        syncBlurGeometry();
+      }, 280);
+    }
 
     const observer = new ResizeObserver(syncBlurGeometry);
     if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
@@ -477,6 +700,7 @@ export default function PlayerControls({
     window.visualViewport?.addEventListener("resize", syncBlurGeometry);
     return () => {
       disposed = true;
+      lastBlurGeometryRef.current = "";
       observer.disconnect();
       mutationObserver.disconnect();
       window.removeEventListener("resize", syncBlurGeometry);
@@ -491,13 +715,45 @@ export default function PlayerControls({
         window.clearTimeout(blurHideTimerRef.current);
         blurHideTimerRef.current = null;
       }
+      if (nativeRetryTimer !== null) window.clearTimeout(nativeRetryTimer);
     };
-  }, [active, activeSidePanel, controlsLocked, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
+  }, [active, activeSidePanel, bigPicture, controlsLocked, nativeSurfaceVisible, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
 
   function runControlAction(action: () => void) {
     setOpenMenu(null);
     action();
   }
+
+  const partyPill = partyConnected ? (
+    <span className="flex min-w-0 items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/12 px-2.5 py-1 text-xs font-bold text-white/85">
+      <Users size={13} className="shrink-0 text-white/70" />
+      <span className="truncate">
+        en Party {partyPeerNames.length > 0 ? `con ${partyPeerNames.slice(0, 4).join(", ")}${partyPeerNames.length > 4 ? ` y ${partyPeerNames.length - 4} más` : ""}` : ""}
+      </span>
+    </span>
+  ) : null;
+
+  // Mismo material que el sidebar de Big Picture (.bp-rail__box).
+  const glassStyle: CSSProperties = bigPicture
+    ? {
+        background: "rgba(255, 255, 255, 0.12)",
+        backdropFilter: "blur(48px) saturate(175%)",
+        WebkitBackdropFilter: "blur(48px) saturate(175%)",
+        border: "1px solid rgba(225, 230, 238, 0.09)",
+        boxShadow: "0 3px 14px rgba(0, 0, 0, 0.38)",
+      }
+    : {
+        background: prefersReducedMotion() || (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches)
+          ? "rgba(28,28,30,0.94)"
+          : "rgba(70, 70, 70, 0.22)",
+        backdropFilter: (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches) ? "none" : "blur(22px) saturate(180%)",
+        WebkitBackdropFilter: (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches) ? "none" : "blur(22px) saturate(180%)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        willChange: "transform, backdrop-filter",
+        transform: "translateZ(0)",
+        backfaceVisibility: "hidden",
+      };
+  const timelineDisplayTime = seekPreviewTime ?? currentTime;
 
   return (
     <div
@@ -513,20 +769,21 @@ export default function PlayerControls({
       <div
         ref={controlsGlassRef}
         data-player-controls-glass
-        className="relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)] will-change-transform"
-        style={{
-          background: prefersReducedMotion() || (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches)
-            ? "rgba(28,28,30,0.94)"
-            : "rgba(70, 70, 70, 0.22)",
-          backdropFilter: (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches) ? "none" : "blur(22px) saturate(180%)",
-          WebkitBackdropFilter: (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches) ? "none" : "blur(22px) saturate(180%)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          willChange: "transform, backdrop-filter",
-          transform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-        }}
+        className={bigPicture
+          ? `bp-player-controls relative mx-auto w-full overflow-hidden rounded-[26px] px-7 pb-3 pt-4${lightBackground ? " bp-player-controls--light" : ""}`
+          : "relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)] will-change-transform"}
+        style={glassStyle}
       >
-        <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
+        {bigPicture ? (
+          <div className="mb-1">
+            <p className="truncate text-[19px] font-bold leading-[1.2] text-white">{currentMetaTitle}</p>
+            {title ? (
+              <p className="mt-0.5 truncate text-[15px] font-medium leading-snug text-white/90">{title}</p>
+            ) : null}
+             {partyPill}
+              </div>
+             ) : (
+         <div className="mb-2 flex items-center gap-3 text-xs text-white/72">
           <span className="max-w-[36ch] truncate text-base font-semibold tracking-[-0.015em] leading-[1.1] text-white/92" style={{ fontOpticalSizing: "auto" }}>{currentMetaTitle}</span>
           {title ? (
             <>
@@ -534,47 +791,128 @@ export default function PlayerControls({
               <span className="tracking-[0.01em] leading-[1.4]">{title}</span>
             </>
           ) : null}
-          {partyConnected ? (
-            <span className="flex min-w-0 items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/12 px-2.5 py-1 text-xs font-bold text-white/85">
-              <Users size={13} className="shrink-0 text-white/70" />
-              <span className="truncate">
-                en Party {partyPeerNames.length > 0 ? `con ${partyPeerNames.slice(0, 4).join(", ")}${partyPeerNames.length > 4 ? ` y ${partyPeerNames.length - 4} más` : ""}` : ""}
-              </span>
-            </span>
-          ) : null}
+          {partyPill}
         </div>
+        )}
+        {gamepadPresent && !bigPicture ? (
+          <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-medium text-white/55" aria-hidden="true">
+            <span><span className="font-bold text-white/80">A</span> Reproducir</span>
+            <span><span className="font-bold text-white/80">←→</span> ±10 s</span>
+            <span><span className="font-bold text-white/80">↑↓</span> Volumen</span>
+            <span><span className="font-bold text-white/80">X</span> Subtítulos</span>
+            <span><span className="font-bold text-white/80">Y</span> Episodios</span>
+            <span><span className="font-bold text-white/80">LB/RB</span> Episodio</span>
+            <span><span className="font-bold text-white/80">B</span> Volver</span>
+          </div>
+        ) : null}
 
-        <div className="mb-3.5 flex items-center gap-3">
-          <span className="w-12 text-right text-xs text-white/84">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={1}
-            value={Math.min(currentTime, duration || currentTime)}
-            onChange={event => onSeek(Number(event.target.value))}
-            disabled={!duration || transportLocked}
-            style={{
-              pointerEvents: transportLocked ? "none" : "auto",
-              opacity: transportLocked ? 0.42 : 1,
-              "--player-progress": `${duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0}%`,
-            } as CSSProperties}
-            className="player-timeline flex-1 disabled:opacity-35"
+        {liveMode ? (
+          <LiveTimelineRow
+            latencySeconds={liveLatencySeconds}
+            atEdge={liveAtEdge}
+            dvrProgress={liveDvrProgress}
+            disabled={transportLocked}
+            onGoLive={onGoLive}
           />
+        ) : (
+        <div className={bigPicture ? "mb-2 flex items-center" : "mb-3.5 flex items-center gap-3"}>
+          {bigPicture ? null : (
+          <span className="w-12 text-right text-xs text-white/84">{formatTime(timelineDisplayTime)}</span>
+          )}
+          <div ref={timelineTrackRef} className="relative min-w-0 flex-1">
+            {seekPreviewVisible && seekrPreview.available && seekPreviewAnchor
+              ? createPortal(
+                <div
+                  data-seekr-preview
+                  data-player-interactive
+                  className="pointer-events-none fixed z-[70] -translate-x-1/2"
+                  style={{ left: `${seekPreviewAnchor.left}px`, bottom: `${seekPreviewAnchor.bottom}px` }}
+                  onPointerDown={event => event.stopPropagation()}
+                  onMouseMove={event => event.stopPropagation()}
+                >
+                {/* Card unica 16:9, sin texto ni iconos: solo la imagen. */}
+                <div className="relative aspect-video w-[292px] max-w-[60vw] shrink-0 overflow-hidden rounded-lg border border-white/15 bg-black shadow-[0_14px_36px_rgba(0,0,0,0.5)]">
+                  {seekrPreview.frames.center ? (
+                    <img src={seekrPreview.frames.center.dataUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full animate-pulse bg-white/5" />
+                  )}
+                </div>
+                </div>,
+                document.body,
+              )
+              : null}
+            <input
+              data-player-timeline
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={1}
+              value={Math.min(timelineDisplayTime, duration || timelineDisplayTime)}
+              onChange={event => {
+                const next = Number(event.target.value);
+                showSeekPreview(next);
+                onSeek(next);
+              }}
+              onPointerDown={event => {
+                seekDraggingRef.current = true;
+                showSeekPreview(previewTimeFromPointer(event));
+              }}
+              onPointerMove={event => {
+                if (!transportLocked) showSeekPreview(previewTimeFromPointer(event));
+              }}
+              onPointerUp={() => {
+                seekDraggingRef.current = false;
+                hideSeekPreviewSoon();
+              }}
+              onPointerLeave={() => {
+                if (!seekDraggingRef.current) hideSeekPreviewSoon();
+              }}
+              onFocus={() => showSeekPreview(currentTime)}
+              onBlur={() => {
+                if (!seekDraggingRef.current) hideSeekPreviewSoon();
+              }}
+              disabled={(!bigPicture && !duration) || transportLocked}
+              style={{
+                pointerEvents: transportLocked ? "none" : "auto",
+                opacity: transportLocked ? 0.42 : 1,
+                "--player-progress": `${duration > 0 ? Math.min(100, (timelineDisplayTime / duration) * 100) : 0}%`,
+              } as CSSProperties}
+              className="player-timeline w-full disabled:opacity-35"
+            />
+          </div>
+          {bigPicture ? null : (
           <span className="w-12 text-xs text-white/84">{formatTime(duration)}</span>
+          )}
         </div>
+        )}
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <IconButton label="Retroceder 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(-10))}>
-              <RotateCcw size={19} />
-            </IconButton>
-            <IconButton label={playing ? "Pausar" : "Reproducir"} disabled={transportLocked} onClick={() => runControlAction(onTogglePlay)} large>
+        <div className={bigPicture ? "flex flex-wrap items-center gap-2" : "flex flex-wrap items-center justify-between gap-3"}>
+          <div className={bigPicture ? "flex flex-wrap items-center gap-2" : "flex flex-wrap items-center gap-2.5"}>
+            {bigPicture ? null : (
+              <IconButton label="Retroceder 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(-10))}>
+                <RotateCcw size={19} />
+              </IconButton>
+            )}
+            <IconButton label={playing ? "Pausar" : "Reproducir"} disabled={transportLocked} onClick={() => runControlAction(onTogglePlay)} large playPause>
               {playing ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" />}
             </IconButton>
-            <IconButton label="Avanzar 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(10))}>
-              <RotateCw size={19} />
-            </IconButton>
+            {bigPicture ? null : (
+              <IconButton label="Avanzar 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(10))}>
+                <RotateCw size={19} />
+              </IconButton>
+            )}
+            {isLocalPlayback ? (
+              <IconButton
+                label={repeatEnabled ? "Desactivar repetición" : "Repetir"}
+                disabled={transportLocked}
+                active={repeatEnabled}
+                onClick={() => runControlAction(onToggleRepeat)}
+              >
+                <Repeat size={18} />
+              </IconButton>
+            ) : null}
+            {bigPicture ? null : (
             <div className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/12 px-2.5 py-2">
               <button
                 type="button"
@@ -597,9 +935,10 @@ export default function PlayerControls({
                 className="h-1 w-32 accent-white"
               />
             </div>
+            )}
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5">
+          <div className={bigPicture ? "flex flex-wrap items-center gap-2" : "flex flex-wrap items-center justify-end gap-2.5"}>
             <IconMenu
               id="audio"
               label="Audio"
@@ -618,17 +957,31 @@ export default function PlayerControls({
               subtitleOptions={[{ value: "", label: subtitlesLoading ? "Cargando subtítulos..." : "Apagado" }, ...subtitleOptions]}
               open={openMenu === "subtitles"}
               disabled={transportLocked}
-              subtitleDelayMs={subtitleDelayMs}
-              subtitleScalePercent={subtitleScalePercent}
-              subtitleVerticalPercent={subtitleVerticalPercent}
-              onToggle={() => setOpenMenu(value => value === "subtitles" ? null : "subtitles")}
-              onClose={() => setOpenMenu(null)}
+              bigPicture={bigPicture}
+              subtitleSyncOpen={subtitleSyncOpen}
+               subtitleDelayMs={subtitleDelayMs}
+               subtitleScalePercent={subtitleScalePercent}
+               subtitleVerticalPercent={subtitleVerticalPercent}
+               subtitleSyncLoading={subtitleSyncLoading}
+                subtitleSyncError={subtitleSyncError}
+                subtitleSyncCanUseManual={subtitleSyncCanUseManual}
+                subtitleSyncStage={subtitleSyncStage}
+               subtitleSyncCues={subtitleSyncCues}
+               subtitleSyncCapturedVideoMs={subtitleSyncCapturedVideoMs}
+               subtitleSyncTrackLabel={subtitleSyncTrackLabel}
+               onToggle={() => setOpenMenu(value => value === "subtitles" ? null : "subtitles")}
+               onClose={() => setOpenMenu(null)}
               onSubtitleChange={onSubtitleChange}
               onSubtitleDelayChange={onSubtitleDelayChange}
-              onSubtitleScaleChange={onSubtitleScaleChange}
-              onSubtitleVerticalChange={onSubtitleVerticalChange}
-              onOpenSubtitleSync={onOpenSubtitleSync}
-            />
+               onSubtitleScaleChange={onSubtitleScaleChange}
+               onSubtitleVerticalChange={onSubtitleVerticalChange}
+               onOpenSubtitleSync={onOpenSubtitleSync}
+               onCloseSubtitleSync={onCloseSubtitleSync}
+               onCaptureSubtitleSync={onCaptureSubtitleSync}
+                onApplySubtitleSyncCue={onApplySubtitleSyncCue}
+                onUseManualSubtitleSync={onUseManualSubtitleSync}
+                onPickSubtitleTrack={onPickSubtitleTrack}
+             />
             <IconMenu
               id="speed"
               label="Velocidad"
@@ -653,13 +1006,15 @@ export default function PlayerControls({
               onClose={() => setOpenMenu(null)}
             />
 
-            <IconButton
-              label={videoScaleMode === "crop" ? "Recortar" : "Original"}
-              disabled={transportLocked}
-              onClick={() => runControlAction(onToggleVideoScale)}
-            >
-              <Crop size={18} />
-            </IconButton>
+            {bigPicture ? null : (
+              <IconButton
+                label={videoScaleMode === "crop" ? "Recortar" : "Original"}
+                disabled={transportLocked}
+                onClick={() => runControlAction(onToggleVideoScale)}
+              >
+                <Crop size={18} />
+              </IconButton>
+            )}
             {canChangeSource ? (
               <IconButton
                 label={activeSidePanel === "sources" ? "Cerrar fuentes" : "Fuentes"}
@@ -679,6 +1034,11 @@ export default function PlayerControls({
                     ? "border-white/[0.11] bg-white/18 text-white"
                     : "border-white/[0.07] bg-white/10 text-white/90 hover:bg-white/14"
                 }`}
+                style={{
+                  backdropFilter: "blur(18px) saturate(160%)",
+                  WebkitBackdropFilter: "blur(18px) saturate(160%)",
+                  boxShadow: "0 2px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.10)",
+                }}
                 title="Episodios"
                 aria-label="Episodios"
               >
@@ -686,7 +1046,7 @@ export default function PlayerControls({
               </button>
             )}
 
-            {hasEpisodeOptions && (
+            {hasEpisodeOptions && !bigPicture && (
               <>
                 <IconButton
                   label="Episodio anterior"
@@ -720,8 +1080,70 @@ export default function PlayerControls({
             ) : null}
 
           </div>
+          {bigPicture ? (
+            <span className="ml-auto shrink-0 text-[15px] font-medium text-white/90">
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </span>
+          ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Barra de directo. En lugar del progreso de un archivo, muestra la ventana
+ * DVR: lo que hay entre el historico disponible y el borde. El borde se marca
+ * explicitamente para que "ir al directo" sea una accion visible y no algo que
+ * el usuario tiene que inferir de un reloj.
+ */
+function LiveTimelineRow({
+  latencySeconds,
+  atEdge,
+  dvrProgress,
+  disabled,
+  onGoLive,
+}: {
+  latencySeconds: number;
+  atEdge: boolean;
+  dvrProgress: number;
+  disabled: boolean;
+  onGoLive?: () => void;
+}) {
+  const behind = Math.max(0, latencySeconds);
+  return (
+    <div className="mb-3.5 flex items-center gap-3" data-player-live-timeline>
+      <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/18">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-white/45 transition-[width] duration-200"
+          style={{ width: `${Math.round(dvrProgress * 100)}%` }}
+        />
+        <div
+          data-player-live-edge
+          className="absolute inset-y-0 right-0 w-[3px] rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)]"
+        />
+      </div>
+
+      {atEdge ? (
+        <span className="flex w-[86px] shrink-0 items-center justify-end gap-1.5 text-[11px] font-semibold text-white/70">
+          <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+          En directo
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onGoLive}
+          disabled={disabled || !onGoLive}
+          data-player-go-live
+          className="flex w-[86px] shrink-0 items-center justify-end gap-1.5 text-[11px] font-semibold text-red-300 gsap-transition hover:text-red-200 disabled:opacity-50"
+          title={`${behind.toFixed(1)}s de retraso`}
+        >
+          <span className="tabular-nums">{behind < 10 ? `${behind.toFixed(1)}s` : `${Math.round(behind)}s`}</span>
+          <span className="rounded bg-red-500/90 px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
+            Ir al directo
+          </span>
+        </button>
+      )}
     </div>
   );
 }
@@ -732,9 +1154,18 @@ function SubtitleMenu({
   subtitleOptions,
   open,
   disabled,
+  bigPicture,
   subtitleDelayMs,
   subtitleScalePercent,
   subtitleVerticalPercent,
+  subtitleSyncOpen,
+  subtitleSyncLoading,
+  subtitleSyncError,
+  subtitleSyncCanUseManual,
+  subtitleSyncStage,
+  subtitleSyncCues,
+  subtitleSyncCapturedVideoMs,
+  subtitleSyncTrackLabel,
   onToggle,
   onClose,
   onSubtitleChange,
@@ -742,12 +1173,26 @@ function SubtitleMenu({
   onSubtitleScaleChange,
   onSubtitleVerticalChange,
   onOpenSubtitleSync,
+  onCloseSubtitleSync,
+  onCaptureSubtitleSync,
+  onApplySubtitleSyncCue,
+  onUseManualSubtitleSync,
+  onPickSubtitleTrack,
 }: {
   label: string;
   selectedSubtitleValue: string;
   subtitleOptions: SelectOption[];
   open: boolean;
   disabled?: boolean;
+  bigPicture?: boolean;
+  subtitleSyncOpen: boolean;
+  subtitleSyncLoading: boolean;
+  subtitleSyncError: string | null;
+  subtitleSyncCanUseManual: boolean;
+  subtitleSyncStage: SubtitleSyncStage | null;
+  subtitleSyncCues: SubtitleSyncCue[];
+  subtitleSyncCapturedVideoMs: number | null;
+  subtitleSyncTrackLabel: string;
   subtitleDelayMs: number;
   subtitleScalePercent: number;
   subtitleVerticalPercent: number;
@@ -758,6 +1203,11 @@ function SubtitleMenu({
   onSubtitleScaleChange: (next: number) => void;
   onSubtitleVerticalChange: (next: number) => void;
   onOpenSubtitleSync: () => void;
+  onCloseSubtitleSync: () => void;
+  onCaptureSubtitleSync: () => void;
+  onApplySubtitleSyncCue: (cueStartTimeMs: number) => void;
+  onUseManualSubtitleSync: () => void;
+  onPickSubtitleTrack: () => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -765,11 +1215,129 @@ function SubtitleMenu({
   const initialLanguage = selectedOption ? subtitleLanguageKey(selectedOption) : "off";
   const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage);
   const [mounted, setMounted] = useState(open);
+  // Memoria de pista por idioma (al volver a un idioma se
+  // recuerda la última pista usada en ese idioma dentro de la sesión).
+  const trackMemoryRef = useRef<Map<string, string>>(new Map());
+  const focusTrackRail = (_languageKey: string, preferredValue?: string) => {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        const root = menuRef.current;
+        if (!root) return;
+        const trackRail = root.querySelector<HTMLElement>('[data-subtitle-rail="track"]');
+        if (!trackRail) return;
+        let targetByValue: HTMLElement | null = null;
+        if (preferredValue) {
+          const buttons = trackRail.querySelectorAll<HTMLElement>("button[data-subtitle-value]");
+          for (const candidate of Array.from(buttons)) {
+            if (candidate.getAttribute("data-subtitle-value") === preferredValue) {
+              targetByValue = candidate;
+              break;
+            }
+          }
+        }
+        const target = targetByValue
+          ?? trackRail.querySelector<HTMLElement>('button[aria-current="true"]')
+          ?? trackRail.querySelector<HTMLElement>("button:not([disabled])");
+        target?.focus({ preventScroll: true });
+        target?.scrollIntoView({ block: "nearest" });
+      }, 60);
+    });
+  };
 
   useEffect(() => {
     if (!open) return;
     setSelectedLanguage(initialLanguage);
   }, [initialLanguage, open]);
+
+  // Big Picture: al abrir, enfocar la pista activa (o el idioma activo si
+  // están apagados), se enfoca la opción seleccionada del rail.
+  useEffect(() => {
+    if (!open || !mounted || !bigPicture) return;
+    const timer = window.setTimeout(() => {
+      const root = menuRef.current;
+      if (!root) return;
+      const trackRail = root.querySelector<HTMLElement>('[data-subtitle-rail="track"]');
+      const activeTrack = trackRail?.querySelector<HTMLElement>('button[aria-current="true"]');
+      if (activeTrack) {
+        activeTrack.focus({ preventScroll: true });
+        activeTrack.scrollIntoView({ block: "nearest" });
+        return;
+      }
+      const activeLang = root.querySelector<HTMLElement>('[data-subtitle-rail="language"] button[aria-current="true"]');
+      (activeLang ?? root.querySelector<HTMLElement>('[data-subtitle-rail="language"] button:not([disabled])'))
+        ?.focus({ preventScroll: true });
+    }, 90);
+    return () => window.clearTimeout(timer);
+  }, [open, mounted, bigPicture]);
+
+  // Big Picture: los subtítulos de addons cargan en asíncrono y la lista de
+  // pistas puede llegar DESPUÉS del foco inicial (que entonces cayó en el
+  // rail de idioma o fuera del menú). Cuando llegan las opciones, si el foco
+  // sigue fuera del panel se lleva a la pista activa; si el usuario ya está
+  // navegando dentro, no se le roba el foco.
+  useEffect(() => {
+    if (!open || !mounted || !bigPicture) return;
+    const root = menuRef.current;
+    if (!root) return;
+    if (root.contains(document.activeElement)) return;
+    const timer = window.setTimeout(() => {
+      const r = menuRef.current;
+      if (!r || r.contains(document.activeElement)) return;
+      const trackRail = r.querySelector<HTMLElement>('[data-subtitle-rail="track"]');
+      const activeTrack = trackRail?.querySelector<HTMLElement>('button[aria-current="true"]');
+      if (activeTrack) {
+        activeTrack.focus({ preventScroll: true });
+        activeTrack.scrollIntoView({ block: "nearest" });
+      }
+    }, 90);
+    return () => window.clearTimeout(timer);
+  }, [open, mounted, bigPicture, subtitleOptions]);
+
+  // El portal se reconcilia desde document.activeElement, no desde el último
+  // evento recibido: cada ciclo elimina cualquier marca vieja y deja una sola.
+  useEffect(() => {
+    if (!open || !mounted) return;
+    const root = menuRef.current;
+    if (!root) return;
+    const clearPanelFocus = () => {
+      root.querySelectorAll<HTMLElement>("[data-bp-focus], .spatial-focus").forEach(element => {
+        element.removeAttribute("data-bp-focus");
+        element.classList.remove("spatial-focus");
+      });
+    };
+    const getActiveButton = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !root.contains(active)) return null;
+      const button = active.matches("button:not([disabled])")
+        ? active
+        : active.closest<HTMLElement>("button:not([disabled])");
+      return button && root.contains(button) ? button : null;
+    };
+    const reconcile = () => {
+      const activeButton = getActiveButton();
+      clearPanelFocus();
+      activeButton?.setAttribute("data-bp-focus", "true");
+    };
+
+    root.addEventListener("focusin", reconcile);
+    root.addEventListener("focusout", reconcile);
+    reconcile();
+    const veilTimer = window.setInterval(reconcile, 100);
+    return () => {
+      root.removeEventListener("focusin", reconcile);
+      root.removeEventListener("focusout", reconcile);
+      window.clearInterval(veilTimer);
+      clearPanelFocus();
+    };
+  }, [open, mounted]);
+
+  // Recordar la pista elegida por idioma dentro de la sesión.
+  useEffect(() => {
+    if (!selectedSubtitleValue) return;
+    const opt = subtitleOptions.find(o => o.value === selectedSubtitleValue);
+    if (!opt) return;
+    trackMemoryRef.current.set(subtitleLanguageKey(opt), selectedSubtitleValue);
+  }, [selectedSubtitleValue, subtitleOptions]);
 
   useEffect(() => {
     if (open) {
@@ -783,30 +1351,61 @@ function SubtitleMenu({
     }
     gsap.killTweensOf(el);
     if (prefersReducedMotion()) {
-      gsap.to(el, { opacity: 0, duration: 0.18, ease: "power1.out", overwrite: "auto", onComplete: () => setMounted(false) });
+      gsap.to(el, {
+        opacity: 0,
+        duration: 0.18,
+        ease: "power1.out",
+        overwrite: "auto",
+        onComplete: () => setMounted(false),
+      });
       return;
     }
-    // §3/§4 spring exit anchored, interruptible
-    const anchor = buttonRef.current;
-    if (anchor) {
-      const aRect = anchor.getBoundingClientRect();
-      const mRect = el.getBoundingClientRect();
-      const origin = anchorTransformOrigin(aRect, mRect.left, mRect.top, mRect.width, mRect.height);
-      gsap.set(el, { transformOrigin: origin });
+    if (bigPicture) {
+      springTo(el, {
+        opacity: 0,
+        y: 14,
+        scale: 0.985,
+        filter: "blur(8px)",
+      } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.28 });
+    } else {
+      // §3/§4 spring exit anchored, interruptible
+      const anchor = buttonRef.current;
+      if (anchor) {
+        const aRect = anchor.getBoundingClientRect();
+        const mRect = el.getBoundingClientRect();
+        const origin = anchorTransformOrigin(aRect, mRect.left, mRect.top, mRect.width, mRect.height);
+        gsap.set(el, { transformOrigin: origin });
+      }
+      springTo(el, {
+        xPercent: -50,
+        opacity: 0,
+        y: 8,
+        scale: 0.98,
+        filter: "blur(6px)",
+      } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.28 });
     }
-    springTo(el, {
-      xPercent: -50,
-      opacity: 0,
-      y: 8,
-      scale: 0.98,
-      filter: "blur(6px)",
-    } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.28 });
     gsap.delayedCall(0.30, () => { if (!open) setMounted(false); });
-  }, [open]);
+  }, [bigPicture, open]);
 
   useEffect(() => {
     if (!open || !mounted || !menuRef.current) return;
     const el = menuRef.current;
+    if (bigPicture) {
+      gsap.killTweensOf(el);
+      if (prefersReducedMotion()) {
+        gsap.set(el, { opacity: 0 });
+        gsap.to(el, { opacity: 1, duration: 0.2, ease: "power1.out", overwrite: "auto" });
+        return;
+      }
+      gsap.set(el, { opacity: 0, y: 14, scale: 0.985, filter: "blur(8px)" });
+      springTo(el, {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        filter: "blur(0px)",
+      } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.38 });
+      return;
+    }
     // §7 anchor origin to trigger button
     const anchor = buttonRef.current;
     if (anchor) {
@@ -824,7 +1423,7 @@ function SubtitleMenu({
     }
     gsap.set(el, { xPercent: -50, opacity: 0, y: 10, scale: 0.98, filter: "blur(8px)" });
     springTo(el, { xPercent: -50, opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { damping: 1.0, duration: 0.36 });
-  }, [open, mounted]);
+  }, [bigPicture, open, mounted]);
 
   useEffect(() => {
     if (!open) return;
@@ -835,8 +1434,16 @@ function SubtitleMenu({
       if (buttonRef.current?.contains(target)) return;
       onClose();
     };
+    // Con el diálogo de sync encima, el menú queda debajo inerte: el clic
+    // exterior y Escape pertenecen al diálogo superior. Sin esta guarda, Escape
+    // cerraría AMBOS (el listener del menú se registró antes y corre primero).
+    if (subtitleSyncOpen) return;
     const onEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      // Consumir para que B del mando no dispare además el "volver" global.
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onEscape);
@@ -844,7 +1451,7 @@ function SubtitleMenu({
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onEscape);
     };
-  }, [onClose, open]);
+  }, [onClose, open, subtitleSyncOpen]);
 
   const languageEntries = useMemo(() => {
     const seen = new Set<string>();
@@ -863,6 +1470,46 @@ function SubtitleMenu({
     if (selectedLanguage === "off") return [];
     return subtitleOptions.filter(option => subtitleLanguageKey(option) === selectedLanguage);
   }, [selectedLanguage, subtitleOptions]);
+
+  const stopMenuKeys = (event: React.KeyboardEvent) => {
+    if (
+      event.key === " " ||
+      event.code === "Space" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown" ||
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight"
+    ) {
+      // Evita que los atajos globales del reproductor (seek/volumen/play)
+      // actúen mientras el menú tiene el foco; la navegación espacial ya
+      // consumió la flecha en captura cuando aplica.
+      event.stopPropagation();
+    }
+  };
+
+  const handleLanguageSelect = (languageKey: string) => {
+    setSelectedLanguage(languageKey);
+    if (languageKey === "off") {
+      onSubtitleChange("");
+      return;
+    }
+    const remembered = trackMemoryRef.current.get(languageKey);
+    const rememberedValid = remembered
+      && subtitleOptions.some(o => o.value === remembered && subtitleLanguageKey(o) === languageKey);
+    const next = rememberedValid
+      ? subtitleOptions.find(o => o.value === remembered)
+      : subtitleOptions.find(option => subtitleLanguageKey(option) === languageKey);
+    if (next) {
+      if (next.value !== selectedSubtitleValue) onSubtitleChange(next.value);
+      if (bigPicture) focusTrackRail(languageKey, next.value);
+    }
+  };
+
+  const handleResetSettings = () => {
+    onSubtitleDelayChange(0);
+    onSubtitleScaleChange(100);
+    onSubtitleVerticalChange(5);
+  };
 
   return (
     <div className="relative" data-player-menu data-menu-id="subtitles">
@@ -895,57 +1542,205 @@ function SubtitleMenu({
               ref={menuRef}
               data-player-subtitle-panel-glass
               data-player-floating-panel-glass
+               {...(bigPicture ? { "data-spatial-modal": "true", "data-subtitle-fullscreen": "true" } : {})}
               role="dialog"
               aria-label="Subtítulos"
-              className="fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white will-change-transform"
+              onKeyDown={stopMenuKeys}
+              className={bigPicture
+                ? "fixed inset-0 z-[60] flex flex-col overflow-hidden text-white will-change-transform"
+                : "fixed left-1/2 z-[60] flex w-[min(760px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] text-white will-change-transform"}
               style={{
-                ...getContextGlassStyle(),
-                bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
-                height: "min(470px, calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top, 0px) - 86px))",
-                minHeight: 300,
+                ...(bigPicture
+                  ? {
+                      background: "rgba(5, 7, 11, 0.46)",
+                      backdropFilter: "blur(8px) saturate(118%)",
+                      WebkitBackdropFilter: "blur(8px) saturate(118%)",
+                    }
+                  : getContextGlassStyle()),
+                ...(bigPicture
+                  ? {}
+                  : {
+                      bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
+                      height: "min(470px, calc(var(--aetherio-player-controls-top, 80vh) - var(--app-safe-top, 0px) - 86px))",
+                      minHeight: 300,
+                    }),
                 willChange: "transform, opacity, filter",
                 transform: "translateZ(0)",
               }}
             >
-          <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
+          {bigPicture ? (
+            <div
+              className="absolute inset-0"
+              style={{
+                background: "linear-gradient(90deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.38) 38%, rgba(0,0,0,0.08) 72%), linear-gradient(0deg, rgba(0,0,0,0.84) 0%, rgba(0,0,0,0.34) 42%, rgba(0,0,0,0.12) 100%)",
+              }}
+              onClick={onClose}
+              aria-hidden="true"
+            />
+          ) : null}
+          <div className={bigPicture
+            ? "relative z-10 flex h-full min-h-0 flex-col justify-center px-[max(24px,var(--app-safe-x))] py-[max(32px,calc(var(--app-safe-top)+24px))]"
+            : "relative z-10 flex min-h-0 flex-1 flex-col"}
+          >
+          <div className={bigPicture
+            ? "mx-auto flex w-full max-w-[1180px] shrink-0 items-end justify-between gap-5 rounded-t-[28px] border-x border-t border-white/[0.1] bg-black/[0.28] px-6 py-5 shadow-[0_26px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl"
+            : "flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] px-5"}
+          >
             <div className="flex min-w-0 items-center gap-2.5">
-              <Captions size={18} className="shrink-0 text-white/72" />
+              {bigPicture && subtitleSyncOpen ? <TimerReset size={18} className="shrink-0 text-white/72" /> : <Captions size={18} className="shrink-0 text-white/72" />}
               <div className="min-w-0">
-                <h3 className="text-[15px] font-semibold tracking-[-0.01em] text-white">Subtítulos</h3>
-                <p className="truncate text-xs text-white/48">{selectedOption?.label || "Apagados"}</p>
+                <h3 className="text-[15px] font-semibold tracking-[-0.01em] text-white">{bigPicture && subtitleSyncOpen ? "Auto Sync" : "Subtítulos"}</h3>
+                <p className="truncate text-xs text-white/48">{bigPicture && subtitleSyncOpen ? (subtitleSyncTrackLabel || "Subtítulos") : (selectedOption?.label || "Apagados")}</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
+             {bigPicture ? null : <button
+               type="button"
+               onClick={onClose}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/64 gsap-transition hover:bg-white/10 hover:text-white"
               aria-label="Cerrar subtítulos"
               title="Cerrar"
             >
-              <X size={17} />
-            </button>
+               <X size={17} />
+             </button>}
           </div>
 
+           {bigPicture && subtitleSyncOpen ? (
+            <div className="relative z-10 mx-auto flex h-[min(64vh,620px)] min-h-[320px] w-full max-w-[1180px] min-w-0 overflow-hidden rounded-b-[28px] border-x border-b border-white/[0.1] bg-black/[0.28] shadow-[0_30px_90px_rgba(0,0,0,0.38)]">
+              <aside className="flex w-[220px] shrink-0 flex-col border-r border-white/[0.08] bg-black/[0.14] p-5" aria-label="Contexto de sincronización">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/42">Subtítulos</p>
+                <h4 className="mt-2 text-base font-semibold leading-snug text-white/92">Ajuste automático</h4>
+                <p className="mt-2 text-xs leading-relaxed text-white/48">
+                  Captura el momento exacto y elige la línea que corresponde al diálogo.
+                </p>
+                <div className="mt-auto border-t border-white/[0.08] pt-4">
+                  <p className="truncate text-xs font-semibold text-white/72">{subtitleSyncTrackLabel || "Pista actual"}</p>
+                  <button
+                    type="button"
+                    onClick={onCloseSubtitleSync}
+                    className="mt-3 rounded-full border border-white/[0.1] bg-white/[0.06] px-3 py-2 text-xs font-semibold text-white/72 gsap-transition hover:bg-white/[0.12] hover:text-white"
+                  >
+                    Volver a pistas
+                  </button>
+                </div>
+              </aside>
+              <div className="min-h-0 min-w-0 flex-1">
+                <SubtitleSyncDialog
+                  open={subtitleSyncOpen}
+                  loading={subtitleSyncLoading}
+                  error={subtitleSyncError}
+                  canUseManual={subtitleSyncCanUseManual}
+                  stage={subtitleSyncStage}
+                  cues={subtitleSyncCues}
+                  capturedVideoMs={subtitleSyncCapturedVideoMs}
+                  trackLabel={subtitleSyncTrackLabel}
+                  bigPicture
+                  embedded
+                  onClose={onCloseSubtitleSync}
+                  onCapture={onCaptureSubtitleSync}
+                  onApplyCue={onApplySubtitleSyncCue}
+                  onUseManualSync={onUseManualSubtitleSync}
+                  onPickTrack={onPickSubtitleTrack}
+                />
+              </div>
+            </div>
+           ) : bigPicture ? (
+            <div className="relative z-10 mx-auto min-h-0 w-full max-w-[1180px] overflow-x-auto overscroll-x-contain pb-1">
+            <div
+              className="grid h-[min(64vh,620px)] min-h-[320px] min-w-[860px] gap-px overflow-hidden rounded-b-[28px] border-x border-b border-white/[0.1] bg-black/[0.28] shadow-[0_30px_90px_rgba(0,0,0,0.38)]"
+              style={{ gridTemplateColumns: "minmax(200px, 0.85fr) minmax(300px, 1.25fr) minmax(280px, 1fr)" }}
+            >
+            <section className="flex min-h-0 flex-col border-r border-white/[0.08] bg-black/[0.08] p-3" aria-label="Idiomas">
+              <h4 className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Idiomas</h4>
+              <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1" data-subtitle-rail="language">
+                {languageEntries.map(entry => (
+                  <SubtitleItemButton
+                    key={entry.key}
+                    active={selectedLanguage === entry.key}
+                    label={entry.label}
+                    onClick={() => handleLanguageSelect(entry.key)}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <section className="flex min-h-0 min-w-0 flex-col border-r border-white/[0.08] p-3" aria-label="Subtítulos">
+              <h4 className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Subtítulos</h4>
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1" data-subtitle-rail="track">
+                {selectedLanguage === "off" ? (
+                  <p className="px-2 py-3 text-sm text-white/42">Subtítulos desactivados.</p>
+                ) : variantOptions.length ? (
+                  variantOptions.map(option => (
+                    <SubtitleVariantButton
+                      key={option.value}
+                      option={option}
+                      active={option.value === selectedSubtitleValue}
+                      onClick={() => onSubtitleChange(option.value)}
+                    />
+                  ))
+                ) : (
+                  <p className="px-2 py-3 text-sm text-white/42">No hay pistas disponibles.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="flex min-h-0 min-w-0 flex-col bg-black/[0.06] p-3" aria-label="Ajustes">
+              <div className="mb-2 flex items-center justify-between px-1">
+                <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Ajustes</h4>
+                <button
+                  type="button"
+                  onClick={handleResetSettings}
+                  className="rounded-full px-2.5 py-1 text-xs font-semibold text-white/58 gsap-transition hover:bg-white/[0.08] hover:text-white"
+                >
+                  Restablecer
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1" data-subtitle-rail="settings">
+                <SubtitleStepper
+                  label="Atraso"
+                  value={formatDelay(subtitleDelayMs)}
+                  onDecrease={() => onSubtitleDelayChange(subtitleDelayMs - SUBTITLE_DELAY_STEP_MS)}
+                  onIncrease={() => onSubtitleDelayChange(subtitleDelayMs + SUBTITLE_DELAY_STEP_MS)}
+                />
+                <SubtitleStepper
+                  label="Tamaño"
+                  value={`${subtitleScalePercent}%`}
+                  onDecrease={() => onSubtitleScaleChange(subtitleScalePercent - 5)}
+                  onIncrease={() => onSubtitleScaleChange(subtitleScalePercent + 5)}
+                />
+                <SubtitleStepper
+                  label="Posición vertical"
+                  value={`${subtitleVerticalPercent}%`}
+                  onDecrease={() => onSubtitleVerticalChange(subtitleVerticalPercent - 5)}
+                  onIncrease={() => onSubtitleVerticalChange(subtitleVerticalPercent + 5)}
+                />
+                <button
+                  type="button"
+                  // El menú queda abierto debajo del diálogo: B/Escape lo cierra
+                  // y el foco vuelve aquí, al carril de subtítulos.
+                  onClick={onOpenSubtitleSync}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.05] px-2.5 py-2 text-xs font-semibold text-white/84 gsap-transition hover:bg-white/[0.1] hover:text-white"
+                >
+                  <TimerReset size={13} />
+                  Auto Sync
+                </button>
+              </div>
+              </section>
+             </div>
+             </div>
+            ) : (
           <div
             className="grid min-h-0 flex-1"
             style={{ gridTemplateColumns: "minmax(160px, 0.72fr) minmax(0, 1.6fr)" }}
           >
             <section className="flex min-h-0 flex-col border-r border-white/[0.08] bg-black/[0.08] p-3">
               <h4 className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Idioma</h4>
-              <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
+              <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1" data-subtitle-rail="language">
                 {languageEntries.map(entry => (
                   <SubtitleItemButton
                     key={entry.key}
                     active={selectedLanguage === entry.key}
                     label={entry.label}
-                    onClick={() => {
-                      setSelectedLanguage(entry.key);
-                      if (entry.key === "off") onSubtitleChange("");
-                      else {
-                        const first = subtitleOptions.find(option => subtitleLanguageKey(option) === entry.key);
-                        if (first) onSubtitleChange(first.value);
-                      }
-                    }}
+                    onClick={() => handleLanguageSelect(entry.key)}
                   />
                 ))}
               </div>
@@ -954,7 +1749,7 @@ function SubtitleMenu({
             <section className="flex min-h-0 min-w-0 flex-col">
               <div className="flex min-h-0 flex-1 flex-col p-3">
                 <h4 className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Pista</h4>
-                <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
+                <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1" data-subtitle-rail="track">
                   {selectedLanguage === "off" ? (
                     <p className="px-2 py-3 text-sm text-white/42">Subtítulos desactivados.</p>
                   ) : variantOptions.length ? (
@@ -972,16 +1767,12 @@ function SubtitleMenu({
                 </div>
               </div>
 
-              <div className="shrink-0 border-t border-white/[0.08] bg-black/[0.06] p-3">
+              <div className="shrink-0 border-t border-white/[0.08] bg-black/[0.06] p-3" data-subtitle-rail="settings">
                 <div className="mb-2 flex items-center justify-between px-1">
                   <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/42">Ajustes</h4>
                   <button
                     type="button"
-                    onClick={() => {
-                      onSubtitleDelayChange(0);
-                      onSubtitleScaleChange(100);
-                      onSubtitleVerticalChange(5);
-                    }}
+                    onClick={handleResetSettings}
                     className="rounded-full px-2.5 py-1 text-xs font-semibold text-white/58 gsap-transition hover:bg-white/[0.08] hover:text-white"
                   >
                     Restablecer
@@ -1009,18 +1800,19 @@ function SubtitleMenu({
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenSubtitleSync();
-                  }}
+                  // El menú queda abierto debajo del diálogo: B/Escape lo cierra
+                  // y el foco vuelve aquí, al carril de subtítulos.
+                  onClick={onOpenSubtitleSync}
                   className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs font-semibold text-white/84 gsap-transition hover:bg-white/[0.1] hover:text-white"
                 >
                   <TimerReset size={13} />
-                  Sincronizar línea
+                  Auto Sync
                 </button>
               </div>
             </section>
             </div>
+           )}
+          </div>
           </div>,
             document.body,
           )
@@ -1035,17 +1827,23 @@ function IconButton({
   onClick,
   disabled = false,
   large = false,
+  active = false,
+  playPause = false,
 }: {
   children: ReactNode;
   label: string;
   onClick: () => void;
   disabled?: boolean;
   large?: boolean;
+  active?: boolean;
+  /** Marca el botón play/pausa para el foco inicial del mando. */
+  playPause?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      data-player-playpause={playPause || undefined}
       onPointerDown={e => {
         if (disabled) return;
         // §1 Response on pointer-down instant
@@ -1059,10 +1857,18 @@ function IconButton({
       onPointerLeave={e => {
         gsap.to(e.currentTarget, { scale: 1, duration: 0.14, ease: "power2.out", overwrite: "auto" });
       }}
-      className={`flex items-center justify-center rounded-full border border-white/[0.07] bg-white/10 text-white gsap-transition hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-35 active:scale-[0.96] will-change-transform ${
-        large ? "h-11 w-11" : "h-10 w-10"
-      }`}
-      style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
+      className={`flex items-center justify-center rounded-full border gsap-transition disabled:cursor-not-allowed disabled:opacity-35 active:scale-[0.96] will-change-transform ${
+        active
+          ? "border-white/[0.11] bg-white/18 text-white"
+          : "border-white/[0.07] bg-white/10 text-white hover:bg-white/16"
+      } ${large ? "h-11 w-11" : "h-10 w-10"}`}
+      style={{
+        transform: "translateZ(0)",
+        willChange: "transform, background-color",
+        backdropFilter: "blur(18px) saturate(160%)",
+        WebkitBackdropFilter: "blur(18px) saturate(160%)",
+        boxShadow: "0 2px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.10)",
+      }}
       title={label}
       aria-label={label}
     >
@@ -1330,7 +2136,11 @@ function PartyMenu({
       onClose();
     };
     const onEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      // Consumir para que B del mando no dispare además el "volver" global.
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onEscape);
@@ -1355,7 +2165,13 @@ function PartyMenu({
         className={`relative flex h-10 w-10 items-center justify-center rounded-full border text-white gsap-transition will-change-transform active:scale-[0.96] ${
           open || connected ? "border-white/[0.12] bg-white/18" : "border-white/[0.07] bg-white/10 hover:bg-white/15"
         }`}
-        style={{ transform: "translateZ(0)", willChange: "transform, background-color" }}
+        style={{
+          transform: "translateZ(0)",
+          willChange: "transform, background-color",
+          backdropFilter: "blur(18px) saturate(160%)",
+          WebkitBackdropFilter: "blur(18px) saturate(160%)",
+          boxShadow: "0 2px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.10)",
+        }}
         title={connected ? "Party: sala activa" : "Party: ver juntos"}
         aria-label={connected ? "Party: sala activa" : "Party: ver juntos"}
         aria-haspopup="menu"
@@ -1506,6 +2322,7 @@ function SubtitleItemButton({
     <button
       type="button"
       onClick={onClick}
+      aria-current={active ? "true" : undefined}
       className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-sm font-semibold gsap-transition ${
         active
           ? "border-white/22 bg-white/14 text-white"
@@ -1531,6 +2348,8 @@ function SubtitleVariantButton({
     <button
       type="button"
       onClick={onClick}
+      aria-current={active ? "true" : undefined}
+      data-subtitle-value={option.value}
       className={`flex min-h-12 w-full items-center gap-3 rounded-md border px-3 py-2 text-left gsap-transition ${
         active
           ? "border-white/22 bg-white/14 text-white"

@@ -85,7 +85,6 @@ const processedTraktCallbacks = new Set<string>();
 const processedOAuthCallbacks = new Set<string>();
 
 const HomePage = lazy(() => import("./pages/Home"));
-const LiveSportsPage = lazy(() => import("./pages/LiveSports"));
 const LibraryPage = lazy(() => import("./pages/Library"));
 const AddonsPage = lazy(() => import("./pages/Addons"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
@@ -164,8 +163,7 @@ export default function App() {
   // despues, cuando ya se sabe el puerto.
   useEffect(() => {
     void ensurePosterServer(getSpatialPosterSettings().instanceUrl).then(async started => {
-      if (!started) return;
-      setPosterCacheUrl(await getPosterCacheUrl());
+      if (started?.running) setPosterCacheUrl(await getPosterCacheUrl());
     });
   }, []);
 
@@ -493,7 +491,7 @@ export default function App() {
                 nextHomePrefs.contentOrientation,
                 nextHomePrefs.bothPreference,
                 undefined,
-                progress => onProgress(45 + progress * 50, progress < 1 ? "Cargando catálogo…" : "Preparando imágenes…"),
+                progress => onProgress(45 + progress * 50, progress < 0.55 ? "Cargando catálogo…" : "Generando pósters…"),
               );
               onProgress(100, "Listo");
             }}
@@ -588,8 +586,6 @@ function PageRoutes({ location, defaultRoute }: { location: Location; defaultRou
       <Routes location={location}>
         <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
         <Route path="/home"              element={<HomePage />} />
-        <Route path="/live"              element={<LiveSportsPage />} />
-        <Route path="/live-sports"       element={<LiveSportsPage />} />
         <Route path="/library"           element={<LibraryPage />} />
         <Route path="/addons"            element={<AddonsPage />} />
         <Route path="/settings"          element={<SettingsPage />} />

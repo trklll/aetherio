@@ -27,6 +27,13 @@ import {
 } from "../../services/mediaExtensionService.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
 import {
+  CNCVERSE_BRIDGE_ID,
+  CNCVERSE_BRIDGE_LOGO,
+  CNCVERSE_LIVE_CATALOGS,
+  normalizeCncVerseBridgeUrl,
+  readCncVerseBridgeUrl,
+} from "../../services/cncverseBridge.ts";
+import {
   getGlobalCloudstreamRepositories,
   type GlobalCloudstreamRepositoryInfo,
 } from "../../services/cloudstreamRepositoryService.ts";
@@ -39,6 +46,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   anime: "ANIME",
   free_with_ads: "GRATUITAS CON ANUNCIOS",
 };
+
+type CncVerseProbe =
+  | { ok: true; name?: string; version?: string; catalogs: number }
+  | { ok: false; error: string };
 
 const sourceLogoUrls = import.meta.glob("../../assets/logosaddons/*.{png,jpg,jpeg}", {
   eager: true,
@@ -74,6 +85,7 @@ export default function SourcesPanel() {
   const addons = useAddonStore(state => state.addons);
   const enableAddon = useAddonStore(state => state.enableAddon);
   const disableAddon = useAddonStore(state => state.disableAddon);
+  const setCncVerseBridgeUrl = useAddonStore(state => state.setCncVerseBridgeUrl);
   const [preferences, setPreferences] = useState<SourcePreferences>(() => getSourcePreferences());
   const [repositories, setRepositories] = useState<ProviderRuntimeRepositoryInfo[]>([]);
   const [sites, setSites] = useState<ScraperSiteInfo[]>([]);
@@ -87,6 +99,48 @@ export default function SourcesPanel() {
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [addingRepository, setAddingRepository] = useState(false);
   const [cloudstreamRepositories, setCloudstreamRepositories] = useState<GlobalCloudstreamRepositoryInfo[]>([]);
+  const [cncVerseUrl, setCncVerseUrl] = useState(() => readCncVerseBridgeUrl());
+  const [cncVerseProbe, setCncVerseProbe] = useState<CncVerseProbe | null>(null);
+  const [cncVerseProbing, setCncVerseProbing] = useState(false);
+
+  const cncVerseAddon = useMemo(
+    () => addons.find(addon => addon.id === CNCVERSE_BRIDGE_ID) ?? null,
+    [addons],
+  );
+
+  /**
+   * Comprueba que la URL pegada serve de verdad un manifest antes de dejar que
+   * la app la use. Un base equivocado no falla visiblemente: simplemente
+   * devuelve listas vacias, y un usuario veria la fuente apagada sin saber
+   * que escribio mal la URL.
+   */
+  const probeCncVerse = useCallback(async (rawUrl: string) => {
+    const base = normalizeCncVerseBridgeUrl(rawUrl);
+    if (!base) {
+      setCncVerseProbe({ ok: false, error: "La URL debe empezar por https://." });
+      return;
+    }
+    setCncVerseProbing(true);
+    try {
+      const response = await fetch(`${base}/manifest.json`, { signal: AbortSignal.timeout(12_000) });
+      if (!response.ok) throw new Error(`El manifest respondió HTTP ${response.status}.`);
+      const manifest = await response.json() as { name?: string; version?: string; catalogs?: unknown[] };
+      const catalogs = Array.isArray(manifest.catalogs) ? manifest.catalogs.length : 0;
+      setCncVerseProbe({ ok: true, name: manifest.name, version: manifest.version, catalogs });
+    } catch (probeError) {
+      setCncVerseProbe({ ok: false, error: probeError instanceof Error ? probeError.message : String(probeError) });
+    } finally {
+      setCncVerseProbing(false);
+    }
+  }, []);
+
+  function saveCncVerseUrl(rawUrl: string) {
+    const normalized = normalizeCncVerseBridgeUrl(rawUrl);
+    setCncVerseUrl(normalized);
+    setCncVerseBridgeUrl(normalized);
+    setCncVerseProbe(null);
+    if (normalized) void probeCncVerse(normalized);
+  }
 
   const loadInventory = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -380,6 +434,7 @@ export default function SourcesPanel() {
                           key={scraper.key}
                           title={scraper.name}
                           description={metadata || scraper.description}
+                          logo={scraper.logo ?? getSourceLogo(scraper.name) ?? undefined}
                           checked={checked}
                           disabled={!repositoryEnabled || !available}
                           onChange={enabled => setProviderEnabled(scraper.key, enabled)}
@@ -393,6 +448,87 @@ export default function SourcesPanel() {
             );
           })}
           {!loading && repositories.length === 0 ? <EmptyRow label="No se pudieron cargar los manifests." /> : null}
+        </SourceSection>
+
+        <SourceSection
+          title="PUENTES DE EXTENSIONES"
+          count={cncVerseUrl ? (cncVerseAddon?.enabled ? "1/1" : "0/1") : "0/1"}
+        >
+          <form
+            onSubmit={event => {
+              event.preventDefault();
+              saveCncVerseUrl(cncVerseUrl);
+            }}
+            className="flex gap-2 border-b border-white/[0.06] bg-black/10 p-3"
+          >
+            <input
+              type="url"
+              value={cncVerseUrl}
+              onChange={event => setCncVerseUrl(event.target.value)}
+              placeholder="https://…/manifest.json"
+              className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none placeholder:text-white/25 focus:border-white/30"
+              aria-label="URL del manifiesto del puente de extensiones"
+              required
+            />
+            <button
+              type="submit"
+              disabled={cncVerseProbing || !cncVerseUrl.trim()}
+              className="flex h-10 items-center gap-2 rounded-lg bg-white px-4 text-sm font-black text-black gsap-transition hover:bg-white/90 disabled:cursor-wait disabled:opacity-45"
+            >
+              Guardar
+            </button>
+          </form>
+          <p className="border-b border-white/[0.05] px-5 py-3 text-xs font-semibold leading-relaxed text-white/38">
+            Un unico add-on que expone muchas extensiones de golpe, y ademas los directos de
+            deportes. Pega aqui la URL de tu instancia. El addon no trae metadatos ni subtitulos
+            (sus endpoints responden 404 y vacio), asi que Aetherio los sigue pidiendo a Cinemeta.
+          </p>
+          <SourceRow
+            title="CNCVerse Bridge"
+            logo={CNCVERSE_BRIDGE_LOGO}
+            description={
+              !cncVerseUrl
+                ? "Sin configurar · pega la URL de tu instancia arriba"
+                : cncVerseProbing
+                  ? "Comprobando el manifiesto..."
+                  : cncVerseProbe && !cncVerseProbe.ok
+                    ? `No disponible · ${cncVerseProbe.error}`
+                    : cncVerseProbe
+                      ? `${cncVerseProbe.name ?? "Manifest"} · ${cncVerseProbe.catalogs} catálogos · ${CNCVERSE_LIVE_CATALOGS.length} de directos · v${cncVerseProbe.version ?? "?"}`
+                      : `${CNCVERSE_LIVE_CATALOGS.length} catálogos de directos · películas, series y anime`
+            }
+            checked={Boolean(cncVerseUrl) && Boolean(cncVerseAddon?.enabled)}
+            disabled={!cncVerseUrl}
+            onChange={checked => {
+              if (!cncVerseUrl || !cncVerseAddon) return;
+              if (checked) enableAddon(CNCVERSE_BRIDGE_ID);
+              else disableAddon(CNCVERSE_BRIDGE_ID);
+            }}
+            action={cncVerseUrl ? (
+              <a
+                href={`${cncVerseUrl}/manifest.json`}
+                target="_blank"
+                rel="noreferrer"
+                onClick={event => { event.preventDefault(); void openExternalUrl(`${cncVerseUrl}/manifest.json`); }}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-white/40 gsap-transition hover:bg-white/[0.08] hover:text-white"
+                aria-label="Abrir el manifiesto del puente"
+                title="Abrir manifiesto"
+              >
+                <ExternalLink size={15} />
+              </a>
+            ) : null}
+          />
+          {cncVerseUrl ? (
+            <div className="flex justify-end border-t border-white/[0.05] bg-black/10 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => saveCncVerseUrl("")}
+                className="text-xs font-black text-white/38 gsap-transition hover:text-white/70"
+              >
+                Quitar la URL y desactivar
+              </button>
+            </div>
+          ) : null}
         </SourceSection>
 
         <SourceSection title="REPOSITORIOS CLOUDSTREAM GLOBALES" count={`${cloudstreamRepositories.length}`}>

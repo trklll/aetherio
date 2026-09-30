@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from
 import { CloudDownload, RefreshCw, Sparkles, X } from "lucide-react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { isAndroidRuntime, isTauriRuntime } from "../../runtime/platform";
+import { isTauriRuntime } from "../../runtime/platform";
 import { gsap, tweenTo } from "../../utils/motion";
 
 type UpdateStage = "available" | "downloading" | "installing" | "error";
@@ -37,7 +37,7 @@ export default function UpdatePopup() {
   const primaryActionRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!isTauriRuntime() || isAndroidRuntime()) return;
+    if (!isTauriRuntime()) return;
     let active = true;
 
     void getAutomaticUpdateCheck().then(availableUpdate => {

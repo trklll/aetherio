@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Check, ChevronLeft, ChevronRight, Film, LoaderCircle, LogOut, RefreshCw, User, Users, X, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys.ts";
 import { useHomePreferences } from "../../config/homePreferences.ts";
@@ -16,17 +16,21 @@ import { useSubtitles } from "../../hooks/useSubtitles.ts";
 import { useStreams } from "../../hooks/useStreams.ts";
 import { useScrapedStreams } from "../../hooks/useScrapedStreams.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
+import { GAMEPAD_ACTION_EVENT } from "../../hooks/useGamepad.ts";
 import { isPlayableMediaStream } from "../../utils/playableMedia.ts";
 import { streamSpanishPriority } from "../../utils/streamLanguagePriority.ts";
 import { animeSourcePriority, sortStreamsForPlayback } from "../../utils/streamPlaybackRanking.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
+import { CNCVERSE_BRIDGE_ID, cncVerseProviderLabel } from "../../services/cncverseBridge.ts";
 import type { MediaStream, StreamQuery } from "../../types/stream.ts";
+import { buildPlayerSearch } from "../../utils/playerSearch.ts";
 import type { SubtitleSource } from "../../types/subtitle.ts";
 import PageContainer from "../../components/layout/PageContainer.tsx";
+import LoadingState from "../../components/ui/LoadingState.tsx";
 import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow.tsx";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService.ts";
 import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork.ts";
-import { pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork.ts";
+import { ensureOriginalTmdbImage, pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork.ts";
 import {
   getExactResumeForQuery,
 } from "../../utils/continueWatching.ts";
@@ -37,11 +41,12 @@ import { inspectStreamManifest, shouldInspectStreamManifest } from "../../utils/
 import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
 import { getSourceLogo, getStreamAddonLogo } from "../../utils/sourceLogos.ts";
+import { buildDetailPath, buildPlayerPath, isBigPictureLocation } from "../../utils/bigPictureDetail.ts";
 import { useParty } from "../../party/PartyContext.tsx";
 import { normalizeRoomCode, isCompleteRoomCode, isEncryptedPayload, partyMediaKey, type PartyMedia } from "../../party/protocol.ts";
 import ContextMenu from "../../components/ui/ContextMenu.tsx";
 import { pickBestMatchingSource, type AutoNextSourceHint } from "../../utils/autoNextSource.ts";
-import { consumeAutoResolveBackPress, registerAutoResolve } from "../../utils/autoResolveGuard.ts";
+import { registerAutoResolve } from "../../utils/autoResolveGuard.ts";
 import PlayerLoadingOverlay from "../Player/PlayerLoadingOverlay.tsx";
 import {
   AVAILABLE_STREAMS_KEY,
@@ -96,7 +101,7 @@ const AUTO_OPTION = "auto";
 const NO_SUBTITLES_OPTION = "none";
 const PLAYER_HANDOFF_DELAY_MS = 90;
 const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
-const PRIORITY_ANIME_SOURCES = ["AnimES", "AnimeAV1", "Torrentio", "Nyaa.si", "SeaDex", "AnimeTosho"] as const;
+const PRIORITY_ANIME_SOURCES = ["AnimES", "AnimeAV1", "AnimeFLV", "GojoWtf", "AnimeKai", "Torrentio", "Nyaa.si", "SeaDex", "AnimeTosho", "AnimeSaturn", "AnimeSaturn (Mirror)", "AnimeUnity", "AnimeUnity (Mirror)", "AnimeWorld"] as const;
 
 function numberValue(value: unknown) {
   const next = Number(value);
@@ -128,14 +133,77 @@ function isAnimeContent(query: StreamQuery | null, meta: EpisodePageMeta | null)
   });
 }
 
-export default function EpisodiePage() {
+export interface EpisodieQueryOverride {
+  type: string;
+  id: string;
+  season?: number;
+  episode?: number;
+  epTitle?: string;
+  continue?: boolean;
+  autoplay?: boolean;
+  fromSearch?: boolean;
+  q?: string;
+  fromPlayer?: boolean;
+  name?: string;
+  background?: string;
+  poster?: string;
+  logo?: string;
+  description?: string;
+  genres?: string[];
+  episodeTitle?: string;
+  episodeOverview?: string;
+  episodeStill?: string;
+  runtime?: number;
+  airDate?: string;
+  mdbListRatings?: MdbListRatings;
+  voteAverage?: number;
+  trailerVideoIds?: string[];
+}
+
+export default function EpisodiePage({ useSharedBackground = false, embedded = false, queryOverride, onReady }: {
+  useSharedBackground?: boolean;
+  embedded?: boolean;
+  queryOverride?: EpisodieQueryOverride;
+  onReady?: () => void;
+} = {}) {
   const [params] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const bigPicture = isBigPictureLocation(location.pathname);
+  // En modo embebido (sección dentro de Detail) no hay fondo propio: el único
+  // background es el del Detail. Tampoco se toca el historial (el padre manda).
+  const sharedTransparent = embedded || useSharedBackground;
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
   const playbackPreferences = usePlaybackPreferences();
   const mdbListSettings = useMdbListSettings();
   const { allowTmdbArtworkFallback } = useHomePreferences();
+  const overrideType = queryOverride?.type;
+  const overrideId = queryOverride?.id;
+  const overrideSeason = queryOverride?.season;
+  const overrideEpisode = queryOverride?.episode;
+  const overrideEpisodeTitle = queryOverride?.epTitle ?? queryOverride?.episodeTitle;
+  const overrideName = queryOverride?.name;
+  const overrideBackground = queryOverride?.background;
+  const overridePoster = queryOverride?.poster;
+  const overrideLogo = queryOverride?.logo;
+  const overrideDescription = queryOverride?.description;
+  const overrideGenres = queryOverride?.genres;
+  const overrideEpisodeOverview = queryOverride?.episodeOverview;
+  const overrideEpisodeStill = queryOverride?.episodeStill;
+  const overrideRuntime = queryOverride?.runtime;
+  const overrideAirDate = queryOverride?.airDate;
+  const overrideRatings = queryOverride?.mdbListRatings;
+  const overrideVoteAverage = queryOverride?.voteAverage;
+  const overrideTrailerVideoIds = queryOverride?.trailerVideoIds;
   const query = useMemo<StreamQuery | null>(() => {
+    if (queryOverride?.type && queryOverride?.id) {
+      return {
+        type: queryOverride.type,
+        id: queryOverride.id,
+        season: overrideSeason,
+        episode: overrideEpisode,
+      };
+    }
     const type = params.get("type");
     const id = params.get("id");
     if (!type || !id) return null;
@@ -147,10 +215,41 @@ export default function EpisodiePage() {
       season: Number.isFinite(season) && season >= 0 ? season : undefined,
       episode: Number.isFinite(episode) && episode > 0 ? episode : undefined,
     };
-  }, [params]);
-  const episodeTitleParam = params.get("epTitle")?.trim() ?? "";
+  }, [params, overrideEpisode, overrideId, overrideSeason, overrideType]);
+  const episodeTitleParam = (overrideEpisodeTitle ?? params.get("epTitle") ?? "").trim();
   const routeCacheKey = episodePageCacheKey(query, episodeTitleParam);
   const initialCachedMeta = readPageDataCache<EpisodePageMeta>("episode", routeCacheKey);
+  const overrideMeta = useMemo<EpisodePageMeta | null>(() => overrideName ? ({
+    name: overrideName,
+    background: overrideBackground,
+    poster: overridePoster,
+    logo: overrideLogo,
+    description: overrideDescription,
+    genres: overrideGenres,
+    episodeTitle: overrideEpisodeTitle,
+    episodeOverview: overrideEpisodeOverview,
+    episodeStill: overrideEpisodeStill,
+    runtime: overrideRuntime,
+    airDate: overrideAirDate,
+    mdbListRatings: overrideRatings,
+    voteAverage: overrideVoteAverage,
+    trailerVideoIds: overrideTrailerVideoIds,
+  }) : null, [
+    overrideAirDate,
+    overrideBackground,
+    overrideDescription,
+    overrideEpisodeOverview,
+    overrideEpisodeStill,
+    overrideEpisodeTitle,
+    overrideGenres,
+    overrideLogo,
+    overrideName,
+    overridePoster,
+    overrideRatings,
+    overrideRuntime,
+    overrideTrailerVideoIds,
+    overrideVoteAverage,
+  ]);
   const autoSelectedKeyRef = useRef("");
   // Modo Party elegido en el panel de fuentes (bloquea autoplay mientras se elige).
   const [partyMode, setPartyMode] = useState<null | "guest" | "host">(null);
@@ -192,7 +291,7 @@ export default function EpisodiePage() {
     } catch {
       // best-effort
     }
-    navigate(`/player?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`);
+    navigate(buildPlayerPath(`type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`));
   }, [partyMode, party.status, party.isOwner, partyGuestMedia, partyGuestMediaKey, partyQueryKey, navigate]);
 
   // Invitado Party: directo al Player con el contenido DE LA SALA (puede ser
@@ -218,14 +317,22 @@ export default function EpisodiePage() {
     } catch {
       // Metadatos best-effort.
     }
-    navigate(`/player?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`);
+    navigate(buildPlayerPath(`type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partyGuestMediaKey, query?.type, query?.id, query?.season, query?.episode, navigate]);
-  // Cancelacion del auto-resolve estilo NuvioTV: atras/ESC en el loader revela el picker manual.
+  // Cancelacion del auto-resolve: atras/ESC en el loader revela el picker manual.
   const [autoResolveCancelled, setAutoResolveCancelled] = useState(false);
-  const [meta, setMeta] = useState<EpisodePageMeta | null>(() => initialCachedMeta);
+  const [meta, setMeta] = useState<EpisodePageMeta | null>(() => initialCachedMeta ?? overrideMeta);
   partyMetaRef.current = meta;
-  const [metaReady, setMetaReady] = useState(() => Boolean(initialCachedMeta));
+  const [metaReady, setMetaReady] = useState(() => Boolean(initialCachedMeta ?? overrideMeta));
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+  useEffect(() => {
+    // Sección embebida: avisar al Detail de que hay contenido que revelar.
+    // Sin esto el padre no debe ocultar su contenido (fondo vacío atascado).
+    if (!embedded || !metaReady || !meta) return;
+    onReadyRef.current?.();
+  }, [embedded, metaReady, meta]);
   const [selectedStreamId, setSelectedStreamId] = useState("");
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const audioChoice = AUTO_OPTION;
@@ -277,25 +384,28 @@ export default function EpisodiePage() {
   }, [query?.type, query?.id, query?.season, query?.episode]);
 
   const originalLanguage = useOriginalLanguage(query, selectedStream);
-  const autoplayRequested = params.get(AUTO_PLAY_PARAM) === "1";
-  const continueRequested = params.get(CONTINUE_PLAY_PARAM) === "1";
-  const returnedFromPlayer = params.get(FROM_PLAYER_PARAM) === "1";
+  const autoplayRequested = queryOverride ? Boolean(queryOverride.autoplay) : params.get(AUTO_PLAY_PARAM) === "1";
+  const continueRequested = queryOverride ? Boolean(queryOverride.continue) : params.get(CONTINUE_PLAY_PARAM) === "1";
+  const returnedFromPlayer = queryOverride ? Boolean(queryOverride.fromPlayer) : params.get(FROM_PLAYER_PARAM) === "1";
   // Intencion de auto-resolve (audita los 3 modos automaticos: reproduccion
   // automatica, primera fuente y reutilizar enlace). Sincrono para poder
-  // mostrar el loader estilo NuvioTV antes de que lleguen los streams.
+  // mostrar el loader antes de que lleguen los streams.
   const autoResolveIntent = useMemo(() => {
     if (!query || returnedFromPlayer || partyMode) return false;
     if (autoplayRequested) return true;
     if (playbackPreferences.sourceSelectionMode === "first") return true;
     if (!playbackPreferences.reuseLastLink) return false;
-    if (continueRequested && getExactResumeForQuery(query)?.streamId) return true;
+    // "Continuar" no auto-resuelve por el streamId que guarda la entrada de
+    // progreso: ese streamId no caduca, asi que basta con haber visto el
+    // titulo una vez para que la row saltara siempre al reproductor. La unica
+    // senal de cache es el ultimo enlace guardado (TTL = lastLinkCacheHours):
+    // hay cache -> directo; no hay -> panel de streams.
     return Boolean(getCachedLastLink(
       streamCacheKey(query.type, query.id, query.season, query.episode),
       playbackPreferences.lastLinkCacheHours,
     ));
   }, [
     autoplayRequested,
-    continueRequested,
     partyMode,
     playbackPreferences.lastLinkCacheHours,
     playbackPreferences.reuseLastLink,
@@ -314,8 +424,16 @@ export default function EpisodiePage() {
       setMetaReady(true);
       return;
     }
-    setMeta(null);
-    setMetaReady(false);
+    if (overrideMeta) {
+      // Detail ya resolvió el título, logo y backdrop. Mostrar la sección al
+      // instante con esos datos mientras los metadatos del episodio se
+      // enriquecen; una caída 401 del proxy TMDB no debe ocultar el panel.
+      setMeta(overrideMeta);
+      setMetaReady(true);
+    } else {
+      setMeta(null);
+      setMetaReady(false);
+    }
 
     async function loadMeta() {
       if (!query) return;
@@ -326,15 +444,20 @@ export default function EpisodiePage() {
       const cachedLogo = readCachedLogo(getDetailLogoKey(query.type, query.id)) ?? undefined;
       const shouldUseTmdbArtwork = allowTmdbArtworkFallback || query.id.startsWith("tmdb:");
       let nextMeta: EpisodePageMeta = {
-        name: cached?.name ?? resume?.name ?? query.id,
-        background: lockedBackground ?? ensureOriginalTmdbImage(cached?.background) ?? resume?.background,
-        poster: cached?.poster ?? resume?.poster,
-        logo: sanitizeLogoUrl(cached?.logo) ?? cachedLogo ?? resume?.logo,
-        mdbListRatings: cached?.mdbListRatings,
-        description: cached?.description,
-        episodeTitle: episodeTitleParam,
-        episodeStill: resume?.episodeStill,
-        episodeOverview: resume?.episodeName === episodeTitleParam ? undefined : resume?.episodeName,
+        name: overrideMeta?.name ?? cached?.name ?? resume?.name ?? query.id,
+        background: lockedBackground ?? ensureOriginalTmdbImage(overrideMeta?.background ?? cached?.background) ?? resume?.background,
+        poster: overrideMeta?.poster ?? cached?.poster ?? resume?.poster,
+        logo: sanitizeLogoUrl(overrideMeta?.logo ?? cached?.logo) ?? cachedLogo ?? resume?.logo,
+        mdbListRatings: overrideMeta?.mdbListRatings ?? cached?.mdbListRatings,
+        description: overrideMeta?.description ?? cached?.description,
+        genres: overrideMeta?.genres,
+        episodeTitle: overrideMeta?.episodeTitle ?? episodeTitleParam,
+        episodeStill: ensureOriginalTmdbImage(overrideMeta?.episodeStill) ?? resume?.episodeStill,
+        episodeOverview: overrideMeta?.episodeOverview ?? (resume?.episodeName === episodeTitleParam ? undefined : resume?.episodeName),
+        runtime: overrideMeta?.runtime,
+        airDate: overrideMeta?.airDate,
+        voteAverage: overrideMeta?.voteAverage,
+        trailerVideoIds: overrideMeta?.trailerVideoIds,
       };
 
       for (const addon of getEnabledAddons()) {
@@ -530,32 +653,14 @@ export default function EpisodiePage() {
     mdbListSettings.showTomatoes,
     mdbListSettings.showMetacritic,
     query,
+    overrideMeta,
   ]);
 
-  useEffect(() => {
-    if (!query?.type || !query?.id) return;
-    const detailParams = new URLSearchParams({ fromStreams: "1" });
-    if (params.get("fromSearch") === "1") {
-      detailParams.set("fromSearch", "1");
-      const searchQuery = params.get("q");
-      if (searchQuery) detailParams.set("q", searchQuery);
-    }
-    const detailPath = `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}?${detailParams.toString()}`;
-    window.history.pushState({ aetherioEpisodeBackGuard: true }, "");
+  // Sin guardián `window.history.pushState`: inserta entradas reales fuera del router
+  // y borra el `idx`, desincronizando el historial (el "atrás" acababa en el
+  // reproductor). El autoplay del loader se cancela con el gesto de atrás vía
+  // consumeAutoResolveBackPress (shell y Big Picture), que es la vía real del botón.
 
-    const onPopState = () => {
-      // Atras del navegador en el loader: cancela el autoplay y revela el
-      // picker manual en vez de salir al detalle (estilo NuvioTV).
-      if (consumeAutoResolveBackPress()) {
-        window.history.pushState({ aetherioEpisodeBackGuard: true }, "");
-        return;
-      }
-      navigate(detailPath, { replace: true });
-    };
-
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [navigate, query?.id, query?.type]);
 
   useEffect(() => {
     if (!allStreams.length) {
@@ -586,8 +691,12 @@ export default function EpisodiePage() {
     if (autoResolveCancelled) return;
     const cached = getPreferredCachedStream(allStreams, query, playbackPreferences);
     const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
+    // "Continuar" solo salta al reproductor si el enlace de la ultima
+    // reproduccion sigue en cache y ademas esa fuente sigue entre las
+    // cargadas. Sin cache se revela el panel de streams. El streamId de la
+    // entrada de progreso sigue sirviendo para preseleccionar, no para saltar.
     const shouldAutoPlay = continueRequested
-      ? playbackPreferences.reuseLastLink && Boolean(nextStream)
+      ? Boolean(cached)
       : autoplayRequested
         || playbackPreferences.sourceSelectionMode === "first"
         || Boolean(playbackPreferences.sourceSelectionMode === "manual" && cached);
@@ -628,7 +737,7 @@ export default function EpisodiePage() {
     if (!allStreams.length) return false;
     const nextStream = pickDefaultStream(allStreams, query, playbackPreferences, continueRequested, autoplayRequested, originalLanguage);
     if (!nextStream) return false;
-    if (continueRequested) return playbackPreferences.reuseLastLink;
+    if (continueRequested) return Boolean(getPreferredCachedStream(allStreams, query, playbackPreferences));
     return autoplayRequested
       || playbackPreferences.sourceSelectionMode === "first"
       || Boolean(playbackPreferences.sourceSelectionMode === "manual" && getPreferredCachedStream(allStreams, query, playbackPreferences));
@@ -645,7 +754,7 @@ export default function EpisodiePage() {
   ]);
 
   const streamsSettled = !loading && !scrapedLoading;
-  // Loader estilo NuvioTV: mientras haya intencion de auto-resolve no se
+  // Loader de auto-resolve: mientras haya intencion de auto-resolve no se
   // muestra el picker (el usuario no debe pensar que tiene que elegir).
   const showAutoResolveLoader = metaReady
     && autoResolveIntent
@@ -719,13 +828,14 @@ export default function EpisodiePage() {
   const heroStills = useMemo(() => heroStillKey ? heroStillKey.split("|").filter(Boolean) : [], [heroStillKey]);
   const detailReturnParams = useMemo(() => {
     const next = new URLSearchParams({ fromStreams: "1" });
-    if (params.get("fromSearch") === "1") {
+    const fromSearch = queryOverride ? queryOverride.fromSearch : params.get("fromSearch") === "1";
+    const searchQuery = queryOverride?.q ?? params.get("q");
+    if (fromSearch) {
       next.set("fromSearch", "1");
-      const searchQuery = params.get("q");
       if (searchQuery) next.set("q", searchQuery);
     }
     return next.toString();
-  }, [params]);
+  }, [params, queryOverride]);
 
   useEffect(() => {
     setHeroStillIndex(0);
@@ -747,7 +857,7 @@ export default function EpisodiePage() {
       ".episode-media-card, .episode-hero-copy, .episode-page-layout > div:last-child",
     ));
     const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
-    timeline.fromTo(background, { opacity: 0 }, { opacity: 1, duration: 0.62 }, 0);
+    if (background) timeline.fromTo(background, { opacity: 0 }, { opacity: 1, duration: 0.62 }, 0);
     timeline.fromTo(
       items,
       { opacity: 0, y: 18 },
@@ -769,7 +879,12 @@ export default function EpisodiePage() {
   }
 
   if (!metaReady || !meta) {
-    return <EpisodePageLoading />;
+    if (embedded) {
+      // No covering spinner/background while the section is preparing. The
+      // parent keeps the Detail backdrop mounted and visible (the single image).
+      return <div ref={pageRef} data-aetherio-episode-section="true" aria-busy="true" style={{ minHeight: "100vh", background: "transparent" }} />;
+    }
+    return bigPicture ? <LoadingState label="Cargando episodio" shellPreviewLoading /> : <EpisodePageLoading />;
   }
 
   const rawEpisodeTitle = meta?.episodeTitle || episodeTitleParam || (query.type === "movie" ? meta?.name : `Episodio ${query.episode ?? 1}`);
@@ -783,7 +898,7 @@ export default function EpisodiePage() {
     ?? ensureOriginalTmdbImage(meta?.background);
   const background = ensureOriginalTmdbImage(meta?.background) ?? meta?.poster;
   const showEpisodeHeading = query.type !== "movie";
-  const detailPath = `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}?${detailReturnParams}`;
+  const detailPath = buildDetailPath(query.type, query.id, detailReturnParams, location.pathname);
 
   playStreamRef.current = playStream;
   allStreamsRef.current = allStreams;
@@ -833,7 +948,7 @@ export default function EpisodiePage() {
       resumeKey: resume?.key,
       resumeTime: resume?.currentTime,
     }));
-    const to = `/player?${buildPlayerSearch(params)}`;
+    const to = buildPlayerPath(buildPlayerSearch(params, query));
     if (options?.transition === false) {
       navigate(to, { replace: options?.replace ?? false });
       return;
@@ -849,11 +964,11 @@ export default function EpisodiePage() {
   // Mismo loader de "cargando streams" del Player (fondo + logo en respiracion):
   // no se crea uno nuevo, se reutiliza PlayerLoadingOverlay. Atras/ESC
   // cancela el autoplay y revela el picker manual (guard autoResolve).
-  if (showAutoResolveLoader) {
+  if (showAutoResolveLoader && !embedded) {
     return (
       <div className="relative min-h-screen overflow-hidden bg-black text-white">
         <div className="pointer-events-none absolute inset-0 bg-black" />
-        {background ? (
+        {background && !sharedTransparent ? (
           <img
             src={background}
             alt=""
@@ -873,10 +988,18 @@ export default function EpisodiePage() {
     );
   }
 
+  // En Big Picture el overlay del Detail es fijo (viewport): el layout es el
+  // original de altura fija con la lista en scroll interno, igual que la page
+  // standalone. En modo normal embebido se usa flujo con scroll del overlay.
   return (
-    <div ref={pageRef} className="relative min-h-screen overflow-hidden bg-[#111111] text-white">
+    <div ref={pageRef} className={bigPicture
+      ? `relative h-[100dvh] max-h-[100dvh] overflow-hidden overscroll-none ${sharedTransparent ? "bg-transparent" : "bg-[#111111]"} text-white`
+      : embedded
+        ? "relative min-h-screen overflow-visible bg-transparent text-white"
+        : "relative min-h-screen overflow-hidden bg-[#111111] text-white"} data-bp-episode={bigPicture ? "true" : undefined} data-aetherio-episode-section={embedded ? "true" : undefined}>
+      {embedded ? null : (
       <div className="pick-streams-background absolute left-0 top-0 overflow-hidden" aria-hidden="true">
-        {background ? (
+        {background && !sharedTransparent ? (
           <img
             src={background}
             alt=""
@@ -890,6 +1013,7 @@ export default function EpisodiePage() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.08)_0%,rgba(0,0,0,0)_42%)]" />
         <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-[#1f1f1f] via-[#1f1f1f]/82 to-transparent" />
       </div>
+      )}
 
       {playerTransitioning ? (
         <div className="aetherio-player-handoff fixed inset-0 z-[9999] overflow-hidden bg-[#080808]">
@@ -911,9 +1035,17 @@ export default function EpisodiePage() {
         </div>
       ) : null}
 
-      <PageContainer fullBleed className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1920px] flex-col pb-9 pt-[88px]">
-        <section className="episode-page-layout grid min-h-[calc(100vh-160px)] grid-cols-1 items-center gap-12 lg:grid-cols-[0.82fr_1fr]">
-          <div className="episode-hero-main flex min-w-0 flex-col items-center justify-center pb-1">
+      <PageContainer fullBleed className={bigPicture
+        ? "relative z-10 mx-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-[1920px] flex-col overflow-hidden pb-6 pt-[88px]"
+        : embedded
+          ? "relative z-10 mx-auto flex min-h-screen w-full max-w-[1920px] flex-col pb-9 pt-8"
+          : "relative z-10 mx-auto flex min-h-screen w-full max-w-[1920px] flex-col pb-9 pt-[88px]"}>
+        <section className={bigPicture
+          ? "episode-page-layout grid min-h-0 w-full flex-1 grid-cols-1 items-stretch gap-12 overflow-hidden lg:grid-cols-[0.82fr_1fr]"
+          : embedded
+            ? "episode-page-layout grid min-h-[calc(100vh-56px)] w-full grid-cols-1 items-start gap-8 lg:grid-cols-[0.82fr_1fr]"
+            : "episode-page-layout grid min-h-[calc(100vh-160px)] grid-cols-1 items-center gap-12 lg:grid-cols-[0.82fr_1fr]"}>
+          <div className={bigPicture ? "episode-hero-main flex max-h-full min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden pb-1" : "episode-hero-main flex min-w-0 flex-col items-center justify-center pb-1"}>
             <div className="episode-media-card liquid-glass-dark relative mx-auto mb-8 aspect-video w-full max-w-[800px] overflow-hidden rounded-2xl border-white/[0.08]">
               <div className="absolute inset-[-2.5%] overflow-hidden">
                 {heroStills.length > 1 ? (
@@ -937,15 +1069,21 @@ export default function EpisodiePage() {
 
             <div className="episode-hero-copy w-full max-w-[800px] text-center">
               {meta?.logo ? (
-                <button
-                  type="button"
-                  onClick={() => navigate(detailPath)}
-                  className="mx-auto mb-5 block max-w-full rounded-md bg-transparent p-0 text-center gsap-transition hover:opacity-90"
-                  aria-label="Ir al detalle"
-                  title="Ir al detalle"
-                >
-                  <img src={meta.logo} alt={mainTitle} decoding="async" className="mx-auto max-h-[216px] max-w-full object-contain drop-shadow-[0_10px_34px_rgba(0,0,0,0.72)]" style={{ aspectRatio: "auto", maxHeight: 216 }} />
-                </button>
+                bigPicture || embedded ? (
+                  <div className="mx-auto mb-5 block max-w-full select-none text-center" style={{ pointerEvents: "none" }}>
+                    <img src={meta.logo} alt={mainTitle} draggable={false} decoding="async" className="mx-auto max-h-[216px] max-w-full object-contain drop-shadow-[0_10px_34px_rgba(0,0,0,0.72)]" style={{ aspectRatio: "auto", maxHeight: 216 }} />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => navigate(detailPath)}
+                    className="mx-auto mb-5 block max-w-full rounded-md bg-transparent p-0 text-center gsap-transition hover:opacity-90"
+                    aria-label="Ir al detalle"
+                    title="Ir al detalle"
+                  >
+                    <img src={meta.logo} alt={mainTitle} decoding="async" className="mx-auto max-h-[216px] max-w-full object-contain drop-shadow-[0_10px_34px_rgba(0,0,0,0.72)]" style={{ aspectRatio: "auto", maxHeight: 216 }} />
+                  </button>
+                )
               ) : (
                 <h1 className="mb-5 text-center text-[clamp(2.75rem,5vw,5rem)] font-light uppercase leading-none tracking-normal text-white">
                   {mainTitle}
@@ -973,20 +1111,22 @@ export default function EpisodiePage() {
             </div>
           </div>
 
-          <div className="w-full min-w-0 self-center">
+          <div className={bigPicture ? "flex max-h-full min-h-0 w-full min-w-0 flex-col justify-center self-stretch overflow-hidden" : "w-full min-w-0 self-center"}>
             <SourcePickerPanel
               title="Seleccionar fuente"
               loading={loading || scrapedLoading}
               error={error ?? scrapedError}
-              streams={allStreams}
-              expectedSourceNames={[
-                ...(preferAnimeAv1 ? PRIORITY_ANIME_SOURCES : []),
-                ...addonSourceNames,
-                ...scrapedSourceNames,
-              ]}
-              isAnime={preferAnimeAv1}
-              selectedStreamId={selectedStreamId}
-              selectedSource={selectedSource}
+                streams={allStreams}
+                expectedSourceNames={[
+                  ...(preferAnimeAv1 ? PRIORITY_ANIME_SOURCES : []),
+                  ...addonSourceNames,
+                  ...scrapedSourceNames,
+                ]}
+                isAnime={preferAnimeAv1}
+                selectedStreamId={selectedStreamId}
+                selectedSource={selectedSource}
+                bigPicture={bigPicture}
+              mediaRuntimeMinutes={meta?.runtime}
               partyMedia={query ? { type: query.type, id: query.id, season: query.season, episode: query.episode } : null}
               partyMode={partyMode}
               onPartyModeChange={setPartyMode}
@@ -1194,10 +1334,14 @@ const StreamItemButton = memo(function StreamItemButton({
   stream,
   selected,
   onSelect,
+  primary,
+  mediaRuntimeMinutes,
 }: {
   stream: MediaStream;
   selected: boolean;
   onSelect: (id: string) => void;
+  primary?: boolean;
+  mediaRuntimeMinutes?: number;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [manifestMetadata, setManifestMetadata] = useState<MediaStream["technicalMetadata"]>();
@@ -1211,7 +1355,7 @@ const StreamItemButton = memo(function StreamItemButton({
   const languageMetadata = useMemo(() => formatStreamLanguageMetadata(stream), [stream]);
   const fileName = useMemo(() => extractSourceFileName(stream), [stream]);
   const summary = useMemo(() => formatSourceSummary(stream), [stream]);
-  const metadata = useMemo(() => formatSourceCardMetadata(stream), [stream]);
+  const metadata = useMemo(() => formatSourceCardMetadata(stream, mediaRuntimeMinutes), [mediaRuntimeMinutes, stream]);
   const addonLogo = useMemo(() => {
     const direct = getStreamAddonLogo(stream);
     if (direct) return direct;
@@ -1251,6 +1395,7 @@ const StreamItemButton = memo(function StreamItemButton({
     <button
       ref={buttonRef}
       type="button"
+      data-bp-episode-primary={primary ? true : undefined}
       onClick={() => onSelect(stream.id)}
       className={`rounded-2xl border px-4 py-3 text-left ${
         selected
@@ -1304,10 +1449,10 @@ const StreamItemButton = memo(function StreamItemButton({
               }`}>
                 <User size={13} className="shrink-0" />
                 {seeders === null
-                  ? "Seeders sin reportar"
-                  : `${seeders} ${seeders === 1 ? "seeder" : "seeders"}`}
+                  ? "seeders sin reportar"
+                  : `${seeders} seeders`}
               </span>
-              <span>Torrent</span>
+              <span>Torrente</span>
             </p>
           ) : null}
           {languageMetadata ? (
@@ -1332,6 +1477,8 @@ function SourcePickerPanel({
   isAnime,
   selectedStreamId,
   selectedSource,
+  bigPicture,
+  mediaRuntimeMinutes,
   partyMedia,
   partyMode,
   onPartyModeChange,
@@ -1348,6 +1495,8 @@ function SourcePickerPanel({
   isAnime: boolean;
   selectedStreamId: string;
   selectedSource: string | null;
+  bigPicture: boolean;
+  mediaRuntimeMinutes?: number;
   partyMedia: PartyMedia | null;
   partyMode: null | "guest" | "host";
   onPartyModeChange: (mode: null | "guest" | "host") => void;
@@ -1357,6 +1506,7 @@ function SourcePickerPanel({
   onGuestJoined: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sourceFilterRefs = useRef(new Map<string, HTMLButtonElement>());
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const party = useParty();
@@ -1463,18 +1613,78 @@ function SourcePickerPanel({
     return streams.filter(stream => normalizeStreamSourceName(extractSourceName(stream) ?? "") === selectedKey);
   }, [streams, selectedSource]);
 
+  const navigableSources = useMemo(
+    () => uniqueSources.filter(({ count }) => loading || count > 0),
+    [loading, uniqueSources],
+  );
+  const navigableSourceCount = navigableSources.length;
+  let nextNavigableSourceIndex = 1;
+
+  // "Todas" no es un proveedor, así que no pasa por `navigableSources` (ni por
+  // `sourceFilterRefs`, que se indexa por nombre normalizado). Este centinela
+  // lo mantiene direccionable con los bumpers igual que el resto de chips.
+  const ALL_SOURCES_KEY = "\u0000all-sources";
+
+  // En Big Picture los bumpers cambian directamente de proveedor; mantener
+  // el filtro al confirmar con A evita que el click vuelva a "Todas". El ciclo
+  // incluye "Todas" como primera parada: sin ella no había forma de volver al
+  // listado completo con el mando (LB/RB solo recorrian los proveedores).
+  useEffect(() => {
+    if (!bigPicture || partyMode !== null) return;
+
+    const onGamepadAction = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id !== "lb" && id !== "rb") return;
+      if (navigableSources.length === 0) return;
+
+      // Índice 0 = "Todas"; 1..n = proveedores navegables.
+      const cycleLength = navigableSources.length + 1;
+      const currentIndex = selectedSource
+        ? navigableSources.findIndex(source => normalizeStreamSourceName(source.name) === normalizeStreamSourceName(selectedSource)) + 1
+        : 0;
+      const direction = id === "lb" ? -1 : 1;
+      const nextIndex = (currentIndex + direction + cycleLength) % cycleLength;
+      const nextSource = nextIndex === 0 ? null : navigableSources[nextIndex - 1]?.name ?? null;
+      if (nextIndex > 0 && !nextSource) return;
+
+      event.preventDefault();
+      onSourceChange(nextSource);
+      window.requestAnimationFrame(() => {
+        const button = sourceFilterRefs.current.get(
+          nextSource ? normalizeStreamSourceName(nextSource) : ALL_SOURCES_KEY,
+        );
+        button?.focus({ preventScroll: true });
+        button?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+      });
+    };
+
+    window.addEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+    return () => window.removeEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+  }, [bigPicture, navigableSources, onSourceChange, partyMode, selectedSource]);
+
+  useEffect(() => {
+    if (!bigPicture || partyMode !== null || loading || filteredStreams.length === 0) return;
+    const timer = window.setTimeout(() => {
+      // Solo si el foco no está ya en otro control (no robar navegación).
+      const current = document.activeElement;
+      if (current && current !== document.body && current !== document.documentElement) return;
+      document.querySelector<HTMLElement>("[data-bp-episode-primary]")?.focus({ preventScroll: true });
+    }, 70);
+    return () => window.clearTimeout(timer);
+  }, [bigPicture, filteredStreams.length, loading, partyMode, selectedSource]);
+
   return (
     <section
-      className="liquid-glass w-full overflow-hidden rounded-3xl border border-white/[0.14]"
+      className={bigPicture ? "liquid-glass flex max-h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-3xl border border-white/[0.14]" : "liquid-glass w-full overflow-hidden rounded-3xl border border-white/[0.14]"}
       aria-label={heading}
     >
-      <div className="flex items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4">
+      <div data-bp-episode-tools={bigPicture ? true : undefined} className="flex shrink-0 items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4">
         <p className="min-w-0 flex-1 truncate text-base font-bold text-white/90">{heading}</p>
         {partyMode !== null ? (
           <button
             type="button"
             onClick={exitPartyMode}
-            className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/[0.09] bg-white/[0.07] px-3 text-xs font-bold text-white/78 gsap-transition hover:bg-white/[0.13] hover:text-white"
+            className={`flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/[0.09] bg-white/[0.07] px-3 text-xs font-bold text-white/78 ${bigPicture ? "" : "gsap-transition"} hover:bg-white/[0.13] hover:text-white`}
             title="Salir del modo Party"
           >
             <X size={15} /> Salir
@@ -1485,7 +1695,7 @@ function SourcePickerPanel({
             ref={partyBtnRef}
             type="button"
             onClick={() => setPartyMenuOpen(value => !value)}
-            className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border gsap-transition ${
+            className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border ${bigPicture ? "" : "gsap-transition"} ${
               party.status === "connected"
                 ? "border-white/[0.14] bg-white/18 text-white"
                 : "border-white/[0.09] bg-white/[0.07] text-white/82 hover:bg-white/[0.13] hover:text-white"
@@ -1508,8 +1718,16 @@ function SourcePickerPanel({
             placement="below-start"
             items={[
               {
+                // Big Picture: el TV solo QUEMA (crea la sala y marca la
+                // fuente). No hay mando para teclear un código de 6 letras, así
+                // que "Como invitado" se muestra pero no se puede elegir.
+                // `disabled` además lo saca del foco del mando: la navegación
+                // espacial filtra por button:not([disabled]).
                 label: "Como invitado",
-                description: "Entrar a una sala con su código",
+                description: bigPicture
+                  ? "No disponible en el TV"
+                  : "Entrar a una sala con su código",
+                disabled: bigPicture,
                 onSelect: () => { onPartyModeChange("guest"); setPartyMenuOpen(false); },
               },
               {
@@ -1523,7 +1741,7 @@ function SourcePickerPanel({
         <button
           type="button"
           onClick={onReload}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/[0.09] bg-white/[0.07] text-white/82 gsap-transition hover:bg-white/[0.13] hover:text-white"
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/[0.09] bg-white/[0.07] text-white/82 ${bigPicture ? "" : "gsap-transition"} hover:bg-white/[0.13] hover:text-white`}
           title="Recargar fuentes"
           aria-label="Recargar fuentes"
         >
@@ -1599,10 +1817,10 @@ function SourcePickerPanel({
         </div>
       ) : (
         <>
-      <div className="relative border-b border-white/[0.06] px-4 py-3" style={{ minHeight: uniqueSources.length > 0 ? undefined : 52 }}>
+      <div className="relative shrink-0 border-b border-white/[0.06] px-4 py-3" style={{ minHeight: uniqueSources.length > 0 ? undefined : 52 }}>
         {uniqueSources.length > 0 ? (
           <>
-            {canScrollLeft ? (
+            {!bigPicture && canScrollLeft ? (
               <button
                 type="button"
                 onClick={() => {
@@ -1615,11 +1833,24 @@ function SourcePickerPanel({
                 <ChevronLeft size={14} />
               </button>
             ) : null}
-            <div ref={scrollRef} className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" style={{ scrollBehavior: "smooth" }}>
+            <div
+              ref={scrollRef}
+              data-row-scroller
+              data-row-key="episode-sources"
+               data-row-count={navigableSourceCount + 1}
+               className={bigPicture ? "flex items-center gap-2 overflow-x-auto overflow-y-hidden px-1 py-1 scrollbar-none" : "flex gap-2 overflow-x-auto pb-1 scrollbar-none"}
+              style={{ scrollBehavior: "smooth" }}
+            >
               <button
                 type="button"
+                ref={element => {
+                  if (element) sourceFilterRefs.current.set(ALL_SOURCES_KEY, element);
+                  else sourceFilterRefs.current.delete(ALL_SOURCES_KEY);
+                }}
+                data-item-index={0}
+                data-row-card
                 onClick={() => onSourceChange(null)}
-                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold gsap-transition ${
+                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold ${bigPicture ? "" : "gsap-transition"} ${
                   selectedSource === null
                     ? "border-white/25 bg-white/15 text-white"
                     : "border-white/[0.08] bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80"
@@ -1634,16 +1865,24 @@ function SourcePickerPanel({
                 const logoUrl = getSourceLogo(name);
                 const unavailable = !loading && count === 0;
                 const pending = loading && count === 0;
+                const itemIndex = unavailable ? undefined : nextNavigableSourceIndex++;
                 return (
                   <button
                     key={name}
                     type="button"
+                    ref={element => {
+                      const key = normalizeStreamSourceName(name);
+                      if (element) sourceFilterRefs.current.set(key, element);
+                      else sourceFilterRefs.current.delete(key);
+                    }}
+                    data-item-index={itemIndex}
+                    data-row-card={itemIndex !== undefined ? true : undefined}
                     onClick={() => {
-                      if (!unavailable) onSourceChange(name === selectedSource ? null : name);
+                      if (!unavailable) onSourceChange(name === selectedSource && !bigPicture ? null : name);
                     }}
                     disabled={unavailable}
                     aria-label={`${name}: ${pending ? "cargando" : unavailable ? "sin resultados" : `${count} resultados`}`}
-                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold gsap-transition ${
+                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold ${bigPicture ? "" : "gsap-transition"} ${
                       selectedSource === name
                         ? "border-white/25 bg-white/15 text-white"
                         : unavailable
@@ -1668,7 +1907,7 @@ function SourcePickerPanel({
                 );
               })}
             </div>
-            {canScrollRight ? (
+            {!bigPicture && canScrollRight ? (
               <button
                 type="button"
                 onClick={() => {
@@ -1684,7 +1923,7 @@ function SourcePickerPanel({
           </>
         ) : null}
       </div>
-      <div className="max-h-[calc(100vh-210px)] overflow-y-auto p-3">
+      <div data-bp-episode-streams={bigPicture ? true : undefined} className={bigPicture ? "min-h-0 flex-1 overflow-hidden overscroll-none px-5 py-3" : "max-h-[calc(100vh-210px)] overflow-y-auto p-3"}>
         {error ? (
           <p className="mb-2 rounded-xl border border-white/[0.08] bg-black/24 px-4 py-3 text-sm font-semibold text-white/58">{error}</p>
         ) : null}
@@ -1696,12 +1935,14 @@ function SourcePickerPanel({
           </p>
         ) : (
           <div className="grid gap-2">
-            {filteredStreams.map(stream => (
+            {filteredStreams.map((stream, index) => (
               <StreamItemButton
                 key={stream.id}
-                stream={stream}
-                selected={stream.id === selectedStreamId}
-                onSelect={handlePick}
+                 stream={stream}
+                 selected={stream.id === selectedStreamId}
+                 primary={bigPicture && index === 0}
+                 mediaRuntimeMinutes={mediaRuntimeMinutes}
+                 onSelect={handlePick}
               />
             ))}
           </div>
@@ -1741,7 +1982,7 @@ function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
           key={badge.id}
           title={badge.label}
           aria-label={badge.label}
-          className="flex h-7 min-w-[42px] max-w-[104px] items-center justify-center overflow-hidden rounded-lg border border-white/[0.09] bg-black/48 px-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+          className="flex h-9 min-w-[52px] max-w-[128px] items-center justify-center overflow-hidden rounded-xl border border-white/[0.09] bg-black/48 px-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
         >
           {badge.imageUrl ? (
             <img
@@ -1750,12 +1991,12 @@ function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
               loading="lazy"
               decoding="async"
               className={badge.overscan
-                ? "h-[74px] w-[108px] max-w-none shrink-0 object-contain"
-                : "max-h-[18px] max-w-[88px] object-contain"
+                ? "h-[88px] w-[128px] max-w-none shrink-0 object-contain"
+                : "max-h-6 max-w-[112px] object-contain"
               }
             />
           ) : (
-            <span className="text-[10px] font-bold tracking-wider text-white/80">{badge.label}</span>
+            <span className="text-xs font-bold tracking-wider text-white/80">{badge.label}</span>
           )}
         </span>
       ))}
@@ -1763,15 +2004,11 @@ function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
   );
 }
 
-function buildPlayerSearch(params: URLSearchParams) {
-  const next = new URLSearchParams();
-  for (const key of ["type", "id", "season", "ep", "fromSearch", "q"]) {
-    const value = params.get(key);
-    if (value) next.set(key, value);
-  }
-  return next.toString();
-}
-
+/**
+ * El query resuelto manda sobre los search params. Embebido en Detail la URL
+ * es /detail/:type/:id y no lleva search params, asi que leerlos aqui dejaba al
+ * reproductor sin type/id y con ello a Seekr sin forma de identificar el titulo.
+ */
 function pickDefaultStream(
   streams: MediaStream[],
   query: StreamQuery | null,
@@ -1977,18 +2214,20 @@ function formatSourceSummary(stream: MediaStream) {
   return `Presentado por ${stream.addonName}${provider}`;
 }
 
-function formatSourceCardMetadata(stream: MediaStream) {
+function formatSourceCardMetadata(stream: MediaStream, mediaRuntimeMinutes?: number) {
   const hints = stream.behaviorHints ?? {};
   const detected = extractRenderedStreamMetadata(stream);
   const size = firstPositiveNumber(stream.size, hints.videoSize, hints.size, detected.size);
   const folderSize = firstPositiveNumber(stream.folderSize, hints.folderSize, detected.folderSize);
   const indexer = firstNonEmptyText(stream.indexer, hints.indexer, detected.indexer);
-  const duration = firstPositiveNumber(stream.duration, hints.duration, detected.duration);
+  const streamDuration = firstPositiveNumber(stream.duration, hints.duration, detected.duration);
+  const mediaRuntime = firstPositiveNumber(mediaRuntimeMinutes);
   const sections: string[] = [];
-  if (size) sections.push(`Size: ${formatBytes10(size)}${folderSize ? ` / ${formatBytes10(folderSize)}` : ""}`);
-  else if (folderSize) sections.push(`Size: ${formatBytes10(folderSize)}`);
-  if (indexer) sections.push(`Source: ${indexer}`);
-  if (duration) sections.push(`Duration: ${formatDuration(duration)}`);
+  if (size) sections.push(`Tamaño: ${formatBytes10(size)}${folderSize ? ` / ${formatBytes10(folderSize)}` : ""}`);
+  else if (folderSize) sections.push(`Tamaño: ${formatBytes10(folderSize)}`);
+  if (indexer) sections.push(`Fuente: ${indexer}`);
+  if (mediaRuntime) sections.push(`Duración: ${formatRuntime(mediaRuntime)}`);
+  else if (streamDuration) sections.push(`Duración: ${formatDuration(streamDuration)}`);
   return sections.join(" | ");
 }
 
@@ -1998,8 +2237,8 @@ function formatStreamLanguageMetadata(stream: MediaStream) {
     subtitle.language ?? subtitle.lang ?? subtitle.title,
   ));
   const sections: string[] = [];
-  if (languages.length) sections.push(`Languages: ${languages.join(", ")}`);
-  if (subtitles.length) sections.push(`Subtitles: ${subtitles.join(", ")}`);
+  if (languages.length) sections.push(`Idiomas: ${languages.join(", ")}`);
+  if (subtitles.length) sections.push(`Subtítulos: ${subtitles.join(", ")}`);
   return sections.join(" | ");
 }
 
@@ -2021,6 +2260,7 @@ function extractSourceName(stream: MediaStream): string | null {
   const addonId = stream.addonId?.trim() ?? "";
   const isTorrentio = addonId === "torrentio" || addonId === ["com.stre", "mio.torrentio"].join("");
   const isMediaExtension = addonId.startsWith("mediaExtension:");
+  const isCncVerse = addonId === CNCVERSE_BRIDGE_ID;
 
   if (isTorrentio) {
     const indexer = stream.indexer?.trim();
@@ -2033,6 +2273,15 @@ function extractSourceName(stream: MediaStream): string | null {
   if (isMediaExtension) {
     const addonName = stream.addonName?.trim();
     if (addonName && addonName !== "Unknown") return addonName;
+  }
+
+  // El CNCVerse Bridge mete un solo add-on delante de ~70 extensiones, asi que
+  // agrupar por nombre de add-on meteria 200 streams en un unico chip. La
+  // extension real va en la segunda linea de `name` ("VegaMovies - 480p"), y su
+  // normalizador traduce las que Aetherio ya trae por otra via al nombre que ya
+  // usan, para que esas se sumen a su chip en vez de abrir uno redundante.
+  if (isCncVerse) {
+    return cncVerseProviderLabel(stream.name);
   }
 
   const name = stream.name?.trim() ?? "";
@@ -2183,11 +2432,6 @@ function streamSupportsPreferredAudio(stream: MediaStream, preferredAudio: strin
   if (!text) return false;
   const aliases = audioLanguageAliases(preferred);
   return aliases.some(alias => text.includes(alias));
-}
-
-function ensureOriginalTmdbImage(url?: string) {
-  if (!url) return undefined;
-  return url.replace(/https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\//i, `${IMG}/w1280/`);
 }
 
 function normalizeArtworkCandidate(value?: string | null) {

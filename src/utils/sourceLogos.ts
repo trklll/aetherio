@@ -1,4 +1,5 @@
 import { useAddonStore } from "../store/addonStore.ts";
+import { CNCVERSE_BRIDGE_LOGO, isCncVerseProviderLabel } from "../services/cncverseBridge.ts";
 
 const sourceLogoUrls = import.meta.glob("../assets/logosaddons/*.{png,jpg,jpeg}", {
   eager: true,
@@ -50,6 +51,11 @@ export function getSourceLogo(sourceName: string): string | null {
   if (key === "nyaasi" && SOURCE_LOGO_MAP.nyaa) return SOURCE_LOGO_MAP.nyaa;
   const direct = SOURCE_LOGO_MAP[sourceName.toLowerCase()];
   if (direct) return direct;
+  // Extensiones del CNCVerse Bridge: no traen logo propio, asi que se muestra
+  // el del puente para que el chip diga de que addon salio el stream. Se
+  // comprueba antes del fuzzy de addons porque el nombre del puente no
+  // contiene el de la extension.
+  if (isCncVerseProviderLabel(sourceName)) return CNCVERSE_BRIDGE_LOGO;
   // Fallback: any addon (including user custom) that exposes logo in manifest
   return getAddonLogoBySourceName(sourceName);
 }

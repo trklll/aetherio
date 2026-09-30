@@ -6,6 +6,7 @@ const FIRST_VALUE_KEYS = {
   audioCodec: ["audioCodec", "audio_codec", "codecAudio", "audioCodecName", "audio_codecs"],
   audioChannels: ["audioChannels", "audio_channels", "channels", "channelCount"],
   dynamicRange: ["dynamicRange", "dynamic_range", "videoRange", "video_range", "hdr", "range"],
+  bitDepth: ["bitDepth", "bit_depth", "bitdepth", "bits", "depth", "colorDepth", "color_depth"],
 } as const;
 
 function record(value: unknown): Record<string, unknown> {
@@ -60,6 +61,7 @@ export function normalizeStreamTechnicalMetadata(...values: unknown[]): StreamTe
     dynamicRange: firstValue(records, FIRST_VALUE_KEYS.dynamicRange) === true
       ? "HDR"
       : normalizeText(firstValue(records, FIRST_VALUE_KEYS.dynamicRange)),
+    bitDepth: normalizeText(firstValue(records, FIRST_VALUE_KEYS.bitDepth)),
   };
   return Object.values(metadata).some(value => value !== undefined) ? metadata : undefined;
 }

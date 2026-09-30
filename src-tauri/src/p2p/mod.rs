@@ -1,8 +1,10 @@
 pub mod chunk_store;
+pub mod enginefs;
 pub mod tracker;
 pub mod webrtc;
 
 pub use chunk_store::{ChunkStore, SharedChunkStore};
+pub use enginefs::{SharedEnginefsRegistry, EnginefsRegistry};
 pub use tracker::TrackerServer;
 
 

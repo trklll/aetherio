@@ -3,7 +3,7 @@ import { useAddonStore } from "../store/addonStore.ts";
 import { tmdbFetch } from "../config/apiKeys.ts";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
 import { isPlayableMediaStream } from "../utils/playableMedia.ts";
-import { streamSpanishPriority } from "../utils/streamLanguagePriority.ts";
+import { sortStreamsForPlayback } from "../utils/streamPlaybackRanking.ts";
 import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetadata.ts";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
@@ -51,34 +51,6 @@ function dedupeStreams(streams: MediaStream[]): MediaStream[] {
     }
   }
   return Array.from(seen.values());
-}
-
-function playbackScore(stream: MediaStream): number {
-  const hints = stream.behaviorHints ?? {};
-  const notWebReady = Boolean(hints.notWebReady);
-  const lowerName = (stream.name ?? "").toLowerCase();
-  const hasDirectUrl = typeof stream.url === "string" && /^https?:\/\//i.test(stream.url);
-  const hasHttpSource = (stream.sources ?? []).some(item => /^https?:\/\//i.test(item));
-  const hasTorrentSignals =
-    Boolean(stream.infoHash) ||
-    (stream.sources ?? []).some(item => /^magnet:/i.test(item));
-
-  let score = 0;
-  if (hasDirectUrl) score += 50;
-  if (hasTorrentSignals) score += 38;
-  if (hasHttpSource) score += 20;
-  if (stream.subtitles?.length) score += 8;
-  if (typeof hints.videoSize === "number" && hints.videoSize > 0) score += 4;
-  if (notWebReady) score -= 100;
-  if (lowerName.includes("cam")) score -= 12;
-  return score;
-}
-
-function sortStreamsForPlayback(streams: MediaStream[]): MediaStream[] {
-  return [...streams].sort((a, b) => {
-    const languagePriority = streamSpanishPriority(b) - streamSpanishPriority(a);
-    return languagePriority || playbackScore(b) - playbackScore(a);
-  });
 }
 
 function buildStreamId(q: StreamQuery): string {
@@ -143,6 +115,10 @@ async function resolveAddonStreamId(addon: any, query: StreamQuery, requestType:
 }
 
 function addonHasStreams(addon: any): boolean {
+  // Sin URL no hay nada que pedir: asi el CNCVerse Bridge puede vivir en la
+  // lista como add-on opt-in sin que cada pagina de episodio dispare cuatro
+  // peticiones a un base vacio.
+  if (typeof addon?.url !== "string" || !addon.url.trim()) return false;
   const resources = addon.manifest?.resources ?? [];
   if (!resources.length) return true; // sin declaracion — intentar igual
   return resources.some((r: unknown) =>
@@ -156,6 +132,16 @@ function addonSupportsType(addon: any, type: string) {
 }
 
 function streamRequestTypes(addon: any, queryType: string) {
+  // Un add-on puede declarar que le basta con una sola peticion aunque sirva
+  // varios tipos. El CNCVerse Bridge resuelve por id IMDB ignorando el tipo, y
+  // su endpoint tarda ~30-50 s: pedirlo 4 veces (movie/series/tv/anime) serian
+  // cuatro esperas identicas en paralelo por cada capitulo.
+  const forced: unknown = addon?.streamRequestTypes;
+  if (Array.isArray(forced)) {
+    const types = forced.filter((type): type is string => typeof type === "string" && Boolean(type));
+    const supported = types.filter(type => addonSupportsType(addon, type));
+    return supported.length ? supported : types;
+  }
   const candidates = queryType === "anime"
     ? ["anime", "series", "tv", "movie"]
     : queryType === "tv" || queryType === "series"
@@ -164,11 +150,15 @@ function streamRequestTypes(addon: any, queryType: string) {
   return candidates.filter((type, index) => candidates.indexOf(type) === index && addonSupportsType(addon, type));
 }
 
-async function fetchStreamPayload(url: string, attempts = 3) {
+/** Timeout por defecto. Adones que agregan muchos upstreams pueden necesitar mas. */
+const DEFAULT_STREAM_TIMEOUT_MS = 6000;
+const DEFAULT_STREAM_ATTEMPTS = 3;
+
+async function fetchStreamPayload(url: string, attempts = DEFAULT_STREAM_ATTEMPTS, timeoutMs = DEFAULT_STREAM_TIMEOUT_MS) {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 6000);
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(url, { signal: controller.signal });
       window.clearTimeout(timer);
@@ -316,6 +306,11 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
   const sourceNames = useMemo(
     () => getEnabledAddons()
       .filter(addon => addonHasStreams(addon) && (!query || streamRequestTypes(addon, query.type).length > 0))
+      // Un add-on que codifica el proveedor en cada stream no debe abrir un
+      // chip con su propio nombre: cada stream se contabiliza en su proveedor
+      // real (ver extractSourceName). Si no, el chip del add-on sale con 0
+      // resultados y pinta de rojo mientras sus providers si funcionan.
+      .filter(addon => !addon.streamSourceFromPayload)
       .map(addon => addon.name)
       .filter(Boolean),
     [getEnabledAddons, query?.type, tick],
@@ -383,12 +378,18 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
       }
 
       pendingRequests += types.length;
+      const timeoutMs = typeof addon.streamTimeoutMs === "number" && addon.streamTimeoutMs > 0
+        ? addon.streamTimeoutMs
+        : DEFAULT_STREAM_TIMEOUT_MS;
+      const attempts = typeof addon.streamAttempts === "number" && addon.streamAttempts > 0
+        ? addon.streamAttempts
+        : DEFAULT_STREAM_ATTEMPTS;
       for (const type of types) {
         resolveAddonStreamId(addon, query, type, streamId)
           .then(requestStreamId => {
             const url = `${base}/stream/${type}/${encodeURIComponent(requestStreamId)}.json`;
-            if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] request", { addonId: addon.id, addonName: addon.name, type, streamId: requestStreamId, url });
-            return fetchStreamPayload(url, 3);
+            if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] request", { addonId: addon.id, addonName: addon.name, type, streamId: requestStreamId, url, timeoutMs });
+            return fetchStreamPayload(url, attempts, timeoutMs);
           })
           .then(({ json, status }) => {
             if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] response", { addonId: addon.id, type, status, ok: true });

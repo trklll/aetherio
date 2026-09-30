@@ -2,7 +2,7 @@ import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import aetherioLogo from "../../assets/aetheriologo.png";
-import { isAndroidRuntime, isTauriRuntime } from "../../runtime/platform";
+import { isTauriRuntime } from "../../runtime/platform";
 import { gsap, prefersReducedMotion } from "../../utils/motion";
 import { STARTUP_COMPLETE_EVENT, STARTUP_STATUS_EVENT } from "./startupEvents";
 import "./StartupExperience.css";
@@ -11,27 +11,30 @@ interface StartupExperienceProps {
   children: ReactNode;
   ready: boolean;
   status: string;
+  onComplete?: () => void;
 }
 
-export default function StartupExperience({ children, ready, status }: StartupExperienceProps) {
-  if (isTauriRuntime() && !isAndroidRuntime()) {
+export default function StartupExperience({ children, ready, status, onComplete }: StartupExperienceProps) {
+  if (isTauriRuntime()) {
     return (
-      <NativeMainStartupCoordinator ready={ready} status={status}>
+      <NativeMainStartupCoordinator ready={ready} status={status} onComplete={onComplete}>
         {children}
       </NativeMainStartupCoordinator>
     );
   }
 
   return (
-    <BrowserStartupExperience ready={ready} status={status}>
+    <BrowserStartupExperience ready={ready} status={status} onComplete={onComplete}>
       {children}
     </BrowserStartupExperience>
   );
 }
 
-function NativeMainStartupCoordinator({ children, ready, status }: StartupExperienceProps) {
+function NativeMainStartupCoordinator({ children, ready, status, onComplete }: StartupExperienceProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const revealedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useLayoutEffect(() => {
     gsap.set(contentRef.current, { autoAlpha: 0, y: 12, scale: 0.997 });
@@ -48,9 +51,16 @@ function NativeMainStartupCoordinator({ children, ready, status }: StartupExperi
 
     const timeout = window.setTimeout(() => {
       void (async () => {
-        const mainWindow = getCurrentWindow();
-        await mainWindow.show();
-        await mainWindow.setFocus();
+        try {
+          const mainWindow = getCurrentWindow();
+          await mainWindow.show();
+          await mainWindow.setFocus();
+        } catch {
+          gsap.set(contentRef.current, { autoAlpha: 1, clearProps: "transform" });
+          return;
+        } finally {
+          onCompleteRef.current?.();
+        }
 
         if (prefersReducedMotion()) {
           gsap.set(contentRef.current, { autoAlpha: 1, clearProps: "transform" });
@@ -65,9 +75,7 @@ function NativeMainStartupCoordinator({ children, ready, status }: StartupExperi
           ease: "power3.out",
           clearProps: "opacity,visibility,transform",
         });
-      })().catch(() => {
-        gsap.set(contentRef.current, { autoAlpha: 1, clearProps: "transform" });
-      });
+      })();
     }, 260);
 
     return () => window.clearTimeout(timeout);
@@ -80,11 +88,14 @@ function NativeMainStartupCoordinator({ children, ready, status }: StartupExperi
   );
 }
 
-function BrowserStartupExperience({ children, ready, status }: StartupExperienceProps) {
+function BrowserStartupExperience({ children, ready, status, onComplete }: StartupExperienceProps) {
   const [visible, setVisible] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const startedAtRef = useRef(Date.now());
+  const completedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -109,6 +120,10 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
       if (reducedMotion) {
         gsap.set(contentRef.current, { autoAlpha: 1, clearProps: "transform" });
         setVisible(false);
+        if (!completedRef.current) {
+          completedRef.current = true;
+          onCompleteRef.current?.();
+        }
         return;
       }
       const timeline = gsap.timeline({
@@ -116,6 +131,10 @@ function BrowserStartupExperience({ children, ready, status }: StartupExperience
         onComplete: () => {
           gsap.set(contentRef.current, { clearProps: "opacity,visibility,transform" });
           setVisible(false);
+          if (!completedRef.current) {
+            completedRef.current = true;
+            onCompleteRef.current?.();
+          }
         },
       });
       timeline

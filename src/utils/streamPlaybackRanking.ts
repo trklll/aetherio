@@ -1,19 +1,30 @@
 import type { MediaStream } from "../types/stream.ts";
+import { getEstimatedConnectionSpeedBps } from "./connectionSpeed";
 import { getDirectPlaybackUrl, hasP2pPlayback, isPlayableMediaStream } from "./playableMedia";
 import { streamSpanishPriority } from "./streamLanguagePriority";
 import { getReportedSeeders, torrentHealthScore } from "./torrentHealth";
 
-interface StreamPlaybackRankingOptions {
+export interface StreamPlaybackRankingOptions {
   preferAnimeAv1?: boolean;
+  connectionSpeedBps?: number;
 }
 
 const ANIME_SOURCE_ORDER = [
   "animes",
   "animeav1",
+  "animeflv",
+  "gojowtf",
+  "animekai",
   "torrentio",
   "nyaasi",
   "seadex",
   "animetosho",
+  "thepiratebay",
+  "animesaturn",
+  "animesaturnmirror",
+  "animeunity",
+  "animeunitymirror",
+  "animeworld",
 ] as const;
 
 function hasTorrentSignals(stream: MediaStream): boolean {
@@ -71,10 +82,33 @@ function streamAnimeSourcePriority(stream: MediaStream): number {
   return animeSourcePriority(sourceText);
 }
 
+function positiveNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function streamBitrateBps(stream: MediaStream): number | null {
+  const hints = stream.behaviorHints ?? {};
+  const explicit = positiveNumber(hints.bitrate ?? hints.bandwidth ?? hints.videoBitrate);
+  if (explicit) return explicit;
+  const sizeBytes = positiveNumber(hints.videoSize) ?? positiveNumber(stream.size);
+  const durationSeconds = positiveNumber(stream.duration);
+  if (!sizeBytes || !durationSeconds || durationSeconds < 600 || durationSeconds > 21_600) return null;
+  return (sizeBytes * 8) / durationSeconds;
+}
+
+function connectionFitPriority(stream: MediaStream, connectionSpeedBps: number): number {
+  if (connectionSpeedBps <= 0 || hasP2pPlayback(stream)) return -1;
+  const bitrate = streamBitrateBps(stream);
+  if (!bitrate) return 1;
+  return bitrate * 1.5 <= connectionSpeedBps ? 0 : 2;
+}
+
 export function sortStreamsForPlayback(
   streams: MediaStream[],
   options: StreamPlaybackRankingOptions = {},
 ): MediaStream[] {
+  const connectionSpeedBps = options.connectionSpeedBps ?? getEstimatedConnectionSpeedBps();
   return streams
     .map((stream, index) => ({ stream, index }))
     .sort((left, right) => {
@@ -83,8 +117,18 @@ export function sortStreamsForPlayback(
         ? streamAnimeSourcePriority(left.stream) - streamAnimeSourcePriority(right.stream)
         : 0;
       const languagePriority = streamSpanishPriority(right.stream) - streamSpanishPriority(left.stream);
+      const fitPriority = connectionFitPriority(left.stream, connectionSpeedBps) - connectionFitPriority(right.stream, connectionSpeedBps);
+      const bitratePriority = fitPriority === 0
+        ? (streamBitrateBps(right.stream) ?? 0) - (streamBitrateBps(left.stream) ?? 0)
+        : 0;
       const healthPriority = playbackScore(right.stream) - playbackScore(left.stream);
-      return availabilityPriority || animeSourceOrder || languagePriority || healthPriority || left.index - right.index;
+      return availabilityPriority
+        || animeSourceOrder
+        || languagePriority
+        || fitPriority
+        || bitratePriority
+        || healthPriority
+        || left.index - right.index;
     })
     .map(item => item.stream);
 }

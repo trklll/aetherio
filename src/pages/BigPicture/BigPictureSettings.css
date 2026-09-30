@@ -1,0 +1,421 @@
+/* Pantallas 10-foot de Ajustes y Complementos. El contenido se desplaza bajo
+   el rail, mientras los controles mantienen targets grandes para el mando. */
+
+.bp-settings-page {
+  --bp-surface: rgba(255, 255, 255, 0.075);
+  --bp-surface-light: rgba(255, 255, 255, 0.12);
+  --bp-line: rgba(255, 255, 255, 0.14);
+  --bp-muted: rgba(255, 255, 255, 0.58);
+  min-height: 100%;
+  padding: calc(5vh + 78px) 6vw 72px 112px;
+  color: #fff;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.bp-settings-page__header,
+.bp-settings-page__layout {
+  width: min(1480px, 100%);
+  margin-inline: auto;
+}
+
+.bp-settings-page__header {
+  margin-bottom: 34px;
+}
+
+.bp-settings-page__eyebrow,
+.bp-addons-page__section-label {
+  margin: 0 0 10px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.bp-settings-page__header h1 {
+  margin: 0;
+  font-size: clamp(42px, 4.2vw, 70px);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  font-weight: 850;
+}
+
+.bp-settings-page__hint {
+  margin: 12px 0 0;
+  color: var(--bp-muted);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.bp-settings-page__layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(28px, 4vw, 72px);
+}
+
+.bp-settings-page__nav {
+  position: sticky;
+  top: 5vh;
+  display: grid;
+  gap: 8px;
+}
+
+.bp-settings-page__nav-item,
+.bp-settings-page__toggle-row,
+.bp-settings-page__cycle-row,
+.bp-settings-page__action-row,
+.bp-settings-page__profile-row,
+.bp-settings-page__catalog-main,
+.bp-addons-page__log > button {
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.bp-settings-page__nav-item {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 15px;
+  width: 100%;
+  min-height: 82px;
+  padding: 14px 17px;
+  border-radius: 22px;
+  border-color: transparent;
+  color: #fff;
+  text-align: left;
+  transition: transform 180ms ease, background 180ms ease;
+}
+
+.bp-settings-page__nav-item:hover,
+.bp-settings-page__nav-item.spatial-focus,
+.bp-settings-page__nav-item:focus-visible {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+  outline: none;
+}
+
+.bp-settings-page__nav-item.is-selected {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.24);
+  color: #fff;
+}
+.bp-settings-page__nav-item.is-selected .bp-settings-page__nav-chevron { opacity: 1; }
+
+.bp-settings-page__nav-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.is-selected .bp-settings-page__nav-icon { background: rgba(255, 255, 255, 0.18); }
+.bp-settings-page__nav-copy { min-width: 0; }
+.bp-settings-page__nav-copy strong,
+.bp-settings-page__nav-copy small { display: block; }
+.bp-settings-page__nav-copy strong { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+.bp-settings-page__nav-copy small { margin-top: 3px; color: var(--bp-muted); font-size: 13px; }
+.is-selected .bp-settings-page__nav-copy small { color: rgba(255, 255, 255, 0.64); }
+.bp-settings-page__nav-chevron { opacity: 0.5; }
+
+.bp-settings-page__panel { min-width: 0; }
+.bp-settings-page__panel-header { margin-bottom: 24px; }
+.bp-settings-page__panel-header h2 {
+  margin: 0;
+  font-size: clamp(26px, 2.5vw, 40px);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  font-weight: 820;
+}
+.bp-settings-page__panel-header p { max-width: 720px; margin: 9px 0 0; color: var(--bp-muted); font-size: 16px; line-height: 1.5; }
+.bp-settings-page__groups { display: grid; gap: 28px; }
+.bp-settings-page__group h3 { margin: 0 0 10px 5px; color: rgba(255, 255, 255, 0.54); font-size: 13px; letter-spacing: 0.02em; font-weight: 750; }
+.bp-settings-page__group-body { overflow: hidden; border-radius: 26px; }
+
+.bp-settings-page__info-row,
+.bp-settings-page__toggle-row,
+.bp-settings-page__choice-row,
+.bp-settings-page__cycle-row,
+.bp-settings-page__action-row,
+.bp-settings-page__profile-row,
+.bp-settings-page__catalog-row {
+  min-height: 82px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+}
+.bp-settings-page__info-row:last-child,
+.bp-settings-page__toggle-row:last-child,
+.bp-settings-page__choice-row:last-child,
+.bp-settings-page__cycle-row:last-child,
+.bp-settings-page__action-row:last-child,
+.bp-settings-page__profile-row:last-child,
+.bp-settings-page__catalog-row:last-child { border-bottom: 0; }
+
+.bp-settings-page__info-row,
+.bp-settings-page__toggle-row,
+.bp-settings-page__cycle-row,
+.bp-settings-page__action-row,
+.bp-settings-page__profile-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 23px;
+  color: #fff;
+  text-align: left;
+}
+.bp-settings-page__toggle-row,
+.bp-settings-page__cycle-row,
+.bp-settings-page__profile-row { background: transparent; }
+.bp-settings-page__toggle-row:hover,
+.bp-settings-page__toggle-row.spatial-focus,
+.bp-settings-page__cycle-row:hover,
+.bp-settings-page__cycle-row.spatial-focus,
+.bp-settings-page__action-row:hover,
+.bp-settings-page__action-row.spatial-focus,
+.bp-settings-page__profile-row:hover,
+.bp-settings-page__profile-row.spatial-focus,
+.bp-settings-page__catalog-main:hover,
+.bp-settings-page__catalog-main.spatial-focus { background: rgba(255, 255, 255, 0.1); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); outline: none; }
+.bp-settings-page__toggle-row:focus,
+.bp-settings-page__cycle-row:focus,
+.bp-settings-page__action-row:focus,
+.bp-settings-page__profile-row:focus,
+.bp-settings-page__catalog-main:focus { outline: none; }
+.bp-settings-page__row-copy { min-width: 0; flex: 1; }
+.bp-settings-page__row-copy strong,
+.bp-settings-page__row-copy small,
+.bp-settings-page__row-copy span,
+.bp-settings-page__action-row strong,
+.bp-settings-page__action-row small { display: block; }
+.bp-settings-page__row-copy strong { color: #fff; font-size: 17px; font-weight: 800; letter-spacing: -0.015em; }
+.bp-settings-page__row-copy small,
+.bp-settings-page__row-copy span { margin-top: 5px; color: var(--bp-muted); font-size: 14px; line-height: 1.45; }
+.bp-settings-page__row-action { flex: 0 0 auto; }
+.bp-settings-page__row-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+
+.bp-settings-page__action {
+  display: inline-flex;
+  min-height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 20px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: #08090b;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 850;
+  transition: transform 180ms ease, background 180ms ease;
+}
+.bp-settings-page__action:hover,
+.bp-settings-page__action.spatial-focus,
+.bp-settings-page__action:focus-visible { transform: none; background: rgba(255, 255, 255, 0.78); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.24), 0 10px 28px rgba(0, 0, 0, 0.22); outline: none; }
+.bp-settings-page__action:disabled { cursor: default; opacity: 0.38; transform: none; }
+
+/* BigPicture.css gives every focused button a scale. Settings keeps focus
+   inside its glass surfaces so rows cannot be clipped by their parent. */
+.big-picture--home-maximized .bp-settings-page button:focus { transform: none; }
+
+.bp-settings-page__toggle { position: relative; flex: 0 0 auto; width: 66px; height: 38px; padding: 4px; border-radius: 99px; background: rgba(255, 255, 255, 0.2); transition: background 180ms ease; }
+.bp-settings-page__toggle span { display: block; width: 30px; height: 30px; border-radius: 50%; background: rgba(255, 255, 255, 0.62); transition: transform 180ms ease, background 180ms ease; }
+.is-on .bp-settings-page__toggle { background: #fff; }
+.is-on .bp-settings-page__toggle span { transform: translateX(28px); background: #090a0c; }
+
+.bp-settings-page__cycle-value { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; max-width: 48%; color: #fff; font-size: 16px; font-weight: 800; text-align: right; }
+.bp-settings-page__text-input { min-width: 0; max-width: 360px; flex: 1 1 260px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 14px; background: rgba(255, 255, 255, 0.07); padding: 12px 14px; color: #fff; font: inherit; font-size: 15px; font-weight: 700; outline: none; }
+.bp-settings-page__text-input:focus { border-color: rgba(255, 255, 255, 0.48); background: rgba(255, 255, 255, 0.11); }
+.bp-settings-page__color-input { width: 58px; height: 42px; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 12px; background: transparent; padding: 4px; }
+.bp-settings-page__choice-row { display: grid; grid-template-columns: minmax(230px, 0.7fr) minmax(0, 1.3fr); align-items: center; gap: 20px; padding: 16px 23px; }
+.bp-settings-page__choices { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.bp-settings-page__choices button { min-height: 43px; padding: 9px 14px; border: 1px solid transparent; border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.68); cursor: pointer; font: inherit; font-size: 13px; font-weight: 800; }
+.bp-settings-page__choices button:hover,
+.bp-settings-page__choices button.spatial-focus,
+.bp-settings-page__choices button:focus-visible,
+.bp-settings-page__choices button.is-selected { border-color: transparent; background: rgba(255, 255, 255, 0.2); color: #fff; outline: none; }
+
+.bp-settings-page__action-row { text-decoration: none; }
+.bp-settings-page__action-row > span { min-width: 0; }
+.bp-settings-page__action-row strong { font-size: 17px; font-weight: 800; }
+.bp-settings-page__action-row small { margin-top: 5px; color: var(--bp-muted); font-size: 14px; line-height: 1.4; }
+.bp-settings-page__action-row > svg { flex: 0 0 auto; color: rgba(255, 255, 255, 0.52); }
+.bp-settings-page__action-row.liquid-glass { border-radius: 18px; border-color: transparent; }
+.bp-settings-page__action-row.liquid-glass:hover,
+.bp-settings-page__action-row.liquid-glass.spatial-focus,
+.bp-settings-page__action-row.liquid-glass:focus-visible { background: rgba(255, 255, 255, 0.22); }
+.bp-settings-page__hint-block { margin: 16px 20px 20px; color: rgba(255, 255, 255, 0.48); font-size: 14px; line-height: 1.55; }
+.bp-settings-page__hint-block--status { color: rgba(255, 255, 255, 0.72); }
+.bp-settings-page__hint-block--error { color: #ffaaa9; font-weight: 700; }
+
+.bp-settings-page__avatar,
+.bp-settings-page__brand-logo,
+.bp-settings-page__profile-dot { display: grid; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #fff; color: #090a0c; font-weight: 850; }
+.bp-settings-page__avatar { width: 54px; height: 54px; font-size: 21px; }
+.bp-settings-page__avatar--small { width: 43px; height: 43px; font-size: 17px; }
+.bp-settings-page__brand-logo { width: 58px; height: 58px; padding: 8px; border-radius: 18px; object-fit: contain; background: rgba(255, 255, 255, 0.14); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 8px 24px rgba(0, 0, 0, 0.22); }
+.bp-settings-page__profile-row { justify-content: flex-start; }
+.bp-settings-page__profile-row span:nth-child(2) { flex: 1; font-size: 16px; font-weight: 800; }
+.bp-settings-page__profile-dot { width: 37px; height: 37px; background: rgba(255, 255, 255, 0.14); color: #fff; font-size: 14px; }
+.bp-settings-page__profile-row.is-active .bp-settings-page__profile-dot { background: #fff; color: #090a0c; }
+.bp-settings-page__profile-state { color: rgba(255, 255, 255, 0.48); font-size: 13px; font-weight: 700; }
+
+.bp-settings-page__catalog-row { display: flex; align-items: stretch; }
+.bp-settings-page__catalog-main { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 23px; border: 0; background: transparent; color: #fff; text-align: left; }
+.bp-settings-page__catalog-main span:first-child { min-width: 0; }
+.bp-settings-page__catalog-main strong,
+.bp-settings-page__catalog-main small { display: block; }
+.bp-settings-page__catalog-main strong { overflow: hidden; text-overflow: ellipsis; font-size: 16px; font-weight: 800; white-space: nowrap; }
+.bp-settings-page__catalog-main small { margin-top: 5px; color: var(--bp-muted); font-size: 13px; }
+.bp-settings-page__status-dot { width: 13px; height: 13px; flex: 0 0 auto; border-radius: 50%; background: #fff; box-shadow: 0 0 16px rgba(255, 255, 255, 0.55); }
+.bp-settings-page__status-dot.is-off { background: rgba(255, 255, 255, 0.25); box-shadow: none; }
+.bp-settings-page__catalog-row.is-hidden { opacity: 0.62; }
+.bp-settings-page__catalog-arrows { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; padding-right: 14px; }
+.bp-settings-page__small-action { display: grid; width: 43px; height: 43px; place-items: center; border: 1px solid transparent; border-radius: 14px; background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.7); cursor: pointer; }
+.bp-settings-page__small-action:hover,
+.bp-settings-page__small-action.spatial-focus,
+.bp-settings-page__small-action:focus-visible { border-color: transparent; background: rgba(255, 255, 255, 0.2); color: #fff; outline: none; }
+.bp-settings-page__small-action:disabled { cursor: default; opacity: 0.25; }
+
+.bp-settings-page__notice { position: fixed; right: 6vw; bottom: 30px; z-index: 20; display: flex; align-items: center; gap: 9px; padding: 14px 19px; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 999px; background: rgba(22, 24, 28, 0.9); color: #fff; box-shadow: 0 16px 50px rgba(0, 0, 0, 0.35); backdrop-filter: blur(20px); font-size: 14px; font-weight: 800; }
+
+.bp-settings-page__modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 34px; background: rgba(0, 0, 0, 0.68); backdrop-filter: blur(12px); }
+.bp-settings-page__editor { width: min(780px, 100%); padding: 26px; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 28px; background: rgba(27, 29, 33, 0.96); box-shadow: 0 30px 100px rgba(0, 0, 0, 0.58); }
+.bp-settings-page__editor-head { margin-bottom: 19px; }
+.bp-settings-page__editor-head span { display: block; color: rgba(255, 255, 255, 0.5); font-size: 12px; font-weight: 700; }
+.bp-settings-page__editor-head strong { display: block; overflow: hidden; margin-top: 9px; color: #fff; font-size: 21px; letter-spacing: 0.12em; text-overflow: ellipsis; white-space: nowrap; }
+.bp-settings-page__editor-keys { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.bp-settings-page__editor-keys button,
+.bp-settings-page__editor-cancel { min-height: 48px; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 14px; background: rgba(255, 255, 255, 0.08); color: #fff; cursor: pointer; font: inherit; font-size: 14px; font-weight: 800; }
+.bp-settings-page__editor-keys button:hover,
+.bp-settings-page__editor-keys button.spatial-focus,
+.bp-settings-page__editor-keys button:focus-visible,
+.bp-settings-page__editor-cancel:hover,
+.bp-settings-page__editor-cancel.spatial-focus,
+.bp-settings-page__editor-cancel:focus-visible { border-color: #fff; background: #fff; color: #090a0c; outline: none; }
+.bp-settings-page__editor-keys .is-save { grid-column: span 2; display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: #fff; color: #090a0c; }
+.bp-settings-page__editor-cancel { display: block; width: 100%; margin-top: 10px; color: rgba(255, 255, 255, 0.65); }
+
+/* Addons shares the same material system, with a larger install card. */
+.bp-addons-page__install,
+.bp-addons-page__log,
+.bp-addons-page__installed { width: min(1480px, 100%); margin: 0 auto 28px; }
+.bp-addons-page__install { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(420px, 1.3fr); gap: 36px; align-items: center; padding: 26px 29px; border: 1px solid var(--bp-line); border-radius: 28px; background: var(--bp-surface); box-shadow: 0 22px 70px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.05); -webkit-backdrop-filter: blur(28px) saturate(135%); backdrop-filter: blur(28px) saturate(135%); }
+.bp-addons-page__install h2,
+.bp-addons-page__installed h2 { margin: 0; font-size: 25px; letter-spacing: -0.03em; font-weight: 820; }
+.bp-addons-page__install h2 + p { margin: 8px 0 0; color: var(--bp-muted); font-size: 14px; line-height: 1.5; }
+.bp-addons-page__install code { color: #fff; font-weight: 700; }
+.bp-addons-page__install-controls { display: flex; gap: 10px; }
+.bp-addons-page__url { display: flex; min-width: 0; flex: 1; min-height: 56px; align-items: center; padding: 0 18px; border: 1px solid rgba(255, 255, 255, 0.19); border-radius: 18px; background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.44); cursor: pointer; text-align: left; font: inherit; font-size: 14px; }
+.bp-addons-page__url.has-value { color: #fff; }
+.bp-addons-page__url:hover,
+.bp-addons-page__url.spatial-focus,
+.bp-addons-page__url:focus-visible { border-color: #fff; background: rgba(255, 255, 255, 0.13); outline: none; }
+.bp-addons-page__install-button { min-height: 56px; border-radius: 18px; }
+.bp-addons-page__error { grid-column: 1 / -1; margin: -12px 0 0; color: #ffaaa9; font-size: 14px; font-weight: 700; }
+.bp-addons-page__installed-header { display: flex; align-items: end; justify-content: space-between; margin-bottom: 13px; }
+.bp-addons-page__installed-header h2 span { color: rgba(255, 255, 255, 0.45); }
+.bp-addons-page__installed-header .bp-settings-page__hint { margin: 0 5px 4px 0; font-size: 14px; }
+.bp-addons-page__list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.bp-addons-page__card { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; align-items: center; gap: 16px; min-height: 128px; padding: 19px; border: 1px solid var(--bp-line); border-radius: 24px; background: var(--bp-surface); box-shadow: 0 18px 52px rgba(0, 0, 0, 0.2); transition: transform 180ms ease, border-color 180ms ease; }
+.bp-addons-page__card:focus-within,
+.bp-addons-page__card:hover { border-color: rgba(255, 255, 255, 0.28); }
+.bp-addons-page__card.is-disabled { opacity: 0.6; }
+.bp-addons-page__logo { display: grid; width: 62px; height: 62px; place-items: center; overflow: hidden; border-radius: 18px; background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.7); }
+.bp-addons-page__logo img { width: 100%; height: 100%; object-fit: contain; }
+.bp-addons-page__card-copy { min-width: 0; }
+.bp-addons-page__card-copy h3 { overflow: hidden; margin: 0; text-overflow: ellipsis; font-size: 18px; font-weight: 820; white-space: nowrap; }
+.bp-addons-page__card-copy p,
+.bp-addons-page__card-copy small { display: block; overflow: hidden; margin: 5px 0 0; color: var(--bp-muted); text-overflow: ellipsis; font-size: 13px; white-space: nowrap; }
+.bp-addons-page__card-copy small { color: rgba(255, 255, 255, 0.43); }
+.bp-addons-page__card-actions { display: flex; align-items: center; gap: 8px; }
+.bp-addons-page__toggle,
+.bp-addons-page__remove { display: grid; place-items: center; border: 0; background: transparent; color: #fff; cursor: pointer; }
+.bp-addons-page__toggle { gap: 3px; color: rgba(255, 255, 255, 0.82); font-size: 11px; font-weight: 800; }
+.is-enabled .bp-addons-page__toggle { color: #fff; }
+.bp-addons-page__remove { width: 43px; height: 43px; border-radius: 14px; color: rgba(255, 255, 255, 0.5); }
+.bp-addons-page__remove:hover,
+.bp-addons-page__remove.spatial-focus,
+.bp-addons-page__remove:focus-visible { background: rgba(255, 80, 80, 0.2); color: #ffb0af; outline: none; }
+.bp-addons-page__empty { display: grid; min-height: 190px; place-items: center; align-content: center; gap: 12px; border: 1px solid var(--bp-line); border-radius: 26px; background: var(--bp-surface); color: rgba(255, 255, 255, 0.46); }
+.bp-addons-page__empty p { margin: 0; font-size: 15px; }
+.bp-addons-page__log > button { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 14px; font-weight: 750; }
+.bp-addons-page__log-body { max-height: 180px; overflow: auto; margin-top: 10px; padding: 15px 18px; border: 1px solid var(--bp-line); border-radius: 18px; background: rgba(0, 0, 0, 0.28); color: rgba(255, 255, 255, 0.55); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.bp-addons-page__log-body p { margin: 4px 0; }
+.bp-addons-page__spin { animation: bp-addon-spin 0.9s linear infinite; }
+@keyframes bp-addon-spin { to { transform: rotate(360deg); } }
+
+.bp-addons-page__modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 34px; background: rgba(0, 0, 0, 0.68); backdrop-filter: blur(12px); }
+.bp-addons-page__keyboard,
+.bp-addons-page__confirm { width: min(760px, 100%); padding: 25px; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 28px; background: rgba(27, 29, 33, 0.96); box-shadow: 0 30px 100px rgba(0, 0, 0, 0.58); }
+.bp-addons-page__keyboard-head { margin-bottom: 18px; }
+.bp-addons-page__keyboard-head span { display: block; color: rgba(255, 255, 255, 0.5); font-size: 12px; font-weight: 700; }
+.bp-addons-page__keyboard-head strong { display: block; overflow: hidden; margin-top: 9px; color: #fff; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.bp-addons-page__keys { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.bp-addons-page__keys button { min-height: 48px; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 14px; background: rgba(255, 255, 255, 0.08); color: #fff; cursor: pointer; font: inherit; font-size: 16px; font-weight: 800; }
+.bp-addons-page__keys button:hover,
+.bp-addons-page__keys button.spatial-focus,
+.bp-addons-page__keys button:focus-visible { border-color: #fff; background: #fff; color: #090a0c; outline: none; }
+.bp-addons-page__keys .is-done { grid-column: span 2; display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: #fff; color: #090a0c; }
+.bp-addons-page__confirm { position: relative; width: min(470px, 100%); text-align: center; }
+.bp-addons-page__confirm > svg { color: #ffafae; }
+.bp-addons-page__confirm h2 { margin: 14px 0 0; font-size: 25px; }
+.bp-addons-page__confirm p { margin: 9px 0 24px; color: var(--bp-muted); font-size: 14px; line-height: 1.5; }
+.bp-addons-page__confirm > div { display: flex; justify-content: center; gap: 10px; }
+.bp-addons-page__confirm button { min-height: 49px; padding: 0 22px; border-radius: 999px; cursor: pointer; font: inherit; font-weight: 800; }
+.bp-addons-page__secondary { border: 1px solid var(--bp-line); background: rgba(255, 255, 255, 0.08); color: #fff; }
+.bp-addons-page__danger { border: 0; background: #d95d5d; color: #fff; }
+.bp-addons-page__close { position: absolute; top: 17px; right: 17px; display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.08); color: #fff; cursor: pointer; }
+
+@media (max-width: 1050px) {
+  .bp-settings-page { padding-right: 34px; padding-left: 76px; }
+  .bp-settings-page__layout { grid-template-columns: 245px minmax(0, 1fr); gap: 28px; }
+  .bp-addons-page__install { grid-template-columns: 1fr; gap: 20px; }
+  .bp-addons-page__list { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .bp-settings-page { padding: calc(5vh + 72px) 20px 48px; }
+  .bp-settings-page__layout { display: block; }
+  .bp-settings-page__nav { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 32px; }
+  .bp-settings-page__nav-item { min-height: 70px; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; padding: 10px; border-radius: 17px; }
+  .bp-settings-page__nav-icon { width: 38px; height: 38px; border-radius: 12px; }
+  .bp-settings-page__nav-copy strong { font-size: 14px; }
+  .bp-settings-page__nav-copy small,
+  .bp-settings-page__nav-chevron { display: none; }
+  .bp-settings-page__choice-row { display: block; }
+  .bp-settings-page__info-row { align-items: flex-start; flex-wrap: wrap; }
+  .bp-settings-page__info-row .bp-settings-page__row-action { width: 100%; }
+  .bp-settings-page__row-actions { justify-content: flex-start; }
+  .bp-settings-page__choices { justify-content: flex-start; margin-top: 13px; }
+  .bp-addons-page__install { padding: 20px; }
+  .bp-addons-page__install-controls { display: grid; }
+  .bp-addons-page__card { grid-template-columns: 50px minmax(0, 1fr); }
+  .bp-addons-page__logo { width: 50px; height: 50px; }
+  .bp-addons-page__card-actions { grid-column: 2; justify-content: flex-start; }
+  .bp-addons-page__keys { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .bp-settings-page__editor-keys { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bp-settings-page *,
+  .bp-addons-page * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .bp-settings-page__group-body,
+  .bp-addons-page__install,
+  .bp-addons-page__card,
+  .bp-addons-page__keyboard,
+  .bp-addons-page__confirm { background: #1c1e22; backdrop-filter: none; }
+}
+
+@media (prefers-contrast: more) {
+  .bp-settings-page__group-body,
+  .bp-settings-page__nav-item,
+  .bp-addons-page__install,
+  .bp-addons-page__card { border-color: rgba(255, 255, 255, 0.55); }
+}

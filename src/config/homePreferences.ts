@@ -4,9 +4,11 @@ import { getScopedStorageKey } from "../utils/localProfiles.ts";
 
 export type HomePosterLayout = "horizontal" | "vertical";
 export type ContentOrientation = "movies-series" | "anime" | "both";
+export type BothContentPreference = "anime" | "movies-series";
 
 export interface HomePreferences {
   contentOrientation: ContentOrientation;
+  bothPreference: BothContentPreference;
   posterLayout: HomePosterLayout;
   catalogOrder: string[];
   hiddenCatalogKeys: string[];
@@ -17,9 +19,11 @@ export const HOME_PREFERENCES_STORAGE_KEY = "aetherio-home-preferences";
 export const HOME_PREFERENCES_CHANGED_EVENT = "aetherio-home-preferences-changed";
 // Marca de la migración única a pósters verticales (por perfil).
 const POSTER_LAYOUT_MIGRATION_KEY = "aetherio-poster-layout-vertical-migration-v1";
+const DEFAULT_ORDER_MIGRATION_KEY = "aetherio-home-default-order-migration-v2";
 
 export const DEFAULT_HOME_PREFERENCES: HomePreferences = {
   contentOrientation: "both",
+  bothPreference: "movies-series",
   posterLayout: "vertical",
   catalogOrder: [],
   hiddenCatalogKeys: [],
@@ -41,7 +45,8 @@ export function getHomePreferences(): HomePreferences {
     const raw = localStorage.getItem(getHomePreferencesStorageKey());
     if (!raw) return DEFAULT_HOME_PREFERENCES;
     const parsed = JSON.parse(raw) as Partial<HomePreferences>;
-    return normalizeHomePreferences(migratePosterLayoutToVertical(parsed));
+    const posterMigrated = migratePosterLayoutToVertical(parsed);
+    return normalizeHomePreferences(migrateDefaultCatalogOrder(posterMigrated));
   } catch {
     return DEFAULT_HOME_PREFERENCES;
   }
@@ -63,6 +68,19 @@ function migratePosterLayoutToVertical(preferences: Partial<HomePreferences>): P
     return migrated;
   } catch {
     return preferences;
+  }
+}
+
+function migrateDefaultCatalogOrder(preferences: Partial<HomePreferences>): Partial<HomePreferences> {
+  try {
+    const migrationKey = getScopedStorageKey(DEFAULT_ORDER_MIGRATION_KEY);
+    if (localStorage.getItem(migrationKey)) return preferences;
+    const migrated: Partial<HomePreferences> = { ...preferences, catalogOrder: [] };
+    localStorage.setItem(getHomePreferencesStorageKey(), JSON.stringify(normalizeHomePreferences(migrated)));
+    localStorage.setItem(migrationKey, "1");
+    return migrated;
+  } catch {
+    return { ...preferences, catalogOrder: [] };
   }
 }
 
@@ -115,16 +133,128 @@ export function sortHomeCatalogRows(rows: CatalogRowData[], preferences: HomePre
   });
 }
 
-export function applyContentOrientationToItems<T extends { type: string }>(items: T[], orientation: ContentOrientation) {
+export function isAnimeType(type: string) {
+  return type.toLowerCase() === "anime";
+}
+
+export function isAnimeFirst(preferences: Pick<HomePreferences, "contentOrientation" | "bothPreference">) {
+  if (preferences.contentOrientation === "anime") return true;
+  if (preferences.contentOrientation === "movies-series") return false;
+  return preferences.bothPreference === "anime";
+}
+
+export function applyContentOrientationToItems<T extends { type: string }>(
+  items: T[],
+  orientation: ContentOrientation,
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
+) {
   return [...items].sort((a, b) => (
-    contentOrientationPriority(a.type, orientation) - contentOrientationPriority(b.type, orientation)
+    contentOrientationPriority(a.type, orientation, bothPreference)
+    - contentOrientationPriority(b.type, orientation, bothPreference)
   ));
 }
 
 export function matchesContentOrientation(type: string, orientation: ContentOrientation) {
   if (orientation === "both") return true;
-  const isAnime = type.toLowerCase() === "anime";
+  const isAnime = isAnimeType(type);
   return orientation === "anime" ? isAnime : !isAnime;
+}
+
+type MovieSeriesRow = Pick<CatalogRowData, "type" | "name" | "catalogId">;
+
+function isMovieRow(row: MovieSeriesRow) {
+  return row.type.toLowerCase() === "movie";
+}
+
+function isSeriesRow(row: MovieSeriesRow) {
+  const type = row.type.toLowerCase();
+  return type === "series" || type === "tv";
+}
+
+function defaultMovieSeriesPairKey(row: MovieSeriesRow) {
+  const normalized = `${row.catalogId} ${row.name}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const year = normalized.match(/(?:nuevas?|new)\s*(?:[-/]\s*)?(?:(?:de|del)\s*)?(20\d{2})/i);
+  if (year) return `new:${year[1]}`;
+  const isTop = normalized.includes("tendencias")
+    || normalized.includes("trending")
+    || normalized.startsWith("top ")
+    || row.catalogId.toLowerCase().includes("trending")
+    || /top_(?:movie|series)/.test(row.catalogId.toLowerCase());
+  if (isTop) return `top:${isMovieRow(row) ? "movie" : "series"}`;
+  if (normalized.includes("popular")) return "popular";
+  return null;
+}
+
+export function interleaveMovieSeriesRows<T extends MovieSeriesRow>(rows: T[]): T[] {
+  const seriesByKey = new Map<string, T[]>();
+  for (const row of rows) {
+    if (!isSeriesRow(row)) continue;
+    const key = defaultMovieSeriesPairKey(row);
+    if (!key) continue;
+    const bucket = seriesByKey.get(key) ?? [];
+    bucket.push(row);
+    seriesByKey.set(key, bucket);
+  }
+
+  const pairedSeries = new Set<T>();
+  const seriesAfterMovie = new Map<T, T>();
+  for (const row of rows) {
+    if (!isMovieRow(row)) continue;
+    const key = defaultMovieSeriesPairKey(row);
+    if (!key || key.startsWith("top:")) continue;
+    const series = seriesByKey.get(key)?.find(candidate => !pairedSeries.has(candidate));
+    if (!series) continue;
+    pairedSeries.add(series);
+    seriesAfterMovie.set(row, series);
+  }
+
+  const result: T[] = [];
+  for (const row of rows) {
+    if (pairedSeries.has(row)) continue;
+    result.push(row);
+    const series = seriesAfterMovie.get(row);
+    if (series) result.push(series);
+  }
+
+  const yearSeriesRows = rows.filter(row => {
+    if (!isSeriesRow(row)) return false;
+    return defaultMovieSeriesPairKey(row)?.startsWith("new:") ?? false;
+  });
+  if (!yearSeriesRows.length) return result;
+
+  const newestYearRow = yearSeriesRows.reduce((latest, row) => {
+    const latestYear = Number(defaultMovieSeriesPairKey(latest)?.slice(4) ?? 0);
+    const rowYear = Number(defaultMovieSeriesPairKey(row)?.slice(4) ?? 0);
+    return rowYear >= latestYear ? row : latest;
+  });
+  const oldestYearRow = yearSeriesRows.reduce((oldest, row) => {
+    const oldestYear = Number(defaultMovieSeriesPairKey(oldest)?.slice(4) ?? Number.MAX_SAFE_INTEGER);
+    const rowYear = Number(defaultMovieSeriesPairKey(row)?.slice(4) ?? Number.MAX_SAFE_INTEGER);
+    return rowYear <= oldestYear ? row : oldest;
+  });
+
+  const topMovieRows = rows.filter(row => isMovieRow(row) && defaultMovieSeriesPairKey(row) === "top:movie");
+  const topSeriesRows = rows.filter(row => isSeriesRow(row) && defaultMovieSeriesPairKey(row) === "top:series");
+  const insertions = new Map<T, T[]>();
+  const insertAfter = (anchor: T, values: T[]) => {
+    if (!values.length) return;
+    insertions.set(anchor, [...(insertions.get(anchor) ?? []), ...values]);
+  };
+  insertAfter(newestYearRow, topMovieRows);
+  insertAfter(oldestYearRow, topSeriesRows);
+
+  const anchoredTopRows = new Set<T>([...topMovieRows, ...topSeriesRows]);
+  const resultWithoutAnchoredTops = result.filter(row => !anchoredTopRows.has(row));
+  const finalResult: T[] = [];
+  for (const row of resultWithoutAnchoredTops) {
+    finalResult.push(row);
+    const additions = insertions.get(row);
+    if (additions) finalResult.push(...additions);
+  }
+  return finalResult;
 }
 
 export function applyHomeCatalogPreferences(rows: CatalogRowData[], preferences: HomePreferences) {
@@ -135,13 +265,16 @@ export function applyHomeCatalogPreferences(rows: CatalogRowData[], preferences:
 
   // A saved order is an explicit user decision. New catalogs that do not yet
   // appear in that order use the selected orientation as their default slot.
-  return ordered.sort((a, b) => {
+  // En modo "both" la sub-preferencia (anime o series/pelis) decide qué va primero.
+  const prioritized = ordered.sort((a, b) => {
     const aExplicit = explicitOrder.has(catalogPreferenceKey(a));
     const bExplicit = explicitOrder.has(catalogPreferenceKey(b));
     if (aExplicit || bExplicit) return 0;
-    return contentOrientationPriority(a.type, preferences.contentOrientation)
-      - contentOrientationPriority(b.type, preferences.contentOrientation);
+    return contentOrientationPriority(a.type, preferences.contentOrientation, preferences.bothPreference)
+      - contentOrientationPriority(b.type, preferences.contentOrientation, preferences.bothPreference);
   });
+
+  return explicitOrder.size > 0 ? prioritized : interleaveMovieSeriesRows(prioritized);
 }
 
 function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePreferences {
@@ -154,6 +287,7 @@ function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePr
 
   return {
     contentOrientation: normalizeContentOrientation(preferences.contentOrientation),
+    bothPreference: normalizeBothPreference(preferences.bothPreference),
     posterLayout: preferences.posterLayout === "horizontal" ? "horizontal" : "vertical",
     catalogOrder,
     hiddenCatalogKeys,
@@ -170,7 +304,21 @@ function normalizeContentOrientation(value: unknown): ContentOrientation {
   return "both";
 }
 
-function contentOrientationPriority(type: string, orientation: ContentOrientation) {
+function normalizeBothPreference(value: unknown): BothContentPreference {
+  if (value === "anime") return "anime";
+  return "movies-series";
+}
+
+function contentOrientationPriority(
+  type: string,
+  orientation: ContentOrientation,
+  bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
+) {
+  if (orientation === "both") {
+    const isAnime = isAnimeType(type);
+    if (bothPreference === "anime") return isAnime ? 0 : 1;
+    return isAnime ? 1 : 0;
+  }
   return matchesContentOrientation(type, orientation) ? 0 : 1;
 }
 

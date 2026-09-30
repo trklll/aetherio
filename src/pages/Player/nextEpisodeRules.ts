@@ -1,12 +1,12 @@
-// Regla de disparo del siguiente episodio / UpNext, portada de NuvioTV
+// Regla de disparo del siguiente episodio / UpNext
 // (PlayerNextEpisodeRules.shouldShowNextEpisodeCard + PostPlayRecommendationTiming).
 //
-// Nuvio no usa un umbral puro: primero mira los segmentos de outro/credits
+// No se usa un umbral puro: primero se miran los segmentos de outro/credits
 // (AniSkip / Anime-Skip / IntroDB) y solo usa el umbral configurado cuando el
 // outro termina lejos del final. Si el outro termina pegado al final, dispara
 // en el inicio del outro más temprano.
 //
-// Unidades en Aetherio: segundos (currentTime/duration de mpv). En Nuvio son ms.
+// Unidades en Aetherio: segundos (currentTime/duration de mpv).
 
 export type NextEpisodeThresholdMode = "percentage" | "minutes";
 
@@ -15,7 +15,7 @@ export interface OutroSegment {
   end: number;
 }
 
-// Clamps idénticos a Nuvio (PlayerNextEpisodeRules + PlayerSettings).
+// Clamps (PlayerNextEpisodeRules + PlayerSettings).
 export const MIN_NEXT_EPISODE_THRESHOLD_PERCENT = 97;
 export const MAX_NEXT_EPISODE_THRESHOLD_PERCENT = 100;
 export const MIN_NEXT_EPISODE_THRESHOLD_MINUTES = 0;
@@ -108,7 +108,7 @@ interface MovieRecommendationInput {
   thresholdPercent: number;
 }
 
-/** Umbral de pelis de Nuvio (shouldShowMovieRecommendation): % puro, sin outro. */
+/** Umbral de pelis (shouldShowMovieRecommendation): % puro, sin outro. */
 export function shouldShowMovieRecommendation(input: MovieRecommendationInput): boolean {
   const { position, duration } = input;
   if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return false;

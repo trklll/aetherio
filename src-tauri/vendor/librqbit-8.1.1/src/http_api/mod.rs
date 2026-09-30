@@ -2,6 +2,7 @@ use anyhow::Context;
 use axum::extract::{ConnectInfo, Request};
 use axum::middleware::Next;
 use axum::response::IntoResponse;
+#[cfg(feature = "webui")]
 use axum::routing::get;
 use base64::Engine;
 use futures::future::BoxFuture;

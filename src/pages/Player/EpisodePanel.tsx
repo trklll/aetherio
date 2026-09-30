@@ -13,6 +13,7 @@ interface EpisodePanelProps {
   hasEpisodeOptions: boolean;
   canGoPrevEpisode: boolean;
   canGoNextEpisode: boolean;
+  bigPicture?: boolean;
   onClose: () => void;
   onNavigateEpisode: (direction: "prev" | "next") => void;
 }
@@ -28,6 +29,7 @@ export default function EpisodePanel({
   hasEpisodeOptions,
   canGoPrevEpisode,
   canGoNextEpisode,
+  bigPicture,
   onClose,
   onNavigateEpisode,
 }: EpisodePanelProps) {
@@ -37,6 +39,7 @@ export default function EpisodePanel({
       title="Episodios"
       subtitle={title}
       icon={<ListVideo size={18} />}
+      bigPicture={bigPicture}
       onClose={onClose}
     >
       <div className="flex h-full min-h-0 flex-col">
@@ -56,7 +59,7 @@ export default function EpisodePanel({
           <p className="line-clamp-4 text-sm leading-6 text-white/80">{currentOverview}</p>
         </div>
 
-        {hasEpisodeOptions && (
+        {hasEpisodeOptions && !bigPicture && (
           <div className="mb-4 grid grid-cols-2 gap-3">
             <button
               onClick={() => onNavigateEpisode("prev")}
@@ -77,11 +80,17 @@ export default function EpisodePanel({
           </div>
         )}
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+        <div
+          className={bigPicture
+            ? "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            : "min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"}
+          data-episode-list
+        >
           {items.map(item => (
             <button
               key={item.key}
               onClick={item.onClick}
+              aria-current={item.active ? "true" : undefined}
               className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-4 text-left gsap-transition ${
                 item.active
                   ? "border-white/[0.12] bg-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"

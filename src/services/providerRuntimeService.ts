@@ -7,6 +7,7 @@ interface ProviderManifestSource {
   key: string;
   fallbackName: string;
   url: string;
+  scraperIds?: readonly string[];
   custom?: boolean;
 }
 
@@ -29,8 +30,81 @@ const PROVIDER_MANIFEST_SOURCES: readonly ProviderManifestSource[] = [
     fallbackName: "Kenneth",
     url: `https://raw.githubusercontent.com/KennethJYS/${EXTERNAL_PROVIDER_PROJECT_NAME}-Providers-Latino/refs/heads/main/manifest.json`,
   },
+  {
+    key: "eclipsia",
+    fallbackName: "Eclipsia",
+    url: "https://eclipsia.dpdns.org/rc244rsv/manifest.json",
+  },
+  {
+    key: "range7",
+    fallbackName: "Range7",
+    url: "https://raw.githubusercontent.com/Range7/Nuvio-Plugin/refs/heads/main/manifest.json",
+    scraperIds: ["2peckle"],
+  },
 ] as const;
 const PROVIDER_MANIFEST_URLS = PROVIDER_MANIFEST_SOURCES.map(source => source.url);
+// Fuentes retiradas por auditoría 2026-09-22: animepahe.com responde 403
+// (Cloudflare) y la cadena TMDB→MAL de animepahe/anizone depende de
+// id-mapping-api-malid.hf.space (muerto); allmovieland retirado a petición.
+// Se filtran por clave completa para no afectar a otros repositorios.
+const RETIRED_PROVIDER_KEYS = new Set([
+  "yoruix:allmovieland",
+  "yoruix:animepahe",
+  "yoruix:anizone",
+  "yoruix:cinemacity",
+  "yoruix:cinevibe",
+  "yoruix:dahmermovies",
+  "yoruix:dooflix",
+  "yoruix:hianime",
+  "yoruix:mallumv",
+  "yoruix:moviesdrive",
+  "yoruix:mycima",
+  "yoruix:netmirror",
+  "yoruix:showbox",
+  "yoruix:streamflix",
+  "yoruix:uhdmovies",
+  "yoruix:vidlink",
+  "yoruix:vidnest",
+  "yoruix:vidnest-anime",
+  "yoruix:videasy",
+  "adrianjael:cuevanaubd",
+  "adrianjael:hackstore",
+  "adrianjael:lamovie",
+  "adrianjael:pelispanda",
+  "adrianjael:pelisplus",
+  "adrianjael:playhubmax",
+  "adrianjael:sololatino",
+  "adrianjael:tioplus",
+  "adrianjael:cinemacity",
+  "adrianjael:videasy",
+  "kennethjys:cinecalidad",
+  "kennethjys:detodopeliculas",
+  "kennethjys:embed69",
+  "kennethjys:hackstore",
+  "kennethjys:lamovie",
+  "kennethjys:peliserieshoy",
+  "kennethjys:seriesflix",
+  "kennethjys:seriesmetro",
+  "kennethjys:xupalace",
+  "eclipsia:fendrix",
+  "eclipsia:hexion",
+  "eclipsia:kryxalia",
+  "eclipsia:mavonyx",
+  "eclipsia:phraxis",
+  "eclipsia:pynvix",
+  "eclipsia:qyrvaen",
+  "eclipsia:solunix",
+  "eclipsia:vitrix",
+]);
+
+export function isProviderRetired(providerKey: string) {
+  return RETIRED_PROVIDER_KEYS.has(providerKey);
+}
+
+export function isProviderManifestScraperAllowed(sourceKey: string, scraperId: string) {
+  const source = PROVIDER_MANIFEST_SOURCES.find(candidate => candidate.key === sourceKey);
+  return !source?.scraperIds || source.scraperIds.includes(scraperId);
+}
 const PROVIDER_CONCURRENCY = 14;
 const PROVIDER_TIMEOUT_MS = 15_000;
 const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -68,6 +142,7 @@ interface ProviderManifestEntry {
   name: string;
   description?: string;
   filename: string;
+  logo?: string;
   enabled?: boolean;
   supportedTypes?: string[];
   contentLanguage?: string[];
@@ -88,6 +163,7 @@ export interface ProviderRuntimeScraperInfo {
   id: string;
   name: string;
   description?: string;
+  logo?: string;
   supportedTypes: string[];
   contentLanguage: string[];
   enabledByManifest: boolean;
@@ -155,6 +231,9 @@ type WorkerMessage =
   | { type: "error"; error: string };
 
 const scriptCache = new Map<string, Promise<string>>();
+const BUILTIN_PROVIDER_SCRIPT_PATHS: Record<string, string> = {
+  "yoruix:4khdhub": "/aetherio-4khdhub.js",
+};
 const manifestCache = new Map<string, Promise<ProviderManifest>>();
 const resultCache = new Map<string, { streams: MediaStream[]; updatedAt: number; ttlMs: number }>();
 type ProviderExecutionStatus = "success" | "empty" | "error";
@@ -174,6 +253,14 @@ const providerExecutionCache = new Map<string, ProviderExecutionCacheEntry>();
 const providerRuntimeHealth = new Map<string, ProviderRuntimeHealth>();
 let repositoriesPromise: Promise<ProviderRuntimeRepositoryInfo[]> | null = null;
 let definitionsPromise: Promise<ProviderDefinition[]> | null = null;
+
+export function providerRuntimeDepsUrl(locationHref: string) {
+  return new URL("/provider-runtime-deps.js", locationHref).toString();
+}
+
+export function getBuiltinProviderScriptPath(providerKey: string) {
+  return BUILTIN_PROVIDER_SCRIPT_PATHS[providerKey] ?? null;
+}
 
 function customRepositoryKey(url: string) {
   let hash = 2166136261;
@@ -418,11 +505,15 @@ export async function getProviderRuntimeRepositories(): Promise<ProviderRuntimeR
         version: manifest.version,
         manifestUrl: source.url,
         custom: source.custom,
-        scrapers: manifest.scrapers.map(scraper => ({
+        scrapers: manifest.scrapers
+          .filter(scraper => isProviderManifestScraperAllowed(source.key, scraper.id))
+          .filter(scraper => !isProviderRetired(`${source.key}:${scraper.id}`))
+          .map(scraper => ({
           key: `${source.key}:${scraper.id}`,
           id: scraper.id,
           name: scraper.name,
           description: scraper.description,
+          logo: scraper.logo,
           supportedTypes: scraper.supportedTypes ?? ["movie", "tv"],
           contentLanguage: scraper.contentLanguage ?? [],
           enabledByManifest: scraper.enabled !== false,
@@ -483,7 +574,9 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
   definitionsPromise = Promise.allSettled(providerManifestSources().map(async source => {
     const manifest = await loadManifest(source.url);
     return manifest.scrapers
+      .filter(scraper => isProviderManifestScraperAllowed(source.key, scraper.id))
       .filter(scraper => scraper.enabled !== false && scraper.supportsExternalPlayer !== false)
+      .filter(scraper => !isProviderRetired(`${source.key}:${scraper.id}`))
       .map(scraper => ({
         key: `${source.key}:${scraper.id}`,
         ownerName: source.fallbackName,
@@ -511,7 +604,7 @@ function loadManifest(url: string, refresh = false): Promise<ProviderManifest> {
         Array.isArray(parsed)
         || (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).pluginLists))
       ) {
-        throw new Error("Este es un repositorio CloudStream .cs3. Esas extensiones Android no pueden ejecutarse en Aetherio Desktop; usa una conversión compatible con ProviderRuntime JS.");
+        throw new Error("Este es un repositorio CloudStream .cs3. Esas extensiones moviles no pueden ejecutarse en Aetherio Desktop; usa una conversión compatible con ProviderRuntime JS.");
       }
       const manifest = parsed as ProviderManifest;
       if (!manifest.name || !Array.isArray(manifest.scrapers)) throw new Error("Invalid provider manifest");
@@ -525,20 +618,28 @@ function loadManifest(url: string, refresh = false): Promise<ProviderManifest> {
   return pending;
 }
 
-function loadScript(url: string): Promise<string> {
-  const cached = scriptCache.get(url);
+function loadScript(url: string, providerKey?: string): Promise<string> {
+  const builtinPath = providerKey ? BUILTIN_PROVIDER_SCRIPT_PATHS[providerKey] : undefined;
+  const cacheKey = builtinPath ?? url;
+  const cached = scriptCache.get(cacheKey);
   if (cached) return cached;
-  const pending = fetchText(url).catch(error => {
-    scriptCache.delete(url);
+  const pending = (builtinPath
+    ? fetch(new URL(builtinPath, window.location.href).toString()).then(async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      return response.text();
+    })
+    : fetchText(url)
+  ).catch(error => {
+    scriptCache.delete(cacheKey);
     throw error;
   });
-  scriptCache.set(url, pending);
+  scriptCache.set(cacheKey, pending);
   return pending;
 }
 
 async function runProvider(definition: ProviderDefinition, args: unknown[]): Promise<RawProviderStream[]> {
-  const source = await loadScript(definition.scriptUrl);
-  const dependencyUrl = new URL("provider-runtime-deps.js", window.location.href).toString();
+  const source = await loadScript(definition.scriptUrl, definition.key);
+  const dependencyUrl = providerRuntimeDepsUrl(window.location.href);
   const blob = new Blob([
     `globalThis.window = globalThis; globalThis.global = globalThis; globalThis.XMLHttpRequest = undefined; var process = globalThis.process = globalThis.process || { env: {} }; importScripts(${JSON.stringify(dependencyUrl)});\n`,
     WORKER_PRELUDE,

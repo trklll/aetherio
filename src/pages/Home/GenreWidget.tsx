@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchJikanGenres, type JikanGenre } from "../../services/jikan";
 import { tweenTo } from "../../utils/motion";
+import { isBigPictureLocation } from "../../utils/bigPictureDetail";
 
 const GENRE_COLORS: Record<string, [string, string]> = {
   Action: ["#e74c3c", "#c0392b"],
@@ -109,6 +110,12 @@ function GenreWidget() {
   }, []);
 
   const handleGenreClick = useCallback((genre: JikanGenre) => {
+    // En Big Picture el género vive en /big-picture/genre (page 10-foot):
+    // /search o /genre saldrían del modo inmersivo.
+    if (isBigPictureLocation()) {
+      navigate(`/big-picture/genre?genre=${encodeURIComponent(genre.name)}&genreId=${genre.mal_id}`);
+      return;
+    }
     navigate(`/search?q=&genreId=${genre.mal_id}&genre=${encodeURIComponent(genre.name)}`);
   }, [navigate]);
 
@@ -117,7 +124,7 @@ function GenreWidget() {
   return (
     <section style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: 48, paddingRight: 48 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>Explorar por género</span>
+        <span style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>Explorar por género</span>
       </div>
       <div
         style={{ position: "relative" }}

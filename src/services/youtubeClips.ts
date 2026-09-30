@@ -417,6 +417,11 @@ interface TmdbVideoResult {
   site: string;
   type: string;
   official?: boolean;
+  iso_639_1?: string;
+  iso_3166_1?: string;
+  size?: number;
+  published_at?: string;
+  name?: string;
 }
 
 async function searchTmdbVideos(tmdbType: "movie" | "tv", tmdbId: number) {
@@ -439,12 +444,175 @@ async function searchTmdbVideos(tmdbType: "movie" | "tv", tmdbId: number) {
   }
 }
 
+function isCatalogTrailer(video: TmdbVideoResult) {
+  if (!video?.key || typeof video.key !== "string") return false;
+  if (String(video.site ?? "").toLowerCase() !== "youtube") return false;
+  const type = String(video.type ?? "").trim().toLowerCase();
+  return type === "trailer" || type === "teaser";
+}
+
+function trailerTypePriority(type: string | undefined): number {
+  const normalized = String(type ?? "").trim().toLowerCase();
+  if (normalized === "trailer") return 0;
+  if (normalized === "teaser") return 1;
+  return 2;
+}
+
+const LATAM_REGIONS = new Set([
+  "419", "MX", "AR", "CL", "CO", "PE", "VE", "EC", "BO", "PY", "UY",
+  "CR", "PA", "DO", "CU", "GT", "HN", "NI", "SV", "PR",
+]);
+
+function trailerLanguageRank(iso6391: string | undefined, iso31661?: string | undefined): number {
+  const lang = String(iso6391 ?? "").trim().toLowerCase();
+  if (lang !== "es") return lang === "en" ? 2 : 3;
+  const region = String(iso31661 ?? "").trim().toUpperCase();
+  // Español LATAM primero, España como respaldo.
+  if (!region) return 1;
+  if (region === "ES") return 1;
+  if (LATAM_REGIONS.has(region)) return 0;
+  return 1;
+}
+
+function parseTrailerPublishedAt(value: string | undefined): number {
+  if (!value) return Number.MIN_SAFE_INTEGER;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.MIN_SAFE_INTEGER;
+}
+
+/**
+ * Ordena los vídeos del catálogo para el hero: solo YouTube + Trailer/Teaser,
+ * sin duplicados, con Trailer antes que Teaser, español LATAM primero,
+ * España como respaldo y luego inglés. A igualdad, oficiales primero y
+ * mayor tamaño / más reciente.
+ */
+export function rankCatalogTrailerVideos(results: TmdbVideoResult[]): TmdbVideoResult[] {
+  const seen = new Set<string>();
+  return (results ?? [])
+    .filter(isCatalogTrailer)
+    .filter(video => {
+      const key = String(video.key).trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => (
+      trailerTypePriority(left.type) - trailerTypePriority(right.type)
+      || trailerLanguageRank(left.iso_639_1, left.iso_3166_1) - trailerLanguageRank(right.iso_639_1, right.iso_3166_1)
+      || Number(right.official === true) - Number(left.official === true)
+      || (Number(right.size ?? 0) - Number(left.size ?? 0))
+      || (parseTrailerPublishedAt(right.published_at) - parseTrailerPublishedAt(left.published_at))
+    ));
+}
+
+/**
+ * Resuelve el TMDB ID igual que la página Detail:
+ * - `tmdb:123` directo.
+ * - `tt...` vía /find (external_source=imdb_id).
+ * - resto vía /search por nombre (tv+movie para anime, como Detail).
+ */
+async function resolveFirstTrailerTmdbId(item: MediaItem): Promise<{ id: number; type: "movie" | "tv" } | null> {
+  const direct = tmdbIdForItem(item);
+  if (direct) return { id: direct, type: item.type === "movie" ? "movie" : "tv" };
+  const rawId = String(item.id ?? "");
+  const name = String(item.name ?? "").trim();
+  try {
+    if (/^tt\d+$/i.test(rawId)) {
+      const found = await tmdbFetch<any>(`/find/${rawId}`, { params: { external_source: "imdb_id", language: "es-MX" } })
+        .catch(() => null);
+      const results = found?.movie_results?.length ? found.movie_results : found?.tv_results ?? [];
+      if (results[0]?.id) {
+        return {
+          id: Number(results[0].id),
+          type: found?.movie_results?.length ? "movie" : "tv",
+        };
+      }
+      return null;
+    }
+    if (!name) return null;
+    const isAnime = item.type === "anime";
+    const searchTypes = item.type === "movie" ? ["movie"] : isAnime ? ["tv", "movie"] : ["tv"];
+    for (const searchType of searchTypes) {
+      for (const language of ["es-MX", "es-ES", "en-US"]) {
+        const found = await tmdbFetch<any>(`/search/${searchType}`, { params: { query: name, language } })
+          .catch(() => null);
+        const id = Number(found?.results?.[0]?.id);
+        if (Number.isFinite(id) && id > 0) return { id, type: searchType as "movie" | "tv" };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Trailers del catálogo para el hero de Big Picture: mismo filtro que la
+ * página Detail (site YouTube y type Trailer|Teaser) pero con ranking
+ * propio (tipo, idioma LATAM > España > inglés, oficial, tamaño, fecha)
+ * sobre es-MX + es-ES + en-US combinados. Devuelve la lista ordenada para
+ * usar el resto como fallbacks si el primer stream falla. Solo trailers:
+ * sin escenas ni clips.
+ */
+async function fetchOrderedCatalogTrailers(item: MediaItem): Promise<YouTubeClipCandidate[]> {
+  const resolved = await resolveFirstTrailerTmdbId(item);
+  if (!resolved) return [];
+  try {
+    const settled = await Promise.all(
+      ["es-MX", "es-ES", "en-US"].map(language =>
+        tmdbFetch<{ results: TmdbVideoResult[] }>(
+          `/${resolved.type}/${resolved.id}/videos`,
+          { params: { language } },
+        ).catch(() => null),
+      ),
+    );
+    const merged = settled.flatMap(data => data?.results ?? []);
+    return rankCatalogTrailerVideos(merged)
+      .slice(0, 4)
+      .map(video => ({ videoId: String(video.key).trim(), source: "tmdb" as const, duration: 0 }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Búsqueda global solo de trailers (sin canal oficial): último recurso del
+ * hero cuando el catálogo no trae vídeos. Mantiene el hero en modo
+ * trailer-only: nunca devuelve escenas ni clips.
+ */
+async function searchGlobalTrailerFallback(
+  item: MediaItem,
+  context: SearchContext,
+): Promise<YouTubeClipCandidate[]> {
+  if (!isTauriRuntime()) return [];
+  context.phase = "trailer";
+  const names = searchNames(item);
+  const isAnime = item.type === "anime";
+  for (const name of names) {
+    const collected: YouTubeSearchResult[] = [];
+    for (const query of phaseQueries(name, "trailer", item.year, isAnime)) {
+      collected.push(...await runYouTubeSearch(query, undefined, context));
+    }
+    const ranked = rankYouTubeCandidates(collected, [name], "trailer", item.year);
+    if (ranked.length) {
+      return ranked.slice(0, MAX_CANDIDATES).map(candidate => ({
+        videoId: candidate.videoId,
+        source: sourceForCandidate(candidate),
+        duration: candidate.duration ?? 0,
+      }));
+    }
+  }
+  return [];
+}
+
 function getItemCacheKey(item: MediaItem) {
   return `clip:${item.type}:${item.id}`;
 }
 
 function tmdbIdForItem(item: MediaItem) {
-  const match = /^(?:tmdb|anilist):(\d+)$/.exec(String(item.id));
+  // Solo `tmdb:` es un TMDB ID directo. Un ID `anilist:` NO es un TMDB ID:
+  // interpretarlo como tal devolvía los vídeos de otro medio distinto.
+  const match = /^tmdb:(\d+)$/.exec(String(item.id));
   if (!match) return null;
   const tmdbId = Number(match[1]);
   return Number.isFinite(tmdbId) && tmdbId > 0 ? tmdbId : null;
@@ -468,11 +636,37 @@ export function getCachedClipInfo(item: MediaItem) {
   return getCached(getItemCacheKey(item));
 }
 
+/** Caché del modo "solo primer trailer" (Big Picture), clave separada. */
+export function getCachedFirstTrailerClipInfo(item: MediaItem) {
+  return getCached(firstTrailerCacheKey(item, true));
+}
+
 export function getTrailerSkipEnd(source: TrailerSource) {
   return TRAILER_SKIP_END[source] ?? 0;
 }
 
-async function discoverYouTubeClip(item: MediaItem, context: SearchContext): Promise<CacheEntry | null> {
+async function discoverYouTubeClip(item: MediaItem, context: SearchContext, firstTrailerOnly = false): Promise<CacheEntry | null> {
+  // Big Picture: modo trailer-only. Primero el catálogo rankeado (misma
+  // fuente que Detail, con fallbacks ordenados); si no hay vídeos, búsqueda
+  // de trailers en canales oficiales y por último global. Nunca escenas.
+  if (firstTrailerOnly) {
+    const ordered = await fetchOrderedCatalogTrailers(item);
+    if (ordered.length) {
+      const [primary, ...fallbacks] = ordered;
+      return { ...primary, fallbacks, fetchedAt: Date.now() };
+    }
+    const channels = item.type === "anime" ? OFFICIAL_CHANNELS : SERIES_MOVIE_OFFICIAL_CHANNELS;
+    const official = await searchOfficialPhase(item, "trailer", channels, context);
+    if (official.length) {
+      const [primary, ...fallbacks] = official;
+      return { ...primary, fallbacks, fetchedAt: Date.now() };
+    }
+    const global = await searchGlobalTrailerFallback(item, context);
+    if (!global.length) return null;
+    const [primary, ...fallbacks] = global;
+    return { ...primary, fallbacks, fetchedAt: Date.now() };
+  }
+
   const channels = item.type === "anime" ? OFFICIAL_CHANNELS : SERIES_MOVIE_OFFICIAL_CHANNELS;
   const tmdbId = tmdbIdForItem(item);
   const tmdbPromise = tmdbId
@@ -534,13 +728,19 @@ function promoteInFlight(entry: InFlightEntry) {
 
 export interface YouTubeFetchOptions {
   priority?: YouTubeFetchPriority;
+  /**
+   * Big Picture: modo trailer-only por medio (misma fuente que Detail).
+   * Catálogo rankeado primero con sus fallbacks ordenados; si no hay
+   * vídeos, búsqueda de trailers (oficial y global). Sin escenas ni clips.
+   */
+  firstTrailerOnly?: boolean;
 }
 
 export async function fetchYouTubeClip(
   item: MediaItem,
   options: YouTubeFetchOptions = {},
 ): Promise<CacheEntry | null> {
-  const cacheKey = getItemCacheKey(item);
+  const cacheKey = firstTrailerCacheKey(item, options.firstTrailerOnly);
   const cached = getCached(cacheKey);
   if (cached) {
     console.info(`[Aetherio:YouTube] cache-hit item=${cacheKey}`);
@@ -560,7 +760,7 @@ export async function fetchYouTubeClip(
 
   const context = createSearchContext(options.priority ?? "foreground");
   const startedAt = performance.now();
-  const promise = discoverYouTubeClip(item, context)
+  const promise = discoverYouTubeClip(item, context, options.firstTrailerOnly)
     .then(result => {
       const elapsed = Math.round(performance.now() - startedAt);
       console.info(`[Aetherio:YouTube] item=${cacheKey} phase=${context.phase} queries=${context.queries} errors=${context.errors} elapsedMs=${elapsed} result=${result ? "hit" : "miss"}`);
@@ -581,6 +781,11 @@ export async function fetchYouTubeClip(
     });
   inFlight.set(cacheKey, { promise, context });
   return promise;
+}
+
+function firstTrailerCacheKey(item: MediaItem, firstTrailerOnly?: boolean) {
+  const base = getItemCacheKey(item);
+  return firstTrailerOnly ? `${base}:firstTrailer` : base;
 }
 
 export function prefetchYouTubeClip(item: MediaItem) {

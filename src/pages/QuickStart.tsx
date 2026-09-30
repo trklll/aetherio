@@ -33,6 +33,7 @@ import {
   DEFAULT_HOME_PREFERENCES,
   getHomePreferences,
   saveHomePreferences,
+  type BothContentPreference,
   type ContentOrientation,
   type HomePreferences,
 } from "../config/homePreferences.ts";
@@ -192,7 +193,9 @@ export default function QuickStart({ installedAddons, activeProfile, defaultName
           {currentStep === "content" ? (
             <ContentStep
               orientation={homePreferences.contentOrientation}
+              bothPreference={homePreferences.bothPreference}
               onChange={contentOrientation => setHomePreferences(current => ({ ...current, contentOrientation }))}
+              onBothChange={bothPreference => setHomePreferences(current => ({ ...current, bothPreference }))}
             />
           ) : null}
           {currentStep === "playback" ? <PlaybackStep playback={playback} onChange={setPlayback} /> : null}
@@ -258,7 +261,17 @@ export default function QuickStart({ installedAddons, activeProfile, defaultName
   );
 }
 
-function ContentStep({ orientation, onChange }: { orientation: ContentOrientation; onChange: (value: ContentOrientation) => void }) {
+function ContentStep({
+  orientation,
+  bothPreference,
+  onChange,
+  onBothChange,
+}: {
+  orientation: ContentOrientation;
+  bothPreference: BothContentPreference;
+  onChange: (value: ContentOrientation) => void;
+  onBothChange: (value: BothContentPreference) => void;
+}) {
   const choices: Array<{ value: ContentOrientation; title: string; description: string }> = [
     {
       value: "movies-series",
@@ -325,6 +338,35 @@ function ContentStep({ orientation, onChange }: { orientation: ContentOrientatio
             </button>
           );
         })}
+        {orientation === "both" ? (
+          <div className="rounded-[26px] border border-white/10 bg-white/[0.055] p-4">
+            <p className="mb-3 px-1 text-sm font-black text-white/78">¿Con qué preferencia?</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  { value: "anime", label: "Anime" },
+                  { value: "movies-series", label: "Series y películas" },
+                ] as Array<{ value: BothContentPreference; label: string }>
+              ).map(option => {
+                const isSelected = bothPreference === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onBothChange(option.value)}
+                    className={clsx(
+                      "gsap-transition rounded-full px-4 py-3 text-sm font-black",
+                      isSelected ? "bg-white text-black" : "text-white/54 hover:bg-white/10 hover:text-white",
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-3 px-1 text-xs font-medium text-white/44">Si eliges Anime, los catálogos de anime se muestran primero y viceversa.</p>
+          </div>
+        ) : null}
       </div>
     </div>
   );

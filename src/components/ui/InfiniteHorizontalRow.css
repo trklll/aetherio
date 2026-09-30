@@ -1,0 +1,120 @@
+.infinite-horizontal-row {
+  --ihr-gap: clamp(14px, 1.25vw, 22px);
+  position: relative;
+  display: block;
+  width: auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+  gap: var(--ihr-gap);
+}
+
+.infinite-horizontal-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* Preserve the existing Home-style gutters and card spacing when the row wraps
+   sports picks, while replacing its native scroller with the animated viewport. */
+.infinite-horizontal-row.bp-sports__picks {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: var(--ihr-gap);
+}
+
+.infinite-horizontal-row__track {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  transform: translate3d(0, 0, 0);
+}
+
+.infinite-horizontal-row[data-overflowing="true"] .infinite-horizontal-row__track {
+  animation: aetherio-infinite-horizontal-row var(--ihr-cycle-duration) linear infinite;
+  will-change: transform;
+}
+
+.infinite-horizontal-row[data-direction="right"] .infinite-horizontal-row__track {
+  animation-direction: reverse;
+}
+
+.infinite-horizontal-row.is-paused .infinite-horizontal-row__track,
+.infinite-horizontal-row:hover .infinite-horizontal-row__track,
+.infinite-horizontal-row:focus-within .infinite-horizontal-row__track {
+  animation-play-state: paused;
+}
+
+.infinite-horizontal-row__group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  width: max-content;
+  gap: var(--ihr-gap);
+  padding-inline-end: var(--ihr-gap);
+}
+
+.infinite-horizontal-row__group > * {
+  flex: 0 0 auto;
+}
+
+.infinite-horizontal-row__group--clone {
+  user-select: none;
+}
+
+.infinite-horizontal-row:focus-within {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.infinite-horizontal-row:focus-within::-webkit-scrollbar {
+  display: none;
+}
+
+.infinite-horizontal-row:focus-within .infinite-horizontal-row__track {
+  width: max-content;
+  min-width: 0;
+  animation: none;
+  transform: none;
+  will-change: auto;
+}
+
+.infinite-horizontal-row:focus-within .infinite-horizontal-row__group--clone {
+  display: none;
+}
+
+@keyframes aetherio-infinite-horizontal-row {
+  to {
+    transform: translate3d(var(--ihr-end-offset), 0, 0);
+  }
+}
+
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .infinite-horizontal-row,
+  .infinite-horizontal-row.bp-sports__picks {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .infinite-horizontal-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .infinite-horizontal-row__track,
+  .infinite-horizontal-row[data-overflowing="true"] .infinite-horizontal-row__track {
+    width: max-content;
+    min-width: 0;
+    animation: none !important;
+    transform: none !important;
+    will-change: auto;
+  }
+
+  .infinite-horizontal-row__group--clone {
+    display: none;
+  }
+}

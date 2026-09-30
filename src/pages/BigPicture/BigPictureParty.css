@@ -1,0 +1,418 @@
+/* Party en Big Picture: page 10-foot (no modal).
+   Paridad visual con BigPictureSearch: fondo tvOS, título display,
+   teclado fino sticky a la izquierda, contenido a la derecha.
+   Foco = cambio de material (fondo blanco) + scale, sin outlines. */
+
+.bp-party {
+  min-height: 100%;
+  background: #2c2c2e;
+  color: #fff;
+  /* Márgenes desde los tokens globales (src/index.css): --app-page-y suma la
+     banda de la pill de la sidebar, --app-page-x suma su holgura lateral. */
+  padding: var(--app-page-y) calc(var(--app-gutter-x) * 2) var(--app-page-y) var(--app-page-x);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.bp-party__title {
+  margin: 0;
+  color: #fff;
+  font-size: 54px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.bp-party__subtitle {
+  margin: 6px 0 24px;
+  font-size: 22px;
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 600;
+}
+
+.bp-party__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 56px;
+}
+
+/* Teclado en pantalla: sticky como en Search (la page scrollea, él queda). */
+.bp-party__keyboard {
+  flex: 0 0 300px;
+  width: 300px;
+  position: sticky;
+  top: calc(5vh + 76px);
+  align-self: flex-start;
+  outline: none;
+}
+
+.bp-party__kb-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+}
+
+.bp-party__kb-key {
+  height: 54px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.bp-party__kb-key:focus {
+  outline: none;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.big-picture--home-maximized .bp-party__kb-key:focus {
+  transform: none;
+}
+
+.bp-party__kb-actionrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 6px;
+}
+
+.bp-party__kb-text {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.bp-party__kb-text:focus {
+  outline: none;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.bp-party__kb-del {
+  width: 52px;
+  height: 42px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.bp-party__kb-del:focus {
+  outline: none;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+/* Servidores: hilera de pills bajo el teclado (sin <select> nativo). */
+.bp-party__servers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bp-party__server {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 18px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.16s ease;
+}
+
+.bp-party__server.is-active {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.bp-party__server:focus {
+  outline: none;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.big-picture--home-maximized .bp-party__server:focus {
+  transform: scale(1.05);
+}
+
+/* ——— Contenido ——— */
+.bp-party__content {
+  flex: 1;
+  min-width: 0;
+  max-width: 640px;
+}
+
+.bp-party__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bp-party__field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  padding: 16px 22px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.16s ease;
+}
+
+.bp-party__field.is-active {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.bp-party__field:focus {
+  outline: none;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.bp-party__field:focus .bp-party__field-label,
+.bp-party__field:focus .bp-party__field-value {
+  color: #1a1a1a;
+}
+
+.big-picture--home-maximized .bp-party__field:focus {
+  transform: scale(1.02);
+}
+
+.bp-party__field-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.bp-party__field-value {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.bp-party__field-value.is-code {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.25em;
+}
+
+.bp-party__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.bp-party__btn {
+  border-radius: 999px;
+  padding: 16px 34px;
+  font-weight: 800;
+  font-size: 19px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, transform 0.16s ease;
+}
+
+.bp-party__btn--primary {
+  background: #f8f8f9;
+  color: #0b0c0e;
+}
+
+.bp-party__btn--primary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.bp-party__btn--ghost {
+  background: #15171a;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.bp-party__btn--ghost.is-danger {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.bp-party__btn:focus {
+  outline: none;
+}
+
+.big-picture--home-maximized .bp-party__btn:focus {
+  transform: scale(1.05);
+}
+
+.bp-party__btn--primary:focus {
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35);
+}
+
+.bp-party__btn--ghost:focus {
+  background: #fff;
+  color: #0b0c0e;
+}
+
+.bp-party__error {
+  margin: 16px 0 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #ff9d9d;
+}
+
+.bp-party__notice {
+  margin: 16px 0 0;
+  font-size: 17px;
+  color: rgba(255, 235, 180, 0.9);
+}
+
+.bp-party__hint {
+  margin: 20px 0 0;
+  font-size: 18px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Estado conectado. */
+.bp-party__code {
+  margin: 0;
+  font-size: 72px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.bp-party__owner {
+  margin: 10px 0 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.bp-party__media {
+  margin: 8px 0 0;
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bp-party__peers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.bp-party__peer {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  padding: 10px 20px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.bp-party__chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 22px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.bp-party__chat::-webkit-scrollbar {
+  display: none;
+}
+
+.bp-party__msg {
+  align-self: flex-start;
+  max-width: 85%;
+}
+
+.bp-party__msg.is-own {
+  align-self: flex-end;
+  text-align: right;
+}
+
+.bp-party__msg-name {
+  margin: 0 0 4px;
+  padding: 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.bp-party__msg-text {
+  margin: 0;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.14);
+  padding: 12px 18px;
+  font-size: 20px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.bp-party__msg.is-own .bp-party__msg-text {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.bp-party__content > .bp-party__field {
+  margin-top: 18px;
+}
+
+.bp-party__busy {
+  padding: 60px 0;
+  text-align: left;
+}
+
+.bp-party__busy-text {
+  margin: 0 0 22px;
+  font-size: 30px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bp-party__kb-key,
+  .bp-party__kb-text,
+  .bp-party__kb-del,
+  .bp-party__server,
+  .bp-party__field,
+  .bp-party__btn {
+    transition: none;
+  }
+}

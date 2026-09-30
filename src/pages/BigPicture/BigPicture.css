@@ -1,0 +1,809 @@
+/* Big Picture: mismo Aetherio, piel TV Native (DESIGN.md).
+   Tokens 1:1 con ui/theme/AetherioTheme.kt — el artwork manda, sin acentos. */
+
+.aetherio-big-picture {
+  background: #050607;
+}
+
+/* Solo Big Picture: sin scrollbar lateral (estilo Steam, todo con mando).
+   La app normal conserva el suyo (index.css). */
+.aetherio-big-picture .big-picture__scroll,
+.aetherio-big-picture [data-aetherio-scroll-shell] {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.aetherio-big-picture .big-picture__scroll::-webkit-scrollbar,
+.aetherio-big-picture [data-aetherio-scroll-shell]::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.big-picture {
+  min-height: 100vh;
+  background: #050607;
+  color: #fff;
+  font-family: Inter, system-ui, sans-serif;
+  outline: none;
+}
+
+.big-picture__ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-size: cover;
+  background-position: center 20%;
+  opacity: 0.5;
+  transition: background-image 0.4s ease;
+}
+
+.big-picture__ambient::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to right, rgba(5, 6, 7, 0.96) 0%, rgba(5, 6, 7, 0.55) 40%, rgba(5, 6, 7, 0.2) 70%),
+    linear-gradient(to bottom, rgba(5, 6, 7, 0.4) 0%, transparent 40%, rgba(5, 6, 7, 0.92) 100%);
+}
+
+.big-picture__body {
+  position: relative;
+  z-index: 1;
+  padding: 48px 56px 88px;
+  max-width: 1920px;
+  margin: 0 auto;
+}
+
+.big-picture__topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.big-picture__brand {
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: 0.14em;
+}
+
+.big-picture__hint {
+  color: #a3a7ae;
+  font-size: 13px;
+}
+
+.big-picture__topbar .spacer {
+  flex: 1;
+}
+
+.big-picture__exit {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(27, 29, 33, 0.6);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 22px;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.big-picture__exit:focus-visible {
+  outline: 3px solid #f8f8f9;
+  outline-offset: 2px;
+}
+
+/* Hero espejo de HomeHeroPanel (22px radius, logo abajo-izquierda). */
+.bp-hero {
+  position: relative;
+  width: 100%;
+  height: min(46vh, 560px);
+  min-height: 340px;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #0b0c0e;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  display: block;
+  color: #fff;
+}
+
+.bp-hero:focus-visible {
+  outline: 3px solid #f8f8f9;
+  outline-offset: 3px;
+}
+
+.bp-hero img.bp-hero__bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bp-hero__shade-h {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, rgba(10, 10, 12, 0.96) 0%, rgba(10, 10, 12, 0.78) 22%, rgba(10, 10, 12, 0.16) 40%, rgba(10, 10, 12, 0.02) 65%, rgba(10, 10, 12, 0.23) 85%, rgba(10, 10, 12, 0.82) 100%);
+}
+
+.bp-hero__shade-v {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 0%, rgba(10, 10, 12, 0.03) 55%, rgba(10, 10, 12, 0.53) 80%, rgba(10, 10, 12, 0.9) 100%);
+}
+
+.bp-hero__content {
+  position: absolute;
+  left: 36px;
+  right: 42px;
+  bottom: 26px;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bp-hero__logo {
+  max-width: 420px;
+  max-height: 92px;
+  object-fit: contain;
+  object-position: left bottom;
+}
+
+.bp-hero__title {
+  font-weight: 900;
+  font-size: 32px;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.bp-hero__meta {
+  font-weight: 700;
+  font-size: 13px;
+  color: #f8f8f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bp-hero__desc {
+  color: #a3a7ae;
+  font-size: 13px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+}
+
+.bp-hero__dots {
+  position: absolute;
+  right: 28px;
+  bottom: 24px;
+  display: flex;
+  gap: 8px;
+}
+
+.bp-hero__dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.bp-hero__dots span.on {
+  background: #f8f8f9;
+}
+
+/* Filas espejo de HomeCatalogRow. */
+.bp-row {
+  margin-top: 34px;
+}
+
+.bp-row__title {
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 24px;
+  margin: 0 0 10px;
+  transition: color 0.15s ease;
+}
+
+.bp-row:focus-within .bp-row__title {
+  color: #fff;
+}
+
+.bp-row__track {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 6px 2px 10px;
+  scrollbar-width: none;
+}
+
+.bp-row__track::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tarjeta espejo de HomeCatalogCard: 186x286 colapsada. */
+.bp-card {
+  flex: 0 0 auto;
+  width: 186px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 18px;
+  text-align: left;
+  color: #fff;
+}
+
+.bp-card__media {
+  position: relative;
+  width: 186px;
+  height: 286px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #2b2b2d;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.bp-card:focus-visible {
+  outline: none;
+}
+
+.bp-card:focus-visible .bp-card__media {
+  transform: scale(1.045);
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55), 0 0 0 3px #f8f8f9;
+}
+
+.bp-card__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.bp-card__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 30%, rgba(11, 14, 19, 0.47) 65%, rgba(11, 14, 19, 0.93) 100%);
+}
+
+.bp-card__meta {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bp-card__name {
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bp-card__sub {
+  color: #a3a7ae;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bp-card__badge {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+}
+
+/* Detalle TV: hero a sangre + acciones píldora. */
+.bp-detail__hero {
+  position: relative;
+  min-height: 52vh;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #0b0c0e;
+}
+
+.bp-detail__hero > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bp-detail__actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+
+.bp-btn {
+  border-radius: 999px;
+  padding: 12px 28px;
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.bp-btn--primary {
+  background: #f8f8f9;
+  color: #0b0c0e;
+}
+
+.bp-btn--ghost {
+  background: #15171a;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.bp-btn:focus-visible {
+  outline: 3px solid #f8f8f9;
+  outline-offset: 3px;
+}
+
+.big-picture__loading,
+.big-picture__empty {
+  padding: 120px 0;
+  text-align: center;
+  color: #a3a7ae;
+  font-size: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bp-card__media,
+  .big-picture__ambient {
+    transition: none;
+  }
+  .bp-wipe-layer,
+  .bp-bg__still--incoming,
+  .bp-hero-copy-layer--in,
+  .bp-hero-copy-layer--out {
+    animation: none;
+  }
+  .bp-wipe-layer,
+  .bp-bg__still--incoming {
+    clip-path: none;
+  }
+}
+
+/* Paso 1 Big Picture: nuevo Home maximizado (sin chrome, a sangre).
+   Anula el offset de AppShell que Home trae por defecto. */
+.big-picture--home-maximized {
+  height: 100vh;
+  overflow: hidden;
+  /* Sin fondo plano: deja ver el degradado del perfil (body) como en /home.
+     Con #050607 opaco, los huecos (padding superior/inferior) se veían
+     como barras negras. */
+  background: transparent;
+}
+
+.big-picture__scroll {
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+/* Episodio Big Picture: página estática sin ningún scroll manual. Todo el
+   contenido vive fijo en el viewport; el cajón de fuentes revela el foco
+   por scroll programático (sin scrollbars ni rueda). */
+.big-picture__scroll.big-picture__scroll--static {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Background maximizado fijo — misma lógica visual que Detail:
+   cover 16:9 centrado + viñeta radial + velo oscuro. El blur lo drivea
+   el scroll (scroll/12, máx 28px). */
+.bp-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background: #000;
+  pointer-events: none;
+}
+
+.bp-bg__frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100vw, 177.777778vh);
+  height: max(100vh, 56.25vw);
+  aspect-ratio: 16 / 9;
+  transform: translate(-50%, -50%);
+}
+
+/* Big Picture transition layers. The new still enters from the right with a
+   clean vertical edge, matching the Apple TV-style intermediate frame. */
+.bp-wipe-layer {
+  animation: bp-vertical-wipe 0.85s cubic-bezier(0.22, 0.9, 0.28, 1) both;
+  will-change: clip-path;
+}
+.bp-bg__still {
+  z-index: 1;
+}
+.bp-bg__still--incoming {
+  z-index: 4;
+  animation-name: bp-vertical-wipe;
+  animation-duration: 0.85s;
+  animation-timing-function: cubic-bezier(0.22, 0.9, 0.28, 1);
+  animation-fill-mode: both;
+}
+@keyframes bp-vertical-wipe {
+  from { clip-path: inset(0 0 0 100%); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+.bp-hero-copy-stage {
+  overflow: hidden;
+}
+.bp-hero-copy-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 48px 44px;
+  will-change: opacity;
+}
+.bp-hero-copy-layer__content {
+  width: 100%;
+  max-width: 640px;
+}
+.bp-hero-copy-layer--in {
+  animation: bp-copy-in 0.6s ease 0.12s both;
+}
+.bp-hero-copy-layer--out {
+  pointer-events: none;
+  animation: bp-copy-out 0.35s ease both;
+}
+@keyframes bp-copy-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes bp-copy-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.bp-bg__image {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.bp-bg__image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.bp-bg__vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  opacity: 1;
+  background: radial-gradient(ellipse 55% 85% at center, transparent 44%, rgba(0, 0, 0, 0.28) 68%, rgba(0, 0, 0, 0.9) 100%);
+  pointer-events: none;
+}
+
+.bp-bg__dark {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  opacity: 0;
+  background: rgba(0, 0, 0, 1);
+  pointer-events: none;
+}
+
+.bp-route-background__shade {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  background:
+    linear-gradient(to bottom, rgba(11, 11, 12, 0.76), rgba(23, 23, 25, 0.78) 58%, rgba(31, 31, 31, 0.98)),
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.08) 0%, rgba(0, 0, 0, 0) 42%);
+  pointer-events: none;
+}
+
+.big-picture--home-maximized .detail-page-root[data-bp-detail-exiting="true"] [data-bp-detail-background] {
+  opacity: 0 !important;
+  transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .big-picture--home-maximized .detail-page-root[data-bp-detail-exiting="true"] [data-bp-detail-background] {
+    transition: opacity 160ms ease;
+  }
+}
+
+.big-picture--home-maximized .home-page-scale {
+  margin-top: 0 !important;
+  /* Hero a la altura de la base de la pill: top del rail (5vh + 4px)
+     + alto de la pill (53px) + respiro de 12px. */
+  padding-top: calc(5vh + 69px) !important;
+}
+
+/* Detail en picture: MISMA page de PC (mismo DetailPage), sin el offset de
+   la topnav de AppShell — el chrome lo pone el rail, no la barra superior.
+   El scroll real lo lleva el shell interior del propio Detail. */
+.big-picture--home-maximized .detail-page-root {
+  margin-top: 0 !important;
+  height: 100% !important;
+  min-height: 100%;
+  background: transparent !important;
+}
+
+.big-picture--home-maximized [data-bp-episode="true"] {
+  background: transparent !important;
+}
+
+/* Home abre el detalle dentro de ShellPreviewApp, que no tiene el chrome de
+   AppShell. Search monta el mismo DetailPage directamente; usa la misma altura
+   independiente del valor global de --app-shell-nav-height. */
+.big-picture--home-maximized .detail-page-hero {
+  height: calc(78vh - 60px) !important;
+  min-height: 540px !important;
+}
+
+/* Acercar la info del hero a la primera row sin mover la row asomada:
+   baja solo el bloque de info dentro del hero (logo/sinopsis/acciones). */
+.big-picture--home-maximized [data-hero-panel] > div,
+.shell-preview-app [data-hero-panel] > div {
+  padding-bottom: 12px !important;
+}
+
+/* El hero atenuado (fade imperativo vía gsap en Detail) no debe recibir
+   puntero: sus botones ya quedaron fuera de vista al entrar en contenido. */
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-hero > [data-detail-hero-copy],
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-hero > .detail-hero-credits,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-hero > [data-detail-hero-copy],
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-hero > .detail-hero-credits {
+  pointer-events: none;
+}
+
+/* Peek hero: la primera row asoma sin header (altura 0, sin espacio).
+   Al entrar a la zona de contenido, el header aparece con fade elegante
+   desde abajo; al volver al hero se oculta con la misma curva. */
+.big-picture--home-maximized .detail-content-logo,
+.shell-preview-app .detail-content-logo {
+  height: 0;
+  padding-top: 0;
+  margin-top: -28px;
+  margin-bottom: -28px;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(34px);
+  will-change: height, padding-top, margin-top, margin-bottom, opacity, transform;
+  transition:
+    height 0.55s cubic-bezier(0.22, 0.9, 0.28, 1),
+    padding-top 0.55s cubic-bezier(0.22, 0.9, 0.28, 1),
+    margin-top 0.55s cubic-bezier(0.22, 0.9, 0.28, 1),
+    margin-bottom 0.55s cubic-bezier(0.22, 0.9, 0.28, 1),
+    opacity 0.38s ease,
+    transform 0.55s cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-content-logo,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-content-logo {
+  height: 95px;
+  padding-top: 14px;
+  margin-top: 0;
+  margin-bottom: 0;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Headers de la zona de contenido: ocultos en el peek del hero (sin mover
+   el layout, para no desplazar la primera row que ya asoma) y con fade
+   elegante desde abajo al entrar a la zona. Las rows/cards no se animan:
+   la primera ya estaba visible en el hero. */
+.big-picture--home-maximized .detail-page-content .detail-section-header,
+.big-picture--home-maximized .detail-page-content .detail-season-header,
+.big-picture--home-maximized .detail-page-content section > h2,
+.shell-preview-app .detail-page-content .detail-section-header,
+.shell-preview-app .detail-page-content .detail-season-header,
+.shell-preview-app .detail-page-content section > h2 {
+  opacity: 0;
+  transform: translateY(26px);
+  pointer-events: none;
+  transition:
+    opacity 0.5s ease,
+    transform 0.6s cubic-bezier(0.22, 0.9, 0.28, 1);
+  will-change: opacity, transform;
+}
+
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content .detail-section-header,
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content .detail-season-header,
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content section > h2,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content .detail-section-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content .detail-season-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content section > h2 {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* Stagger sutil por sección para que no aparezcan todos de golpe. */
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(3) .detail-section-header,
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(3) .detail-season-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(3) .detail-section-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(3) .detail-season-header {
+  transition-delay: 0.07s;
+}
+
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(4) .detail-section-header,
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(4) .detail-season-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(4) .detail-section-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(4) .detail-season-header {
+  transition-delay: 0.14s;
+}
+
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(n+5) .detail-section-header,
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(n+5) .detail-season-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(n+5) .detail-section-header,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content > *:nth-child(n+5) .detail-season-header {
+  transition-delay: 0.21s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .big-picture--home-maximized .detail-content-logo,
+  .shell-preview-app .detail-content-logo,
+  .big-picture--home-maximized .detail-page-content .detail-section-header,
+  .big-picture--home-maximized .detail-page-content .detail-season-header,
+  .big-picture--home-maximized .detail-page-content section > h2,
+  .shell-preview-app .detail-page-content .detail-section-header,
+  .shell-preview-app .detail-page-content .detail-season-header,
+  .shell-preview-app .detail-page-content section > h2 {
+    transition: none;
+  }
+}
+
+/* Detail en picture: foco = escala, sin bordes blancos. El outline ya muere
+   con la regla global de :focus; aquí cae el anillo blanco del media del
+   episodio (:focus-visible) y cualquier resto de anillo en cards del detail.
+   Cubre el detail normal y el iframe del shell preview (que no usa
+   --home-maximized). */
+.big-picture--home-maximized .detail-page-root .detail-episode-card:focus-visible .detail-episode-card__media,
+.shell-preview-app .detail-page-root .detail-episode-card:focus-visible .detail-episode-card__media {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+/* Tabs de temporada en picture: pastilla + escala, sin anillo blanco
+   (el componente pinta box-shadow 0 0 0 2px #fff en :hover/:focus). */
+.big-picture--home-maximized .season-tab:hover,
+.big-picture--home-maximized .season-tab:focus,
+.big-picture--home-maximized .season-tab.spatial-focus,
+.shell-preview-app .season-tab:hover,
+.shell-preview-app .season-tab:focus,
+.shell-preview-app .season-tab.spatial-focus {
+  box-shadow: none;
+}
+
+/* En picture no hay bordes blancos al seleccionar (mando o teclado):
+   ni outline propio, ni :focus-visible, ni defaults del navegador.
+   Solo queda la animación de enfoque (escala) de cada card. */
+.big-picture--home-maximized :focus,
+.big-picture--home-maximized :focus-visible,
+.big-picture--home-maximized :focus-within,
+.shell-preview-app :focus,
+.shell-preview-app :focus-visible,
+.shell-preview-app :focus-within {
+  outline: none !important;
+}
+
+/* Validación visual en botones enfocados: pequeño scale, sin bordes.
+   Las cards-div llevan su propia animación por JS; esto cubre Reproducir,
+   Siguiente y demás botones del modo picture. */
+.big-picture--home-maximized button,
+.shell-preview-app button {
+  transition: transform 0.18s ease;
+}
+
+.big-picture--home-maximized button:focus,
+.shell-preview-app button:focus {
+  transform: scale(1.07);
+}
+
+/* La columna del hero está anclada a la línea de contenido (--app-gutter-x):
+   logo, meta, sinopsis y el botón comparten ese mismo borde. Escalar desde el
+   centro arrastra el borde izquierdo hacia dentro y saca el botón de la línea
+   (con "Reproducir", de ~195px, eran ~7px), así que los controles de esa
+   columna escalan desde su borde izquierdo: crecen hacia el contenido y nunca
+   mueven la alineación. */
+.bp-hero-copy-stage button,
+.shell-preview-app .bp-hero-copy-stage button {
+  transform-origin: left center;
+}
+
+/* Chips de fuentes del episodio: animación de enfoque estilo TV (escala +
+   realce de fondo, sin bordes blancos). El motor espacial marca
+   .spatial-focus porque los eventos sintéticos del mando no siempre
+   activan :focus-visible. */
+.big-picture--home-maximized [data-row-key="episode-sources"] [data-row-card] {
+  transition: transform 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.big-picture--home-maximized [data-row-key="episode-sources"] [data-row-card]:focus,
+.big-picture--home-maximized [data-row-key="episode-sources"] [data-row-card].spatial-focus {
+  transform: scale(1.04);
+  background-color: rgba(255, 255, 255, 0.18);
+  /* La fila es un scroller horizontal y recorta sombras exteriores. El
+     realce queda dentro del chip para no cortar el foco en los bordes. */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3), inset 0 -2px 0 rgba(255, 255, 255, 0.1);
+  color: #fff;
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .big-picture--home-maximized [data-row-key="episode-sources"] [data-row-card] {
+    transition: none;
+  }
+  .big-picture--home-maximized [data-row-key="episode-sources"] [data-row-card]:focus,
+  .big-picture--home-maximized [data-row-key="episode-sources"] [data-row-card].spatial-focus {
+    transform: none;
+  }
+}
+
+/* Cards de fuentes del episodio: ocupan todo el ancho del cajón, así que
+   la escala de enfoque es mínima (1.02) para no chocar con los laterales
+   del panel. Gana a la regla global de button:focus por especificidad. */
+.big-picture--home-maximized [data-bp-episode-streams] button:focus,
+.big-picture--home-maximized [data-bp-episode-streams] button.spatial-focus {
+  transform: scale(1.02);
+}
+
+/* Botones del encabezado del panel de episodio (party, recargar, salir):
+   mismo idioma que los chips — escala contenida + realce interno, sin
+   bordes blancos. Gana a la regla global de button:focus por especificidad. */
+.big-picture--home-maximized [data-bp-episode-tools] button:focus,
+.big-picture--home-maximized [data-bp-episode-tools] button.spatial-focus {
+  transform: scale(1.08);
+  background-color: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  color: #fff;
+  outline: none;
+}
+
+/* Ancla de scroll de las rows en picture: al subir/bajar con el mando la
+   row enfocada queda bajo la pill (su base + respiro), como el
+   BringIntoView nativo. Solo lo usa el motor espacial. */
+.big-picture--home-maximized [data-row-card] {
+  scroll-margin-top: calc(5vh + 81px);
+}
+
+/* Steam: en Big Picture el cursor del SO desaparece; el JS lo muestra de
+   forma temporal al mover el ratón (aetherio-bp-hide-cursor ausente). */
+.aetherio-bp-hide-cursor,
+.aetherio-bp-hide-cursor * {
+  cursor: none !important;
+}

@@ -1,4 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play, Volume2, VolumeX } from "lucide-react";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
@@ -8,8 +8,9 @@ import { sanitizeLogoUrl } from "../../utils/artwork.ts";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata.ts";
 import { saveHomeScroll } from "../../store/homeScrollStore.ts";
 import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork.ts";
-import { gsap, tweenTo } from "../../utils/motion.ts";
+import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion.ts";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition.ts";
+import { buildDetailPath } from "../../utils/bigPictureDetail.ts";
 import {
   fetchYouTubeClip,
   getCachedClipInfo,
@@ -29,11 +30,18 @@ interface Props {
   onVideoEnd?: () => void;
   inline?: boolean;
   onOpenDetail?: (activeIndex: number) => void;
+  contentVisible?: boolean;
+  animateEntrance?: boolean;
 }
 
 const START_TIME = 60;
+// Ciclo del hero: background -> info en pantalla -> 2.5s -> trailer ->
+// background 2.5s -> siguiente. El conteo previo al trailer arranca cuando la
+// info ya es visible, no al montar el item.
+const HERO_BG_HOLD_MS = 2500;
+const HERO_POST_TRAILER_HOLD_MS = 2500;
 
-function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () => void; side: "left" | "right" }) {
+function NeighborCard({ item, onClick, side, contentVisible }: { item: MediaItem; onClick: () => void; side: "left" | "right"; contentVisible: boolean }) {
   const bg = ensureOriginalTmdbImage(item.background) ?? "";
   if (!bg) return null;
   return (
@@ -46,7 +54,6 @@ function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () =>
         borderRadius: side === "left" ? "0 20px 20px 0" : "20px 0 0 20px",
         overflow: "hidden",
         cursor: "pointer",
-        opacity: 0.65,
         filter: "brightness(0.55)",
         transition: "all 0.3s ease",
         position: "absolute",
@@ -54,6 +61,8 @@ function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () =>
         zIndex: 1,
         left: side === "left" ? "0.2vw" : "auto",
         right: side === "right" ? "0.2vw" : "auto",
+        opacity: contentVisible ? 0.65 : 0,
+        pointerEvents: contentVisible ? "auto" : "none",
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.opacity = "0.9";
@@ -95,7 +104,7 @@ function NeighborCard({ item, onClick, side }: { item: MediaItem; onClick: () =>
   );
 }
 
-export default function HeroSection({ item, items, activeIndex, onSelect, onVideoEnd, inline = false, onOpenDetail }: Props) {
+export default function HeroSection({ item, items, activeIndex, onSelect, onVideoEnd, inline = false, onOpenDetail, contentVisible = true, animateEntrance = false }: Props) {
   const navigate = useNavigate();
   const mdbListSettings = useMdbListSettings();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -107,7 +116,29 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
   const [clipIndex, setClipIndex] = useState(0);
   const [videoReady, setVideoReady] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const [preHoldDone, setPreHoldDone] = useState(false);
+  const [inPostHold, setInPostHold] = useState(false);
+  const [clipFetchSettled, setClipFetchSettled] = useState(false);
   const videoEndHandledRef = useRef(false);
+  const preHoldTimerRef = useRef<number | null>(null);
+  const postHoldTimerRef = useRef<number | null>(null);
+  const onVideoEndRef = useRef(onVideoEnd);
+  onVideoEndRef.current = onVideoEnd;
+  // Fade-in del background solo en la entrada fresca a la app (no al volver
+  // desde otra página). Se dispara cuando la primera imagen carga.
+  const [entranceFadedIn, setEntranceFadedIn] = useState(!animateEntrance);
+  const entranceDoneRef = useRef(!animateEntrance);
+  const fadeEntranceIn = useCallback(() => {
+    if (entranceDoneRef.current) return;
+    entranceDoneRef.current = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => setEntranceFadedIn(true)));
+  }, []);
+
+  useEffect(() => {
+    if (!animateEntrance) return;
+    const timer = window.setTimeout(() => fadeEntranceIn(), 3500);
+    return () => window.clearTimeout(timer);
+  }, [animateEntrance, fadeEntranceIn]);
 
   const bg = ensureOriginalTmdbImage(displayItem.background) ?? "";
   const logo = sanitizeLogoUrl(displayItem.logo);
@@ -142,6 +173,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
     setVideoReady(false);
     setClipCandidates([]);
     setClipIndex(0);
+    setClipFetchSettled(false);
 
     const cached = getCachedClipInfo(displayItem);
     if (cached) {
@@ -149,19 +181,94 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
         { videoId: cached.videoId, source: cached.source, duration: cached.duration },
         ...(cached.fallbacks ?? []),
       ]);
+      setClipFetchSettled(true);
       return;
     }
     let cancelled = false;
     void fetchYouTubeClip(displayItem).then(result => {
-      if (!cancelled && result) {
+      if (cancelled) return;
+      if (result) {
         setClipCandidates([
           { videoId: result.videoId, source: result.source, duration: result.duration },
           ...(result.fallbacks ?? []),
         ]);
       }
+      setClipFetchSettled(true);
     });
     return () => { cancelled = true; };
   }, [displayItem]);
+
+  // Reset del ciclo con cada item (no arranca el conteo aquí).
+  useEffect(() => {
+    setVideoReady(false);
+    setPreHoldDone(false);
+    setInPostHold(false);
+    videoEndHandledRef.current = false;
+    if (preHoldTimerRef.current !== null) {
+      window.clearTimeout(preHoldTimerRef.current);
+      preHoldTimerRef.current = null;
+    }
+    if (postHoldTimerRef.current !== null) {
+      window.clearTimeout(postHoldTimerRef.current);
+      postHoldTimerRef.current = null;
+    }
+    videoRef.current?.pause();
+    audioRef.current?.pause();
+    return () => {
+      if (preHoldTimerRef.current !== null) {
+        window.clearTimeout(preHoldTimerRef.current);
+        preHoldTimerRef.current = null;
+      }
+      if (postHoldTimerRef.current !== null) {
+        window.clearTimeout(postHoldTimerRef.current);
+        postHoldTimerRef.current = null;
+      }
+    };
+  }, [activeIndex]);
+
+  // El conteo de 2.5s arranca cuando la info ya está en pantalla.
+  useEffect(() => {
+    if (!contentVisible || inPostHold || preHoldDone) return;
+    if (preHoldTimerRef.current !== null) return;
+    preHoldTimerRef.current = window.setTimeout(() => {
+      preHoldTimerRef.current = null;
+      setPreHoldDone(true);
+    }, HERO_BG_HOLD_MS);
+    return () => {
+      if (preHoldTimerRef.current !== null) {
+        window.clearTimeout(preHoldTimerRef.current);
+        preHoldTimerRef.current = null;
+      }
+    };
+  // Se reinicia por item (id/type) o al revelarse la info; preHoldDone en
+  // deps repara el arranque tras el reset del efecto anterior.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex, item?.id, item?.type, contentVisible, inPostHold, preHoldDone]);
+
+  // Cuando termina el pre-hold, arrancar el trailer si ya hay stream.
+  useEffect(() => {
+    if (!preHoldDone || inPostHold || !contentVisible) return;
+    if (!stream || streamLoading) return;
+    if (prefersReducedMotion()) return;
+    const video = videoRef.current;
+    if (video && video.paused) {
+      void video.play().catch(() => undefined);
+    }
+  }, [preHoldDone, inPostHold, contentVisible, stream, streamLoading]);
+
+  // Sin trailer reproducible (fetch vacío, candidatos agotados o reduced
+  // motion): el background espera su hold tras la info y avanza.
+  useEffect(() => {
+    if (!clipFetchSettled || !preHoldDone || inPostHold) return;
+    if (items.length < 2) return;
+    const exhausted = clipCandidates.length > 0 && streamError != null && clipIndex >= clipCandidates.length - 1;
+    const hasPlayableTrailer = clipCandidates.length > 0 && !exhausted && !prefersReducedMotion();
+    if (hasPlayableTrailer) return;
+    const timer = window.setTimeout(() => {
+      onVideoEndRef.current?.();
+    }, HERO_POST_TRAILER_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [clipFetchSettled, preHoldDone, inPostHold, clipCandidates.length, clipIndex, streamError, items.length]);
 
   useEffect(() => {
     if (!clipCandidates.length || items.length < 2) return;
@@ -246,7 +353,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
     });
     setSharedElementName(displayItem.type, displayItem.id);
     captureCardRect(cardRef.current);
-    navigate(`/detail/${encodeURIComponent(displayItem.type)}/${encodeURIComponent(displayItem.id)}`);
+    navigate(buildDetailPath(displayItem.type, displayItem.id));
   };
 
   const hasNeighbors = items.length > 1;
@@ -257,14 +364,24 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
     if (videoEndHandledRef.current) return;
     videoEndHandledRef.current = true;
     audioRef.current?.pause();
+    videoRef.current?.pause();
     setVideoReady(false);
-    onVideoEnd?.();
+    // Volver al background 2.5s antes de pasar al siguiente.
+    setInPostHold(true);
+    if (postHoldTimerRef.current !== null) {
+      window.clearTimeout(postHoldTimerRef.current);
+    }
+    postHoldTimerRef.current = window.setTimeout(() => {
+      postHoldTimerRef.current = null;
+      onVideoEndRef.current?.();
+    }, HERO_POST_TRAILER_HOLD_MS);
   };
 
   const toggleMute = () => {
     const video = videoRef.current;
     const audio = audioRef.current;
     if (!video || !stream?.hasAudio) return;
+    if (!preHoldDone || inPostHold || !contentVisible) return;
     const nextMuted = !isMuted;
     if (stream.audioUrl && audio) {
       video.muted = true;
@@ -288,6 +405,8 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
     setClipIndex(index => Math.min(index + 1, Math.max(clipCandidates.length - 1, 0)));
   };
 
+  const showTrailer = videoReady && preHoldDone && !inPostHold && contentVisible;
+
   return (
     <div style={{
       position: "relative",
@@ -297,10 +416,12 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
       marginLeft: inline ? 0 : "-50vw",
       left: inline ? 0 : "50%",
       overflow: "visible",
+      opacity: entranceFadedIn ? 1 : 0,
+      transition: animateEntrance ? "opacity 0.9s ease" : undefined,
     }}>
       <div style={{ position: "relative", display: "flex", justifyContent: "center", alignItems: "center", height: "clamp(340px, 42vw, 680px)", width: "100%", overflow: "visible" }}>
         {hasNeighbors && prevIndex >= 0 && (
-          <NeighborCard item={items[prevIndex]} onClick={() => onSelect(prevIndex)} side="left" />
+          <NeighborCard item={items[prevIndex]} onClick={() => onSelect(prevIndex)} side="left" contentVisible={contentVisible} />
         )}
         <div
           ref={cardRef}
@@ -312,6 +433,8 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
               alt=""
               decoding="async"
               fetchPriority="high"
+              onLoad={fadeEntranceIn}
+              onError={fadeEntranceIn}
               style={{
                 position: "absolute",
                 inset: 0,
@@ -319,7 +442,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                 height: "100%",
                 objectFit: "cover",
                 objectPosition: "center top",
-                opacity: videoReady ? 0 : 1,
+                opacity: showTrailer ? 0 : 1,
                 transition: "opacity 1.5s ease-in-out",
               }}
             />
@@ -330,7 +453,6 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
               ref={videoRef}
               key={clipInfo ? clipInfo.videoId : "placeholder"}
               src={stream.url}
-              autoPlay
               muted={stream.audioUrl ? true : isMuted}
               playsInline
               preload="auto"
@@ -341,7 +463,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                 height: "100%",
                 border: "none",
                 objectFit: "cover",
-                opacity: videoReady ? 1 : 0,
+                opacity: showTrailer ? 1 : 0,
                 transition: "opacity 1.5s ease-in-out",
               }}
               onLoadedMetadata={event => {
@@ -356,8 +478,15 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                   video.currentTime = startAt;
                   if (audioRef.current) audioRef.current.currentTime = startAt;
                 }
+                if (preHoldDone && !inPostHold && contentVisible && !prefersReducedMotion()) {
+                  void video.play().catch(() => undefined);
+                }
               }}
               onPlaying={event => {
+                if (!preHoldDone || inPostHold || !contentVisible || prefersReducedMotion()) {
+                  event.currentTarget.pause();
+                  return;
+                }
                 const audio = audioRef.current;
                 if (stream.audioUrl && audio) {
                   if (Math.abs(audio.currentTime - event.currentTarget.currentTime) > 0.2) {
@@ -415,6 +544,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
               onClick={toggleMute}
               aria-label={isMuted ? "Desmutear escena" : "Mutear escena"}
               title={stream.hasAudio ? (isMuted ? "Desmutear" : "Mutear") : "Este stream no trae audio integrado"}
+              data-home-entrance
               disabled={!stream.hasAudio}
               style={{
                 position: "absolute",
@@ -433,6 +563,8 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
                 backdropFilter: "blur(14px)",
                 cursor: stream.hasAudio ? "pointer" : "default",
                 opacity: stream.hasAudio ? 1 : 0.42,
+                visibility: contentVisible ? "visible" : "hidden",
+                pointerEvents: contentVisible ? "auto" : "none",
               }}
               onMouseEnter={event => {
                 if (stream.hasAudio) tweenTo(event.currentTarget, { opacity: 0.86 });
@@ -449,7 +581,8 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
           <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.02) 50%, rgba(0,0,0,0.15) 75%, rgba(0,0,0,0.50) 100%)" }} />
           <div
             key={displayItem.id}
-            style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 42px 22px 36px", display: "flex", alignItems: "flex-end", zIndex: 11 }}
+            data-home-entrance
+            style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 42px 22px 36px", display: "flex", alignItems: "flex-end", zIndex: 11, visibility: contentVisible ? "visible" : "hidden", pointerEvents: contentVisible ? "auto" : "none" }}
           >
             <div style={{ maxWidth: 560 }}>
               {awards.featured && (
@@ -569,7 +702,7 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
           </div>
         </div>
         {hasNeighbors && nextIndex >= 0 && (
-          <NeighborCard item={items[nextIndex]} onClick={() => onSelect(nextIndex)} side="right" />
+          <NeighborCard item={items[nextIndex]} onClick={() => onSelect(nextIndex)} side="right" contentVisible={contentVisible} />
         )}
       </div>
     </div>

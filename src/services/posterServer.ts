@@ -8,6 +8,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { getEffectiveInstanceUrl, setPosterCacheUrl } from "../config/spatialPosters";
+import type { SpatialPosterSettings } from "../config/spatialPosters";
+
 export interface PosterServerStatus {
   running: boolean;
   ready: boolean;
@@ -59,6 +62,33 @@ export async function getPosterCacheUrl(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * URL contra la que hay que pedir posters, con el server ya arrancado.
+ *
+ * Sondear antes de que arranque produce dos fallos encadenados: contra
+ * `localhost:3000` da `ERR_CONNECTION_REFUSED`, y si despues se consulta la URL
+ * del proxy sin esperar, se prueba un puerto efimero que todavia no escucha.
+ * Por eso todo el que probea debe pasar por aqui y no por
+ * `getEffectiveInstanceUrl` directo.
+ *
+ * Nunca rechaza: si el server no levanta, devuelve la instancia configurada y
+ * que sea el sondeo el que diga que no hay posters.
+ */
+export async function resolvePosterEndpoint(
+  settings: SpatialPosterSettings,
+): Promise<string> {
+  if (isTauri()) {
+    const status = await ensurePosterServer(settings.instanceUrl);
+    // Solo tiene sentido apuntar al proxy si Rust confirmo que hay algo
+    // escuchando: `poster_cache_url` puede devolver el puerto aunque el cache
+    // se haya quedado sin arrancar.
+    if (status?.running) {
+      setPosterCacheUrl(await getPosterCacheUrl());
+    }
+  }
+  return getEffectiveInstanceUrl(settings);
 }
 
 export async function stopPosterServer(): Promise<void> {

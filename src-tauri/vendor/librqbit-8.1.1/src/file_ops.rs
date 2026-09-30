@@ -73,6 +73,7 @@ impl<'a> FileOps<'a> {
     }
 
     // Returns the bitvector with pieces we have.
+    #[allow(dead_code)]
     pub fn initial_check(&self, progress: &AtomicU64) -> anyhow::Result<BF> {
         let mut have_pieces =
             BF::from_boxed_slice(vec![0u8; self.lengths.piece_bitfield_bytes()].into());

@@ -1,4 +1,5 @@
 import { tmdbFetch } from "../config/apiKeys.ts";
+import { fetchTmdbArtwork } from "../services/tmdbArtworkService.ts";
 import { invokeCommand, openExternalUrl } from "../runtime/platform.ts";
 import {
   buildContinueWatchingKey,
@@ -799,22 +800,22 @@ async function fetchTmdbArtworkForEntry(entry: ContinueWatchingEntry): Promise<P
   const tmdbId = await resolveTmdbIdForEntry(entry, tmdbType);
   if (!tmdbId) return {};
 
-  const [details, images] = await Promise.all([
-    tmdbFetch<{ title?: string; name?: string; backdrop_path?: string; poster_path?: string }>(`/${tmdbType}/${tmdbId}`, { params: { language: "es-ES" } }),
-    entry.logo ? Promise.resolve(null) : tmdbFetch<{ logos?: unknown }>(`/${tmdbType}/${tmdbId}/images`, { params: { include_image_language: "es,en,null" } }),
-  ]);
-  const logoPath = entry.logo ? undefined : pickTmdbLogoPath(images?.logos);
+  // Detalle e imagenes en una sola peticion y cacheados por el resolver
+  // compartido, igual que Continue Viendo: las dos pantallas piden los mismos
+  // titulos del historial y antes cada una gastaba su propia cuota.
+  const artwork = await fetchTmdbArtwork(tmdbType, tmdbId);
+  const logoPath = entry.logo ? undefined : artwork?.logoPath;
   const episodeDetails = entry.type !== "movie" && entry.season && entry.episode
     ? await fetchTmdbEpisodeDetails(tmdbId, entry.season, entry.episode)
     : null;
 
   return {
-    name: details?.title ?? details?.name ?? entry.name,
+    name: artwork?.title ?? entry.name,
     background: entry.type === "movie"
-      ? tmdbImage(details?.backdrop_path, "original")
+      ? tmdbImage(artwork?.backdropPath, "original")
       : tmdbImage(episodeDetails?.still_path, "original"),
     episodeStill: entry.type !== "movie" ? tmdbImage(episodeDetails?.still_path, "original") : undefined,
-    poster: tmdbImage(details?.poster_path, "w780"),
+    poster: tmdbImage(artwork?.posterPath, "w780"),
     logo: entry.logo ?? sanitizeImportedLogo(tmdbImage(logoPath, "w500")),
     episodeName: episodeDetails?.name ?? entry.episodeName,
   };
@@ -1041,15 +1042,6 @@ function titleSearchVariants(title: string) {
 
 function tmdbImage(path: string | undefined | null, size: "original" | "w780" | "w500") {
   return path ? `${TMDB_IMG_URL}/${size}${path}` : undefined;
-}
-
-function pickTmdbLogoPath(logos: unknown) {
-  if (!Array.isArray(logos)) return undefined;
-  const logo = logos.find((item: any) => item?.iso_639_1 === "es" && typeof item?.file_path === "string")
-    ?? logos.find((item: any) => item?.iso_639_1 === "en" && typeof item?.file_path === "string")
-    ?? logos.find((item: any) => item?.iso_639_1 === null && typeof item?.file_path === "string")
-    ?? logos.find((item: any) => typeof item?.file_path === "string");
-  return logo?.file_path;
 }
 
 function sanitizeImportedLogo(value: string | undefined) {

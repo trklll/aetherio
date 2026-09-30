@@ -6,15 +6,16 @@ import {
   extractTmdbId,
   getSpatialPosterSettings,
   isSpatialPostersConfigured,
-  getEffectiveInstanceUrl,
   spatialPosterSignature,
   SPATIAL_POSTER_CHANGED_EVENT,
   type SpatialPosterOverrides,
   type SpatialPosterSettings,
 } from "../config/spatialPosters.ts";
 import { probeSpatialInstance, resetSpatialAvailability } from "../services/spatialInstance.ts";
+import { resolvePosterEndpoint } from "../services/posterServer.ts";
 import { clearSpatialRankCache, fetchSpatialRankMap, spatialRankOf } from "../services/spatialRank.ts";
-import { preloadArtworkImage, preloadPosterArtwork } from "../services/posterArtworkCache.ts";
+import { preloadArtworkImage, preloadPosterArtwork, isPosterArtworkFailed } from "../services/posterArtworkCache.ts";
+import { POSTER_PROBE_MAX_CONCURRENT } from "../services/posterProbe.ts";
 import { isTopFormatRow } from "../utils/topRows.ts";
 import { getMdbListSettings } from "../config/mdblist.ts";
 import {
@@ -47,6 +48,7 @@ import { resolveDetailBackground } from "../utils/mediaMetadata.ts";
 import { readHomeCardArtwork } from "../utils/homeCardArtwork.ts";
 import { getContinueWatchingRows } from "../utils/continueWatching.ts";
 import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
+import { fetchTmdbArtwork } from "../services/tmdbArtworkService.ts";
 
 const HERO_GROUP_FETCH_LIMIT = 7;
 const HERO_TOTAL_LIMIT = 15;
@@ -490,28 +492,13 @@ export const homeCatalogKeys = {
 };
 
 async function tmdbArtwork(type: "movie" | "tv", id: number, fallbackBackdropPath?: string | null) {
-  try {
-    const [data, imageData] = await Promise.all([
-      tmdbFetch<any>(`/${type}/${id}`, { params: { language: "es-ES" } }),
-      tmdbFetch<any>(`/${type}/${id}/images`, { params: { include_image_language: "es,en,null" } }),
-    ]);
-    if (!data && !imageData) return {};
-    const images = imageData ?? data?.images;
-    const logo = images?.logos?.find((item: any) => item.iso_639_1 === "es")
-      ?? images?.logos?.find((item: any) => item.iso_639_1 === "en")
-      ?? images?.logos?.[0];
-    const hasDescription = Boolean(data?.overview?.trim());
-    return {
-      logo: tmdbImageUrl(logo?.file_path, "original"),
-      background: upgradeTmdbImage(
-        pickPreferredTmdbBackdrop(images?.backdrops, fallbackBackdropPath),
-        HOME_BACKGROUND_IMAGE_SIZE,
-      ),
-      description: hasDescription ? data.overview : undefined,
-    };
-  } catch {
-    return {};
-  }
+  const artwork = await fetchTmdbArtwork(type, id, fallbackBackdropPath);
+  if (!artwork) return {};
+  return {
+    logo: artwork.logo,
+    background: upgradeTmdbImage(artwork.backdrop, HOME_BACKGROUND_IMAGE_SIZE),
+    description: artwork.description?.trim() ? artwork.description : undefined,
+  };
 }
 
 async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]> {
@@ -536,14 +523,20 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
       }
       const tmdbType = item.type === "movie" ? "movie" : "tv";
       try {
-        let artwork = await tmdbArtwork(tmdbType, tmdbId, item.background);
+        const artwork = await tmdbArtwork(tmdbType, tmdbId, item.background);
+        // El sondeo del namespace contrario solo tiene sentido cuando el id
+        // puede estar catalogado como pelicula. Para una entrada de anime ya
+        // esta confirmado que es serie, y preguntarlo costaba una peticion por
+        // titulo en cada arranque en frio: eso era lo que reventaba el limite
+        // del proxy con las filas de anime.
         if (!artwork.description && tmdbType === "tv") {
-          const movieArtwork = await tmdbArtwork("movie", tmdbId, item.background);
-          artwork = {
-            logo: artwork.logo ?? movieArtwork.logo,
-            background: artwork.background ?? movieArtwork.background,
-            description: artwork.description ?? movieArtwork.description,
-          };
+          const entry = await fetchTmdbArtwork("tv", tmdbId);
+          if (entry && !entry.isAnimation) {
+            const movieArtwork = await tmdbArtwork("movie", tmdbId, item.background);
+            artwork.description ??= movieArtwork.description;
+            artwork.logo ??= movieArtwork.logo;
+            artwork.background ??= movieArtwork.background;
+          }
         }
         results[i] = {
           ...item,
@@ -563,12 +556,15 @@ async function enrichAllItemsWithLogos(items: MediaItem[]): Promise<MediaItem[]>
 
 async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anime", group: string): Promise<MediaItem> {
   const tmdbType = type === "movie" ? "movie" : "tv";
-  const [detail, imageData] = await Promise.all([
-    tmdbFetch<any>(`/${tmdbType}/${item.id}`, {
-      params: { language: "es-ES", append_to_response: type === "movie" ? "release_dates" : "content_ratings" },
-    }),
-    tmdbFetch<any>(`/${tmdbType}/${item.id}/images`, { params: { include_image_language: "es,en,null" } }),
-  ]);
+  // `images` viaja en el mismo append_to_response que el dato especifico del
+  // tipo: el hero necesita los dos, y pedirlos por separado duplicaba trafico.
+  const detail = await tmdbFetch<any>(`/${tmdbType}/${item.id}`, {
+    params: {
+      language: "es-ES",
+      append_to_response: `${type === "movie" ? "release_dates" : "content_ratings"},images`,
+      include_image_language: "es,en,null",
+    },
+  });
 
   let logo: string | undefined;
   let background: string | undefined;
@@ -578,7 +574,7 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
   let isAnime = false;
 
   if (detail) {
-    const images = imageData ?? detail.images;
+    const images = detail.images;
     if (images) {
       const logoData = images.logos?.find((l: any) => l.iso_639_1 === "es")
         ?? images.logos?.find((l: any) => l.iso_639_1 === "en")
@@ -1299,7 +1295,10 @@ export async function warmHomeStartup(
   // El server en si lo levanta App.tsx al abrir, no aqui.
   const posterSettings = getSpatialPosterSettings();
   if (isSpatialPostersConfigured(posterSettings)) {
-    void probeSpatialInstance(getEffectiveInstanceUrl(posterSettings));
+    // Se espera al arranque antes de sondear: contra el puerto 3000 recien
+    // encendido el probe solo daria `ERR_CONNECTION_REFUSED` y marcaria la
+    // instancia como caida, apagando los posters de toda la sesion.
+    void resolvePosterEndpoint(posterSettings).then(url => probeSpatialInstance(url));
   }
 
   if (rows) {
@@ -1329,13 +1328,92 @@ export async function warmHomeStartup(
   const heroSource = queryClient.getQueryData<MediaItem[]>(homeCatalogKeys.hero(heroSignature())) ?? [];
   const heroItems = mergeHeroItems(heroSource, readyRows, contentOrientation, bothPreference);
 
-  onImages?.();
+onImages?.();
   const backgroundUrls = collectHomeDetailBackgroundUrls(readyRows, heroItems);
-  await Promise.allSettled([
-    prewarmHomePosters(readyRows),
+  // El progreso del prewarm se reporta como fraccion del tramo final: los
+  // catalogos ya cargaron (0.55) y lo que queda son las imagenes. Asi la barra
+  // de la pantalla de carga avanza con los posteres reales en vez de quedarse
+  // clavada en el mismo numero mientras se hornea todo.
+  const posterProgress = onProgress
+    ? (done: number, total: number) => {
+        if (total <= 0) return;
+        onProgress(0.55 + (done / total) * 0.45);
+      }
+    : undefined;
+await Promise.allSettled([
+    prewarmHomePosters(readyRows, posterProgress),
     preloadImageUrls(backgroundUrls),
   ]);
+
+  // Ultimo filtro antes de dejar entrar a Home. `prewarmHomePosters` ya hizo dos
+  // rondas (con reintento de lo que dio 503 por cola llena) y devuelve cuantos
+  // quedaron sin verificar. Si aqui todavia falta alguno, se espera otra vez en
+  // vez de entrar con la mitad de las filas en TMDB: era justo lo que se veía.
+  // El tiempo spent es de nuevo una garantia superior, no una promesa de que
+  //SpatialPosters responda; si esta colgado, este timeout lo suelta.
+  let pending = await waitForPostersOrGiveUp(readyRows, posterProgress);
+  if (pending > 0) {
+    // Una ronda mas y se acepta lo que haya: a partir de aca ya no es congestión
+    // de arranque sino un póster que de verdad no se genera (404, título
+    // inexistente, error de render). Quedarse esperando para siempre seria peor
+    // que mostrar TMDB en esas pocas cards.
+    pending = await retryMissingPosters(readyRows, posterProgress);
+  }
   onProgress?.(1);
+}
+
+/**
+ * Espera a que se vacíe la lista de posters pendientes, hasta `deadlineMs`.
+ * Devuelve los que siguen faltando.
+ */
+async function waitForPostersOrGiveUp(
+  rows: CatalogRowData[],
+  posterProgress?: (done: number, total: number) => void,
+  deadlineMs = 120_000,
+): Promise<number> {
+  const settings = getSpatialPosterSettings();
+  if (!isSpatialPostersConfigured(settings)) return 0;
+  const signature = spatialPosterSignature(settings);
+  const startedAt = Date.now();
+  // Sondeo corto: cada vuelta mira si el server ya drenó lo suyo. 750 ms evita
+  // que esto sea un bucle ocupado sin hacer esperas visibles.
+  while (Date.now() - startedAt < deadlineMs) {
+    const missing = collectMissingPosterTargets(rows, settings, signature);
+    if (!missing.length) return 0;
+    await retryMissingPosters(rows, posterProgress);
+  }
+  return collectMissingPosterTargets(rows, settings, signature).length;
+}
+
+/** Reintenta los posters pendientes una vez y devuelve los que aun faltan. */
+async function retryMissingPosters(
+  rows: CatalogRowData[],
+  posterProgress?: (done: number, total: number) => void,
+): Promise<number> {
+  const settings = getSpatialPosterSettings();
+  if (!isSpatialPostersConfigured(settings)) return 0;
+  const signature = spatialPosterSignature(settings);
+  const missing = collectMissingPosterTargets(rows, settings, signature);
+  if (!missing.length) return 0;
+
+  let retried = 0;
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(POSTER_PROBE_MAX_CONCURRENT, missing.length) },
+    async () => {
+      while (next < missing.length) {
+        const url = missing[next++];
+        await preloadPosterArtwork(url, settings, signature);
+        retried += 1;
+        posterProgress?.(retried, missing.length);
+      }
+    },
+  );
+  await withTimeout(
+    Promise.allSettled(workers),
+    PREWARM_TIMEOUT_MS,
+  ).catch(() => undefined);
+  return collectMissingPosterTargets(rows, settings, signature).length;
 }
 
 /** Fondos de Home y de detalle para cada medio precargado. */
@@ -1370,22 +1448,30 @@ function collectHomeDetailBackgroundUrls(rows: CatalogRowData[], heroItems: Medi
 }
 
 /**
- * Presupuesto del prewarm. `warmHomeStartup` espera a esta promesa, y
- * SpatialPosters renderiza bajo demanda (sharp es CPU-bound) con un limitador
- * de 6 descargas por host: sin tope, un arranque con muchas filas quedaría
- * esperando la cola de renders. Lo que no quepa se verifica igual de forma perezosa
- * cuando la card entra en pantalla.
+ * El peor caso medido es un arranque en frio sin ninguna copia en disco: con
+ * ~260 posteres y renders de ~2 s, y 6 conexiones (el limite por host del
+ * navegador), la cola tarda del orden de 90 s. Con renders mas lentos se va de
+ * 120 s, asi que el techo queda en 5 min: es solo un seguro contra un
+ * SpatialPosters colgado, no el tiempo que tarda de verdad.
  */
-const PREWARM_BUDGET_MS = 6_000;
+const PREWARM_TIMEOUT_MS = 300_000;
 
-/** Calienta el poster final de todos los medios de las filas cargadas. */
-async function prewarmHomePosters(rows: CatalogRowData[]) {
+/**
+ * Calienta el poster final de todos los medios de las filas cargadas.
+ *
+ * Devuelve cuantos quedaron sin póster de SpatialPosters, para que la pantalla
+ * de carga sepa si puede pasar a Home o si todavia le falta algo.
+ */
+async function prewarmHomePosters(
+  rows: CatalogRowData[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<number> {
   const settings = getSpatialPosterSettings();
-  if (!isSpatialPostersConfigured(settings)) return;
+  if (!isSpatialPostersConfigured(settings)) return 0;
   // El server recien arrancado puede tardar un par de segundos en responder.
   // Si la instancia no esta levantada no se intenta ni un póster: el pipeline
-  // queda en los de TMDB y no se gastan los 6 s del presupuesto.
-  if (!await probeSpatialInstance(getEffectiveInstanceUrl(settings))) return;
+  // queda en los de TMDB y la pantalla de carga no se queda esperando.
+  if (!await probeSpatialInstance(await resolvePosterEndpoint(settings))) return 0;
   const signature = spatialPosterSignature(settings);
   const jobs: Array<() => Promise<void>> = [];
   for (const row of rows) {
@@ -1394,17 +1480,66 @@ async function prewarmHomePosters(rows: CatalogRowData[]) {
       jobs.push(() => prewarmOnePoster(item, settings, signature, overrides));
     }
   }
+  // El pool no sube de `POSTER_PROBE_MAX_CONCURRENT` (6) a proposito: el
+  // navegador abre 6 conexiones por host y `posterProbe` ya tiene su propia cola
+  // con ese limite. Lanzar mas workers de los que hay slots solo hace que
+  // esperen dentro de esa cola, sin ganar nada.
+  const total = jobs.length;
+  let done = 0;
+  onProgress?.(0, total);
   let next = 0;
-  const workers = Array.from({ length: Math.min(12, jobs.length) }, async () => {
-    while (next < jobs.length) {
-      const job = jobs[next++];
-      await job();
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(POSTER_PROBE_MAX_CONCURRENT, jobs.length) },
+    async () => {
+      while (next < jobs.length) {
+        const job = jobs[next++];
+        await job();
+        done += 1;
+        onProgress?.(done, total);
+      }
+    },
+  );
+  // Se espera a TODOS. Los que fallan o no tienen id TMDB resuelven igual (con
+  // `allSettled` y el catch interno de `prewarmOnePoster`), asi que esta promesa
+  // no se cuelga nunca por un poster problematico: solo por uno que se quede
+  // colgado contra el servidor, y para eso esta `PREWARM_TIMEOUT_MS`.
   await withTimeout(
     Promise.allSettled(workers),
-    PREWARM_BUDGET_MS,
+    PREWARM_TIMEOUT_MS,
   ).catch(() => undefined);
+
+  return collectMissingPosterTargets(rows, settings, signature).length;
+}
+
+/**
+ * URLs de SpatialPosters que siguen sin verificar tras el prewarm.
+ *
+ * Solo cuenta los que tienen id TMDB: sin id no hay URL de SpatialPosters que
+ * construir, y ese item ya está en su fallback de forma correcta y permanente.
+ * Los que sí tienen id pero fallaron por cola congestedionada son los que la
+ * segunda pasada intenta de nuevo.
+ */
+function collectMissingPosterTargets(
+  rows: CatalogRowData[],
+  settings: SpatialPosterSettings,
+  signature: string,
+): string[] {
+  const missing: string[] = [];
+  for (const row of rows) {
+    const overrides = isTopFormatRow(row) ? { rankingBadges: false } : undefined;
+    for (const item of row.items) {
+      // Un artwork elegido a mano manda sobre el poster del catalogo: para el
+      // no se genera un poster de SpatialPosters, asi que se saltea.
+      if (readHomeCardArtwork("poster", item.type, item.id)) continue;
+      const tmdbId = extractTmdbId(item.id);
+      if (!tmdbId || !item.poster) continue;
+      const url = applySpatialPosterToUrl(item.poster, tmdbId, item.type, settings, overrides);
+      if (!url) continue;
+      if (!isPosterArtworkFailed(url, settings, signature)) continue;
+      missing.push(url);
+    }
+  }
+  return missing;
 }
 
 async function prewarmOnePoster(

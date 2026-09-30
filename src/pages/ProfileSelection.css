@@ -6,6 +6,13 @@
   color: #fff;
 }
 
+/* El modo (Big Picture / normal) en esta page lo decide el dispositivo de
+   entrada activo, no la ruta: puede cambiar mientras el usuario mira la
+   pantalla. Por eso NO hay variantes `--big-picture` aquí — ni tamaños, ni gaps,
+   ni padding distintos. Ambas versiones renderizan exactamente lo mismo y el
+   cambio de modo es imperceptible; lo que sí cambia es el destino al elegir
+   perfil (/big-picture o /home) y el cursor. */
+
 .profile-selection-bg {
   position: fixed;
   inset: 0;
@@ -95,6 +102,87 @@
   font-weight: 800;
   letter-spacing: -0.02em;
   color: rgba(255, 255, 255, 0.9);
+}
+
+.profile-selection-page--welcoming .profile-selection-content {
+  gap: 0;
+}
+
+.profile-welcome-title {
+  max-width: min(92vw, 1100px);
+  margin-bottom: 0;
+  animation: profile-welcome-title-in 0.72s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.profile-selection-page--welcoming .profile-welcome-title {
+  margin: 0;
+}
+
+.profile-selection-page--welcoming .profile-preparing {
+  margin-top: 16px;
+}
+
+.profile-preparing {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  animation: profile-preparing-in 0.55s 0.2s ease both;
+}
+
+.profile-preparing-track {
+  width: min(220px, 48vw);
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.profile-preparing-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.96), #fff 82%, rgba(255, 255, 255, 0.92));
+  box-shadow: 0 0 16px rgba(255, 255, 255, 0.2);
+  transition: width 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: width;
+}
+
+.profile-preparing p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+@keyframes profile-preparing-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes profile-welcome-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-welcome-title,
+  .profile-preparing {
+    animation: none;
+  }
+
+  .profile-preparing-track span {
+    transition: none;
+  }
 }
 
 @media (min-width: 768px) {
@@ -193,14 +281,14 @@
 }
 
 .profile-card-add .profile-card-avatar {
-  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border: 0;
   background: rgba(255, 255, 255, 0.04);
   color: rgba(255, 255, 255, 0.4);
 }
 
 .profile-card-add:hover .profile-card-avatar,
 .profile-card-add:focus-visible .profile-card-avatar {
-  border-color: rgba(255, 255, 255, 0.4);
+  border: 0;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.7);
   box-shadow: none;

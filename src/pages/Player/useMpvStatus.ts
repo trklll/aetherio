@@ -24,6 +24,8 @@ interface UseMpvStatusArgs {
   setMpvTracks: Dispatch<SetStateAction<MpvTrack[]>>;
   setMpvVideoWidth?: Dispatch<SetStateAction<number | null>>;
   setMpvVideoHeight?: Dispatch<SetStateAction<number | null>>;
+  setMpvEofReached?: Dispatch<SetStateAction<boolean>>;
+  setMpvDemuxerCacheDuration?: Dispatch<SetStateAction<number>>;
   setSelectedMpvSubtitle: Dispatch<SetStateAction<string>>;
   setSelectedMpvAudio: Dispatch<SetStateAction<string>>;
   setSelectedSpeed: Dispatch<SetStateAction<string>>;
@@ -31,6 +33,7 @@ interface UseMpvStatusArgs {
   setChapterOptions: Dispatch<SetStateAction<ChapterOption[]>>;
   setMpvStatus?: Dispatch<SetStateAction<string | null>>;
   onPlaybackRestart?: () => void;
+  onThroughputStatus?: (status: MpvStatusSnapshot) => void;
   isP2pStream?: boolean;
   enabled?: boolean;
 }
@@ -49,6 +52,8 @@ export function useMpvStatus({
   setMpvTracks,
   setMpvVideoWidth,
   setMpvVideoHeight,
+  setMpvEofReached,
+  setMpvDemuxerCacheDuration,
   setSelectedMpvSubtitle,
   setSelectedMpvAudio,
   setSelectedSpeed,
@@ -56,6 +61,7 @@ export function useMpvStatus({
   setChapterOptions,
   setMpvStatus,
   onPlaybackRestart,
+  onThroughputStatus,
   isP2pStream = false,
   enabled = true,
 }: UseMpvStatusArgs) {
@@ -64,6 +70,7 @@ export function useMpvStatus({
 
     function applyStatus(status: MpvStatusSnapshot) {
       if (cancelled) return;
+      onThroughputStatus?.(status);
 
       const nextTime = Number(status.timePos ?? 0);
       const nextDuration = Number(status.duration ?? 0);
@@ -110,6 +117,17 @@ export function useMpvStatus({
       if (setMpvVideoHeight) {
         const h = typeof status.videoHeight === "number" && Number.isFinite(status.videoHeight) ? status.videoHeight : null;
         setMpvVideoHeight(prev => (prev === h ? prev : h));
+      }
+      // Solo se propagan en directo: son las dos senales que definen el borde y
+      // el final de una transmision, irrelevantes en VOD.
+      if (setMpvEofReached) {
+        const eof = Boolean(status.eofReached);
+        setMpvEofReached(prev => (prev === eof ? prev : eof));
+      }
+      if (setMpvDemuxerCacheDuration) {
+        const cached = Number(status.demuxerCacheDuration ?? 0);
+        const next = Number.isFinite(cached) ? Math.max(0, cached) : 0;
+        setMpvDemuxerCacheDuration(prev => (Math.abs(prev - next) < 0.2 ? prev : next));
       }
 
       const selectedSubtitleTrack = (status.tracks ?? []).find(track => {
@@ -158,6 +176,8 @@ export function useMpvStatus({
       setMpvTracks([]);
       setMpvVideoWidth?.(null);
       setMpvVideoHeight?.(null);
+      setMpvEofReached?.(false);
+      setMpvDemuxerCacheDuration?.(0);
       setChapterOptions([]);
       setMpvFileLoaded(false);
       setMpvPausedForCache(false);
@@ -203,5 +223,5 @@ export function useMpvStatus({
       void unlistenPromise.then(unlisten => unlisten());
       resetMpvState();
     };
-  }, [enabled, isP2pStream]);
+  }, [enabled, isP2pStream, onThroughputStatus]);
 }

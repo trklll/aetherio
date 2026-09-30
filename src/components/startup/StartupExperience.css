@@ -11,7 +11,7 @@
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.045), transparent 34%),
-    #151515;
+    #1c1c1c;
   color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
 }
@@ -37,7 +37,7 @@
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.055), transparent 35%),
-    #0b0b0c;
+    #1c1c1c;
   color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
   user-select: none;
@@ -65,7 +65,7 @@
   border-radius: 22px;
   background:
     radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.05), transparent 34%),
-    #0b0b0c;
+    #1c1c1c;
   box-shadow: 0 34px 90px rgba(0, 0, 0, 0.54), 0 2px 12px rgba(0, 0, 0, 0.44);
 }
 

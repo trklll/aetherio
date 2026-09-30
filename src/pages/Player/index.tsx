@@ -24,32 +24,49 @@ import {
   type ContinueWatchingEntry,
 } from "../../utils/continueWatching";
 import { sanitizeLogoUrl } from "../../utils/artwork";
+import {
+  accumulateThroughput,
+  createThroughputAccumulator,
+  isNetworkSampleEligible,
+  recordConnectionSpeedSample,
+  type ThroughputAccumulator,
+} from "../../utils/connectionSpeed";
 import { isPlayableMediaStream } from "../../utils/playableMedia";
+import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking";
 import { readDetailMediaMeta, resolveDetailBackground } from "../../utils/mediaMetadata";
 import { sendTraktScrobble, syncTraktProgressEntry } from "../../trakt";
 import {
   getNativePlaybackStatus,
   getPlaybackCapabilities,
-  isAndroidRuntime,
+  invokeCommand,
+  isTauriRuntime,
   openExternalUrl,
+  sampleNativeVideoLightness,
   sendNativePlaybackCommand,
   setNativeMpvVideoProfile,
   setNativeAutocrop,
   setNativeMpvSurfaceVisible,
   stopNativePlayback,
 } from "../../runtime/platform";
-import type { ChapterOption, MpvTrack, VideoScaleMode } from "./types";
+import type { ChapterOption, MpvStatusSnapshot, MpvTrack, VideoScaleMode } from "./types";
 import EpisodePanel from "./EpisodePanel";
 import SourcePanel from "./SourcePanel";
 import PlayerControls from "./PlayerControls";
+import { sampleImageLightness, shouldUseDarkPlayerText } from "./playerContrast.ts";
 import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
+import { LiveBadge, LiveEndedNotice } from "./LiveOverlays";
 import PlayerActionFeedback, { type PlayerActionFeedbackData, type PlayerFeedbackKind } from "./PlayerActionFeedback";
+import PlayerContentAdvisories, { useContentAdvisories } from "./PlayerContentAdvisories";
+import { buildSeekrContent } from "./seekPreview/seekr";
+import { seekrLog } from "./seekPreview/seekrDebug";
 import UpNext from "../../components/upnext/UpNext";
 import { useRelatedRecommendation } from "../../hooks/useRelatedRecommendation";
 import { useControlsVisibility } from "./useControlsVisibility";
 import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
+import { usePlayerGamepad } from "./usePlayerGamepad";
 import { useMpvStatus } from "./useMpvStatus";
+import { useLivePlayback } from "./useLivePlayback";
 import { useSkipIntro } from "./useSkipIntro";
 import { shouldShowMovieRecommendation, shouldShowNextEpisodeCard } from "./nextEpisodeRules";
 import { useParty } from "../../party/PartyContext";
@@ -62,8 +79,10 @@ import {
   SUBTITLE_DELAY_MAX_MS,
   SUBTITLE_DELAY_MIN_MS,
 } from "./subtitleSync/config";
-import { formatAutoSyncDelay } from "./subtitleSync/parser";
+import { formatAutoSyncDelay, serializeWebVttCues } from "./subtitleSync/parser";
+import type { AutoSubtitleSyncPlan } from "./subtitleSync/autoSync";
 import { getSavedSubtitleDelayMs, saveSubtitleDelayMs } from "./subtitleSync/storage";
+import { buildAutoSyncTitleKey, clearAutoSyncTitleMode } from "./subtitleSync/autoSyncPreference";
 import { useSubtitleSync } from "./subtitleSync/useSubtitleSync";
 import {
   VIDEO_ENHANCEMENT_OPTIONS,
@@ -75,6 +94,7 @@ import { useDiscordPresence } from "../../hooks/useDiscordPresence";
 import {
   AUTO_NEXT_SOURCE_KEY,
   AVAILABLE_STREAMS_KEY,
+  DIRECT_STREAM_FALLBACKS_KEY,
   SELECTED_ENGINE_KEY,
   SELECTED_MEDIA_META_KEY,
   SELECTED_PLAYBACK_OVERRIDES_KEY,
@@ -83,9 +103,11 @@ import {
   formatTime,
   getPlaybackTarget,
   getStreamKind,
+  isLocalPlaybackStream,
   openExternal,
   playbackOverrideQueryKey,
 } from "./utils";
+import { buildDetailPath, buildEpisodePath, buildPlayerBackPath, buildPlayerPath, isBigPictureLocation } from "../../utils/bigPictureDetail";
 
 const DEBUG_AUTOPLAY = false;
 const DEBUG_AUTO_LANG = true;
@@ -95,7 +117,6 @@ const P2P_STARTUP_GATE_TIMEOUT_MS = 3500;
 const LOAD_FAILURE_TIMEOUT_MS = 12_000;
 const P2P_LOAD_FAILURE_TIMEOUT_MS = 180000;
 const DIRECT_FIRST_FRAME_TIMEOUT_MS = 8_000;
-const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
 // Party: ventana anti-eco tras aplicar una acción remota, salto mínimo que
 // cuenta como seek manual, tolerancia de deriva y periodo de re-sync.
 const PARTY_ECHO_WINDOW_MS = 1500;
@@ -205,8 +226,13 @@ export default function PlayerPage() {
   const nextEpisodePromptKeyRef = useRef("");
   const directFallbacksRef = useRef<MediaStream[]>([]);
   const attemptedDirectTargetsRef = useRef(new Set<string>());
+  const skipButtonRef = useRef<HTMLButtonElement | null>(null);
+  const fallbackRetryButtonRef = useRef<HTMLButtonElement | null>(null);
+  const autoSubtitlePathRef = useRef("");
+  const throughputAccumulatorRef = useRef<ThroughputAccumulator>(createThroughputAccumulator(""));
 
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const isLocalPlayback = isLocalPlaybackStream(stream);
   const isP2pStream = getStreamKind(stream) === "p2p";
   const startupGateTimeoutMs = isP2pStream
     ? P2P_STARTUP_GATE_TIMEOUT_MS
@@ -216,13 +242,19 @@ export default function PlayerPage() {
   const [selectedMediaLogo, setSelectedMediaLogo] = useState("");
   const [selectedMediaPoster, setSelectedMediaPoster] = useState("");
   const [selectedResumeTime, setSelectedResumeTime] = useState(0);
+  const [lightPlayerBackground, setLightPlayerBackground] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [manualPaused, setManualPaused] = useState(false);
   const playbackPreferences = usePlaybackPreferences();
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(0.86);
-  const { controlsVisible, wakeControls, holdControls, releaseControls } = useControlsVisibility(3000);
+  const { controlsVisible, setControlsVisible, wakeControls, holdControls, releaseControls } = useControlsVisibility(3000);
+  // Barra abierta por el mando (stick derecho): el stick izquierdo navega por
+  // ella y B sale de la barra sin salir del reproductor. La zona es explícita
+  // (timeline o row de botones) para no depender del foco DOM.
+  const [gamepadBarMode, setGamepadBarMode] = useState(false);
+  const [barZone, setBarZone] = useState<"timeline" | "buttons">("timeline");
   // OSD central: iconos de play/pausa/seek/volumen SIN despertar la barra (§1 respuesta inmediata).
   const [actionFeedback, setActionFeedback] = useState<PlayerActionFeedbackData | null>(null);
   const actionFeedbackIdRef = useRef(0);
@@ -258,9 +290,14 @@ export default function PlayerPage() {
   const [mpvTracks, setMpvTracks] = useState<MpvTrack[]>([]);
   const [mpvVideoWidth, setMpvVideoWidth] = useState<number | null>(null);
   const [mpvVideoHeight, setMpvVideoHeight] = useState<number | null>(null);
+  const [mpvEofReached, setMpvEofReached] = useState(false);
+  const [mpvDemuxerCacheDuration, setMpvDemuxerCacheDuration] = useState(0);
   const [chapterIndex, setChapterIndex] = useState<number | null>(null);
   const [chapterOptions, setChapterOptions] = useState<ChapterOption[]>([]);
   const [activeSidePanel, setActiveSidePanel] = useState<"episodes" | "sources" | null>(null);
+  // Menú flotante de la barra (audio/subtítulos/velocidad/mejoras/party),
+  // elevado desde PlayerControls para que el mando (X) lo abra de forma tipada.
+  const [playerMenu, setPlayerMenu] = useState<string | null>(null);
   const [availableStreams, setAvailableStreams] = useState<MediaStream[]>([]);
   const [showUpNext, setShowUpNext] = useState(false);
   const upNextShownKeyRef = useRef("");
@@ -317,6 +354,7 @@ export default function PlayerPage() {
   const subtitleSyncNoticeTimerRef = useRef<number | null>(null);
   const [videoFilterNotice, setVideoFilterNotice] = useState("");
   const videoFilterNoticeTimerRef = useRef<number | null>(null);
+  const [repeatLocal, setRepeatLocal] = useState(false);
   const localPlaybackKey = params.get("local");
 
   const query = useMemo(() => buildQuery(params), [
@@ -325,14 +363,51 @@ export default function PlayerPage() {
   params.get("season"),
   params.get("ep"),
   ]);
+  const seekrContent = useMemo(() => {
+    const content = buildSeekrContent(query);
+    // Diagnostico: el id del catalogo es lo que decide si Seekr puede preguntar
+    // algo. Si el prefijo no es tmdb/imdb, la API no tiene forma de saber que
+    // pelicula es.
+    seekrLog("query del reproductor", {
+      tipo: query?.type ?? "(null)",
+      id: query?.id ?? "(null)",
+      temporada: query?.season ?? "-",
+      capitulo: query?.episode ?? "-",
+      reconocible: content ? "si" : "no",
+    });
+    return content;
+  }, [query]);
   const { episodeOptions, seriesLogoUrl, nextSeasonEpisode } = useEpisodeMetadata(query);
   const { addonLogoUrl, detailLogoUrl } = usePlayerLogos(query, stream);
   const safeStream = stream ?? null;
   const isIframeStream = safeStream?.behaviorHints?.scraperPlayback === "iframe";
-  const androidPlayback = isAndroidRuntime();
+  // Variante visual Big Picture + gestos de mando: solo en /big-picture/player.
+  const isBigPicturePlayer = isBigPictureLocation();
   const trailerRequested = params.get("trailer") === "1";
   const isTrailerStream = trailerRequested || Boolean(safeStream?.ytId);
-  const metadataQuery = isTrailerStream ? null : query;
+  // Un directo no tiene duracionKnown, no se reanuda y no tiene capitulos: todo
+  // el codigo de VOD (progress, creditos, intro/outro, seekr) queda colgando de
+  // `duration`, asi que se apaga por flag en vez de por numero para no dejar
+  // ninguno de esos caminos activo por accidente.
+  const isLiveStream = safeStream?.behaviorHints?.live === true || query?.type === "live";
+  const metadataQuery = isTrailerStream || isLiveStream ? null : query;
+  const livePlayback = useLivePlayback({
+    enabled: isLiveStream,
+    timePos: currentTime,
+    demuxerCacheDuration: mpvDemuxerCacheDuration,
+    eofReached: mpvEofReached,
+    playing,
+  });
+  const contentAdvisories = useContentAdvisories(metadataQuery, safeStream);
+  const [contentAdvisoriesVisible, setContentAdvisoriesVisible] = useState(false);
+  const contentAdvisoriesShownKeyRef = useRef("");
+  const contentAdvisoriesKey = query
+    ? `${query.type}:${query.id}:${query.season ?? ""}:${query.episode ?? ""}`
+    : "";
+  const completeContentAdvisories = useCallback(() => {
+    setContentAdvisoriesVisible(false);
+    if (contentAdvisoriesKey) contentAdvisoriesShownKeyRef.current = contentAdvisoriesKey;
+  }, [contentAdvisoriesKey]);
   const originalLanguage = useOriginalLanguage(metadataQuery, safeStream);
   const resumeEntry = useMemo(() => getExactResumeForQuery(query), [query]);
   const savedAudioSelection = useMemo(() => getContinueWatchingAudioSelection(query), [query]);
@@ -350,12 +425,64 @@ export default function PlayerPage() {
     setSubtitleDelayMs(getSavedSubtitleDelayMs(query));
   }, [query]);
 
-  const hasMpvError = !isLeavingPlayer && !androidPlayback && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
-  const nativeSurfaceVisible = !androidPlayback && !isIframeStream && Boolean(stream && playbackStarted && !hasMpvError);
+  const hasMpvError = !isLeavingPlayer && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
+  const nativeSurfaceVisible = !isIframeStream && Boolean(stream && playbackStarted && !hasMpvError);
 
   const currentEpisode = query?.season && query?.episode
     ? episodeOptions.find(ep => ep.episode === query.episode) ?? null
     : null;
+
+  const streamBehaviorBackground = typeof safeStream?.behaviorHints?.background === "string" ? safeStream.behaviorHints.background : "";
+  const streamBehaviorPoster = typeof safeStream?.behaviorHints?.poster === "string" ? safeStream.behaviorHints.poster : "";
+  const sharedArtwork = selectedMediaBackground
+    || resumeEntry?.background
+    || resumeEntry?.poster
+    || streamBehaviorBackground
+    || streamBehaviorPoster;
+
+  const contrastArtwork = ensureOriginalTmdbImage(
+    query?.type === "movie"
+      ? sharedArtwork
+      : currentEpisode?.still || sharedArtwork,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    if (!isBigPicturePlayer) {
+      setLightPlayerBackground(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLightPlayerBackground(false);
+    if (contrastArtwork) {
+      void sampleImageLightness(contrastArtwork).then(lightness => {
+        if (!cancelled) setLightPlayerBackground(shouldUseDarkPlayerText(lightness));
+      });
+    }
+
+    if (nativeSurfaceVisible) {
+      const sampleFrame = async () => {
+        try {
+          const lightness = await sampleNativeVideoLightness();
+          if (!cancelled && lightness) {
+            setLightPlayerBackground(shouldUseDarkPlayerText(lightness));
+          }
+        } catch {
+          // Artwork remains the fallback when native frame capture is unavailable.
+        }
+        if (!cancelled) timer = window.setTimeout(sampleFrame, 1200);
+      };
+      timer = window.setTimeout(sampleFrame, 500);
+    }
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [contrastArtwork, isBigPicturePlayer, nativeSurfaceVisible]);
 
   useEffect(() => {
     leavingPlayerRef.current = isLeavingPlayer;
@@ -376,14 +503,13 @@ export default function PlayerPage() {
   }, [nativeSurfaceVisible]);
 
   useEffect(() => {
-    if (androidPlayback) return;
     void setNativeMpvSurfaceVisible(nativeSurfaceVisible).catch(error => {
       console.warn("[AETHERIO:PLAYER:SURFACE] visibility sync failed", String(error));
     });
     return () => {
       void setNativeMpvSurfaceVisible(false).catch(() => undefined);
     };
-  }, [androidPlayback, nativeSurfaceVisible]);
+  }, [nativeSurfaceVisible]);
 
   function debugLog(event: string, extra?: Record<string, unknown>) {
     if (!DEBUG_AUTOPLAY) return;
@@ -442,11 +568,11 @@ export default function PlayerPage() {
     try {
       const parsedAvailable = savedAvailableStreams ? JSON.parse(savedAvailableStreams) as unknown : [];
       setAvailableStreams(Array.isArray(parsedAvailable)
-        ? parsedAvailable.filter((candidate): candidate is MediaStream => (
+        ? sortStreamsForPlayback(parsedAvailable.filter((candidate): candidate is MediaStream => (
             Boolean(candidate)
             && typeof candidate === "object"
             && isPlayableMediaStream(candidate as MediaStream)
-          ))
+          )))
         : []);
     } catch {
       setAvailableStreams([]);
@@ -528,6 +654,24 @@ export default function PlayerPage() {
       .catch(() => setMpvBundled(false));
   }, []);
 
+  const handleMpvThroughputStatus = useCallback((status: MpvStatusSnapshot) => {
+    const sessionKey = stream?.id || stream?.url || "none";
+    if (isP2pStream || !isNetworkSampleEligible(stream?.url)) {
+      throughputAccumulatorRef.current = createThroughputAccumulator(sessionKey);
+      return;
+    }
+    const result = accumulateThroughput(throughputAccumulatorRef.current, {
+      sessionKey,
+      at: Date.now(),
+      fileLoaded: Boolean(status.fileLoaded),
+      idle: status.demuxerCacheIdle !== false,
+      bytesPerSecond: Number(status.cacheSpeedBytesPerSecond ?? 0),
+      positionSeconds: Number(status.timePos ?? 0),
+    });
+    throughputAccumulatorRef.current = result.state;
+    if (result.completedSample) recordConnectionSpeedSample(result.completedSample);
+  }, [isP2pStream, stream?.id, stream?.url]);
+
   useMpvStatus({
     lastMpvFileLoadedRef,
     lastMpvCacheRef,
@@ -547,6 +691,8 @@ export default function PlayerPage() {
     setMpvTracks,
     setMpvVideoWidth,
     setMpvVideoHeight,
+    setMpvEofReached,
+    setMpvDemuxerCacheDuration,
     setSelectedMpvSubtitle: next => {
       setSelectedMpvSubtitle(prev => {
         const nextValue = typeof next === "function" ? next(prev) : next;
@@ -579,8 +725,9 @@ export default function PlayerPage() {
       setSeekBuffering(false);
       setStalledPlayback(false);
     },
+    onThroughputStatus: handleMpvThroughputStatus,
     isP2pStream,
-    enabled: !androidPlayback && !isIframeStream,
+    enabled: !isIframeStream,
   });
 
   useEffect(() => {
@@ -592,7 +739,7 @@ export default function PlayerPage() {
   }, [selectedMpvSubtitle]);
 
   useEffect(() => {
-    if (mpvFileLoaded) {
+    if (mpvFileLoaded && isTauriRuntime() && !isIframeStream) {
       mpvFileLoadedAtRef.current = Date.now();
       startupKickCountRef.current = 0;
       window.performance?.mark?.("player:file_loaded");
@@ -624,7 +771,19 @@ export default function PlayerPage() {
           setMpvStatus(`Mejoras de vídeo: ${String(error)}`);
         });
     }
-  }, [mpvFileLoaded, playbackPreferences.hardwareDecoding, selectedVideoProfile, videoScaleMode, volume]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- el volumen se setea por separado; re-aplicar el perfil por cada tick del slider era un bug.
+  }, [mpvFileLoaded, playbackPreferences.hardwareDecoding, selectedVideoProfile, videoScaleMode]);
+
+  // Repetir (loop): solo para archivos locales reproducidos con MPV.
+  useEffect(() => {
+    if (!isLocalPlayback) return;
+    if (!mpvFileLoaded) return;
+    void sendMpvCommand(["set_property", "loop-file", repeatLocal ? "inf" : "no"]);
+  }, [isLocalPlayback, mpvFileLoaded, repeatLocal]);
+
+  useEffect(() => {
+    if (!isLocalPlayback) setRepeatLocal(false);
+  }, [isLocalPlayback]);
 
   const applySubtitleSettings = useCallback((input?: {
     delayMs?: number;
@@ -658,11 +817,8 @@ export default function PlayerPage() {
     window.setTimeout(() => applySubtitleSettings(), 160);
   }, [applySubtitleSettings, mpvTracks]);
 
-  const handleSubtitleSyncApply = useCallback((delayMs: number) => {
-    setSubtitleDelayMs(delayMs);
-    applySubtitleSettings({ delayMs });
-    saveSubtitleDelayMs(query, delayMs);
-    setSubtitleSyncNotice(`Sync aplicado: ${formatAutoSyncDelay(delayMs)}`);
+  const showSubtitleSyncNotice = useCallback((message: string) => {
+    setSubtitleSyncNotice(message);
     if (subtitleSyncNoticeTimerRef.current !== null) {
       window.clearTimeout(subtitleSyncNoticeTimerRef.current);
     }
@@ -670,7 +826,31 @@ export default function PlayerPage() {
       subtitleSyncNoticeTimerRef.current = null;
       setSubtitleSyncNotice("");
     }, 2400);
-  }, [applySubtitleSettings, query]);
+  }, []);
+
+  const handleSubtitleSyncApply = useCallback((delayMs: number) => {
+    setSubtitleDelayMs(delayMs);
+    applySubtitleSettings({ delayMs });
+    saveSubtitleDelayMs(query, delayMs);
+    showSubtitleSyncNotice(`Sync aplicado: ${formatAutoSyncDelay(delayMs)}`);
+  }, [applySubtitleSettings, query, showSubtitleSyncNotice]);
+
+  const handleAutoSubtitleSyncApply = useCallback(async (plan: AutoSubtitleSyncPlan) => {
+    if (plan.mode === "delay") {
+      handleSubtitleSyncApply(plan.delayMs);
+      return;
+    }
+    if (plan.mode !== "retime") throw new Error("No se encontró una sincronización segura.");
+    const path = await invokeCommand<string>("cache_subtitle_text", {
+      text: serializeWebVttCues(plan.cues),
+    });
+    autoSubtitlePathRef.current = path;
+    setSubtitleDelayMs(0);
+    applySubtitleSettings({ delayMs: 0 });
+    saveSubtitleDelayMs(query, 0);
+    await sendMpvCommand(["sub-add", path, "select", "Aetherio Auto Sync", "und"]);
+    showSubtitleSyncNotice(`Auto Sync aplicado · ${Math.round(plan.confidence * 100)}%`);
+  }, [applySubtitleSettings, handleSubtitleSyncApply, query, showSubtitleSyncNotice]);
 
   useEffect(() => {
     if (!mpvFileLoaded) return;
@@ -968,10 +1148,15 @@ export default function PlayerPage() {
     return [...internal, ...external];
   }, [allSubtitles, mpvTracks]);
 
+  const subtitleTitleKey = useMemo(() => buildAutoSyncTitleKey(query), [query]);
+
   const subtitleSync = useSubtitleSync({
     selectedSubtitleValue: selectedMpvSubtitle,
+    subtitleSources: allSubtitles,
     streamUrl: stream?.url ?? null,
     streamHeaders: stream?.behaviorHints?.headers as Record<string, string> | undefined,
+    titleKey: subtitleTitleKey,
+    autoSyncMode: playbackPreferences.autoSubtitleSync,
     getPositionMs: async () => {
       try {
         const status = await getNativePlaybackStatus();
@@ -981,6 +1166,7 @@ export default function PlayerPage() {
       }
     },
     onApplyDelay: handleSubtitleSyncApply,
+    onApplyPlan: handleAutoSubtitleSyncApply,
   });
 
   useEffect(() => {
@@ -1040,7 +1226,7 @@ export default function PlayerPage() {
       onClick: () => {
         if (item.episode === query?.episode) return;
         void stopNativePlayback().finally(() => {
-          navigate(`/episode?type=${query?.type}&id=${encodeURIComponent(query?.id ?? "")}&season=${item.season}&ep=${item.episode}`);
+          navigate(buildEpisodePath(`type=${query?.type}&id=${encodeURIComponent(query?.id ?? "")}&season=${item.season}&ep=${item.episode}`));
         });
       },
     }))
@@ -1199,6 +1385,10 @@ export default function PlayerPage() {
         setVideoFilterNotice("");
       }, 2600);
     };
+    if (!isTauriRuntime() || isIframeStream) {
+      showNotice(`Mejora guardada: ${label} (requiere el reproductor MPV nativo)`);
+      return;
+    }
     if (!mpvFileLoaded) {
       showNotice(`Mejora guardada: ${label} (se aplicará al cargar)`);
       return;
@@ -1221,45 +1411,31 @@ export default function PlayerPage() {
 
   async function launchMpv(showOpening = true) {
     if (!stream || isIframeStream) return;
-    if (showOpening) setMpvStatus(androidPlayback
-      ? "Abriendo reproductor Android TV..."
-      : isP2pStream
-        ? "Preparando stream P2P..."
-        : "Abriendo MPV...");
+    if (showOpening) setMpvStatus(isP2pStream
+      ? "Preparando stream P2P..."
+      : "Abriendo MPV...");
     launchStartedAtRef.current = Date.now();
     // Lobby Party: el medio se precarga en pausa (hold) y sin reanudar.
     const lobbyHold = partyLobbyRef.current;
-    const resumeStartTime = lobbyHold ? 0 : Math.max(resumeSeekTargetRef.current, getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
-    const { error } = await openExternal(stream, undefined, resumeStartTime, query?.episode);
+    const resumeStartTime = lobbyHold || isLiveStream
+      ? 0
+      : Math.max(resumeSeekTargetRef.current, getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
+    const { error } = await openExternal(stream, undefined, resumeStartTime, query?.episode, isLiveStream);
     setMpvReadyForCommands(!error);
     setPlaying(false);
     setManualPaused(lobbyHold);
     manualPausedRef.current = lobbyHold;
-    setMpvStatus(error ? `${androidPlayback ? "Android TV" : "MPV"} no inicio: ${error}` : null);
+    setMpvStatus(error ? `MPV no inicio: ${error}` : null);
     if (!error) {
-      if (androidPlayback) {
-        if (lobbyHold) {
-          startupGateActiveRef.current = false;
-          setMpvFileLoaded(true);
-        } else {
-          startupGateActiveRef.current = false;
-          setMpvFileLoaded(true);
-          setPlaybackStarted(true);
-          setPlaying(true);
-        }
-      } else {
-        void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current || lobbyHold]);
-        applyVideoScale(videoScaleMode);
-      }
+      void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current || lobbyHold]);
+      applyVideoScale(videoScaleMode);
     }
   }
 
   async function retryMpvPlayback() {
-    setMpvStatus(androidPlayback
-      ? "Reiniciando reproductor Android TV..."
-      : isP2pStream
-        ? "Reiniciando stream P2P..."
-        : "Reiniciando MPV...");
+    setMpvStatus(isP2pStream
+      ? "Reiniciando stream P2P..."
+      : "Reiniciando MPV...");
     await launchMpv(false);
   }
 
@@ -1270,7 +1446,7 @@ export default function PlayerPage() {
       debugLog("mpv_command ok", { command });
     } catch (error) {
       debugLog("mpv_command error", { command, error: String(error) });
-      if (!androidPlayback) setMpvStatus(`MPV: ${String(error)}`);
+      setMpvStatus(`MPV: ${String(error)}`);
     }
   }
 
@@ -1288,37 +1464,34 @@ export default function PlayerPage() {
   }
 
   function getStreamsPath() {
-    if (!query?.type || !query?.id) return null;
-    const next = new URLSearchParams({ type: query.type, id: query.id });
-    if (query.season) next.set("season", String(query.season));
-    if (query.episode) next.set("ep", String(query.episode));
-    next.set("fromPlayer", "1");
-    return `/episode?${next.toString()}`;
+    // Delega en el helper compartido: mismo destino que el shell y Big Picture
+    // para el gesto de atrás, incluido `fromPlayer=1` (desactiva el
+    // auto-resolve y revela el picker manual).
+    return buildPlayerBackPath(params.toString());
   }
 
   function getDetailPath() {
     if (!query?.type || !query?.id) return null;
-    return `/detail/${encodeURIComponent(query.type)}/${encodeURIComponent(query.id)}`;
+    return buildDetailPath(query.type, query.id);
   }
 
   function goBack() {
     leavingPlayerRef.current = true;
     setIsLeavingPlayer(true);
     setMpvStatus(null);
-    // Atrás SIEMPRE lleva a la page detail del medio que se estaba viendo
-    // (no a pickstreams), tal como pide la UX.
     const detailPath = getDetailPath();
     const streamsPath = getStreamsPath();
+    // Todavía en la pantalla de carga (nada ha empezado a reproducirse): atrás
+    // devuelve al picker de fuentes del mismo medio, no a la ficha. Es el mismo
+    // destino que usan el shell y Big Picture (buildPlayerBackPath) para que los
+    // tres caminos coincidan. Con reproducción ya iniciada, la UX pide la ficha.
+    const target = !playbackStarted ? (streamsPath ?? detailPath) : (detailPath ?? streamsPath);
     saveCurrentProgressNow("goBack");
     sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
     void stopNativePlayback()
       .finally(() => {
-        if (detailPath) {
-          navigate(detailPath, { replace: true });
-          return;
-        }
-        if (streamsPath) {
-          navigate(streamsPath, { replace: true });
+        if (target) {
+          navigate(target, { replace: true });
           return;
         }
         navigate(-1);
@@ -1389,7 +1562,7 @@ export default function PlayerPage() {
     sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
     void stopNativePlayback().finally(() => {
       const autoplay = direction === "next" ? "&autoplay=1" : "";
-      navigate(`/episode?type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}${autoplay}`);
+      navigate(buildEpisodePath(`type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}${autoplay}`));
     });
   }
 
@@ -1473,7 +1646,9 @@ export default function PlayerPage() {
     resumeSeekAttemptsRef.current = 0;
     // Lobby Party: abrir en 0 (hold), sin reanudar.
     const lobbyHold = partyLobbyRef.current;
-    resumeSeekTargetRef.current = lobbyHold ? 0 : Math.max(getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
+    resumeSeekTargetRef.current = lobbyHold || isLiveStream
+      ? 0
+      : Math.max(getResumeStartTime(query), selectedResumeTime, readSelectedMediaResumeTime());
     savedAudioRestoreKeyRef.current = "";
     savedAudioRestoreAttemptsRef.current = 0;
     if (savedAudioRestoreTimerRef.current) {
@@ -1496,7 +1671,7 @@ export default function PlayerPage() {
     startupKickCountRef.current = 0;
     setStalledPlayback(false);
     setPlaybackStarted(false);
-    startupGateActiveRef.current = !androidPlayback && !stream.ytId;
+    startupGateActiveRef.current = !stream.ytId;
     startupGatePausedRef.current = false;
     startupGateStartedAtRef.current = Date.now();
     startupGateLastAudioApplyAtRef.current = 0;
@@ -1528,40 +1703,28 @@ export default function PlayerPage() {
     setPlaying(false);
     setManualPaused(lobbyHold);
     manualPausedRef.current = lobbyHold;
-    setMpvStatus(androidPlayback
-      ? "Abriendo reproductor Android TV..."
-      : isP2pStream
-        ? "Preparando stream P2P..."
-        : "Abriendo MPV...");
+    setMpvStatus(isP2pStream
+      ? "Preparando stream P2P..."
+      : "Abriendo MPV...");
     debugLog("native playback open called", {
       streamId: stream.id,
       source: stream.addonName ?? stream.name,
       kind: getStreamKind(stream),
-      androidPlayback,
     });
 
     const resumeStartTime = resumeSeekTargetRef.current;
-    void openExternal(stream, undefined, resumeStartTime, query?.episode).then(({ error }) => {
+    void openExternal(stream, undefined, resumeStartTime, query?.episode, isLiveStream).then(({ error }) => {
       if (cancelled || leavingPlayerRef.current) return;
       setPlaying(false);
       setMpvReadyForCommands(!error);
       setManualPaused(lobbyHold);
       manualPausedRef.current = lobbyHold;
-      setMpvStatus(error ? `${androidPlayback ? "Android TV" : "MPV"} no inicio: ${error}` : null);
+      setMpvStatus(error ? `MPV no inicio: ${error}` : null);
       if (!error) {
-        if (androidPlayback) {
-          startupGateActiveRef.current = false;
-          setMpvFileLoaded(true);
-          if (!lobbyHold) {
-            setPlaybackStarted(true);
-            setPlaying(true);
-          }
-        } else {
-          void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current || lobbyHold]);
-          applyVideoScale(videoScaleMode);
-        }
+        void sendMpvCommand(["set_property", "pause", startupGateActiveRef.current || lobbyHold]);
+        applyVideoScale(videoScaleMode);
       }
-      debugLog(error ? "native playback open error" : "native playback open resolved", { error, androidPlayback });
+      debugLog(error ? "native playback open error" : "native playback open resolved", { error });
     });
 
     return () => {
@@ -1589,8 +1752,8 @@ export default function PlayerPage() {
       void stopNativePlayback();
     };
   }, [
-    androidPlayback,
     isIframeStream,
+    isLiveStream,
     query,
     selectedPlaybackOverrides?.forceSubtitleSelection,
     selectedPlaybackOverrides?.selectedAudio,
@@ -1600,25 +1763,15 @@ export default function PlayerPage() {
     stream,
   ]);
 
-  useEffect(() => {
-    if (!query?.type || !query?.id) return;
-    const returnPath = (trailerRequested || isTrailerStream) ? getDetailPath() : getStreamsPath();
-    if (!returnPath) return;
-    window.history.pushState({ aetherioPlayerBackGuard: true }, "");
-
-    const onPopState = () => {
-      leavingPlayerRef.current = true;
-      setIsLeavingPlayer(true);
-      setMpvStatus(null);
-      void stopNativePlayback()
-        .finally(() => navigate(returnPath, { replace: true }));
-    };
-
-    window.addEventListener("popstate", onPopState);
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-    };
-  }, [isTrailerStream, navigate, query?.episode, query?.id, query?.season, query?.type, trailerRequested]);
+  // Ya NO hay un guardián `window.history.pushState` aquí. Ese guard insertaba una
+  // entrada real fuera de React Router y además borraba el `idx` del estado, así que
+  // el `idx` del router se desincronizaba del historial real del navegador. Con esa
+  // desviación, el "atrás" del shell/Big Picture (`navigate(delta)` / `navigate(-1)`)
+  // caminaba una pila contaminada y acababa volviendo al reproductor. El destino de
+  // salida del Player lo resuelven goBack() (propio), el shell y Big Picture con
+  // buildPlayerBackPath, que ya son la vía real del gesto "atrás" (botón B / flecha /
+  // botón volver). Empujar un estado falso aquí solo servía para el botón atrás del
+  // SO/navegador, a costa de corromper el modelo de historial de la app.
 
   useEffect(() => {
     if (!playbackStarted || !mpvReadyForCommands || !subtitlesReady || !subtitleOptions.length) return;
@@ -2056,9 +2209,37 @@ export default function PlayerPage() {
     stopSpaceAcceleration,
     volume,
     playing,
-    enabled: !showUpNext,
+    // En Big Picture con menú, panel lateral o sync abiertos las flechas y el
+    // espacio pertenecen a la navegación del overlay (motor espacial): sin
+    // esto, ←/→ harían seek y ↑/↓ volumen con el menú abierto. En desktop se
+    // conserva el comportamiento anterior.
+    enabled: !showUpNext && (!isBigPicturePlayer || (playerMenu === null && !subtitleSync.open && activeSidePanel === null)),
   });
-  const controlsActive = controlsVisible || activeSidePanel !== null || partyLobbyRef.current;
+  // La barra se mantiene visible con panel lateral, menú flotante o sync
+  // abiertos (el mando los recorre sin ratón).
+  const controlsActive =
+    controlsVisible
+    || activeSidePanel !== null
+    || playerMenu !== null
+    || subtitleSync.open
+    || partyLobbyRef.current;
+
+  useEffect(() => {
+    if (contentAdvisoriesShownKeyRef.current === contentAdvisoriesKey) return;
+    if (
+      !playbackStarted
+      || isIframeStream
+      || !contentAdvisoriesKey
+      || contentAdvisories.length === 0
+    ) return;
+    setContentAdvisoriesVisible(true);
+    return () => setContentAdvisoriesVisible(false);
+  }, [
+    contentAdvisories,
+    contentAdvisoriesKey,
+    isIframeStream,
+    playbackStarted,
+  ]);
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("aetherio-player-controls", { detail: { visible: controlsActive } }));
@@ -2150,7 +2331,7 @@ function saveUpcomingEpisodePrompt() {
 }
 
 function saveCurrentProgressNow(reason: string) {
-  if (!query || !stream || isTrailerStream) return null;
+  if (!query || !stream || isTrailerStream || isLiveStream) return null;
   const current = Math.max(currentTimeRef.current, currentTime);
   const totalDuration = Math.max(durationRef.current, duration);
   if (!current || current < 5) return null;
@@ -2198,13 +2379,13 @@ function shouldStopTraktPlayback() {
 }
 
 useEffect(() => {
-  if (!playbackStarted || !query || !stream || isTrailerStream) return;
+  if (!playbackStarted || !query || !stream || isTrailerStream || isLiveStream) return;
   const key = `${buildContinueWatchingKey(query)}:${stream.id}`;
   if (traktStartedKeyRef.current === key) return;
   traktStartedKeyRef.current = key;
   traktStoppedKeyRef.current = "";
   sendCurrentTraktPlaybackEvent("start");
-}, [isTrailerStream, playbackStarted, query, stream]);
+}, [isLiveStream, isTrailerStream, playbackStarted, query, stream]);
 
 useEffect(() => {
   if (!manualPaused || !playbackStarted) return;
@@ -2236,7 +2417,7 @@ useEffect(() => () => {
 }, [isTrailerStream, query?.episode, query?.id, query?.season, query?.type, stream?.id]);
 
 useEffect(() => {
-  if (!query || !stream || isTrailerStream) return;
+  if (!query || !stream || isTrailerStream || isLiveStream) return;
   if (!currentTime || currentTime < 5) return;
   const pendingResume = !resumeSeekSettledRef.current && resumeSeekTargetRef.current >= 12;
   if (pendingResume && currentTime < Math.max(12, resumeSeekTargetRef.current - 2)) {
@@ -2281,6 +2462,7 @@ useEffect(() => {
   currentTime,
   detailLogoUrl,
   duration,
+  isLiveStream,
   isMovie,
   isTrailerStream,
   mediaTitle,
@@ -2293,7 +2475,7 @@ useEffect(() => {
 ]);
 
 useEffect(() => {
-  if (!query || !stream || isTrailerStream) return;
+  if (!query || !stream || isTrailerStream || isLiveStream) return;
   if (!mpvReadyForCommands || !mpvFileLoaded) {
     resumeLog("resume waiting for mpv readiness");
     return;
@@ -2336,13 +2518,14 @@ useEffect(() => {
   }, 2000);
 
   return () => window.clearTimeout(verify);
-}, [duration, isTrailerStream, mpvFileLoaded, mpvReadyForCommands, query, stream]);
+}, [duration, isLiveStream, isTrailerStream, mpvFileLoaded, mpvReadyForCommands, query, stream]);
 
 useEffect(() => {
-  // Regla estilo Nuvio (PlayerNextEpisodeRules): si hay outro y termina pegado
+  // Regla de siguiente episodio (PlayerNextEpisodeRules): si hay outro y termina pegado
   // al final, dispara en el inicio del outro; si termina lejos, respeta el
   // umbral configurado (porcentaje o minutos restantes). Sin outro, umbral puro.
   if (!playbackPreferences.autoPlayNextEpisode || !canGoNextEpisode || manualPaused) return;
+  if (isLiveStream) return;
   if (!duration || duration < 60 || currentTime <= 0) return;
   const outroSegments = upNextCreditsSegment && Number.isFinite(upNextCreditsSegment.start) && Number.isFinite(upNextCreditsSegment.end) && upNextCreditsSegment.end > upNextCreditsSegment.start
     ? [{ start: upNextCreditsSegment.start, end: upNextCreditsSegment.end }]
@@ -2364,6 +2547,7 @@ useEffect(() => {
   canGoNextEpisode,
   currentTime,
   duration,
+  isLiveStream,
   manualPaused,
   playbackPreferences.autoPlayNextEpisode,
   playbackPreferences.nextEpisodeThresholdMinutesBeforeEnd,
@@ -2379,14 +2563,15 @@ useEffect(() => {
 useEffect(() => {
   // Se dispara al TERMINAR una pelicula o el ultimo episodio de una serie
   // (no al llegar al siguiente episodio). Muestra una recomendacion.
-  // Estilo Nuvio (shouldShowMovieRecommendation): umbral de peli configurable
+  // Recomendación de peli (shouldShowMovieRecommendation): umbral configurable
   // (default 90%) o menos de 5s restantes. Si hay timestamp de créditos
   // (TheIntroDB/IntroDB), se usa como referencia exacta. Desactivable desde ajustes.
   if (!playbackPreferences.upNextEnabled) return;
+  if (isLiveStream) return;
   if (duration < 60 || currentTime <= 0) return;
   const progress = (currentTime / duration) * 100;
   // Si hay un timestamp de créditos, se usa como referencia exacta;
-  // si no, el umbral de peli (estilo Nuvio) como respaldo.
+  // si no, el umbral de peli como respaldo.
   const hasCredits = upNextCreditsSegment && Number.isFinite(upNextCreditsSegment.start) && upNextCreditsSegment.start > 0;
   const finished = (hasCredits
     ? currentTime >= upNextCreditsSegment!.start
@@ -2423,6 +2608,7 @@ useEffect(() => {
 }, [
   currentTime,
   duration,
+  isLiveStream,
   isMovie,
   canGoNextEpisode,
   query?.episode,
@@ -2463,6 +2649,188 @@ const {
 const partyQueryKey = query ? `${query.type}:${query.id}:${query.season ?? ""}:${query.episode ?? ""}` : "";
 const partyRoomKey = partyMediaKey(partyMedia);
 partyLobbyRef.current = partyLobby;
+
+// Mando en Big Picture: reproducción directa (A, cruceta, LT/RT, LB/RB, X/Y).
+// Con overlay abierto, cruceta y A vuelven a la navegación espacial; B cierra.
+function focusPlayerOverlay() {
+  window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
+      const root = document.querySelector(
+        "[data-player-subtitle-panel-glass], [data-player-episode-panel-glass], [data-aetherio-context-menu]",
+      );
+      if (!root) return;
+      const target = root.querySelector<HTMLElement>("button[aria-current='true']:not([disabled])")
+        ?? root.querySelector<HTMLElement>("button:not([disabled])");
+      target?.focus({ preventScroll: true });
+    }, 60);
+  });
+}
+// Al cerrar el diálogo de sync con el menú de subtítulos debajo, el foco
+// vuelve al carril de pistas (no se pierde al desmontarse el diálogo).
+function focusSubtitleMenuTrack() {
+  window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
+      const rail = document.querySelector(
+        '[data-player-subtitle-panel-glass] [data-subtitle-rail="track"]',
+      );
+      const target = rail?.querySelector<HTMLElement>('button[aria-current="true"]:not([disabled])')
+        ?? rail?.querySelector<HTMLElement>("button:not([disabled])");
+      if (target) {
+        target.focus({ preventScroll: true });
+        target.scrollIntoView({ block: "nearest" });
+        return;
+      }
+      focusPlayerOverlay();
+    }, 60);
+  });
+}
+const prevSubtitleSyncOpenRef = useRef(false);
+useEffect(() => {
+  const wasOpen = prevSubtitleSyncOpenRef.current;
+  prevSubtitleSyncOpenRef.current = subtitleSync.open;
+  if (wasOpen && !subtitleSync.open && playerMenu === "subtitles") {
+    focusSubtitleMenuTrack();
+  }
+}, [subtitleSync.open, playerMenu]);
+// Foco determinista por zonas de la barra (el mando no depende del foco DOM).
+function focusBarTimeline() {
+  setBarZone("timeline");
+  const target = document.querySelector<HTMLElement>(
+    "[data-player-controls-glass] [data-player-timeline]:not([disabled])",
+  ) ?? document.querySelector<HTMLElement>(
+    "[data-player-controls-glass] [data-player-playpause]:not([disabled])",
+  );
+  target?.focus({ preventScroll: true });
+}
+function focusBarButtons() {
+  setBarZone("buttons");
+  const target = document.querySelector<HTMLElement>(
+    "[data-player-controls-glass] [data-player-playpause]:not([disabled])",
+  ) ?? document.querySelector<HTMLElement>(
+    "[data-player-controls-glass] button:not([disabled])",
+  );
+  target?.focus({ preventScroll: true });
+}
+// Row de botones con wrap circular (del último al primero y viceversa).
+function moveBarButton(dir: "prev" | "next") {
+  const buttons = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[data-player-controls-glass] button:not([disabled])",
+    ),
+  );
+  if (!buttons.length) return;
+  const active = document.activeElement as HTMLElement | null;
+  const index = active ? buttons.indexOf(active) : -1;
+  const next = index < 0
+    ? (dir === "next" ? buttons[0] : buttons[buttons.length - 1])
+    : buttons[(index + (dir === "next" ? 1 : -1) + buttons.length) % buttons.length];
+  next?.focus({ preventScroll: true });
+}
+usePlayerGamepad({
+  enabled: !showUpNext,
+  transportLocked: partyLobby,
+  canGoPrevEpisode,
+  canGoNextEpisode,
+  hasEpisodesPanel: episodeOptions.length > 0,
+  hasSourcesPanel: availableStreams.length > 0 && !isTrailerStream,
+  volume,
+  playing,
+  isDirectMode: () => !showFallbackPanel && !subtitleSync.open && playerMenu === null && activeSidePanel === null,
+  controlsMode: gamepadBarMode,
+  barZone,
+  skipAvailable: () => Boolean(
+    playbackPreferences.skipSegmentsEnabled
+    && activeSkipSegment
+    && mpvReadyForCommands
+    && playbackStarted
+    && playerMenu === null
+    && activeSidePanel === null
+    && !subtitleSync.open
+    && !showUpNext,
+  ),
+  skipSegment: () => {
+    if (activeSkipSegment) seek(activeSkipSegment.end + 0.15);
+  },
+  openControls: () => {
+    holdControls();
+    setGamepadBarMode(true);
+    // Entrada a la barra: foco primero al timeline (otra vez abajo = play).
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => focusBarTimeline(), 60);
+    });
+  },
+  exitControls: () => {
+    setGamepadBarMode(false);
+    setBarZone("timeline");
+    const focused = document.activeElement as HTMLElement | null;
+    if (focused?.closest?.("[data-player-controls-glass], [data-player-skip]")) {
+      focused.blur();
+    }
+    setControlsVisible(false);
+  },
+  focusBarTimeline,
+  focusBarButtons,
+  moveBarButton,
+  togglePlay,
+  jump,
+  applyVolume,
+  flash: flashActionFeedback,
+  navigateEpisode,
+  openSubtitles: () => {
+    setPlayerMenu("subtitles");
+    holdControls();
+    focusPlayerOverlay();
+  },
+  openEpisodesOrSources: () => {
+    if (episodeOptions.length > 0) setActiveSidePanel("episodes");
+    else if (availableStreams.length > 0 && !isTrailerStream) setActiveSidePanel("sources");
+    else return;
+    holdControls();
+    focusPlayerOverlay();
+  },
+  closeTopOverlay: () => {
+    if (subtitleSync.open) {
+      subtitleSync.closeSync();
+      return true;
+    }
+    if (playerMenu !== null) {
+      setPlayerMenu(null);
+      return true;
+    }
+    if (activeSidePanel !== null) {
+      setActiveSidePanel(null);
+      return true;
+    }
+    return false;
+  },
+});
+// Big Picture: al aparecer intro/resumen/outro, el botón toma foco solo para
+// omitir con A. Sin diálogos ni paneles encima.
+const activeSkipKey = activeSkipSegment
+  ? `${activeSkipSegment.id}:${activeSkipSegment.start}:${activeSkipSegment.end}`
+  : "";
+useEffect(() => {
+  if (!isBigPicturePlayer) return;
+  if (!activeSkipSegment || !playbackPreferences.skipSegmentsEnabled) return;
+  if (!mpvReadyForCommands || !playbackStarted) return;
+  if (playerMenu !== null || activeSidePanel !== null || subtitleSync.open || showUpNext) return;
+  const timer = window.setTimeout(() => {
+    skipButtonRef.current?.focus({ preventScroll: true });
+  }, 60);
+  return () => window.clearTimeout(timer);
+}, [activeSkipKey, isBigPicturePlayer, playbackPreferences.skipSegmentsEnabled, mpvReadyForCommands, playbackStarted, playerMenu, activeSidePanel, subtitleSync.open, showUpNext]);
+// Al ocultarse la barra, soltar su foco para que la cruceta vuelva al modo directo.
+useEffect(() => {
+  if (controlsActive) return;
+  const focused = document.activeElement as HTMLElement | null;
+  if (focused?.closest?.("[data-player-controls-glass]")) focused.blur();
+}, [controlsActive]);
+// Si la barra se oculta por otra vía (ratón/timeout), salir del modo barra.
+useEffect(() => {
+  if (controlsActive || !gamepadBarMode) return;
+  setGamepadBarMode(false);
+  setBarZone("timeline");
+}, [controlsActive, gamepadBarMode]);
 // Espera de la fuente del anfitrión: aviso tras 12s + salida (efecto aquí
 // porque necesita partyStatus/partyIsOwner/stream ya declarados).
 useEffect(() => {
@@ -2476,7 +2844,7 @@ useEffect(() => {
 }, [partyStatus, partyIsOwner, stream]);
 // Presencia Discord (debajo de party a propósito: usa su estado).
 useDiscordPresence({
-  enabled: playbackPreferences.enableDiscordRichPresence && !androidPlayback,
+  enabled: playbackPreferences.enableDiscordRichPresence,
   hasStream: Boolean(stream),
   playbackStarted,
   playing: playing && !manualPaused,
@@ -2655,7 +3023,7 @@ useEffect(() => {
   } catch {
     // best-effort
   }
-  navigate(`/player?type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`);
+  navigate(buildPlayerPath(`type=${target.type}&id=${encodeURIComponent(target.id)}${target.season != null ? `&season=${target.season}` : ""}${target.episode != null ? `&ep=${target.episode}` : ""}`));
 }, [partyStatus, partyLastMediaEvent, partySelfId, partyQueryKey, navigate]);
 
 function partyCanBroadcast(): boolean {
@@ -3137,7 +3505,7 @@ const mpvTweenRef = useRef<gsap.core.Tween | null>(null);
 // Solo se anima la vuelta a fullscreen si el video realmente estaba achicado.
 const upNextShrunkRef = useRef(false);
 useEffect(() => {
-  if (androidPlayback || isIframeStream) return;
+    if (isIframeStream) return;
   if (!mpvReadyForCommands || !mpvFileLoaded) return;
 
   const videoTrack = mpvTracks.find(t => String(t.type ?? "").toLowerCase() === "video");
@@ -3269,7 +3637,7 @@ useEffect(() => {
       mpvTweenRef.current = null;
     }
   };
-}, [showUpNext, androidPlayback, isIframeStream, mpvReadyForCommands, mpvFileLoaded, videoScaleMode, mpvTracks, mpvVideoWidth, mpvVideoHeight]);
+}, [showUpNext, isIframeStream, mpvReadyForCommands, mpvFileLoaded, videoScaleMode, mpvTracks, mpvVideoWidth, mpvVideoHeight]);
 
 // Estado de salida de UpNext: primero se desvanece (exit animation) y luego desmonta.
 const [upNextExiting, setUpNextExiting] = useState(false);
@@ -3284,6 +3652,15 @@ function completeUpNextExit() {
 
 const mpvError = hasMpvError;
 const showFallbackPanel = Boolean(mpvError) && !isLeavingPlayer;
+// Panel fallback (error MPV): el mando/teclado se enfoca solo en
+// "Reintentar reproducción" (A lo activa, B/Esc sale). Normal y Big Picture.
+useEffect(() => {
+  if (!showFallbackPanel) return;
+  const timer = window.setTimeout(() => {
+    fallbackRetryButtonRef.current?.focus({ preventScroll: true });
+  }, 60);
+  return () => window.clearTimeout(timer);
+}, [showFallbackPanel]);
 const playerVisuallyReady = playbackStarted || (mpvReadyForCommands && mpvFileLoaded && playing);
 const bufferingActive = seekBuffering || stalledPlayback || mpvPausedForCache;
 const bufferingSignal = !manualPaused
@@ -3333,6 +3710,7 @@ if (isIframeStream && playbackTarget) {
         allow="autoplay; encrypted-media; fullscreen"
         allowFullScreen
         referrerPolicy="strict-origin-when-cross-origin"
+        sandbox="allow-scripts allow-same-origin allow-presentation"
       />
       <div className="absolute left-5 top-5 z-20 flex gap-2">
         <button
@@ -3405,8 +3783,6 @@ if (!stream) {
   const selectedSubtitleValue = selectedMpvSubtitle;
   const currentMetaTitle = isMovie ? mediaTitle : (currentEpisode?.name ?? mediaTitle);
   const currentOverview = currentEpisode?.overview?.trim() || "Sin descripción disponible para este episodio.";
-  const behaviorBackground = typeof stream?.behaviorHints?.background === "string" ? stream.behaviorHints.background : "";
-  const behaviorPoster = typeof stream?.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
   const loadingArtwork =
     selectedMediaLogo
     || sanitizeLogoUrl(resumeEntry?.logo)
@@ -3414,25 +3790,17 @@ if (!stream) {
     || addonLogoUrl
     || seriesLogoUrl
     || null;
-  const resumeBackground = resumeEntry?.background || resumeEntry?.poster || "";
-  const backgroundArtwork = ensureOriginalTmdbImage(
-    !isMovie
-      ? currentEpisode?.still || ""
-      : selectedMediaBackground
-        || resumeBackground
-        || behaviorBackground
-        || behaviorPoster
-        || "",
-  );
-  const controlsReady = !androidPlayback && (playbackStarted || (mpvReadyForCommands && mpvFileLoaded));
-  const playerCursor = !androidPlayback && playbackStarted && !controlsActive ? "none" : "default";
+  const backgroundArtwork = contrastArtwork;
+  const controlsReady = playbackStarted || (mpvReadyForCommands && mpvFileLoaded);
+  const playerCursor = playbackStarted && !controlsActive ? "none" : "default";
   const playerShellClassName = !showFallbackPanel
     ? `relative h-screen w-screen overflow-hidden ${nativeSurfaceVisible ? "bg-transparent" : "bg-black"} text-white`
-    : "relative h-screen w-screen overflow-hidden bg-[#101014] text-white";
+    : "relative h-screen w-screen overflow-hidden bg-[#1e1e1e] text-white";
   
   return (
     <div
       className={playerShellClassName}
+      data-player-contrast={isBigPicturePlayer && lightPlayerBackground ? "light" : undefined}
       style={{ cursor: playerCursor, fontFamily: "Inter, system-ui, sans-serif" }}
       onPointerMove={() => wakeControls()}
       onPointerDown={startHoldToAccelerate}
@@ -3460,7 +3828,7 @@ if (!stream) {
         <div className="pointer-events-none absolute inset-0 bg-[#101014]" />
       ) : null}
       {showFallbackPanel ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black px-8 text-center">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[#1e1e1e] px-8 text-center">
           <div className="pointer-events-auto liquid-glass-dark max-w-lg rounded-lg p-6 opacity-95 gsap-transition hover:opacity-100">
             <h1 className="mb-3 text-xl font-black">libmpv interno</h1>
             {mpvBundled === false && (
@@ -3469,35 +3837,58 @@ if (!stream) {
               </p>
             )}
             {mpvStatus && <p className="mb-4 text-xs text-white/58">{mpvStatus}</p>}
-            <button onClick={() => void retryMpvPlayback()} className="rounded-md bg-white px-5 py-2.5 font-bold text-black">
+            <button
+              ref={fallbackRetryButtonRef}
+              data-player-interactive
+              onClick={() => void retryMpvPlayback()}
+              className="rounded-md bg-white px-5 py-2.5 font-bold text-black"
+            >
               Reintentar reproducción
             </button>
             {playbackTarget && <p className="mt-4 break-all text-xs text-white/32">{playbackTarget}</p>}
           </div>
         </div>
       ) : null}
-      {androidPlayback && !showFallbackPanel ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/72 px-[5vw] text-center">
-          <div className="liquid-glass-dark max-w-xl rounded-lg p-6">
-            <h1 className="mb-3 text-xl font-black">Reproductor Android TV</h1>
-            <p className="mb-5 text-sm text-white/62">
-              {mpvStatus || "El reproductor nativo se abre en pantalla completa dentro del APK."}
-            </p>
-            <div className="flex flex-wrap justify-center gap-3">
-              <button data-player-interactive onClick={() => void retryMpvPlayback()} className="rounded-md bg-white px-5 py-2.5 font-bold text-black">
-                Reabrir
-              </button>
-              <button data-player-interactive onClick={goBack} className="rounded-md border border-white/18 px-5 py-2.5 font-bold text-white">
-                Volver
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {/*
+        El aviso "el reproductor nativo se abre en pantalla completa" se elimino
+        junto con el soporte de Android: solo tenia sentido alli, donde Media3
+        corria en su propia Activity y el webview quedaba vacio.
+
+        En escritorio mpv se dibuja en la ventana nativa por detras de este DOM,
+        asi que el cartel solo tapaba el video. Sin Android queda un unico
+        camino, y en web un fallo de apertura lo cubre `showFallbackPanel`.
+      */}
+
 
       <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} message={mpvStatus} hideMessage={playbackStarted} p2p={isP2pStream} />
+      {isLiveStream ? (
+        <LiveBadge
+          atEdge={livePlayback.atLiveEdge}
+          latencySeconds={livePlayback.latency}
+          playing={playing}
+          lightBackground={lightPlayerBackground}
+        />
+      ) : null}
+      {isLiveStream && livePlayback.ended ? (
+        <LiveEndedNotice
+          onRetry={() => {
+            setMpvStatus("Reconectando al directo...");
+            void launchMpv(false);
+          }}
+        />
+      ) : null}
       {/* OSD central: play/pausa/seek/volumen por teclado o click. No despierta la barra. */}
       {actionFeedback ? <PlayerActionFeedback feedback={actionFeedback} /> : null}
+      {contentAdvisoriesVisible ? (
+        <PlayerContentAdvisories
+          key={`${contentAdvisoriesKey}:${contentAdvisories.map(item => `${item.id}:${item.severity}`).join("|")}`}
+          items={contentAdvisories}
+          bigPicture={isBigPicturePlayer}
+          lightBackground={isBigPicturePlayer && lightPlayerBackground}
+          dismissed={controlsActive || showUpNext || !playbackStarted}
+          onComplete={completeContentAdvisories}
+        />
+      ) : null}
       {fileDropNotice ? (
         <div
           data-player-interactive
@@ -3524,39 +3915,56 @@ if (!stream) {
       ) : null}
 
       <SubtitleSyncDialog
-        open={subtitleSync.open}
+        open={subtitleSync.open && !isBigPicturePlayer}
         loading={subtitleSync.loading}
         error={subtitleSync.error}
+        canUseManual={subtitleSync.canUseManual}
         stage={subtitleSync.stage}
         cues={subtitleSync.visibleCues}
         capturedVideoMs={subtitleSync.capturedVideoMs}
         trackLabel={subtitleOptions.find(option => option.value === selectedMpvSubtitle)?.label ?? ""}
+        bigPicture={isBigPicturePlayer}
         onClose={subtitleSync.closeSync}
         onCapture={() => void subtitleSync.capture()}
         onApplyCue={subtitleSync.applyCue}
+        onUseManualSync={subtitleSync.fallbackToManual}
+        onForgetTitle={subtitleTitleKey ? () => {
+          clearAutoSyncTitleMode(subtitleTitleKey);
+          subtitleSync.closeSync();
+        } : undefined}
+        onPickTrack={() => {
+          subtitleSync.closeSync();
+          focusSubtitleMenuTrack();
+        }}
       />
 
-      {!androidPlayback && playbackPreferences.skipSegmentsEnabled && activeSkipSegment && mpvReadyForCommands && playbackStarted ? (
+      {playbackPreferences.skipSegmentsEnabled && activeSkipSegment && mpvReadyForCommands && playbackStarted ? (
         <button
+          ref={skipButtonRef}
           data-player-interactive
+          data-player-skip
           type="button"
-          className="absolute z-40 flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-2.5 text-sm font-black text-black shadow-[0_18px_56px_rgba(0,0,0,0.62)] gsap-transition hover:scale-[1.03]"
-          style={{
-            right: "max(32px, calc((100vw - min(1240px, calc(100vw - 32px))) / 2 + 24px))",
-            bottom: controlsActive ? 166 : 44,
-          }}
+          className={isBigPicturePlayer
+            ? "absolute z-40 flex items-center gap-2.5 rounded-2xl border border-white/10 bg-[#1e1e1e]/85 px-[18px] py-3 text-sm font-bold text-white shadow-[0_18px_56px_rgba(0,0,0,0.62)] gsap-transition hover:scale-[1.03]"
+            : "absolute z-40 flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-2.5 text-sm font-black text-black shadow-[0_18px_56px_rgba(0,0,0,0.62)] gsap-transition hover:scale-[1.03]"}
+          style={isBigPicturePlayer
+            ? { right: 28, bottom: controlsActive ? 190 : 70 }
+            : {
+              right: "max(32px, calc((100vw - min(1240px, calc(100vw - 32px))) / 2 + 24px))",
+              bottom: controlsActive ? 166 : 44,
+            }}
           onClick={event => {
             event.stopPropagation();
             seek(activeSkipSegment.end + 0.15);
           }}
         >
-          <SkipForward size={17} />
-          {activeSkipSegment.kind === "recap" ? "Saltar resumen" : "Saltar intro"}
+          {isBigPicturePlayer ? null : <SkipForward size={17} />}
+          {activeSkipSegment.kind === "recap" ? "Saltar resumen" : activeSkipSegment.kind === "outro" ? "Saltar outro" : "Saltar intro"}
         </button>
       ) : null}
 
       <EpisodePanel
-        visible={!androidPlayback && activeSidePanel === "episodes" && showPanelToggle}
+        visible={activeSidePanel === "episodes" && showPanelToggle}
         title={title}
         streamName={mediaTitle}
         seriesLogoUrl={seriesLogoUrl}
@@ -3566,11 +3974,12 @@ if (!stream) {
         hasEpisodeOptions={episodeOptions.length > 0}
         canGoPrevEpisode={canGoPrevEpisode}
         canGoNextEpisode={canGoNextEpisode}
+        bigPicture={isBigPicturePlayer}
         onClose={() => setActiveSidePanel(null)}
         onNavigateEpisode={navigateEpisode}
       />
       <SourcePanel
-        visible={!androidPlayback && activeSidePanel === "sources"}
+        visible={activeSidePanel === "sources"}
         streams={availableStreams}
         currentStreamId={stream.id}
         onClose={() => setActiveSidePanel(null)}
@@ -3579,8 +3988,11 @@ if (!stream) {
 
       <PlayerControls
         active={controlsReady && controlsActive && !showUpNext}
+        bigPicture={isBigPicturePlayer}
+        lightBackground={lightPlayerBackground}
         currentMetaTitle={currentMetaTitle}
         title={title}
+        seekrContent={seekrContent}
         currentTime={currentTime}
         duration={duration}
         playing={playing}
@@ -3590,6 +4002,9 @@ if (!stream) {
         selectedSpeed={selectedSpeed}
         selectedVideoProfile={selectedVideoProfile}
         videoScaleMode={videoScaleMode}
+        isLocalPlayback={isLocalPlayback}
+        repeatEnabled={isLocalPlayback && repeatLocal}
+        onToggleRepeat={() => setRepeatLocal(value => !value)}
         audioOptions={normalizedAudioOptions}
         subtitleOptions={subtitleOptions}
         speedOptions={speedOptions}
@@ -3597,8 +4012,23 @@ if (!stream) {
         subtitlesLoading={subtitlesLoading}
         subtitleDelayMs={subtitleDelayMs}
         subtitleScalePercent={subtitleScalePercent}
-        subtitleVerticalPercent={subtitleVerticalPercent}
-        subtitleSyncOpen={subtitleSync.open}
+         subtitleVerticalPercent={subtitleVerticalPercent}
+          subtitleSyncOpen={subtitleSync.open}
+          subtitleSyncLoading={subtitleSync.loading}
+          subtitleSyncError={subtitleSync.error}
+          subtitleSyncCanUseManual={subtitleSync.canUseManual}
+          subtitleSyncStage={subtitleSync.stage}
+          subtitleSyncCues={subtitleSync.visibleCues}
+          subtitleSyncCapturedVideoMs={subtitleSync.capturedVideoMs}
+        subtitleSyncTrackLabel={subtitleOptions.find(option => option.value === selectedMpvSubtitle)?.label ?? ""}
+        liveMode={isLiveStream}
+        liveLatencySeconds={livePlayback.latency}
+        liveAtEdge={livePlayback.atLiveEdge}
+        liveDvrProgress={livePlayback.dvrProgress}
+        onGoLive={livePlayback.goLive}
+        nativeSurfaceVisible={nativeSurfaceVisible}
+         openMenu={playerMenu}
+        onOpenMenuChange={setPlayerMenu}
         showPanelToggle={showPanelToggle}
         activeSidePanel={activeSidePanel}
         hasEpisodeOptions={episodeOptions.length > 0}
@@ -3684,6 +4114,14 @@ if (!stream) {
           applySubtitleSettings({ verticalPercent: value });
         }}
         onOpenSubtitleSync={subtitleSync.openSync}
+        onCloseSubtitleSync={subtitleSync.closeSync}
+        onCaptureSubtitleSync={() => void subtitleSync.capture()}
+        onApplySubtitleSyncCue={subtitleSync.applyCue}
+        onUseManualSubtitleSync={subtitleSync.fallbackToManual}
+        onPickSubtitleTrack={() => {
+          subtitleSync.closeSync();
+          focusSubtitleMenuTrack();
+        }}
         onSpeedChange={value => {
           setSelectedSpeed(value);
           void sendMpvCommand(["set_property", "speed", Number(value)]);
@@ -3716,17 +4154,17 @@ if (!stream) {
             onPlay={() => {
             dismissUpNext();
             const rec = related.recommendation;
-            if (rec) navigate(`/episode?type=${rec.type}&id=tmdb:${rec.tmdbId}`);
+            if (rec) navigate(buildEpisodePath(`type=${rec.type}&id=tmdb:${rec.tmdbId}`));
             }}
             onDetails={() => {
             dismissUpNext();
             const rec = related.recommendation;
-            if (rec) navigate(`/detail/${rec.type}/tmdb:${rec.tmdbId}`);
+            if (rec) navigate(buildDetailPath(rec.type, `tmdb:${rec.tmdbId}`));
             }}
             onCountdownEnd={() => {
             dismissUpNext();
             const rec = related.recommendation;
-            if (rec) navigate(`/episode?type=${rec.type}&id=tmdb:${rec.tmdbId}`);
+            if (rec) navigate(buildEpisodePath(`type=${rec.type}&id=tmdb:${rec.tmdbId}`));
             }}
             onMiniClick={dismissUpNext}
             />

@@ -118,9 +118,19 @@ export function PartyHomeButton({ onOpen }: { onOpen: () => void }) {
         type="button"
         onClick={onOpen}
         className={`rounded-full flex items-center justify-center shrink-0 hover:scale-105 gsap-transition ${
-          connected ? "bg-atv-selected text-white" : "text-atv-secondary hover:text-white hover:bg-atv-hover"
+          connected ? "bg-atv-selected text-white" : "text-atv-secondary hover:text-white"
         }`}
-        style={{ width: 32, height: 32 }}
+        style={{
+          width: 32,
+          height: 32,
+          // Disco esmerilado propio: dentro de la píldora, sobre fondos
+          // oscuros el blur de la píldora solo no se aprecia.
+          background: connected ? undefined : "rgba(255,255,255,0.12)",
+          backdropFilter: connected ? undefined : "blur(48px) saturate(175%)",
+          WebkitBackdropFilter: connected ? undefined : "blur(48px) saturate(175%)",
+          border: connected ? undefined : "1px solid rgba(255,255,255,0.14)",
+          boxShadow: connected ? undefined : "0 2px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.10)",
+        }}
         title={connected ? `Party: en sala ${party.roomCode}` : "Party: ver juntos"}
         aria-label={connected ? "Party: en sala" : "Party: ver juntos"}
       >
@@ -285,7 +295,7 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
           <button
             type="button"
             onClick={onClose}
-            className="gsap-transition flex h-9 w-9 items-center justify-center rounded-full border border-white/12 text-white/70 hover:bg-white/12 hover:text-white active:scale-90"
+            className="gsap-transition flex h-9 w-9 items-center justify-center rounded-full text-white/70 hover:bg-white/12 hover:text-white active:scale-90"
             aria-label="Cerrar"
           >
             <X size={16} />
@@ -300,7 +310,7 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
                 <button
                   type="button"
                   onClick={() => void copyText(party.roomCode, setCopiedCode)}
-                  className="gsap-transition flex flex-1 items-center justify-center gap-1.5 rounded-full border border-white/12 px-4 py-2.5 text-xs font-black text-white/75 hover:bg-white/10 hover:text-white active:scale-[0.98]"
+                  className="gsap-transition flex flex-1 items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-black text-white/75 hover:bg-white/10 hover:text-white active:scale-[0.98]"
                 >
                   {copiedCode ? <Check size={14} /> : <Copy size={14} />} Código
                 </button>
@@ -344,7 +354,7 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
               <button
                 type="button"
                 onClick={() => { if (party.isOwner) party.closeRoom(); else party.leaveRoom(); onClose(); }}
-                className="gsap-transition flex w-full items-center justify-center gap-1.5 rounded-full border border-white/12 px-4 py-2 text-xs font-black text-white/60 hover:bg-white/10 hover:text-white active:scale-[0.98]"
+                className="gsap-transition flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2 text-xs font-black text-white/60 hover:bg-white/10 hover:text-white active:scale-[0.98]"
               >
                 <LogOut size={14} /> Salir de la sala
               </button>
@@ -358,7 +368,7 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
                   onChange={event => setName(event.target.value)}
                   placeholder="¿Cómo te verán?"
                   maxLength={32}
-                  className="gsap-transition w-full rounded-full border border-white/12 bg-white/10 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/34 focus:border-white/34"
+                  className="gsap-transition w-full rounded-full bg-white/10 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/34"
                 />
               </div>
               <div>
@@ -370,7 +380,7 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
                     placeholder="ABC123"
                     maxLength={6}
                     autoFocus
-                    className="gsap-transition min-w-0 flex-1 rounded-full border border-white/12 bg-white/10 px-4 py-2.5 text-center text-sm font-black uppercase tracking-[0.2em] text-white outline-none placeholder:text-white/34 focus:border-white/34"
+                    className="gsap-transition min-w-0 flex-1 rounded-full bg-white/10 px-4 py-2.5 text-center text-sm font-black uppercase tracking-[0.2em] text-white outline-none placeholder:text-white/34"
                   />
                   <button
                     type="button"
@@ -386,7 +396,7 @@ export default function HomePartyModal({ open, onClose }: { open: boolean; onClo
                 <select
                   value={joinServer}
                   onChange={event => setJoinServer(event.target.value)}
-                  className="gsap-transition w-full rounded-full border border-white/12 bg-[#171719] px-4 py-2.5 text-sm font-semibold text-white outline-none focus:border-white/34"
+                  className="gsap-transition w-full rounded-full bg-[#171719] px-4 py-2.5 text-sm font-semibold text-white outline-none"
                   aria-label="Servidor de la sala"
                 >
                   {getPartyServers().map(server => (

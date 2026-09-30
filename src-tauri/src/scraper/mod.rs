@@ -141,18 +141,29 @@ async fn scrape_single_site(
             Ok((candidates, episode_title)) if !candidates.is_empty() => {
                 return candidates
                     .into_iter()
-                    .map(|candidate| ScrapedStream {
-                        id: format!("animeav1|{}", candidate.url),
-                        url: candidate.url,
-                        name: site.name.to_string(),
-                        title: episode_title.clone(),
-                        quality: candidate.quality,
-                        languages: candidate.language.map(|l| vec![l]),
-                        site_id: "animeav1".to_string(),
-                        site_name: "AnimeAV1".to_string(),
-                        embed_url: None,
-                        headers: candidate.headers,
-                        subtitles: None,
+                    .map(|candidate| {
+                        // Garantía de reproducción: MPV con UA por defecto es
+                        // bloqueado (403 -> "no pudo cargar esta fuente").
+                        // Si algún resolver olvidó el UA, lo inyectamos aquí.
+                        let mut headers = candidate.headers;
+                        if let Some(map) = headers.as_mut() {
+                            map.entry("User-Agent".to_string()).or_insert_with(|| {
+                                http::DEFAULT_USER_AGENT.to_string()
+                            });
+                        }
+                        ScrapedStream {
+                            id: format!("animeav1|{}", candidate.url),
+                            url: candidate.url,
+                            name: site.name.to_string(),
+                            title: episode_title.clone(),
+                            quality: candidate.quality,
+                            languages: candidate.language.map(|l| vec![l]),
+                            site_id: "animeav1".to_string(),
+                            site_name: "AnimeAV1".to_string(),
+                            embed_url: None,
+                            headers,
+                            subtitles: None,
+                        }
                     })
                     .collect();
             }

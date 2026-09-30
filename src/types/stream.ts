@@ -12,6 +12,7 @@ export interface StreamTechnicalMetadata {
   audioCodec?: string;
   audioChannels?: number;
   dynamicRange?: string;
+  bitDepth?: string;
 }
 
 export interface MediaStream {

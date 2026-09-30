@@ -1,9 +1,49 @@
 import type { MediaItem } from "../types/ui.ts";
 import { tmdbFetch } from "../config/apiKeys.ts";
+import { pickTmdbSearchCandidate } from "../utils/tmdbIdentity.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
 const anilistIdByMalCache = new Map<number, number>();
+const anilistIdByMalMisses = new Map<number, number>();
 const anilistIdByMalPromises = new Map<number, Promise<number | null>>();
+
+/**
+ * AniList tiene una cuota global y responde 429 sin cabecera CORS (por eso el
+ * navegador reporta a la vez "429" y "error de CORS": es el mismo incidente).
+ * Antes salian en rafaga: las 4 entradas del Home en `Promise.all` mas un
+ * reintento cada una, y ademas `fetchAnilistIdByMalId` en cada apertura de
+ * detalle. Aqui se serializan con una separacion minima entre arranques.
+ */
+const ANILIST_MIN_INTERVAL_MS = 250;
+const ANILIST_TIMEOUT_MS = 8_000;
+const ANILIST_COOLDOWN_MS = 60_000;
+/** Un id que no existe en AniList no va a aparecer solo: se recuerda un rato. */
+const ANILIST_MISS_TTL_MS = 10 * 60 * 1000;
+
+let anilistChain: Promise<unknown> = Promise.resolve();
+let anilistLastStart = 0;
+let anilistCooldownUntil = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Encadena las consultas y respeta la separacion minima y el cooldown. */
+function scheduleAnilist<T>(task: () => Promise<T>): Promise<T> {
+  const run = anilistChain.then(async () => {
+    const wait = Math.max(
+      anilistCooldownUntil - Date.now(),
+      anilistLastStart + ANILIST_MIN_INTERVAL_MS - Date.now(),
+      0,
+    );
+    if (wait > 0) await sleep(wait);
+    anilistLastStart = Date.now();
+    return task();
+  });
+  // La cadena no se rompe si una consulta falla.
+  anilistChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 const PROBE_TTL_MS = 10 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 5_000;
@@ -18,20 +58,19 @@ let probeOk = true;
 export async function probeAnilist(): Promise<boolean> {
   if (Date.now() - probeAt < PROBE_TTL_MS) return probeOk;
   probeAt = Date.now();
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    const response = await fetch(ANILIST_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ query: "query { Page(page: 1, perPage: 1) { media { id } } }" }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    probeOk = response.ok;
-  } catch {
-    probeOk = false;
-  }
+  probeOk = await scheduleAnilist(async () => {
+    try {
+      const response = await fetch(ANILIST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ query: "query { Page(page: 1, perPage: 1) { media { id } } }" }),
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  });
   return probeOk;
 }
 
@@ -92,17 +131,32 @@ function mediaToItem(media: AniListMedia): MediaItem {
 }
 
 async function anilistQuery<T>(query: string, variables: Record<string, unknown> = {}): Promise<T | null> {
-  try {
-    const response = await fetch(ANILIST_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ query, variables }),
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  }
+  return scheduleAnilist(async () => {
+    try {
+      const response = await fetch(ANILIST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(ANILIST_TIMEOUT_MS),
+      });
+      if (response.status === 429) {
+        // Congela el resto de la cola: seguir golpeando solo alarga el bloqueo.
+        const retryAfter = Number(response.headers.get("Retry-After"));
+        const cooldown = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : ANILIST_COOLDOWN_MS;
+        anilistCooldownUntil = Date.now() + cooldown;
+        if (import.meta.env.DEV) {
+          console.warn(`[ANILIST] 429: pausando consultas ${Math.round(cooldown / 1000)}s.`);
+        }
+        return null;
+      }
+      if (!response.ok) return null;
+      return (await response.json()) as T;
+    } catch {
+      return null;
+    }
+  });
 }
 
 /** Resuelve el identificador AniList de una obra que solo trae ID de MyAnimeList. */
@@ -110,6 +164,11 @@ export async function fetchAnilistIdByMalId(malId: number): Promise<number | nul
   if (!Number.isInteger(malId) || malId <= 0) return null;
   const cached = anilistIdByMalCache.get(malId);
   if (cached) return cached;
+  const missedAt = anilistIdByMalMisses.get(malId);
+  if (missedAt != null) {
+    if (Date.now() - missedAt < ANILIST_MISS_TTL_MS) return null;
+    anilistIdByMalMisses.delete(malId);
+  }
   const pending = anilistIdByMalPromises.get(malId);
   if (pending) return pending;
   const request = (async () => {
@@ -120,8 +179,10 @@ export async function fetchAnilistIdByMalId(malId: number): Promise<number | nul
     const id = result?.data?.Media?.id;
     if (typeof id === "number" && Number.isInteger(id) && id > 0) {
       anilistIdByMalCache.set(malId, id);
+      anilistIdByMalMisses.delete(malId);
       return id;
     }
+    anilistIdByMalMisses.set(malId, Date.now());
     return null;
   })().finally(() => anilistIdByMalPromises.delete(malId));
   anilistIdByMalPromises.set(malId, request);
@@ -351,20 +412,6 @@ interface TmdbSearchResult {
   popularity?: number;
 }
 
-function normalizeTitle(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-}
-
-function titlesMatch(searchTitle: string, tmdbResult: TmdbSearchResult): boolean {
-  const norm = normalizeTitle(searchTitle);
-  const candidates = [
-    tmdbResult.name,
-    tmdbResult.title,
-    tmdbResult.original_name,
-  ].filter(Boolean).map(s => normalizeTitle(s!));
-  return candidates.some(c => c === norm || c.includes(norm) || norm.includes(c));
-}
-
 async function searchTmdbByTitle(
   title: string,
   searchType: "tv" | "movie",
@@ -378,14 +425,58 @@ async function searchTmdbByTitle(
   if (year) {
     params[searchType === "tv" ? "first_air_date_year" : "year"] = String(year);
   }
-  const result = await tmdbFetch<{ results: TmdbSearchResult[] }>(`/search/${searchType}`, { params });
-  if (!result?.results?.length) return null;
-  const matches = result.results.filter(r => titlesMatch(title, r));
-  if (matches.length) {
-    return matches.reduce((best, r) => (r.popularity ?? 0) > (best.popularity ?? 0) ? r : best);
-  }
-  return result.results.reduce((best, r) => (r.popularity ?? 0) > (best.popularity ?? 0) ? r : best);
+  return withTmdbSearchSlot(async () => {
+    const result = await tmdbFetch<{ results: TmdbSearchResult[] }>(`/search/${searchType}`, { params });
+    if (!result?.results?.length) return null;
+    const selected = pickTmdbSearchCandidate(
+      result.results.map(item => ({ kind: searchType, item })),
+      title,
+      year,
+    );
+    return selected?.item ?? null;
+  });
 }
+
+/**
+ * Limite GLOBAL de busquedas TMDB. Antes cada fila de anime llevaba su propio
+ * pool de 3, y como las filas corren en `Promise.all` eso multiplicaba la
+ * concurrencia (9 filas x 3). El tope tiene que ser de todo el cliente, no por
+ * fila, y conviene que sea bajo: en redes con limitacion (escuela, movil,
+ * coworking) lo que tira la conexion abajo es la rafaga, no el total.
+ */
+const TMDB_SEARCH_CONCURRENCY = 3;
+let tmdbSearchActive = 0;
+const tmdbSearchQueue: Array<() => void> = [];
+
+async function withTmdbSearchSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (tmdbSearchActive >= TMDB_SEARCH_CONCURRENCY) {
+    await new Promise<void>(resolve => {
+      tmdbSearchQueue.push(resolve);
+    });
+  } else {
+    tmdbSearchActive += 1;
+  }
+  try {
+    return await task();
+  } finally {
+    // El slot se cede al siguiente de la cola; si no hay, se libera.
+    const next = tmdbSearchQueue.shift();
+    if (next) next();
+    else tmdbSearchActive -= 1;
+  }
+}
+
+interface AnimeTmdbMatch {
+  tmdbId: number;
+  poster?: string;
+  background?: string;
+}
+
+/** Un acierto aguanta media hora: la correspondencia titulo -> tmdb no cambia. */
+const ANIME_MATCH_TTL_MS = 30 * 60 * 1000;
+/** Un "no existe" se recuerda menos: si fue la red y no TMDB, quiero reintentar. */
+const ANIME_MISS_TTL_MS = 10 * 60 * 1000;
+const animeTmdbCache = new Map<string, { match: AnimeTmdbMatch; expiresAt: number }>();
 
 function toTmdbItem(r: TmdbSearchResult) {
   return {
@@ -395,53 +486,95 @@ function toTmdbItem(r: TmdbSearchResult) {
   };
 }
 
+function rememberAnimeMatch(key: string, match: AnimeTmdbMatch) {
+  if (animeTmdbCache.size > 400) {
+    const now = Date.now();
+    for (const [k, v] of animeTmdbCache) {
+      if (now > v.expiresAt) animeTmdbCache.delete(k);
+    }
+  }
+  const ttl = match.tmdbId > 0 ? ANIME_MATCH_TTL_MS : ANIME_MISS_TTL_MS;
+  animeTmdbCache.set(key, { match, expiresAt: Date.now() + ttl });
+}
+
+async function trySearch(
+  title: string,
+  searchType: "tv" | "movie",
+  year?: number,
+): Promise<AnimeTmdbMatch | null> {
+  try {
+    const r = await searchTmdbByTitle(title, searchType, year);
+    return r ? toTmdbItem(r) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function searchTmdbAnime(
   englishTitle: string | undefined,
   romajiTitle: string,
   year?: number,
-): Promise<{ tmdbId: number; poster?: string; background?: string }> {
-  const titles = [englishTitle, romajiTitle].filter(Boolean) as string[];
+): Promise<AnimeTmdbMatch> {
+  // Sin deduplicar, pasar el mismo nombre por english y por romaji disparaba
+  // dos veces cada consulta identica.
+  const titles = [...new Set(
+    [englishTitle, romajiTitle]
+      .map((t) => t?.trim())
+      .filter((t): t is string => Boolean(t)),
+  )];
+  if (!titles.length) return { tmdbId: 0 };
 
-  for (const title of titles) {
+  const cacheKey = `${titles.join("\u0000")}\u0000${year ?? 0}`;
+  const cached = animeTmdbCache.get(cacheKey);
+  if (cached) {
+    if (Date.now() < cached.expiresAt) return cached.match;
+    animeTmdbCache.delete(cacheKey);
+  }
+
+  let match: AnimeTmdbMatch = { tmdbId: 0 };
+
+  // 1) Titulo exacto con ano.
+  outer: for (const title of titles) {
     for (const searchType of ["tv", "movie"] as const) {
-      try {
-        const r = await searchTmdbByTitle(title, searchType, year);
-        if (r) return toTmdbItem(r);
-      } catch {}
+      const hit = await trySearch(title, searchType, year);
+      if (hit) {
+        match = hit;
+        break outer;
+      }
     }
   }
 
-  for (const title of titles) {
-    for (const searchType of ["tv", "movie"] as const) {
-      try {
-        const r = await searchTmdbByTitle(title, searchType);
-        if (r) return toTmdbItem(r);
-      } catch {}
+  // 2) Titulo exacto sin ano.
+  if (!match.tmdbId) {
+    outer2: for (const title of titles) {
+      for (const searchType of ["tv", "movie"] as const) {
+        const hit = await trySearch(title, searchType);
+        if (hit) {
+          match = hit;
+          break outer2;
+        }
+      }
     }
   }
 
-  for (const title of titles) {
-    const shortTitle = title.split(/[:\-–]/)[0].trim();
-    if (shortTitle.length < 3 || shortTitle === title) continue;
-    for (const searchType of ["tv", "movie"] as const) {
-      try {
-        const r = await searchTmdbByTitle(shortTitle, searchType);
-        if (r) return toTmdbItem(r);
-      } catch {}
+  // 3) Titulo sin el sufijo de temporada ("Gintama: THE VERY FINAL" -> "Gintama").
+  if (!match.tmdbId) {
+    for (const title of titles) {
+      const shortTitle = title.split(/[:\-–]/)[0].trim();
+      if (shortTitle.length < 3 || shortTitle === title) continue;
+      for (const searchType of ["tv", "movie"] as const) {
+        const hit = await trySearch(shortTitle, searchType);
+        if (hit) {
+          match = hit;
+          break;
+        }
+      }
+      if (match.tmdbId) break;
     }
   }
 
-  const fallback = romajiTitle.split(/[:\-–]/)[0].trim().slice(0, 40);
-  if (fallback.length >= 3) {
-    for (const searchType of ["tv", "movie"] as const) {
-      try {
-        const r = await searchTmdbByTitle(fallback, searchType);
-        if (r) return toTmdbItem(r);
-      } catch {}
-    }
-  }
-
-  return { tmdbId: 0, poster: undefined, background: undefined };
+  rememberAnimeMatch(cacheKey, match);
+  return match;
 }
 
 const TMDB_CONCURRENCY = 3;
@@ -460,7 +593,7 @@ export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaIte
   ).slice(0, 40);
   if (!anilistItems.length) return items;
 
-  const resolved = new Map<number, { tmdbId: number; poster?: string; background?: string }>();
+  const resolved = new Map<number, AnimeTmdbMatch>();
   const seasonBaseNames = new Map<number, string>();
   let nextIndex = 0;
 
@@ -472,7 +605,7 @@ export async function resolveAnilistToTmdb(items: MediaItem[]): Promise<MediaIte
         const baseName = stripSeasonPattern(item._romaji) ?? (item._english ? stripSeasonPattern(item._english) : null);
         if (baseName) {
           seasonBaseNames.set(item._anilistId, baseName);
-          const tmdb = await searchTmdbAnime(baseName, baseName, item.year);
+          const tmdb = await searchTmdbAnime(undefined, baseName, item.year);
           if (tmdb && tmdb.tmdbId > 0) {
             resolved.set(item._anilistId, tmdb);
           }

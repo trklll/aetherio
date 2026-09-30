@@ -49,17 +49,26 @@ const MAX_PATH_LENGTH = 256;
  * 218 posters ok y 40 con "TMDB fetch failed: 429".
  *
  * Los valores de ahora se justifican contra el limite real de TMDB (~40-50
- * req/s), no contra lo que "funciona": 1200/30s son exactamente 40/s, el techo
- * que la propia TMDB tolera, asi que el limite sigue frenando a un bucle
- * runaway sin pedirle a upstream mas de lo que da. Si TMDB bajara su techo esto
- * habria que bajar con el (los dos numeros son sobreescritura por variable de
- * entorno: TMDB_RATE_LIMIT y TMDB_IMAGE_RATE_LIMIT).
+ * req/s), no contra lo que "funciona": el limite sigue frenando a un bucle
+ * runaway sin pedirle a upstream mas de lo que da. Los dos numeros son
+ * sobreescritura por variable de entorno: TMDB_RATE_LIMIT y
+ * TMDB_IMAGE_RATE_LIMIT.
+ *
+ * JSON: 900/30s son 30 req/s. La ventana la comparte el arranque en frio de
+ * Home, que enriquECE con logos decenas de filas de anime a 4 peticiones
+ * concurrentes -- del orden de 25 req/s durante unos segundos. Con 400/30s
+ * (13 req/s) ese pico legitimo se comia el techo a mitad del arranque y las
+ * filas pernian poster, fondo y overview. 30 req/s deja margen para el pico
+ * y sigue por debajo del ~40-50 que tolera TMDB.
  *
  * El arreglo de raiz no es este numero: es que la cache de SpatialPosters es
  * solo en memoria, asi que el arranque en frio se repite en cada inicio de la
- * app. Con cache persistente (Upstash) esto deja de importar.
+ * app. Con cache persistente (Upstash) esto deja de importar. Y para el lado
+ * JSON ya se redujo el trabajo de verdad (src/services/tmdbArtworkService.ts
+ * hace una peticion por id en vez de dos y comparte el resultado entre Home,
+ * Detalle y Continue Viendo).
  */
-export const DEFAULT_API_RATE: RateLimitRule = { limit: 400, windowMs: 30_000 };
+export const DEFAULT_API_RATE: RateLimitRule = { limit: 900, windowMs: 30_000 };
 export const DEFAULT_IMAGE_RATE: RateLimitRule = { limit: 1200, windowMs: 30_000 };
 
 // Rutas TMDB: letras, dígitos, /, - y _. Sin puntos (bloquea "..").

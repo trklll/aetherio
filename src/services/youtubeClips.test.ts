@@ -14,6 +14,7 @@ import { tmdbFetch } from "../config/apiKeys.ts";
 import {
   fetchYouTubeClip,
   normalizeYouTubeText,
+  rankCatalogTrailerVideos,
   rankYouTubeCandidates,
 } from "./youtubeClips.ts";
 
@@ -200,5 +201,94 @@ describe("youtube hero search phases", () => {
     expect(callsAfterFirstSearch).toBeGreaterThan(0);
     await fetchYouTubeClip(item);
     expect(invokeMock).toHaveBeenCalledTimes(callsAfterFirstSearch);
+  });
+});
+
+describe("big picture hero trailer-only", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storage.clear();
+    invokeMock.mockResolvedValue([]);
+    tmdbMock.mockResolvedValue({ results: [] });
+  });
+
+  it("ranks catalog videos: trailer first, spanish first, official first, deduped", () => {
+    const ranked = rankCatalogTrailerVideos([
+      { key: "en-trailer", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", size: 1080, published_at: "2024-01-01T00:00:00.000Z" },
+      { key: "es-teaser", site: "YouTube", type: "Teaser", official: true, iso_639_1: "es", size: 720, published_at: "2024-06-01T00:00:00.000Z" },
+      { key: "es-trailer", site: "YouTube", type: "Trailer", official: true, iso_639_1: "es", size: 1080, published_at: "2024-05-01T00:00:00.000Z" },
+      { key: "es-trailer", site: "YouTube", type: "Trailer", official: true, iso_639_1: "es", size: 1080, published_at: "2024-05-01T00:00:00.000Z" },
+      { key: "clip", site: "YouTube", type: "Clip", official: true, iso_639_1: "es", size: 2160, published_at: "2024-07-01T00:00:00.000Z" },
+      { key: "vimeo", site: "Vimeo", type: "Trailer", official: true, iso_639_1: "es", size: 1080, published_at: "2024-07-01T00:00:00.000Z" },
+    ]);
+    expect(ranked.map(video => video.key)).toEqual(["es-trailer", "en-trailer", "es-teaser"]);
+  });
+
+  it("prefers LATAM spanish over Spain spanish and english last", () => {
+    const ranked = rankCatalogTrailerVideos([
+      { key: "en", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", iso_3166_1: "US", size: 1080, published_at: "2024-01-01T00:00:00.000Z" },
+      { key: "es-es", site: "YouTube", type: "Trailer", official: true, iso_639_1: "es", iso_3166_1: "ES", size: 1080, published_at: "2024-01-01T00:00:00.000Z" },
+      { key: "es-mx", site: "YouTube", type: "Trailer", official: true, iso_639_1: "es", iso_3166_1: "MX", size: 1080, published_at: "2024-01-01T00:00:00.000Z" },
+    ]);
+    expect(ranked.map(video => video.key)).toEqual(["es-mx", "es-es", "en"]);
+  });
+
+  it("uses the ranked catalog trailer with ordered fallbacks and skips youtube search", async () => {
+    tmdbMock.mockImplementation(async (path: string, options?: { params?: Record<string, unknown> }) => {
+      if (String(path).endsWith("/videos")) {
+        const language = String((options?.params as Record<string, unknown> | undefined)?.language ?? "");
+        if (language === "es-MX") {
+          return { results: [{ key: "es-mx-first", site: "YouTube", type: "Trailer", official: true, iso_639_1: "es", iso_3166_1: "MX", size: 1080, published_at: "2024-05-01T00:00:00.000Z" }] };
+        }
+        if (language === "es-ES") {
+          return { results: [{ key: "es-es-second", site: "YouTube", type: "Trailer", official: true, iso_639_1: "es", iso_3166_1: "ES", size: 1080, published_at: "2024-04-01T00:00:00.000Z" }] };
+        }
+        return { results: [{ key: "en-third", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", size: 1080, published_at: "2024-01-01T00:00:00.000Z" }] };
+      }
+      return { results: [] };
+    });
+
+    const entry = await fetchYouTubeClip(
+      { id: "tmdb:11", type: "movie", name: "Dune", year: 2021 },
+      { firstTrailerOnly: true },
+    );
+    expect(entry?.videoId).toBe("es-mx-first");
+    expect(entry?.source).toBe("tmdb");
+    expect(entry?.fallbacks.map(item => item.videoId)).toEqual(["es-es-second", "en-third"]);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to official trailer search when the catalog has no videos, never scenes", async () => {
+    invokeMock.mockImplementation(async (_command, args) => {
+      const query = String((args as { query?: string }).query ?? "");
+      if (query.includes("trailer") && query.includes("Dune")) return [result("official-trailer", "Dune - official trailer", 150)];
+      return [];
+    });
+
+    const entry = await fetchYouTubeClip(
+      { id: "tmdb:12", type: "movie", name: "Dune", year: 2021 },
+      { firstTrailerOnly: true },
+    );
+    expect(entry?.videoId).toBe("official-trailer");
+    const queries = invokeMock.mock.calls.map(([, args]) => String((args as { query?: string }).query ?? ""));
+    expect(queries.some(query => query.includes("scene") || query.includes("escena") || query.includes("clip"))).toBe(false);
+  });
+
+  it("falls back to global trailer search when official channels have nothing", async () => {
+    invokeMock.mockImplementation(async (_command, args) => {
+      const query = String((args as { query?: string }).query ?? "");
+      const channel = (args as { channel?: string | null }).channel;
+      if (!channel && query.includes("trailer") && query.includes("Dune")) {
+        return [result("global-trailer", "Dune - official trailer", 150)];
+      }
+      return [];
+    });
+
+    const entry = await fetchYouTubeClip(
+      { id: "tmdb:13", type: "movie", name: "Dune", year: 2021 },
+      { firstTrailerOnly: true },
+    );
+    expect(entry?.videoId).toBe("global-trailer");
+    expect(invokeMock.mock.calls.some(([, args]) => (args as { channel?: string | null }).channel == null)).toBe(true);
   });
 });

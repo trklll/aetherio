@@ -1,10 +1,9 @@
 import { Maximize, Minus, X } from "lucide-react";
-import { isAndroidRuntime } from "../../runtime/platform";
 import { closeWindow, minimizeWindow, toggleWindowFullscreen } from "../../utils/windowControls";
 import FloatingActionButton from "./FloatingActionButton";
 
 export default function WindowControls() {
-  if (isAndroidRuntime()) return null;
+
   return (
     <>
       <FloatingActionButton

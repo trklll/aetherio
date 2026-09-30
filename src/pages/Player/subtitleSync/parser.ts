@@ -12,6 +12,8 @@ export function parseSubtitleCuesFromText(rawText: string, sourceUrl: string): S
     .replace("\uFEFF", "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
+  if (looksLikeAss(cleanedText, sourceUrl)) return parseAss(cleanedText);
+  if (looksLikeTtml(cleanedText, sourceUrl)) return parseTtml(cleanedText);
   return looksLikeVtt(cleanedText, sourceUrl) ? parseVtt(cleanedText) : parseSrt(cleanedText);
 }
 
@@ -19,6 +21,75 @@ function looksLikeVtt(text: string, sourceUrl: string): boolean {
   const normalizedUrl = sourceUrl.split("?")[0].split("#")[0].toLowerCase();
   if (normalizedUrl.endsWith(".vtt") || normalizedUrl.endsWith(".webvtt")) return true;
   return text.trimStart().startsWith("WEBVTT");
+}
+
+function looksLikeAss(text: string, sourceUrl: string): boolean {
+  const normalizedUrl = sourceUrl.split("?")[0].split("#")[0].toLowerCase();
+  return normalizedUrl.endsWith(".ass") || normalizedUrl.endsWith(".ssa") || /^\s*\[Script Info\]/i.test(text);
+}
+
+function looksLikeTtml(text: string, sourceUrl: string): boolean {
+  const normalizedUrl = sourceUrl.split("?")[0].split("#")[0].toLowerCase();
+  return normalizedUrl.endsWith(".ttml") || normalizedUrl.endsWith(".xml") || /<tt(?:\s|>)/i.test(text);
+}
+
+function parseAss(text: string): SubtitleSyncCue[] {
+  let format: string[] = [];
+  const cues: SubtitleSyncCue[] = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (/^Format\s*:/i.test(line) && /Start/i.test(line)) {
+      format = line.slice(line.indexOf(":") + 1).split(",").map(value => value.trim().toLowerCase());
+      continue;
+    }
+    if (!/^Dialogue\s*:/i.test(line)) continue;
+    const values = line.slice(line.indexOf(":") + 1).split(",").map(value => value.trim());
+    const startIndex = Math.max(0, format.indexOf("start"));
+    const endIndex = Math.max(0, format.indexOf("end"));
+    const textIndex = Math.max(0, format.indexOf("text"));
+    const startTimeMs = parseTimestampMs(values[startIndex] ?? "");
+    const endTimeMs = parseTimestampMs(values[endIndex] ?? "");
+    if (startTimeMs === null || endTimeMs === null || endTimeMs <= startTimeMs) continue;
+    const cueText = normalizeCueText((values.slice(textIndex).join(",") || "")
+      .replace(/\\N|\\n/gi, "\n")
+      .replace(ASS_OVERRIDE_TAG_REGEX, ""));
+    if (cueText.trim()) cues.push({ startTimeMs, endTimeMs, text: cueText });
+  }
+  return cues.sort((left, right) => left.startTimeMs - right.startTimeMs);
+}
+
+function parseTtml(text: string): SubtitleSyncCue[] {
+  const cues: SubtitleSyncCue[] = [];
+  const pattern = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
+  for (const match of text.matchAll(pattern)) {
+    const attributes = match[1] ?? "";
+    const begin = readXmlAttribute(attributes, "begin");
+    const end = readXmlAttribute(attributes, "end");
+    const duration = readXmlAttribute(attributes, "dur");
+    const startTimeMs = parseXmlTime(begin);
+    const durationMs = parseXmlTime(duration);
+    const endTimeMs = parseXmlTime(end) ?? (startTimeMs !== null && durationMs !== null ? startTimeMs + durationMs : null);
+    if (startTimeMs === null || endTimeMs === null || endTimeMs <= startTimeMs) continue;
+    const cueText = normalizeCueText(match[2]
+      .replace(/<br\s*\/?\s*>/gi, "\n")
+      .replace(/<[^>]+>/g, " "));
+    if (cueText.trim()) cues.push({ startTimeMs, endTimeMs, text: cueText });
+  }
+  return cues.sort((left, right) => left.startTimeMs - right.startTimeMs);
+}
+
+function readXmlAttribute(attributes: string, name: string): string {
+  const match = attributes.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i"));
+  return match?.[1] ?? "";
+}
+
+function parseXmlTime(raw: string): number | null {
+  const value = raw.trim();
+  if (!value) return null;
+  const clock = parseTimestampMs(value.split(/[;\s]/)[0]);
+  if (clock !== null) return clock;
+  const seconds = Number(value.replace(/s$/i, ""));
+  return Number.isFinite(seconds) ? Math.round(seconds * 1_000) : null;
 }
 
 function parseSrt(text: string): SubtitleSyncCue[] {
@@ -240,4 +311,21 @@ export function formatAutoSyncDelay(delayMs: number): string {
   const seconds = Math.floor(absMs / 1000);
   const millis = absMs % 1000;
   return `${sign}${seconds}.${String(millis).padStart(3, "0")}s`;
+}
+
+function formatWebVttTimestamp(timeMs: number): string {
+  const totalMilliseconds = Math.max(0, Math.round(timeMs));
+  const hours = Math.floor(totalMilliseconds / 3_600_000);
+  const minutes = Math.floor((totalMilliseconds % 3_600_000) / 60_000);
+  const seconds = Math.floor((totalMilliseconds % 60_000) / 1_000);
+  const milliseconds = totalMilliseconds % 1_000;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+export function serializeWebVttCues(cues: SubtitleSyncCue[]): string {
+  const blocks = cues.map((cue, index) => {
+    const text = cue.text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    return `${index + 1}\n${formatWebVttTimestamp(cue.startTimeMs)} --> ${formatWebVttTimestamp(cue.endTimeMs)}\n${text}`;
+  });
+  return `WEBVTT\n\n${blocks.join("\n\n")}\n`;
 }

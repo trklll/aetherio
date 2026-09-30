@@ -58,7 +58,7 @@ impl Default for ProviderHttpState {
     }
 }
 
-fn is_safe_url(url: &Url) -> bool {
+pub(crate) fn is_safe_url(url: &Url) -> bool {
     if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() {
         return false;
     }
@@ -84,8 +84,39 @@ fn is_safe_url(url: &Url) -> bool {
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local())
         }
-        Err(_) => true,
+        // A hostname that merely looks numeric (bare integers like
+        // 2130706433, hex/octal forms, shortened dotted quads) is rejected:
+        // resolvers may interpret it as an IP while `IpAddr::parse` does
+        // not, which previously bypassed this denylist. Plain DNS names
+        // still pass here and are resolved later by the HTTP client.
+        Err(_) => !looks_numeric(&normalized),
     }
+}
+
+/// True for host spellings that resolvers may interpret as IP addresses even
+/// though `IpAddr::parse` rejects them: bare integers (`2130706433`),
+/// hexadecimal (`0x7f.0.0.1`), octal quads (`0177.0.0.1`), and shortened
+/// digit-dot forms (`127.1`).
+fn looks_numeric(normalized: &str) -> bool {
+    if normalized.is_empty() || normalized.contains(['@', ' ', '/', '?', '#']) {
+        return true;
+    }
+    if normalized.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("0x") {
+        return true;
+    }
+    if normalized.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return true;
+    }
+    for part in normalized.split('.') {
+        if part.len() > 1 && part.starts_with('0') && part.bytes().all(|b| b.is_ascii_digit()) {
+            return true;
+        }
+    }
+    false
 }
 
 fn response_headers(headers: &HeaderMap) -> HashMap<String, String> {
@@ -209,6 +240,25 @@ mod tests {
             "file:///etc/passwd",
         ] {
             assert!(!is_safe_url(&Url::parse(url).unwrap()));
+        }
+    }
+
+    #[test]
+    fn rejects_non_canonical_numeric_hosts() {
+        // Integer, hexadecimal, octal, and shortened literals must not pass
+        // as "public DNS": resolvers may interpret them as loopback/private
+        // IPs while `IpAddr::parse` does not recognize them.
+        for url in [
+            "http://2130706433/test",
+            "http://0x7f.0.0.1/test",
+            "http://0x7f000001/test",
+            "http://0177.0.0.1/test",
+            "http://127.1/test",
+        ] {
+            assert!(
+                !is_safe_url(&Url::parse(url).unwrap()),
+                "numeric host bypassed the guard: {url}"
+            );
         }
     }
 

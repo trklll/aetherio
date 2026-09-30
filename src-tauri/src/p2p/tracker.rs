@@ -66,6 +66,7 @@ pub enum TrackerMessage {
     },
 }
 
+#[allow(dead_code)]
 struct PeerConnection {
     peer_id: String,
     info_hash: String,
@@ -123,6 +124,7 @@ impl TrackerState {
 
 pub struct TrackerServer {
     pub port: u16,
+    #[allow(dead_code)]
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     _handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -163,6 +165,7 @@ impl TrackerServer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stop(&mut self) {
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
@@ -282,7 +285,7 @@ async fn handle_peer(stream: tokio::net::TcpStream, state: Arc<TrackerState>) {
                             state.send_to(info_hash, &to, &relay);
                         }
                     }
-                    TrackerMessage::IceCandidate { from, to, .. } => {
+                    TrackerMessage::IceCandidate { from: _, to, .. } => {
                         if let Some((info_hash, _)) = &my_info {
                             state.send_to(info_hash, &to, &text);
                         }

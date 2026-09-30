@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, Children, Component, lazy, Suspense, type LazyExoticComponent, type ComponentType } from "react";
 import type { ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { BookmarkMinus, BookmarkPlus, Image as ImageIcon, MoreHorizontal, Play, X, ChevronDown, Check, EyeOff, UsersRound } from "lucide-react";
+import { useBackAction } from "../../input/inputActions.ts";
+import { BookmarkMinus, BookmarkPlus, Image as ImageIcon, MoreHorizontal, Play, X, Check, EyeOff, UsersRound } from "lucide-react";
 import addImageIcon from "../../assets/add-image-svgrepo-com.svg";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
@@ -25,7 +26,7 @@ import {
   type ContinueWatchingEntry,
 } from "../../utils/continueWatching";
 import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork";
-import { pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork";
+import { ensureOriginalTmdbImage, pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork";
 import {
   readDetailBackgroundOverride,
   readDetailLogoOverride,
@@ -42,38 +43,170 @@ import {
 } from "../../trakt";
 import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../services/tmdbComments";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
-import { gsap, appleEase, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
+import { gsap, appleEase, prefersReducedMotion, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
 import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
 import { useAwardsByTmdbId, awardCategoryLabel, featuredText } from "../../hooks/useAwards";
 import { AwardLogo } from "../../components/awards/AwardLogo";
+import CardArtworkPicker, { type CardArtworkPickerOption } from "../Home/CardArtworkPicker";
+import type { MediaItem } from "../../types/ui";
+import LoadingState from "../../components/ui/LoadingState";
+import SeasonTabs from "./SeasonTabs.tsx";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
+import { buildDetailPath, buildEntityPath, buildEpisodePath, buildPersonPath, buildPlayerPath, detailDataMatchesRoute, isBigPictureLocation } from "../../utils/bigPictureDetail";
+import { pickTmdbSearchCandidate, type TmdbSearchCandidate } from "../../utils/tmdbIdentity";
+import { DETAIL_ENTER_CONTENT_EVENT, DETAIL_EXIT_HERO_EVENT, useBigPictureActive } from "../../navigation/spatialNav.ts";
+import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
+import { GAMEPAD_ACTION_EVENT } from "../../hooks/useGamepad.ts";
+import { consumeAutoResolveBackPress } from "../../utils/autoResolveGuard.ts";
+
+const loadEpisodieSection = () => import("../Episodie/index.tsx");
+
+// Reintenta cargas transitorias del chunk (p. ej. HMR/dev a medio recargar):
+// sin esto un fallo puntual deja el Suspense pendiente para siempre.
+function lazyWithRetry<T extends ComponentType<any>>(
+  loader: () => Promise<{ default: T }>,
+  retries = 3,
+): LazyExoticComponent<T> {
+  return lazy(() => {
+    const attempt = (remaining: number): Promise<{ default: T }> =>
+      loader().catch(error => {
+        if (remaining <= 0) throw error;
+        return new Promise<{ default: T }>(resolve => {
+          window.setTimeout(() => { void attempt(remaining - 1).then(resolve); }, 600);
+        });
+      });
+    return attempt(retries);
+  });
+}
+
+const EpisodieSection = lazyWithRetry(loadEpisodieSection);
+
+class EpisodeSectionErrorBoundary extends Component<{
+  onRetry: () => void;
+  onClose: () => void;
+  onError: () => void;
+  children: ReactNode;
+}, { error: unknown }> {
+  state = { error: null as unknown };
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+  componentDidCatch() {
+    this.props.onError();
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: "60vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: 32, textAlign: "center" }}>
+          <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,0.9)" }}>
+            No se pudo cargar la sección de fuentes
+          </p>
+          <p style={{ margin: 0, fontSize: 13, color: "rgba(255,255,255,0.6)", maxWidth: 420 }}>
+            El detalle sigue intacto debajo. Reintenta para volver a cargar la sección.
+          </p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              type="button"
+              onClick={() => { this.setState({ error: null }); this.props.onRetry(); }}
+              style={{ padding: "10px 22px", borderRadius: 999, border: "none", background: "#fff", color: "#000", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
+            >
+              Reintentar
+            </button>
+            <button
+              type="button"
+              onClick={this.props.onClose}
+              style={{ padding: "10px 22px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
+            >
+              Volver
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export interface DetailEpisodeRequest {
+  season?: number;
+  ep?: number;
+  episodeName?: string;
+  continue?: boolean;
+  autoplay?: boolean;
+  fromSearch?: boolean;
+  q?: string;
+  fromPlayer?: boolean;
+}
+
+function readEpisodeRequestFromState(state: unknown): DetailEpisodeRequest | null {
+  if (!state || typeof state !== "object") return null;
+  const request = (state as { episodeRequest?: unknown }).episodeRequest;
+  if (!request || typeof request !== "object") return null;
+  const candidate = request as Record<string, unknown>;
+  const clean: DetailEpisodeRequest = {};
+  if (typeof candidate.season === "number") clean.season = candidate.season;
+  if (typeof candidate.ep === "number") clean.ep = candidate.ep;
+  if (typeof candidate.episodeName === "string") clean.episodeName = candidate.episodeName;
+  if (typeof candidate.continue === "boolean") clean.continue = candidate.continue;
+  if (typeof candidate.autoplay === "boolean") clean.autoplay = candidate.autoplay;
+  if (typeof candidate.fromSearch === "boolean") clean.fromSearch = candidate.fromSearch;
+  if (typeof candidate.q === "string") clean.q = candidate.q;
+  if (typeof candidate.fromPlayer === "boolean") clean.fromPlayer = candidate.fromPlayer;
+  return clean;
+}
 const IMG      = "https://image.tmdb.org/t/p";
 const DEBUG_LOGO = false;
+// Empieza el fade del logo durante la salida del hero, antes de que la primera
+// fila de contenido termine de entrar en el viewport.
+const CONTENT_LOGO_REVEAL_DISTANCE = 520;
+// Duración del recorrido hero → contenido en Big Picture (referencia Akira).
+const DETAIL_ZONE_TRAVEL_S = 0.74;
 const DETAIL_LOGO_KEY = "aetherio-detail-logo";
-const DETAIL_HERO_HEIGHT = "calc(78vh + var(--app-shell-nav-height) - 150px)";
+const DETAIL_HERO_HEIGHT = "calc(78vh + var(--app-shell-nav-height) - 60px)";
+const BIG_PICTURE_DETAIL_HERO_HEIGHT = "calc(78vh - 60px)";
 const DETAIL_VERTICAL_CARD_GAP = 22;
 const DETAIL_EPISODE_CARD_GAP = 22;
 const DETAIL_ROW_SHADOW_TOP_GUTTER = 16;
 const DETAIL_ROW_SHADOW_BOTTOM_GUTTER = 40;
-const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 16, bottom: 40 };
+const DETAIL_RELATED_ROW_SHADOW_GUTTER = { top: 36, bottom: 76 };
+// Los trailers usan sombra + escala mayores (0 20px 42px en hover): necesitan
+// más gutter vertical para que el scrollport horizontal no la recorte.
+const DETAIL_TRAILER_ROW_SHADOW_GUTTER = { top: 28, bottom: 64 };
+// Colección (340x192, escala 1.05 + 0 20px 42px en foco) y comentarios TMDB
+// (escala 1.04 + 0 22px 46px en foco): misma clase de sombra que trailers,
+// mismo problema de recorte con el gutter por defecto (16/40).
+const DETAIL_COLLECTION_ROW_SHADOW_GUTTER = { top: 28, bottom: 64 };
+const DETAIL_COMMENTS_ROW_SHADOW_GUTTER = { top: 28, bottom: 72 };
+// Altura nominal de la card de comentario (minHeight 144 + contenido): solo
+// para centrar las flechas de la row, que son un affordance hover en PC.
+const DETAIL_COMMENTS_CARD_HEIGHT = 160;
 // Keep arrows centered on the media (image) height, not the full card
-const DETAIL_EPISODE_MEDIA_HEIGHT = 225;
+const DETAIL_EPISODE_MEDIA_HEIGHT = 195;
 const DETAIL_TRAILER_HEIGHT = 224;
 const DETAIL_CAST_PORTRAIT_SIZE = 159;
 const DETAIL_VERTICAL_POSTER_HEIGHT = 296;
 const DETAIL_COLLECTION_HEIGHT = 192;
 const DETAIL_MEDIA_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_EPISODE_MEDIA_HEIGHT / 2 + 10;
-const DETAIL_TRAILER_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_TRAILER_HEIGHT / 2;
+const DETAIL_TRAILER_ARROW_TOP = DETAIL_TRAILER_ROW_SHADOW_GUTTER.top + DETAIL_TRAILER_HEIGHT / 2;
 const DETAIL_CAST_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_CAST_PORTRAIT_SIZE / 2;
-const DETAIL_RELATED_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_VERTICAL_POSTER_HEIGHT / 2;
-const DETAIL_COLLECTION_ARROW_TOP = DETAIL_ROW_SHADOW_TOP_GUTTER + DETAIL_COLLECTION_HEIGHT / 2;
+const DETAIL_RELATED_ARROW_TOP = DETAIL_RELATED_ROW_SHADOW_GUTTER.top + DETAIL_VERTICAL_POSTER_HEIGHT / 2;
+const DETAIL_COLLECTION_ARROW_TOP = DETAIL_COLLECTION_ROW_SHADOW_GUTTER.top + DETAIL_COLLECTION_HEIGHT / 2;
+const DETAIL_COMMENTS_ARROW_TOP = DETAIL_COMMENTS_ROW_SHADOW_GUTTER.top + DETAIL_COMMENTS_CARD_HEIGHT / 2;
 
-function preloadImage(url?: string | null) {
+function preloadImage(url?: string | null, timeoutMs = 6000) {
   if (!url) return Promise.resolve();
   return new Promise<void>(resolve => {
+    let settled = false;
     const img = new Image();
-    img.onload = () => resolve();
-    img.onerror = () => resolve();
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = window.setTimeout(finish, timeoutMs);
+    img.onload = finish;
+    img.onerror = finish;
     img.src = url;
   });
 }
@@ -216,7 +349,10 @@ function formatDateLabel(value?: string) {
 }
 
 function detailPageCacheKey(type?: string, id?: string) {
-  return type && id ? `${type}:${id}` : "";
+  // La versión anterior podía cachear un anime con la namespace TMDB
+  // equivocada (movie/229858 = Three Mothers, tv/229858 = Fate/strange Fake).
+  // No reutilizar esos detalles una vez corregida la resolución de identidad.
+  return type && id ? `v2:${type}:${id}` : "";
 }
 
 function normalizeMojibakeText(value?: string | null) {
@@ -407,6 +543,25 @@ function parseMediaIds(id: string) {
     return Number.isFinite(anilist) && anilist > 0 ? { anilist } : {};
   }
   return {};
+}
+
+type TmdbKind = "movie" | "tv";
+
+const TMDB_DETAIL_APPEND = "credits,aggregate_credits,videos,similar,recommendations,external_ids";
+
+function inferTmdbKind(value: any, requested: TmdbKind): TmdbKind {
+  if (!value || typeof value !== "object") return requested;
+  if (
+    typeof value.name === "string"
+    || typeof value.first_air_date === "string"
+    || Object.prototype.hasOwnProperty.call(value, "number_of_seasons")
+  ) return "tv";
+  if (
+    typeof value.title === "string"
+    || typeof value.release_date === "string"
+    || Object.prototype.hasOwnProperty.call(value, "runtime")
+  ) return "movie";
+  return requested;
 }
 
 function resolveDetailImdbId(detail: DetailData) {
@@ -617,7 +772,10 @@ function isEpisodeLocked(episode: Episode) {
   if (!releaseMs) return false;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  return releaseMs > today.getTime();
+  // TMDB suele ir 1 día desfasado (dice 21 cuando estrena el 20).
+  // Permitir entrar 1 día antes de la fecha anunciada.
+  const EARLY_ACCESS_MS = 24 * 60 * 60 * 1000;
+  return releaseMs > today.getTime() + EARLY_ACCESS_MS;
 }
 
 function parseEpisodeAirDateMs(value?: string) {
@@ -634,18 +792,14 @@ function getEpisodeKey(season?: number, episode?: number) {
   return typeof season === "number" && episode ? `${season}:${episode}` : "";
 }
 
-function getSearchReturnPath(params: URLSearchParams) {
-  if (params.get("fromSearch") !== "1") return null;
-  const query = params.get("q")?.trim();
-  return query ? `/search?q=${encodeURIComponent(query)}` : "/search";
-}
-
 function isActiveDetailPath(pathname: string, type?: string, id?: string) {
   if (!type || !id) return false;
   const segments = pathname.split("/").filter(Boolean);
-  if (segments.length !== 3 || segments[0] !== "detail" || segments[1] !== type) return false;
+  // PC: /detail/:type/:id — Big Picture: /big-picture/detail/:type/:id
+  const offset = segments[0] === "big-picture" && segments[1] === "detail" ? 1 : 0;
+  if (segments.length !== 3 + offset || segments[offset] !== "detail" || segments[offset + 1] !== type) return false;
   try {
-    return decodeURIComponent(segments[2]) === id;
+    return decodeURIComponent(segments[offset + 2]) === id;
   } catch {
     return false;
   }
@@ -753,17 +907,59 @@ function mapAddonSeasons(meta: any): DetailData["seasons"] | undefined {
     }));
 }
 
-export default function DetailPage() {
+export default function DetailPage({
+  onShellPreviewReady,
+  onShellPreviewBackground,
+  onBigPictureBackground,
+  onBigPictureEpisodeNavigation,
+  bigPictureEpisodeTransitioning = false,
+  initialEpisodeRequest,
+}: {
+  onShellPreviewReady?: () => void;
+  onShellPreviewBackground?: (background: string) => void;
+  onBigPictureBackground?: (background: string) => void;
+  onBigPictureEpisodeNavigation?: (to: string) => void;
+  bigPictureEpisodeTransitioning?: boolean;
+  initialEpisodeRequest?: DetailEpisodeRequest | null;
+} = {}) {
   const { type, id } = useParams<{type:string;id:string}>();
   const navigate = useNavigate();
   const location = useLocation();
   const routeCacheKey = detailPageCacheKey(type, id);
   const initialCachedDetail = readPageDataCache<DetailData>("detail", routeCacheKey);
-  const normalizedInitialDetail = initialCachedDetail ? normalizeDetailData(initialCachedDetail) : null;
-  const [data, setData]         = useState<DetailData|null>(() => normalizedInitialDetail);
-  const [loading, setLoading]   = useState(() => !normalizedInitialDetail);
+  const normalizedInitialDetail = initialCachedDetail ? normalizeDetailData({
+    ...initialCachedDetail,
+    backdrop: ensureOriginalTmdbImage(initialCachedDetail.backdrop) ?? initialCachedDetail.backdrop,
+  }) : null;
+  const initialBackgroundOverride = readDetailBackgroundOverride(type, id);
+  const initialSeed = readDetailMediaMeta(type, id);
+  const initialDetail = normalizedInitialDetail && initialBackgroundOverride
+    ? {
+      ...normalizedInitialDetail,
+      backdrop: ensureOriginalTmdbImage(initialBackgroundOverride) ?? initialBackgroundOverride,
+    }
+    : normalizedInitialDetail ?? (type && id && initialSeed ? {
+      id,
+      name: initialSeed.name ?? "",
+      type,
+      ids: parseMediaIds(id),
+      aliases: uniqueAliases(initialSeed.name, id),
+      backdrop: ensureOriginalTmdbImage(initialBackgroundOverride ?? initialSeed.background)
+        ?? initialBackgroundOverride
+        ?? initialSeed.background,
+      poster: initialSeed.poster,
+      logo: sanitizeLogoUrl(initialSeed.logo),
+      description: initialSeed.description,
+      year: initialSeed.year,
+      mdbListRatings: initialSeed.mdbListRatings,
+    } : null);
+  const [data, setData]         = useState<DetailData|null>(() => initialDetail);
+  // El seed reserva el layout y puede mantenerse visible mientras la
+  // revalidación resuelve el backdrop definitivo.
+  const [loading, setLoading]   = useState(() => isBigPictureLocation(location.pathname) || !initialDetail);
   const [season, setSeason]     = useState(1);
   const [showMore, setShowMore] = useState(false);
+  const [synopsisTop, setSynopsisTop] = useState<number | null>(null);
   const [progressVersion, setProgressVersion] = useState(0);
   const [logoStatus, setLogoStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [cachedLogo, setCachedLogo] = useState<string | null>(() => readCachedLogo(getDetailLogoKey(type, id)));
@@ -778,6 +974,10 @@ export default function DetailPage() {
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const detailMenuButtonRef = useRef<HTMLButtonElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
+  // Fade del hero ligado al scroll (vía imperativa con gsap.set, igual que el
+  // blur del backdrop: no depende de la cascada CSS).
+  const heroCopyRef = useRef<HTMLDivElement>(null);
+  const heroCreditsRef = useRef<HTMLDivElement>(null);
   const awardBadgeRef = useRef<HTMLDivElement>(null);
   const detailContentRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
@@ -798,9 +998,142 @@ export default function DetailPage() {
   const metadataVignetteOpacityRef = useRef(1);
   const darkOverlayRef = useRef<HTMLDivElement>(null);
   const darkOverlayOpacityRef = useRef(0);
+  // Zona de contenido (solo picture): el logo desplegado marca "ya bajaste".
+  const pastHeroRef = useRef(false);
+  const detailScrollTopRef = useRef(0);
+  // La key del capítulo resume viaja en ref: el listener de
+  // enterContentZone se registra una vez y si leyera el closure vería la key
+  // del primer render (vacía).
+  const episodeScrollKeyRef = useRef("");
   const getEnabled = useAddonStore(s => s.getEnabledAddons);
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const mdbListSettings = useMdbListSettings();
+  // En picture el detail es la misma page de PC pero con foco = escala sin
+  // bordes, logo y créditos del hero no clicables, y foco inicial en Reproducir.
+  const bigPicture = useBigPictureActive();
+  // Episodie como sección embebida: nunca se sale del Detail, solo cambia de
+  // sección sobre el MISMO fondo (una sola imagen). La sección se pilota con
+  // el state del historial: abrir empuja una entrada, Atrás la cierra.
+  const inShellPreview = Boolean(onShellPreviewReady ?? onShellPreviewBackground);
+  const episodeRequestFromState = useMemo(() => readEpisodeRequestFromState(location.state), [location.state]);
+  const episodeRequest = episodeRequestFromState ?? initialEpisodeRequest ?? null;
+  const episodeOpen = Boolean(episodeRequest && data);
+  const episodeSectionRef = useRef<HTMLDivElement>(null);
+  const episodeWasOpenRef = useRef(false);
+  // La sección solo se revela cuando confirma contenido listo. Mientras tanto
+  // el Detail sigue visible sobre el mismo fondo: imposible quedarse en un
+  // fondo vacío atascado.
+  const [episodeSectionReady, setEpisodeSectionReady] = useState(false);
+  // La sección viva adapta su query internamente; el ready se mantiene entre
+  // peticiones para no re-animar al cambiar de episodio con ella abierta.
+  const [sectionAttempt, setSectionAttempt] = useState(0);
+  const episodeShown = episodeOpen && episodeSectionReady;
+  const selectedEpisode = (episodeRequest && data?.seasons
+    ?.find(season => season.number === episodeRequest.season)?.episodes
+    ?.find(episode => episode.episode === episodeRequest.ep))
+    ?? null;
+  const episodeQueryOverride = useMemo(() => data && episodeRequest ? ({
+    type: data.type,
+    id: data.id,
+    season: episodeRequest.season,
+    episode: episodeRequest.ep,
+    epTitle: episodeRequest.episodeName ?? selectedEpisode?.name,
+    continue: episodeRequest.continue,
+    autoplay: episodeRequest.autoplay,
+    fromSearch: episodeRequest.fromSearch,
+    q: episodeRequest.q,
+    fromPlayer: episodeRequest.fromPlayer,
+    name: data.name,
+    background: data.backdrop,
+    poster: data.poster,
+    logo: data.logo,
+    description: data.description,
+    genres: data.genres,
+    episodeTitle: selectedEpisode?.name,
+    episodeOverview: selectedEpisode?.overview,
+    episodeStill: selectedEpisode?.still,
+    runtime: selectedEpisode?.runtime,
+    airDate: selectedEpisode?.airDate,
+    mdbListRatings: data.mdbListRatings,
+    voteAverage: data.voteAverage,
+    trailerVideoIds: data.trailers?.map(trailer => trailer.key).filter((key): key is string => Boolean(key)),
+  }) : null, [
+    data,
+    // La identidad del request: pasar de null a {} (película sin campos) debe
+    // recomputar aunque ningún campo opcional haya cambiado.
+    episodeRequest,
+    episodeRequest?.autoplay,
+    episodeRequest?.continue,
+    episodeRequest?.ep,
+    episodeRequest?.episodeName,
+    episodeRequest?.fromPlayer,
+    episodeRequest?.fromSearch,
+    episodeRequest?.q,
+    episodeRequest?.season,
+    selectedEpisode,
+  ]);
+  useEffect(() => {
+    // La sección Episodie vive en otro chunk: precargarlo en reposo para que
+    // la primera apertura no muestre la sección vacía mientras se resuelve.
+    if (inShellPreview) return;
+    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    if (typeof idle === "function") {
+      const id = idle(() => { void loadEpisodieSection(); });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(() => { void loadEpisodieSection(); }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [inShellPreview]);
+  const openEpisodeSection = (request: DetailEpisodeRequest) => {
+    // Preload before changing sections so the shared backdrop can remain
+    // unobstructed while the section chunk is resolved.
+    void loadEpisodieSection();
+    const baseState = (location.state && typeof location.state === "object" ? location.state : {}) as Record<string, unknown>;
+    navigate(`${location.pathname}${location.search}`, {
+      state: { ...baseState, episodeRequest: request },
+    });
+  };
+  const closeEpisodeSection = () => {
+    if (!episodeRequest) return;
+    const baseState = (location.state && typeof location.state === "object" ? { ...(location.state as Record<string, unknown>) } : {}) as Record<string, unknown>;
+    delete baseState.episodeRequest;
+    navigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: Object.keys(baseState).length ? baseState : null,
+    });
+    window.setTimeout(() => {
+      playButtonRef.current?.focus({ preventScroll: true });
+    }, 60);
+  };
+  useBackAction(() => {
+    if (consumeAutoResolveBackPress()) return;
+    if (episodeOpen) closeEpisodeSection();
+  }, !episodeOpen);
+  const pickerItem = useMemo<MediaItem | null>(() => data ? {
+    id: data.id,
+    type: data.type,
+    name: data.name,
+    poster: data.poster,
+    background: data.backdrop,
+    logo: data.logo,
+  } : null, [data]);
+  const backgroundPickerOptions = useMemo<CardArtworkPickerOption[]>(
+    () => (data?.backgroundOptions ?? []).map(option => ({
+      url: option.url,
+      label: option.label,
+      preview: backgroundPreviewUrl(option.url),
+    })),
+    [data?.backgroundOptions],
+  );
+  const logoPickerOptions = useMemo<CardArtworkPickerOption[]>(
+    () => (data?.logoOptions ?? []).map(option => ({
+      url: sanitizeLogoUrl(option.url) ?? option.url,
+      label: option.label,
+      preview: option.url,
+    })),
+    [data?.logoOptions],
+  );
+  const playButtonRef = useRef<HTMLButtonElement>(null);
   const tmdbIdForAwards = data?.ids?.tmdb ?? (id?.startsWith("tmdb:") ? Number(id.replace("tmdb:", "")) : null);
   const awardsType = data?.type ?? type ?? "";
   const awards = useAwardsByTmdbId(
@@ -883,6 +1216,21 @@ export default function DetailPage() {
     };
   }, []);
 
+  // En Big Picture el popup de sinopsis no tiene X: B del mando / Esc lo
+  // cierra. En captura para preceder al back de BigPicture (burbuja); AppShell
+  // y BigPicture lo ignoran cuando el popup está abierto (marcador DOM).
+  useEffect(() => {
+    if (!bigPicture || !showMore) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Esc" && event.code !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowMore(false);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [bigPicture, showMore]);
+
   useEffect(() => {
     if (data?.logo || cachedLogo) setLogoStatus("loaded");
     else setLogoStatus("idle");
@@ -897,7 +1245,7 @@ export default function DetailPage() {
   }, [loading, data?.id]);
 
   useLayoutEffect(() => {
-    if (!isActiveDetailPath(location.pathname, type, id)) return;
+    if (!bigPicture && !isActiveDetailPath(location.pathname, type, id)) return;
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
     gsap.killTweensOf([
       backdropImageRef.current,
@@ -907,10 +1255,18 @@ export default function DetailPage() {
     backdropBlurAmountRef.current = 0;
     metadataVignetteOpacityRef.current = 1;
     darkOverlayOpacityRef.current = 0;
+    pastHeroRef.current = false;
+    detailScrollTopRef.current = 0;
+    detailScrollRef.current?.removeAttribute("data-past-hero");
+    detailScrollRef.current?.removeAttribute("data-content-zone");
+    // El fade del hero es estilo inline (gsap.set en updateBackdropBlur):
+    // al cambiar de ruta se restaura sin depender de la cascada.
+    if (heroCopyRef.current) gsap.set(heroCopyRef.current, { opacity: 1, y: 0 });
+    if (heroCreditsRef.current) gsap.set(heroCreditsRef.current, { opacity: 1, y: 0 });
     gsap.set(backdropImageRef.current, { opacity: 1, filter: "blur(0px)", scale: 1 });
     gsap.set(metadataVignetteRef.current, { opacity: 1 });
     gsap.set(darkOverlayRef.current, { opacity: 0 });
-  }, [type, id, location.key, location.pathname]);
+  }, [bigPicture, type, id, location.pathname]);
 
   useLayoutEffect(() => {
     backdropBlurAmountRef.current = -1;
@@ -994,7 +1350,7 @@ export default function DetailPage() {
     const root = detailContentRef.current;
     if (loading || !data || !root) return;
     const items = Array.from(root.querySelectorAll<HTMLElement>(
-      ".detail-page-hero > div, .detail-page-content > *",
+      ".detail-page-hero > div, .detail-page-content > *:not(.detail-content-logo)",
     ));
     const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
     timeline.fromTo(
@@ -1011,8 +1367,8 @@ export default function DetailPage() {
     );
     return () => {
       timeline.kill();
-      gsap.set(backdropImageRef.current, { opacity: 1, filter: "blur(0px)", scale: 1 });
-      gsap.set(items, { clearProps: "opacity,transform" });
+      gsap.set(backdropImageRef.current, { opacity: 1, filter: "blur(0px)", scale: 1, visibility: "inherit" });
+      gsap.set(items, { clearProps: "opacity,visibility,transform" });
     };
   }, [loading, data?.id]);
 
@@ -1070,16 +1426,249 @@ export default function DetailPage() {
   }, [type, id]);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get("fromStreams") !== "1") return;
-    window.history.pushState({ aetherioDetailFromStreams: true }, "");
-    const onPopState = () => {
-      const searchPath = getSearchReturnPath(params);
-      navigate(searchPath ?? "/home", { replace: true });
+    const background = data?.backdrop ?? data?.poster;
+    if (background) {
+      onShellPreviewBackground?.(background);
+      onBigPictureBackground?.(background);
+    }
+  }, [data?.backdrop, data?.poster, onBigPictureBackground, onShellPreviewBackground]);
+
+  useEffect(() => {
+    if (!loading && data) onShellPreviewReady?.();
+  }, [loading, data, onShellPreviewReady]);
+
+  // Al entrar a un detail en picture, el foco principal cae en Reproducir.
+  //
+  // No basta con un unico intento diferido: la page entra con una transicion que
+  // arranca en `visibility: hidden`, y enfocar un elemento invisible es un no-op
+  // silencioso para el navegador (focus() no lanza error, simplemente no pasa
+  // nada). Con un solo disparo a 80 ms, si la page venia del buscador —que trae
+  // la metadata ya cacheada y monta el detail de inmediato— el boton todavia no
+  // era enfocable, el foco se perdia, y el nav espacial a los 380 ms se quedaba
+  // con el primer candidato en vez de Reproducir.
+  //
+  // Por eso se reintenta durante ~700ms y se VERIFICA que el foco quedo donde
+  // toca. Solo se abandona si el usuario movio el foco dentro de esta misma page.
+  useEffect(() => {
+    if (!bigPicture || loading || !data || episodeOpen) return;
+    let attempts = 0;
+    let timer = 0;
+    // Solo se cede ante input REAL del usuario. Sin esto, el nav espacial enfoca el
+    // primer candidato a los 380 ms (focusInitialContent) y eso se confundiria con
+    // "el usuario movio el foco", perdiendo Reproducir otra vez.
+    let userMoved = false;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.startsWith("Arrow") || event.key === "Enter" || event.key === "Tab") {
+        userMoved = true;
+      }
     };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [location.search, navigate]);
+    window.addEventListener("keydown", onKeyDown, true);
+    const tryFocus = () => {
+      const button = playButtonRef.current;
+      if (button && document.activeElement === button) return;
+      if (userMoved) {
+        const active = document.activeElement;
+        if (active && active !== document.body && active !== document.documentElement) return;
+      }
+      if (button) {
+        button.focus({ preventScroll: true });
+        // Verificacion: si el navegador lo rechazo (sigue oculto o sin foco), se
+        // vuelve a intentar en el siguiente tick.
+        if (document.activeElement === button) return;
+      }
+      attempts += 1;
+      if (attempts >= 14) return;
+      timer = window.setTimeout(tryFocus, 50);
+    };
+    timer = window.setTimeout(tryFocus, 40);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [bigPicture, loading, data?.id, episodeOpen]);
+
+  // Transición Detail <-> sección Episodie sobre el MISMO fondo: el contenido
+  // del Detail se funde hacia abajo, el fondo pasa a grayscale y la sección
+  // entra. Solo corre cuando la sección confirma contenido (ready): nunca hay
+  // dos imágenes ni un fondo vacío atascado.
+  useLayoutEffect(() => {
+    const wasOpen = episodeWasOpenRef.current;
+    if (wasOpen === episodeShown) return;
+    episodeWasOpenRef.current = episodeShown;
+    const content = detailContentRef.current;
+    const section = episodeSectionRef.current;
+    const shell = detailScrollRef.current;
+    const reduced = prefersReducedMotion();
+    shell?.scrollTo({ top: 0, behavior: "auto" as ScrollBehavior });
+    gsap.killTweensOf([content, section, backdropImageRef.current]);
+    if (episodeShown) {
+      if (content) {
+        content.inert = true;
+        content.setAttribute("aria-hidden", "true");
+      }
+      const timeline = gsap.timeline({
+        onComplete: () => {
+          window.setTimeout(() => {
+            section?.querySelector<HTMLElement>("button, [tabindex='0']")?.focus({ preventScroll: true });
+          }, 0);
+        },
+      });
+      if (content) {
+        timeline.to(content, {
+          autoAlpha: 0,
+          ...(reduced ? {} : { y: 34 }),
+          duration: reduced ? 0.12 : 0.42,
+          ease: "power3.out",
+          overwrite: "auto",
+        }, 0);
+      }
+      timeline.to(backdropImageRef.current, {
+        opacity: 1,
+        visibility: "inherit",
+        filter: "blur(0px) grayscale(1)",
+        duration: reduced ? 0.16 : 0.72,
+        ease: "power3.out",
+        overwrite: "auto",
+      }, 0);
+      if (section) {
+        timeline.fromTo(section, { opacity: 0, y: reduced ? 0 : 26 }, {
+          opacity: 1,
+          y: 0,
+          duration: reduced ? 0.12 : 0.44,
+          ease: "power3.out",
+          overwrite: "auto",
+          clearProps: "transform",
+        }, 0.08);
+      }
+    } else {
+      if (content) {
+        content.inert = false;
+        content.removeAttribute("aria-hidden");
+        gsap.fromTo(content, { autoAlpha: 0, y: reduced ? 0 : 34 }, {
+          autoAlpha: 1,
+          y: 0,
+          duration: reduced ? 0.12 : 0.46,
+          ease: "power3.out",
+          overwrite: "auto",
+          clearProps: "transform",
+          onComplete: () => playButtonRef.current?.focus({ preventScroll: true }),
+        });
+      }
+      gsap.to(backdropImageRef.current, {
+        opacity: 1,
+        visibility: "inherit",
+        filter: `blur(${backdropBlurAmountRef.current}px) grayscale(0)`,
+        duration: reduced ? 0.16 : 0.56,
+        ease: "power3.out",
+        overwrite: "auto",
+      });
+    }
+  }, [episodeShown]);
+
+  // Esc con la sección abierta la cierra (captura, antes del back exterior).
+  useEffect(() => {
+    if (!episodeOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Esc" && event.code !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeEpisodeSection();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [episodeOpen]);
+
+  // Port de onMoveToContent nativo: baja a la zona de contenido (el logo se
+  // despliega y las tabs bajan a su sitio) y enfoca el primer contenido.
+  function enterContentZone() {
+    if (!bigPicture) return;
+    const shell = detailScrollRef.current;
+    const heroEl = heroRef.current;
+    if (!shell || !heroEl) return;
+    // El evento solo inicia el desplazamiento. El logo se habilita desde el
+    // onScroll cuando el shell ya se está moviendo hacia el contenido.
+    shell.removeAttribute("data-past-hero");
+    shell.removeAttribute("data-content-zone");
+    pastHeroRef.current = false;
+    // The scaled detail moves one visual pixel per shell scroll pixel. Use
+    // the rendered hero edge instead of converting it to layout coordinates;
+    // the latter stops short and lets the scroll handler collapse the logo.
+    const shellTop = shell.getBoundingClientRect().top;
+    const heroBottom = heroEl.getBoundingClientRect().bottom;
+    // El logo se revela progresivamente desde el scroll handler mientras el
+    // desplazamiento suave atraviesa el final del hero.
+    const target = Math.max(0, heroBottom - shellTop + 24);
+    // El foco entra de frente, sin esperar al recorrido: la row ya está
+    // scrolleada a su posición (initialScrollKey) y el tween vertical trae
+    // el contenido a vista con la card enfocada.
+    // Las tabs de temporada son solo indicador (LB/RB): el foco cae al
+    // primer episodio o tráiler, nunca a la row de temporadas.
+    // Si la serie se está viendo, cae en el capítulo que sigue (resume),
+    // no en el primero.
+    const resumeKey = episodeScrollKeyRef.current;
+    const resume = resumeKey
+      ? shell.querySelector<HTMLElement>(`.detail-episode-card[data-scroll-key="${resumeKey}"]`)
+      : null;
+    const ep = resume
+      ?? shell.querySelector<HTMLElement>('.detail-episode-card[tabindex="0"]');
+    const trailer = shell.querySelector<HTMLElement>(
+      '[data-row-key$=":trailers"] button:not([disabled]), [data-row-key$=":trailers"] [tabindex="0"]',
+    ) ?? shell.querySelector<HTMLElement>(".detail-page-content button");
+    (ep ?? trailer)?.focus({ preventScroll: true });
+    const reduced = prefersReducedMotion();
+    if (reduced) {
+      shell.scrollTo({ top: target, behavior: "auto" });
+    } else {
+      // Recorrido de referencia: 0.74 s clavados, no el smooth nativo. El
+      // onUpdate alimenta al scroll handler porque el tween por propiedad no
+      // siempre dispara scroll events en todos los frames.
+      tweenTo(shell, {
+        scrollTop: target,
+        onUpdate: () => updateBackdropBlur(shell.scrollTop),
+        onComplete: () => updateBackdropBlur(shell.scrollTop),
+      }, DETAIL_ZONE_TRAVEL_S);
+    }
+  }
+
+  // Port de onMoveToHero nativo: vuelve arriba y enfoca Reproducir.
+  function exitToHeroZone() {
+    if (!bigPicture) return;
+    const shell = detailScrollRef.current;
+    if (!shell) return;
+    const reduced = prefersReducedMotion();
+    shell.removeAttribute("data-past-hero");
+    shell.removeAttribute("data-content-zone");
+    pastHeroRef.current = false;
+    // El foco vuelve de inmediato al hero; la animación visual y el scroll
+    // continúan debajo, sin dejar la navegación atrapada durante 790ms.
+    playButtonRef.current?.focus({ preventScroll: true });
+    if (reduced) {
+      shell.scrollTo({ top: 0, behavior: "auto" });
+    } else {
+      tweenTo(shell, {
+        scrollTop: 0,
+        onUpdate: () => updateBackdropBlur(shell.scrollTop),
+        onComplete: () => updateBackdropBlur(shell.scrollTop),
+      }, DETAIL_ZONE_TRAVEL_S);
+    }
+  }
+
+  useEffect(() => {
+    if (!bigPicture) return;
+    const onEnter = () => enterContentZone();
+    const onExit = () => exitToHeroZone();
+    window.addEventListener(DETAIL_ENTER_CONTENT_EVENT, onEnter);
+    window.addEventListener(DETAIL_EXIT_HERO_EVENT, onExit);
+    return () => {
+      window.removeEventListener(DETAIL_ENTER_CONTENT_EVENT, onEnter);
+      window.removeEventListener(DETAIL_EXIT_HERO_EVENT, onExit);
+    };
+  }, [bigPicture]);
+
+  // Sin guardián `window.history.pushState` (ver nota en Player/Episodie): esa
+  // entrada real fuera del router desincronizaba el historial y el "atrás" desde
+  // la ficha volvía al reproductor. El destino "atrás" de una ficha alcanzada desde
+  // el selector de fuentes lo resuelve el shell (findDetailReturnDelta / fromStreams).
 
   useEffect(() => {
     const onUpdated = () => setProgressVersion(prev => prev + 1);
@@ -1091,31 +1680,42 @@ export default function DetailPage() {
     const isCurrent = () => requestId === loadGenerationRef.current;
     if (!isCurrent()) return;
     const cacheKey = detailPageCacheKey(t, mediaId);
+    const backgroundOverride = readDetailBackgroundOverride(t, mediaId);
     const cachedDetail = readPageDataCache<DetailData>("detail", cacheKey);
     if (cachedDetail) {
       const hydrated = normalizeDetailData(await hydrateAnimeIdentity(cachedDetail));
+      const resolved = {
+        ...hydrated,
+        backdrop: ensureOriginalTmdbImage(backgroundOverride ?? hydrated.backdrop)
+          ?? backgroundOverride
+          ?? hydrated.backdrop,
+      };
       if (!isCurrent()) return;
-      if (hydrated !== cachedDetail) writePageDataCache("detail", cacheKey, hydrated);
-      setData(hydrated);
+      if (resolved !== cachedDetail) writePageDataCache("detail", cacheKey, resolved);
+      setData(resolved);
       setLoading(false);
       return;
     }
     setLoading(true);
-    setData(null);
+    // Al cambiar de ruta sí descartamos el detalle anterior. En una
+    // revalidación de la misma ruta conservamos el seed para no volver a
+    // mostrar una pantalla de carga mientras TMDB/Jikan responden.
+    if (!data || data.id !== mediaId) setData(null);
     const shouldUseTmdbArtwork = allowTmdbArtworkFallback || mediaId.startsWith("tmdb:");
     const logoOverride = readDetailLogoOverride(t, mediaId);
     const hasLogoOverride = logoOverride !== undefined;
     const overrideLogo = sanitizeLogoUrl(logoOverride);
     const cachedMediaLogo = hasLogoOverride ? overrideLogo : readCachedLogo(getDetailLogoKey(t, mediaId)) ?? undefined;
     const seededMeta = readDetailMediaMeta(t, mediaId);
-    const backgroundOverride = readDetailBackgroundOverride(t, mediaId);
     let d:DetailData = {
       id: mediaId,
       name: seededMeta?.name ?? "",
       type: t,
       ids: parseMediaIds(mediaId),
       aliases: uniqueAliases(seededMeta?.name, mediaId),
-      backdrop: backgroundOverride ?? seededMeta?.background,
+      backdrop: ensureOriginalTmdbImage(backgroundOverride ?? seededMeta?.background)
+        ?? backgroundOverride
+        ?? seededMeta?.background,
       poster: seededMeta?.poster,
       logo: hasLogoOverride ? overrideLogo : sanitizeLogoUrl(seededMeta?.logo) ?? cachedMediaLogo,
       description: seededMeta?.description,
@@ -1131,6 +1731,14 @@ export default function DetailPage() {
         cachedMediaLogo ? { url: cachedMediaLogo, label: "Cache", source: "cache" } : null,
       ]),
     };
+    // La ficha sembrada por Home conserva la identidad humana correcta. Los
+    // add-ons son útiles para enriquecerla, pero no deben cambiar el título
+    // que usaremos para desambiguar namespaces movie/tv.
+    const requestedIdentityName = d.name;
+    const requestedIdentityYear = d.year;
+    // Home/Big Picture ya tiene metadata suficiente para pintar el shell.
+    // Se muestra mientras addon/TMDB revalidan y enriquecen la página.
+    if (d.name || d.poster || d.backdrop || d.logo) setData(d);
     const finish = async (next: DetailData) => {
       next = normalizeDetailData(await hydrateAnimeIdentity(next));
       if (!isCurrent()) return;
@@ -1204,7 +1812,10 @@ export default function DetailPage() {
           ...d,
           name: m.name ?? m.title ?? d.name,
           aliases: uniqueAliases(...(d.aliases ?? []), m.name, m.title, m.originalName, m.original_name, m.slug),
-          backdrop: backgroundOverride ?? pickAddonArtwork(m.background, m.backdrop, m.fanart) ?? d.backdrop,
+          backdrop: ensureOriginalTmdbImage(backgroundOverride ?? pickAddonArtwork(m.background, m.backdrop, m.fanart))
+            ?? backgroundOverride
+            ?? pickAddonArtwork(m.background, m.backdrop, m.fanart)
+            ?? d.backdrop,
           poster: pickAddonArtwork(m.poster) ?? d.poster,
           logo: hasLogoOverride ? d.logo : sanitizeLogoUrl(m.logo) ?? d.logo,
           description: m.description ?? m.overview ?? d.description,
@@ -1228,44 +1839,140 @@ export default function DetailPage() {
 
     try {
       let tmdbId:number|null = null;
-      let resolvedType: string | null = null;
+      let resolvedType: TmdbKind | null = null;
+      let mainEs: any = null;
+      let imgRes: any = null;
+      let mainEn: any = null;
+
       if (mediaId.startsWith("tt")) {
         const fd = await tmdbFetch<any>(`/find/${mediaId}`, { params: { external_source: "imdb_id", language: "es-ES" } });
-        const rs = fd?.movie_results?.length ? fd.movie_results : fd?.tv_results ?? [];
-        tmdbId = rs[0]?.id??null;
+        const candidates: TmdbSearchCandidate[] = [
+          ...(fd?.movie_results ?? []).map((item: any) => ({ kind: "movie" as const, item })),
+          ...(fd?.tv_results ?? []).map((item: any) => ({ kind: "tv" as const, item })),
+        ];
+        const selected = pickTmdbSearchCandidate(candidates, requestedIdentityName, requestedIdentityYear, t === "anime");
+        const fallback = t === "movie"
+          ? candidates.find(candidate => candidate.kind === "movie")
+          : t === "anime"
+            ? selected ?? candidates.find(candidate => candidate.kind === "tv") ?? candidates.find(candidate => candidate.kind === "movie")
+            : candidates.find(candidate => candidate.kind === "tv") ?? candidates.find(candidate => candidate.kind === "movie");
+        tmdbId = Number(fallback?.item.id) || null;
+        resolvedType = fallback?.kind ?? null;
       } else if (mediaId.startsWith("tmdb:")) {
-        tmdbId = parseInt(mediaId.replace("tmdb:",""),10);
+        tmdbId = Number(mediaId.slice("tmdb:".length));
+        if (!Number.isFinite(tmdbId) || tmdbId <= 0) tmdbId = null;
+
+        // Anime is an umbrella type: AniList/Jikan can resolve both series
+        // and movies to the same numeric TMDB id. TMDB keeps movie and TV in
+        // separate namespaces, so query both before choosing one. Example:
+        // movie/229858 = Three Mothers, tv/229858 = Fate/strange Fake.
+        if (tmdbId && t === "anime") {
+          const directCandidates = (await Promise.all(([
+            "movie",
+            "tv",
+          ] as TmdbKind[]).map(async requestedKind => {
+            const item = await tmdbFetch<any>(`/${requestedKind}/${tmdbId}`, {
+              params: { language: "es-ES", append_to_response: TMDB_DETAIL_APPEND },
+            });
+            if (!item) return null;
+            const kind = inferTmdbKind(item, requestedKind);
+            return { kind, item } satisfies TmdbSearchCandidate;
+          }))).filter((candidate): candidate is TmdbSearchCandidate => candidate !== null);
+          const uniqueCandidates = directCandidates.filter((candidate, index, list) => (
+            list.findIndex(other => other.kind === candidate.kind && Number(other.item.id) === Number(candidate.item.id)) === index
+          ));
+          const selected = pickTmdbSearchCandidate(
+            uniqueCandidates,
+            requestedIdentityName,
+            requestedIdentityYear,
+            true,
+          ) ?? uniqueCandidates.find(candidate => candidate.kind === "tv") ?? uniqueCandidates[0];
+          if (selected) {
+            tmdbId = Number(selected.item.id) || tmdbId;
+            resolvedType = selected.kind;
+            mainEs = selected.item;
+          }
+        } else if (tmdbId) {
+          resolvedType = t === "movie" ? "movie" : "tv";
+        }
       }
-      if (!tmdbId && d.name) {
+
+      if (!tmdbId && requestedIdentityName) {
         const isAnime = t === "anime";
-        const searchTypes = t === "movie" ? ["movie"] : isAnime ? ["tv", "movie"] : ["tv"];
+        const searchTypes: TmdbKind[] = t === "movie" ? ["movie"] : isAnime ? ["movie", "tv"] : ["tv"];
+        const candidates: TmdbSearchCandidate[] = [];
         for (const searchType of searchTypes) {
-          const sd = await tmdbFetch<any>(`/search/${searchType}`, { params: { query: d.name, language: "es-ES" } })
-            ?? await tmdbFetch<any>(`/search/${searchType}`, { params: { query: d.name, language: "en-US" } });
-          tmdbId = sd?.results?.[0]?.id ?? null;
-          if (tmdbId) { if (isAnime) resolvedType = searchType; break; }
+          const sd = await tmdbFetch<any>(`/search/${searchType}`, { params: { query: requestedIdentityName, language: "es-ES" } })
+            ?? await tmdbFetch<any>(`/search/${searchType}`, { params: { query: requestedIdentityName, language: "en-US" } });
+          for (const item of sd?.results ?? []) {
+            if (item?.id) candidates.push({ kind: searchType, item });
+          }
+        }
+        const selected = pickTmdbSearchCandidate(candidates, requestedIdentityName, requestedIdentityYear, isAnime);
+        if (selected) {
+          tmdbId = selected.item.id ?? null;
+          resolvedType = selected.kind;
         }
       }
       if (!tmdbId) { await finishWithRatings(d); return; }
 
-      let ep2 = (t === "movie" || resolvedType === "movie") ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
-      let [mainEs,imgRes,mainEn]=await Promise.all([
-        tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
-        tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
-        tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
-      ]);
-      if (!mainEs && !mainEn && ep2.startsWith("/tv/")) {
-        ep2 = `/movie/${tmdbId}`;
-        [mainEs,imgRes,mainEn]=await Promise.all([
-          tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
+      let ep2Type: TmdbKind = resolvedType ?? (t === "movie" ? "movie" : "tv");
+      let ep2 = `/${ep2Type}/${tmdbId}`;
+      if (!mainEs) {
+        [mainEs, imgRes, mainEn] = await Promise.all([
+          tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: TMDB_DETAIL_APPEND } }),
           tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
-          tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: "credits,aggregate_credits,videos,similar,recommendations,external_ids" } }),
+          tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: TMDB_DETAIL_APPEND } }),
         ]);
-        resolvedType = "movie";
+      } else {
+        [imgRes, mainEn] = await Promise.all([
+          tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
+          tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: TMDB_DETAIL_APPEND } }),
+        ]);
+      }
+
+      // The proxy may transparently try the opposite namespace after a 404.
+      // Keep the resolved type in sync with the payload rather than trusting
+      // the original request path.
+      const actualMainKind = inferTmdbKind(mainEs ?? mainEn, ep2Type);
+      if (actualMainKind !== ep2Type) {
+        ep2Type = actualMainKind;
+        resolvedType = actualMainKind;
+      }
+
+      if (!mainEs && !mainEn && (ep2Type === "tv" || t === "anime")) {
+        ep2Type = ep2Type === "tv" ? "movie" : "tv";
+        ep2 = `/${ep2Type}/${tmdbId}`;
+        resolvedType = ep2Type;
+        [mainEs,imgRes,mainEn]=await Promise.all([
+          tmdbFetch<any>(`${ep2}`, { params: { language: "es-ES", append_to_response: TMDB_DETAIL_APPEND } }),
+          tmdbFetch<any>(`${ep2}/images`, { params: { include_image_language: "en,es,null" } }),
+          tmdbFetch<any>(`${ep2}`, { params: { language: "en-US", append_to_response: TMDB_DETAIL_APPEND } }),
+        ]);
       }
       const main=mainEs ?? mainEn;
       const imgs=imgRes ?? {};
       if (!main) { await finishWithRatings(d); return; }
+      const explicitTmdbIdentity = /^tmdb:\d+$/i.test(mediaId);
+      if (explicitTmdbIdentity) {
+        // A numeric tmdb id is the stable identity. Once its namespace has
+        // been resolved, addon metadata must not be allowed to turn the
+        // title into another work that happens to share that number.
+        d.name = main.title ?? main.name ?? d.name;
+        d.description = main.overview ?? d.description;
+        d.year = parseInt((main.release_date ?? main.first_air_date ?? "").slice(0, 4), 10) || d.year;
+        d.genres = Array.isArray(main.genres) && main.genres.length
+          ? main.genres.map((genre: any) => genre.name).filter(Boolean)
+          : d.genres;
+        d.cast = undefined;
+        d.director = undefined;
+        d.directorId = undefined;
+        d.productionCompanies = undefined;
+        d.networks = undefined;
+        d.trailers = undefined;
+        d.related = undefined;
+        d.seasons = undefined;
+      }
       d.ids = {
         ...d.ids,
         tmdb: tmdbId,
@@ -1301,19 +2008,20 @@ export default function DetailPage() {
       if (shouldUseTmdbArtwork && preferredBackdrop && (!d.backdrop || isTmdbImageUrl(d.backdrop))) d.backdrop=preferredBackdrop;
       if (backgroundOverride) d.backdrop = backgroundOverride;
       if (shouldUseTmdbArtwork&&!d.poster&&main.poster_path)     d.poster=`${IMG}/w780${main.poster_path}`;
-      if (!d.description||t==="anime") d.description=main.overview;
-      if (!d.year) d.year=parseInt((main.release_date??main.first_air_date??"").slice(0,4),10)||undefined;
-      if (!d.genres?.length) d.genres=main.genres?.map((g:any)=>g.name);
+       if (explicitTmdbIdentity || !d.description || t === "anime") d.description=main.overview ?? d.description;
+       if (explicitTmdbIdentity || !d.year) d.year=parseInt((main.release_date??main.first_air_date??"").slice(0,4),10)||d.year;
+       if (explicitTmdbIdentity || !d.genres?.length) d.genres=main.genres?.map((g:any)=>g.name);
       const genreIds = new Set<number>((main.genres ?? []).map((g: any) => Number(g?.id)).filter((id: number) => Number.isFinite(id)));
       const isActuallyAnime = t === "anime"
         || (main.genres ?? []).some((g: any) => String(g?.name ?? "").toLowerCase() === "anime")
         || (genreIds.has(16) && main.original_language === "ja");
-      if (isActuallyAnime) d.type = "anime";
-      if (!d.name) d.name=main.title??main.name??"";
-      if (typeof main.vote_average === "number") d.voteAverage=main.vote_average;
-      if (!d.runtime){ const mins=t==="movie"?main.runtime:main.episode_run_time?.[0]; if(mins) d.runtime=formatRuntime(mins); }
-      d.productionCompanies = mapTmdbCompanies(main.production_companies) ?? d.productionCompanies;
-      d.networks = mapTmdbCompanies(main.networks) ?? d.networks;
+      if (resolvedType === "movie") d.type = "movie";
+      else if (isActuallyAnime) d.type = "anime";
+       if (explicitTmdbIdentity || !d.name) d.name=main.title??main.name??"";
+       if (typeof main.vote_average === "number") d.voteAverage=main.vote_average;
+       if (explicitTmdbIdentity || !d.runtime){ const mins=resolvedType === "movie" ? main.runtime : main.episode_run_time?.[0]; if(mins) d.runtime=formatRuntime(mins); }
+       d.productionCompanies = mapTmdbCompanies(main.production_companies) ?? d.productionCompanies;
+       d.networks = mapTmdbCompanies(main.networks) ?? d.networks;
       const castSource = t === "movie" ? main.credits?.cast : main.aggregate_credits?.cast ?? main.credits?.cast;
       const tmdbCast: CastMember[] = (castSource??[]).map((c:any)=>({
         id:c.id,
@@ -1395,7 +2103,7 @@ export default function DetailPage() {
         }
       }
 
-      if (!d.director){ const crew = [...(main.credits?.crew ?? []), ...(main.aggregate_credits?.crew ?? [])]; const dir = crew.find((c:any)=>c.job==="Director" || c.jobs?.some((j:any)=>j.job==="Director")); if(dir) { d.director=dir.name; d.directorId=dir.id; } }
+       if (explicitTmdbIdentity || !d.director){ const crew = [...(main.credits?.crew ?? []), ...(main.aggregate_credits?.crew ?? [])]; const dir = crew.find((c:any)=>c.job==="Director" || c.jobs?.some((j:any)=>j.job==="Director")); if(dir) { d.director=dir.name; d.directorId=dir.id; } }
       let trailerResults = (main.videos?.results??[]).filter((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));
       if (!trailerResults.length) {
         try {
@@ -1543,6 +2251,10 @@ export default function DetailPage() {
     : "";
 
   useEffect(() => {
+    episodeScrollKeyRef.current = episodeScrollKey;
+  }, [episodeScrollKey]);
+
+  useEffect(() => {
     if (!data) {
       setTmdbComments([]);
       setTmdbCommentsError("");
@@ -1604,7 +2316,82 @@ export default function DetailPage() {
     setSeason(current => current === targetSeason ? current : targetSeason);
   }, [focusTargetEpisode?.season]);
 
-  if (loading) return (
+  const regularSeasons = data?.seasons?.filter(s => s.number > 0) ?? [];
+  const curSeason = regularSeasons.find(s => s.number === season) ?? regularSeasons[0];
+
+  // Keep this hook before the loading returns below. Detail data arrives
+  // asynchronously, so placing it after an early return changes the hook
+  // count between the loading and loaded renders.
+  useEffect(() => {
+    if (!bigPicture || regularSeasons.length < 2) return;
+    const seasonNumbers = regularSeasons.map(item => item.number);
+    // Al entrar a la temporada el foco cae en el episodio que se está viendo
+    // (con progreso sin terminar) o en el primer episodio disponible.
+    const focusSeasonEpisode = (nextSeason: number) => {
+      const shell = detailScrollRef.current;
+      if (!shell) return;
+      const nextData = regularSeasons.find(item => item.number === nextSeason);
+      const episodes = nextData?.episodes ?? [];
+      if (!episodes.length) return;
+      const watching = episodes.find(episode => {
+        const entry = episodeProgressMap.get(`${nextSeason}:${episode.episode}`);
+        return entry && !entry.completed;
+      });
+      const firstOpen = episodes.find(episode => !isEpisodeLocked(episode));
+      const target = watching ?? firstOpen ?? episodes[0];
+      if (!target) return;
+      const key = getEpisodeKey(nextSeason, target.episode);
+      window.setTimeout(() => {
+        const card = (key
+          ? shell.querySelector<HTMLElement>(`[data-scroll-key="${key}"]`)
+          : null) ?? shell.querySelector<HTMLElement>('.detail-episode-card[tabindex="0"]');
+        card?.focus({ preventScroll: true });
+        card?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+      }, 140);
+    };
+    const switchSeason = (direction: 1 | -1) => {
+      const shell = detailScrollRef.current;
+      // LB/RB are the season controls in Big Picture. Do not couple them to
+      // the scroll marker: that marker is visual state and can briefly lag
+      // while the detail shell is moving into the content zone.
+      if (!bigPicture || !shell) return false;
+      const currentNumber = curSeason?.number ?? season;
+      const currentIndex = seasonNumbers.indexOf(currentNumber);
+      const nextIndex = currentIndex < 0
+        ? (direction > 0 ? 0 : seasonNumbers.length - 1)
+        : (currentIndex + direction + seasonNumbers.length) % seasonNumbers.length;
+      const nextSeason = seasonNumbers[nextIndex];
+      if (nextSeason === undefined || nextSeason === currentNumber) return false;
+      setSeason(nextSeason);
+      focusSeasonEpisode(nextSeason);
+      return true;
+    };
+    const onGamepadAction = (event: Event) => {
+      const actionId = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (actionId !== "lb" && actionId !== "rb") return;
+      if (switchSeason(actionId === "lb" ? -1 : 1)) event.preventDefault();
+    };
+    // Respaldo de teclado (PageUp/PageDown es lo que emite el mando si nadie
+    // reclama lb/rb): permite probar sin gamepad físico.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "PageUp" && event.key !== "PageDown") return;
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (switchSeason(event.key === "PageUp" ? -1 : 1)) event.preventDefault();
+    };
+    window.addEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [bigPicture, regularSeasons, curSeason?.number, season, data?.id, episodeProgressMap]);
+
+  const dataMatchesRoute = detailDataMatchesRoute(data, id);
+  if (loading && !dataMatchesRoute) {
+    if (bigPicture) return <LoadingState label="Cargando detalle" shellPreviewLoading />;
+    return (
     <div
       data-vt-hero-claim
       style={{
@@ -1619,7 +2406,7 @@ export default function DetailPage() {
       }}
     >
       <div className="detail-page-scale" style={{ position:"relative",minHeight:"100vh" }}>
-        <div className="detail-page-hero" style={{ position:"relative",width:"100vw",left:"50%",marginLeft:"-50vw",height:DETAIL_HERO_HEIGHT,minHeight:450,overflow:"hidden" }}>
+        <div className="detail-page-hero" style={{ position:"relative",width:"100vw",left:"50%",marginLeft:"-50vw",height:bigPicture ? BIG_PICTURE_DETAIL_HERO_HEIGHT : DETAIL_HERO_HEIGHT,minHeight:540,overflow:"hidden" }}>
           <div className="skeleton" style={{ position:"absolute",inset:0,opacity:0.38 }} />
           <div style={{ position:"absolute",inset:0,background:"linear-gradient(90deg, rgba(0,0,0,0.78), rgba(0,0,0,0.18) 58%, transparent)" }} />
           <div style={{ position:"absolute",left:"var(--app-safe-x)",bottom:4,width:460,maxWidth:"42vw",paddingBottom:22,display:"flex",flexDirection:"column",gap:11 }}>
@@ -1643,19 +2430,21 @@ export default function DetailPage() {
         </div>
       </div>
     </div>
-  );
-  if (!data)   return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>Error cargando.</div>;
+    );
+  }
+  if (!dataMatchesRoute || !data) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>Error cargando.</div>;
   const detailData = data;
 
   const isMovie = detailData.type==="movie";
   const typeLabel = isMovie ? "Película" : data.type === "anime" ? "Anime" : "Programa de TV";
   const DESC_MAX  = 180;
   const normalizedDescription = normalizeMojibakeText(data.description ?? "");
-  const descShort = normalizedDescription.length > DESC_MAX ? normalizedDescription.slice(0, DESC_MAX) + "..." : normalizedDescription;
+  const descShort = normalizedDescription.length > DESC_MAX
+    ? normalizedDescription.slice(0, DESC_MAX) + "..."
+    : normalizedDescription;
   const hasMore   = (data.description ?? "").length>DESC_MAX;
-  const regularSeasons = data.seasons?.filter(s=>s.number>0) ?? [];
   const specialSeason = data.seasons?.find(s=>s.number===0);
-  const curSeason = regularSeasons.find(s=>s.number===season) ?? regularSeasons[0];
+
   const displayLogo = sanitizeLogoUrl(data.logo) || cachedLogo;
   const playLabel = resumeEntry ? `Continuar ${formatResumeTime(resumeEntry.currentTime)}` : "Reproducir";
   const playableEpisodes = regularSeasons.flatMap(item => item.episodes).filter(item => !isEpisodeLocked(item));
@@ -1823,33 +2612,86 @@ export default function DetailPage() {
     }
   }
 
-  // Navegar al selector de fuentes
-  function goToStreams(season?: number, ep?: number, episodeName?: string) {
-    const q = new URLSearchParams({ type: data!.type, id: data!.id });
-    const returnParams = new URLSearchParams(location.search);
-    if (returnParams.get("fromSearch") === "1") {
-      q.set("fromSearch", "1");
-      const searchQuery = returnParams.get("q");
-      if (searchQuery) q.set("q", searchQuery);
+  function toggleDetailLibrary() {
+    const added = toggleLibraryItem({
+      id: detailData.id,
+      type: detailData.type,
+      name: detailData.name,
+      poster: detailData.poster,
+      background: detailData.backdrop,
+      logo: detailData.logo,
+      description: detailData.description,
+      year: detailData.year,
+      genres: detailData.genres,
+      rating: detailData.rating,
+    });
+    setInLibrary(added);
+  }
+
+  // Selector de fuentes como sección embebida: no se sale del Detail (mismo
+  // fondo, una sola imagen). Solo el preview en iframe navega de verdad para
+  // que el padre tome el control.
+  function navigateToEpisode(to: string) {
+    if (inShellPreview) {
+      navigate(to);
+      return;
     }
-    if (typeof season === "number") q.set("season", String(season));
-    if (ep)     q.set("ep", String(ep));
-    if (episodeName) q.set("epTitle", episodeName);
-    navigate(`/episode?${q.toString()}`);
+    if (bigPicture && onBigPictureEpisodeNavigation) {
+      onBigPictureEpisodeNavigation(to);
+      return;
+    }
+    navigate(to);
+  }
+
+  function episodeRequestFor(season?: number, ep?: number, episodeName?: string, cont?: boolean): DetailEpisodeRequest {
+    const returnParams = new URLSearchParams(location.search);
+    const request: DetailEpisodeRequest = {};
+    if (typeof season === "number") request.season = season;
+    if (ep) request.ep = ep;
+    if (episodeName) request.episodeName = episodeName;
+    if (cont) request.continue = true;
+    if (returnParams.get("fromSearch") === "1") {
+      request.fromSearch = true;
+      const searchQuery = returnParams.get("q");
+      if (searchQuery) request.q = searchQuery;
+    }
+    return request;
+  }
+
+  function goToStreams(season?: number, ep?: number, episodeName?: string) {
+    if (inShellPreview) {
+      const q = new URLSearchParams({ type: data!.type, id: data!.id });
+      const returnParams = new URLSearchParams(location.search);
+      if (returnParams.get("fromSearch") === "1") {
+        q.set("fromSearch", "1");
+        const searchQuery = returnParams.get("q");
+        if (searchQuery) q.set("q", searchQuery);
+      }
+      if (typeof season === "number") q.set("season", String(season));
+      if (ep)     q.set("ep", String(ep));
+      if (episodeName) q.set("epTitle", episodeName);
+      navigateToEpisode(buildEpisodePath(q.toString(), location.pathname));
+      return;
+    }
+    openEpisodeSection(episodeRequestFor(season, ep, episodeName, false));
   }
 
   function goToStreamsContinue(season?: number, ep?: number, episodeName?: string) {
-    const q = new URLSearchParams({ type: data!.type, id: data!.id, continue: "1" });
-    const returnParams = new URLSearchParams(location.search);
-    if (returnParams.get("fromSearch") === "1") {
-      q.set("fromSearch", "1");
-      const searchQuery = returnParams.get("q");
-      if (searchQuery) q.set("q", searchQuery);
+    if (inShellPreview) {
+      const q = new URLSearchParams({ type: data!.type, id: data!.id, continue: "1" });
+      const returnParams = new URLSearchParams(location.search);
+      if (returnParams.get("fromSearch") === "1") {
+        q.set("fromSearch", "1");
+        const searchQuery = returnParams.get("q");
+        if (searchQuery) q.set("q", searchQuery);
+      }
+      if (typeof season === "number") q.set("season", String(season));
+      if (ep) q.set("ep", String(ep));
+      if (episodeName) q.set("epTitle", episodeName);
+      navigateToEpisode(buildEpisodePath(q.toString(), location.pathname));
+      return;
     }
-    if (typeof season === "number") q.set("season", String(season));
-    if (ep) q.set("ep", String(ep));
-    if (episodeName) q.set("epTitle", episodeName);
-    navigate(`/episode?${q.toString()}`);
+    openEpisodeSection(episodeRequestFor(season, ep, episodeName, true));
   }
 
   function playFromDetail() {
@@ -1939,7 +2781,18 @@ export default function DetailPage() {
   }
 
   function openShowMore() {
-    scheduleHeroPopup(() => setShowMore(true));
+    scheduleHeroPopup(() => {
+      // El popup se centra sobre el hero (no sobre toda la page): al abrir,
+      // el hero ya quedó arriba del todo, se mide su centro en viewport.
+      const heroEl = heroRef.current;
+      if (heroEl) {
+        const rect = heroEl.getBoundingClientRect();
+        setSynopsisTop(rect.top + rect.height / 2);
+      } else {
+        setSynopsisTop(null);
+      }
+      setShowMore(true);
+    });
   }
 
   function openBackgroundPicker() {
@@ -1989,6 +2842,10 @@ export default function DetailPage() {
     const darkOpacity = Math.round(Math.min(0.55, Math.max(0, scrollTop / 400)) * 100) / 100;
     if (blur !== backdropBlurAmountRef.current) {
       backdropBlurAmountRef.current = blur;
+      if (episodeWasOpenRef.current) {
+        // No interrumpir el filtro grayscale que se anima sobre la imagen
+        // compartida mientras la sección Episodie está visible.
+      } else {
       // The hero background blur is a readability function of the detail page,
       // not decorative motion — apply it directly so it works even with
       // prefers-reduced-motion (which tweenTo would otherwise strip).
@@ -1996,6 +2853,7 @@ export default function DetailPage() {
       if (el) {
         gsap.killTweensOf(el);
         gsap.set(el, { filter: `blur(${blur}px)`, scale: 1 + blur * 0.0018 });
+      }
       }
     }
     if (vignetteOpacity !== metadataVignetteOpacityRef.current) {
@@ -2006,10 +2864,55 @@ export default function DetailPage() {
       darkOverlayOpacityRef.current = darkOpacity;
       tweenTo(darkOverlayRef.current, { opacity: darkOpacity }, 0.24);
     }
+    // Zona de contenido: al bajar del héroe el logo se despliega y empuja las
+    // tabs/episodios a su sitio (misma medida del rail).
+    const heroEl = heroRef.current;
+    const shellEl = detailScrollRef.current;
+    if (heroEl && shellEl) {
+      const heroBottom = heroEl.getBoundingClientRect().bottom;
+      const shellTop = shellEl.getBoundingClientRect().top;
+      const heroDistance = heroBottom - shellTop;
+      detailScrollTopRef.current = scrollTop;
+      // El fade del hero sigue el recorrido real del shell frame a frame:
+      // empieza cuando el hero entra en el umbral de contenido y termina al
+      // cruzar su borde. Vía imperativa (gsap.set inmediato, sin transiciones
+      // CSS que retrasen cada frame): igual que el blur del backdrop.
+      const heroFadeProgress = bigPicture
+        ? Math.min(1, Math.max(0, (CONTENT_LOGO_REVEAL_DISTANCE - heroDistance) / CONTENT_LOGO_REVEAL_DISTANCE))
+        : 0;
+      if (bigPicture) {
+        const heroFadeOpacity = 1 - heroFadeProgress;
+        const heroFadeY = -26 * heroFadeProgress;
+        if (heroCopyRef.current) gsap.set(heroCopyRef.current, { opacity: heroFadeOpacity, y: heroFadeY });
+        if (heroCreditsRef.current) gsap.set(heroCreditsRef.current, { opacity: heroFadeOpacity, y: heroFadeY });
+      }
+      // Preparar el logo antes de entrar al contenido evita que aparezca unos
+      // frames tarde. Mientras se esté en la zona de contenido el logo no se
+      // puede ir, sin importar la dirección del scroll entre rows.
+      const pastHero = scrollTop > 0 && heroDistance < CONTENT_LOGO_REVEAL_DISTANCE;
+      const showContentLogo = pastHero;
+      if (showContentLogo !== pastHeroRef.current) {
+        pastHeroRef.current = showContentLogo;
+        if (showContentLogo) {
+          shellEl.setAttribute("data-past-hero", "1");
+          shellEl.setAttribute("data-content-zone", "1");
+        } else {
+          shellEl.removeAttribute("data-past-hero");
+          shellEl.removeAttribute("data-content-zone");
+        }
+      }
+    }
   }
+
+  // El -26 de Big Picture en colección/relacionados compensa el gutter
+  // negativo del ScrollRow previo. Tras el panel de Producción (caja normal,
+  // sin gutter) hay que mantener el gap: si no, el header queda pegado.
+  const hasCompanyLogos = Boolean(data.networks?.length || data.productionCompanies?.length);
 
   return (
     <div
+      className="detail-page-root"
+      data-bp-detail-exiting={bigPicture && bigPictureEpisodeTransitioning ? "true" : undefined}
       style={{
         position:"relative",
         width:"100%",
@@ -2021,6 +2924,7 @@ export default function DetailPage() {
     >
       <div
         aria-hidden="true"
+        data-bp-detail-background
         style={{
           position:"absolute",
           inset:0,
@@ -2092,6 +2996,7 @@ export default function DetailPage() {
       <div
         ref={metadataVignetteRef}
         aria-hidden="true"
+        data-bp-detail-background
         style={{
           position:"absolute",
           inset:0,
@@ -2104,6 +3009,7 @@ export default function DetailPage() {
       <div
         ref={darkOverlayRef}
         aria-hidden="true"
+        data-bp-detail-background
         style={{
           position:"absolute",
           inset:0,
@@ -2126,15 +3032,52 @@ export default function DetailPage() {
           overscrollBehavior:"contain",
         }}
       >
-      <div ref={detailContentRef} className="detail-page-scale" key={`detail-content-${data.id}`} style={{ position:"relative",minHeight:"100vh",background:"transparent" }}>
-      {/* HERO full-bleed */}
-      <div className="detail-page-hero" ref={heroRef} style={{ position:"relative", width:"100vw", left:"50%", marginLeft:"-50vw", height:DETAIL_HERO_HEIGHT, minHeight:450, overflow:"hidden" }}>
-        <div style={{ position:"absolute",bottom:4,left:0,padding:"0 var(--app-safe-x) 22px",maxWidth:520 }}>
+      <div
+        ref={detailContentRef}
+        data-aetherio-detail-content
+        className="detail-page-scale"
+        key={`detail-content-${data.id}`}
+        inert={episodeOpen || undefined}
+        aria-hidden={episodeOpen || undefined}
+        style={{
+          position: "relative",
+          minHeight: "100vh",
+          background: "transparent",
+          pointerEvents: episodeOpen ? "none" : undefined,
+        }}
+      >
+      {/* HERO full-bleed: misma altura que PC para que la sección de
+            contenido (tabs de episodios) asome abajo como en la referencia. */}
+      <div className="detail-page-hero" ref={heroRef} data-hero-panel={bigPicture ? true : undefined} style={{ position:"relative", width:"100vw", left:"50%", marginLeft:"-50vw", height:bigPicture ? BIG_PICTURE_DETAIL_HERO_HEIGHT : DETAIL_HERO_HEIGHT, minHeight:540, overflow:"hidden" }}>
+        <div ref={heroCopyRef} data-detail-hero-copy style={{ position:"absolute",bottom:4,left:0,padding:"0 var(--app-safe-x) 22px",maxWidth:520 }}>
           {displayLogo && logoStatus !== "error" ? (
             <div style={{ minHeight:100,display:"flex",alignItems:"center",marginBottom:14,position:"relative" }}>
+              {bigPicture ? (
+                // En picture el logo es solo visual: ni clicable ni seleccionable
+                // (sin crossfade por refs: cambio directo).
+                <div
+                  aria-hidden="true"
+                  style={{ position:"relative",border:0,padding:0,background:"transparent",display:"block",userSelect:"none",pointerEvents:"none" }}
+                >
+                  <img
+                    src={logoStack.curr || displayLogo}
+                    alt=""
+                    draggable={false}
+                    onLoad={() => {
+                      logoLog("logo img onLoad", { url: displayLogo });
+                      setLogoStatus("loaded");
+                    }}
+                    onError={() => {
+                      logoLog("logo img onError", { url: displayLogo });
+                      setLogoStatus("error");
+                    }}
+                    style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 10px rgba(0,0,0,0.75))",display:"block",userSelect:"none",pointerEvents:"none" }}
+                  />
+                </div>
+              ) : (
               <button
                 type="button"
-                onClick={() => navigate(`/detail/${encodeURIComponent(data.type)}/${encodeURIComponent(data.id)}`, { replace: true })}
+                onClick={() => navigate(buildDetailPath(data.type, data.id), { replace: true })}
                 aria-label={`Ir al detalle de ${data.name}`}
                 style={{ position:"relative", border:0,padding:0,background:"transparent",cursor:"pointer",display:"block" }}
               >
@@ -2161,6 +3104,7 @@ export default function DetailPage() {
                   style={{ maxHeight:100,maxWidth:300,objectFit:"contain",filter:"drop-shadow(0 2px 10px rgba(0,0,0,0.75))",opacity:logoStack.prev ? 0 : 1, display:"block" }}
                 />
               </button>
+              )}
             </div>
           ) : (
             <h1 style={{ fontSize:"2.6rem",fontWeight:900,color:"#fff",marginBottom:14,lineHeight:1.05,textShadow:"0 2px 20px rgba(0,0,0,0.8)" }}>{data.name}</h1>
@@ -2180,13 +3124,14 @@ export default function DetailPage() {
           </div>
           <div style={{ display:"flex",alignItems:"center",gap:12 }}>
             {/* Reproducir -> /episode */}
-            <button onClick={playFromDetail}
+            <button ref={playButtonRef} data-hero-primary data-hero-action onClick={playFromDetail}
               style={{ display:"flex",alignItems:"center",gap:8,padding:"11px 30px",background:"#fff",color:"#000",fontWeight:700,borderRadius:999,fontSize:15,border:"none",cursor:"pointer",boxShadow:"0 3px 12px rgba(0,0,0,0.38)",textShadow:"none" }}>
               <Play size={16} fill="black" /> {playLabel}
             </button>
             <button
               ref={detailMenuButtonRef}
               type="button"
+              data-hero-action
               aria-label="Opciones del medio"
               onClick={() => setDetailMenuOpen(value => !value)}
               style={{ width:42,height:42,borderRadius:999,border:"1px solid rgba(255,255,255,0.12)",background:"rgba(255,255,255,0.08)",backdropFilter:"blur(12px)",WebkitBackdropFilter:"blur(12px)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",boxShadow:"0 3px 12px rgba(0,0,0,0.28)" }}
@@ -2203,21 +3148,7 @@ export default function DetailPage() {
                 {
                   label: inLibrary ? "Quitar de la biblioteca" : "Añadir a la biblioteca",
                   icon: inLibrary ? <BookmarkMinus size={15} /> : <BookmarkPlus size={15} />,
-                  onSelect: () => {
-                    const added = toggleLibraryItem({
-                      id: data.id,
-                      type: data.type,
-                      name: data.name,
-                      poster: data.poster,
-                      background: data.backdrop,
-                      logo: data.logo,
-                      description: data.description,
-                      year: data.year,
-                      genres: data.genres,
-                      rating: data.rating,
-                    });
-                    setInLibrary(added);
-                  },
+                  onSelect: toggleDetailLibrary,
                 },
                 {
                   label: "Elegir fondo del medio",
@@ -2248,7 +3179,7 @@ export default function DetailPage() {
         </div>
 
         {(data.cast?.length || data.director || awards.featured)&&(
-          <div className="detail-hero-credits" style={{ position:"absolute",bottom:4,right:0,padding:"0 var(--app-safe-x) 22px",textAlign:"right",maxWidth:300 }}>
+          <div ref={heroCreditsRef} className="detail-hero-credits" style={{ position:"absolute",bottom:4,right:0,padding:"0 var(--app-safe-x) 22px",textAlign:"right",maxWidth:300 }}>
             {awards.featured && (
               <div
                 ref={awardBadgeRef}
@@ -2279,129 +3210,108 @@ export default function DetailPage() {
                 />
               </div>
             )}
-            {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5 }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button></span>))}</p>)}
-            {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)" }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Director </span><button type="button" onClick={() => data.directorId && navigate(`/person/${encodeURIComponent(String(data.directorId))}`)} disabled={!data.directorId} onMouseEnter={data.directorId?(e)=>e.currentTarget.style.color="#fff":undefined} onMouseLeave={data.directorId?(e)=>e.currentTarget.style.color="rgba(255,255,255,0.8)":undefined} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:data.directorId ? "pointer" : "default",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{data.director}</button></p>}
+            {!!data.cast?.length&&(<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",marginBottom:5,...(bigPicture ? { userSelect:"none" as const } : null) }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Reparto </span>{data.cast.slice(0,3).map((castMember, index) => (<span key={castMember.id}>{index > 0 ? ", " : ""}{bigPicture ? (<span style={{ color:"rgba(255,255,255,0.8)",userSelect:"none" }}>{castMember.name}</span>) : (<button type="button" onClick={() => navigate(`/person/${encodeURIComponent(String(castMember.id))}`)} onMouseEnter={e=>e.currentTarget.style.color="#fff"} onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.8)"} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:"pointer",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{castMember.name}</button>)}</span>))}</p>)}
+            {data.director&&<p style={{ fontSize:13,color:"rgba(255,255,255,0.55)",...(bigPicture ? { userSelect:"none" as const } : null) }}><span style={{ color:"rgba(255,255,255,0.3)" }}>Director </span>{bigPicture ? (<span style={{ color:"rgba(255,255,255,0.8)",userSelect:"none" }}>{data.director}</span>) : (<button type="button" onClick={() => data.directorId && navigate(`/person/${encodeURIComponent(String(data.directorId))}`)} disabled={!data.directorId} onMouseEnter={data.directorId?(e)=>e.currentTarget.style.color="#fff":undefined} onMouseLeave={data.directorId?(e)=>e.currentTarget.style.color="rgba(255,255,255,0.8)":undefined} style={{ background:"none",border:"none",padding:0,color:"rgba(255,255,255,0.8)",cursor:data.directorId ? "pointer" : "default",fontSize:13,textDecoration:"none",transition:"color 0.2s ease" }}>{data.director}</button>)}</p>}
           </div>
         )}
         {showMore&&(
           <div
             onClick={()=>setShowMore(false)}
-            style={{ position:"fixed",inset:0,zIndex:20,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"calc(var(--app-shell-nav-height) + 24px) var(--app-safe-x) var(--app-safe-x)",background:"rgba(0,0,0,0.64)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)" }}
+            data-aetherio-synopsis-popup={bigPicture ? "true" : undefined}
+            style={{ position:"fixed",inset:0,zIndex:20,padding:"var(--app-safe-x)",background:"rgba(0,0,0,0.64)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)" }}
           >
             <div
               className="liquid-glass-dark"
               onClick={e=>e.stopPropagation()}
-              style={{ borderRadius:18,padding:"28px 30px",width:"min(560px, calc(100vw - var(--app-safe-x) * 2))",maxHeight:"min(56vh, 420px)",overflowY:"auto",position:"relative",boxShadow:"0 24px 80px rgba(0,0,0,0.58)" }}
+              style={{ position:"absolute",left:"50%",top:synopsisTop ?? "50%",transform:"translate(-50%,-50%)",borderRadius:18,padding:"28px 30px",width:"min(560px, calc(100vw - var(--app-safe-x) * 2))",maxHeight:"min(56vh, 420px)",overflowY:"auto",boxShadow:"0 24px 80px rgba(0,0,0,0.58)" }}
             >
-              <button onClick={()=>setShowMore(false)} style={{ position:"absolute",top:14,right:14,width:30,height:30,border:"none",borderRadius:999,background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.68)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><X size={16}/></button>
-              <p style={{ fontSize:15,color:"rgba(255,255,255,0.82)",lineHeight:1.72,paddingRight:24,fontWeight:400 }}>{normalizedDescription}</p>
+              {!bigPicture&&<button onClick={()=>setShowMore(false)} style={{ position:"absolute",top:14,right:14,width:30,height:30,border:"none",borderRadius:999,background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.68)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><X size={16}/></button>}
+              <p style={{ fontSize:15,color:"rgba(255,255,255,0.82)",lineHeight:1.72,paddingRight:bigPicture ? 0 : 24,fontWeight:400 }}>{normalizedDescription}</p>
             </div>
           </div>
         )}
-        {backgroundPickerOpen&&(
-          <div
-            onClick={()=>setBackgroundPickerOpen(false)}
-            style={{ position:"fixed",inset:0,zIndex:22,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"calc(var(--app-shell-nav-height) + 24px) var(--app-safe-x) var(--app-safe-x)",background:"rgba(0,0,0,0.66)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)" }}
-          >
-            <div
-              className="liquid-glass-dark"
-              onClick={event=>event.stopPropagation()}
-              style={{ borderRadius:20,padding:"28px",width:"min(860px, calc(100vw - var(--app-safe-x) * 2))",maxHeight:"min(72vh, 620px)",overflowY:"auto",position:"relative",boxShadow:"0 26px 90px rgba(0,0,0,0.62)" }}
-            >
-              <button onClick={()=>setBackgroundPickerOpen(false)} style={{ position:"absolute",top:14,right:14,width:30,height:30,border:"none",borderRadius:999,background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.68)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><X size={16}/></button>
-              <div style={{ paddingRight:42,marginBottom:20 }}>
-                <h2 style={{ margin:0,fontSize:20,fontWeight:700,color:"#fff",letterSpacing:0 }}>Fondo del medio</h2>
-                <p style={{ margin:"8px 0 0",fontSize:13,lineHeight:1.5,color:"rgba(255,255,255,0.58)" }}>Elige una imagen de fondo disponible desde los addons o TMDB.</p>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(210px, 1fr))",gap:12 }}>
-                {(data.backgroundOptions ?? []).map((option, index) => {
-                  const active = option.url === data.backdrop;
-                  return (
-                    <button
-                      key={`${option.url}-${index}`}
-                      type="button"
-                      onClick={() => applyDetailBackground(option.url)}
-                      style={{ position:"relative",height:118,borderRadius:14,overflow:"hidden",border:active ? "1px solid rgba(255,255,255,0.82)" : "1px solid rgba(255,255,255,0.12)",background:"#151515",padding:0,cursor:"pointer",boxShadow:active ? "0 0 0 2px rgba(255,255,255,0.14)" : "none",textAlign:"left" }}
-                    >
-                      <img src={backgroundPreviewUrl(option.url)} alt="" loading="lazy" decoding="async" style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover" }} />
-                      <div style={{ position:"absolute",inset:0,background:"linear-gradient(to top, rgba(0,0,0,0.74), rgba(0,0,0,0.08))" }} />
-                      <div style={{ position:"absolute",left:10,right:10,bottom:9,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10 }}>
-                        <span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.9)" }}>{option.label}</span>
-                        {active ? <Check size={16} style={{ color:"#fff",flexShrink:0 }} /> : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-        {logoPickerOpen&&(
-          <div
-            onClick={()=>setLogoPickerOpen(false)}
-            style={{ position:"fixed",inset:0,zIndex:22,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"calc(var(--app-shell-nav-height) + 24px) var(--app-safe-x) var(--app-safe-x)",background:"rgba(0,0,0,0.66)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)" }}
-          >
-            <div
-              className="liquid-glass-dark"
-              onClick={event=>event.stopPropagation()}
-              style={{ borderRadius:20,padding:"28px",width:"min(860px, calc(100vw - var(--app-safe-x) * 2))",maxHeight:"min(72vh, 620px)",overflowY:"auto",position:"relative",boxShadow:"0 26px 90px rgba(0,0,0,0.62)" }}
-            >
-              <button onClick={()=>setLogoPickerOpen(false)} style={{ position:"absolute",top:14,right:14,width:30,height:30,border:"none",borderRadius:999,background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.68)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><X size={16}/></button>
-              <div style={{ paddingRight:42,marginBottom:20 }}>
-                <h2 style={{ margin:0,fontSize:20,fontWeight:700,color:"#fff",letterSpacing:0 }}>Logo del medio</h2>
-                <p style={{ margin:"8px 0 0",fontSize:13,lineHeight:1.5,color:"rgba(255,255,255,0.58)" }}>{data.name} · Elige un logo disponible desde los addons, TMDB o usa texto.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => applyDetailLogo("")}
-                style={{ width:"100%",minHeight:48,borderRadius:14,border:!displayLogo ? "1px solid rgba(255,255,255,0.82)" : "1px solid rgba(255,255,255,0.12)",background:"rgba(255,255,255,0.1)",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"0 16px",marginBottom:16,textAlign:"left",boxShadow:!displayLogo ? "0 0 0 2px rgba(255,255,255,0.14)" : "none" }}
-              >
-                <span style={{ fontSize:15,fontWeight:650,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>Usar texto (sin logo)</span>
-                {!displayLogo ? <Check size={16} style={{ color:"#fff",flexShrink:0 }} /> : null}
-              </button>
-              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(210px, 1fr))",gap:12 }}>
-                {(data.logoOptions ?? []).map((option, index) => {
-                  const active = sanitizeLogoUrl(option.url) === displayLogo;
-                  return (
-                    <button
-                      key={`${option.url}-${index}`}
-                      type="button"
-                      onClick={() => applyDetailLogo(option.url)}
-                      style={{ position:"relative",height:118,borderRadius:14,overflow:"hidden",border:active ? "1px solid rgba(255,255,255,0.82)" : "1px solid rgba(255,255,255,0.12)",background:"#151515",padding:0,cursor:"pointer",boxShadow:active ? "0 0 0 2px rgba(255,255,255,0.14)" : "none",textAlign:"left" }}
-                    >
-                      <img src={option.url} alt="" loading="lazy" decoding="async" style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:18 }} />
-                      <div style={{ position:"absolute",left:0,right:0,bottom:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"8px 10px",background:"rgba(0,0,0,0.7)" }}>
-                        <span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.9)" }}>{option.label}</span>
-                        {active ? <Check size={16} style={{ color:"#fff",flexShrink:0 }} /> : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
+        {pickerItem ? (
+          <>
+            <CardArtworkPicker
+              open={backgroundPickerOpen}
+              item={pickerItem}
+              type={data.type}
+              mode="background"
+              currentUrl={data.backdrop}
+              extraOptions={backgroundPickerOptions}
+              fetchTmdbOptions={false}
+              titleOverride="Fondo del medio"
+              descriptionOverride={`Escoge el fondo para ${data.name}`}
+              onSelect={applyDetailBackground}
+              onClose={() => setBackgroundPickerOpen(false)}
+            />
+            <CardArtworkPicker
+              open={logoPickerOpen}
+              item={pickerItem}
+              type={data.type}
+              mode="logo"
+              currentUrl={displayLogo ?? ""}
+              extraOptions={logoPickerOptions}
+              fetchTmdbOptions={false}
+              emptyOptionLabel="Usar texto (sin logo)"
+              titleOverride="Logo del medio"
+              descriptionOverride={`Escoge el logo para ${data.name}`}
+              onSelect={applyDetailLogo}
+              onClose={() => setLogoPickerOpen(false)}
+            />
+          </>
+        ) : null}
       </div>
 
       {/* SECCIONES INFERIORES */}
       <div className="detail-page-content" style={{ padding:"24px var(--app-safe-x)",display:"flex",flexDirection:"column",gap:28,background:"transparent" }}>
 
-        {/* Episodios */}
+        {/* Zona de contenido: el logo se mantiene dentro de la zona, pero
+            permanece colapsado mientras el hero todavía está visible para
+            que el primer peek sea la row de episodios. */}
+        {bigPicture && (
+          <div
+            data-content-logo
+            aria-hidden="true"
+            className="detail-content-logo"
+            style={{ display:"flex",justifyContent:"center",alignItems:"center",userSelect:"none",pointerEvents:"none" }}
+          >
+            {(logoStack.curr || displayLogo) && logoStatus !== "error" ? (
+              <img
+                src={logoStack.curr || displayLogo || undefined}
+                alt=""
+                draggable={false}
+                style={{ maxWidth:"min(504px, 70vw)",maxHeight:81,objectFit:"contain",opacity:0.9,userSelect:"none",pointerEvents:"none" }}
+              />
+            ) : (
+              <span style={{ fontSize:22,fontWeight:800,color:"rgba(255,255,255,0.9)",lineHeight:"24px",userSelect:"none" }}>
+                {data.name}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Episodios: tabs 1:1 nativo solo si hay >1 temporada; si no, título */}
         {!isMovie&&curSeason&&(
           <section>
-            <div style={{ display:"flex",alignItems:"center",gap:14,marginBottom:12 }}>
-              {regularSeasons.length>1&&(
-                <SeasonMenu
-                  seasons={regularSeasons}
-                  value={season}
-                  onChange={setSeason}
-                />
-              )}
-              {regularSeasons.length<=1&&(
-                <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>Temporada {curSeason.number}</h2>
-              )}
-            </div>
-            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP} initialScrollKey={episodeScrollKey || getEpisodeKey(curSeason.episodes[0]?.season, curSeason.episodes[0]?.episode)}>
+            {regularSeasons.length>1 ? (
+              <div className="detail-season-header" style={{ marginBottom: bigPicture ? 24 : 0 }}>
+              <SeasonTabs
+                seasons={regularSeasons.map(item => item.number)}
+                selectedSeason={curSeason.number}
+                onSeasonSelected={setSeason}
+                seasonWatched={seasonNumber => seasonMarkedMap.get(seasonNumber) ?? false}
+                onMarkSeasonWatched={markSeasonAsWatched}
+                onMarkSeasonUnwatched={markSeasonAsUnwatched}
+              />
+              </div>
+            ) : (
+              <div className="detail-season-header" style={{ display:"flex",alignItems:"center",gap:14,marginBottom:bigPicture ? 24 : 12 }}>
+                <h2 style={{ fontSize:20,fontWeight:750,color:"var(--detail-h, rgba(255,255,255,0.6))",lineHeight:1.1 }}>Temporada {curSeason.number}</h2>
+              </div>
+            )}
+            <div style={{ marginTop: bigPicture ? 12 : 0 }}>
+            <ScrollRow key={curSeason.number} rowKey={`detail:${type}:${id}:episodes:${curSeason.number}`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP} initialScrollKey={episodeScrollKey || getEpisodeKey(curSeason.episodes[0]?.season, curSeason.episodes[0]?.episode)}>
               {curSeason.episodes.map(ep=>(
                 <EpCard
                   key={ep.id}
@@ -2428,13 +3338,15 @@ export default function DetailPage() {
                 />
               ))}
             </ScrollRow>
+            </div>
           </section>
         )}
 
         {!isMovie&&Boolean(specialSeason?.episodes.length)&&(
-          <section>
-            <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1,marginBottom:12 }}>Especiales</h2>
-            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
+          <section style={{ marginTop: bigPicture ? -26 : undefined }}>
+            <h2 style={{ fontSize:20,fontWeight:750,color:"var(--detail-h, rgba(255,255,255,0.6))",lineHeight:1.1,marginBottom:bigPicture ? 24 : 12 }}>Especiales</h2>
+            <div style={{ marginTop: bigPicture ? 12 : 0 }}>
+            <ScrollRow rowKey={`detail:${type}:${id}:specials`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
               {specialSeason!.episodes.map(ep=>(
                 <EpCard
                   key={ep.id}
@@ -2461,41 +3373,48 @@ export default function DetailPage() {
                 />
               ))}
             </ScrollRow>
+            </div>
           </section>
         )}
 
         {!!data.trailers?.length&&(
-          <section>
+          <section style={{ marginTop: bigPicture && !isMovie && (curSeason || Boolean(specialSeason?.episodes.length)) ? -26 : undefined }}>
             <SectionH title="Tráilers" />
-            <ScrollRow gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_TRAILER_ARROW_TOP}>
+            <ScrollRow rowKey={`detail:${type}:${id}:trailers`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_TRAILER_ARROW_TOP} shadowGutter={DETAIL_TRAILER_ROW_SHADOW_GUTTER}>
               {data.trailers.map((t,index)=><TrailerCard key={t.key ?? `trailer-${index}`} trailer={t} media={data} />)}
             </ScrollRow>
           </section>
         )}
 
-        <div ref={commentsSectionRef}>
+        <div
+          ref={commentsSectionRef}
+          style={!isMovie && Boolean(specialSeason?.episodes.length) && !data.trailers?.length
+            ? { marginTop: bigPicture ? -76 : -32 }
+            : undefined}
+        >
           <TmdbCommentsSection
             comments={tmdbComments}
             loading={tmdbCommentsLoading}
             error={tmdbCommentsError}
+            detailKey={data ? `${data.type}:${data.id}` : undefined}
           />
         </div>
 
         {!!data.cast?.length&&(
           <section>
             <SectionH title="Reparto" />
-            <ScrollRow gap={25} arrowTop={DETAIL_CAST_ARROW_TOP} initialScrollKey={`${data.id}:cast:start`}>
-              {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>{ navigate(`/person/${encodeURIComponent(String(c.id))}`); }} />)}
+            <ScrollRow rowKey={`detail:${type}:${id}:cast`} gap={25} arrowTop={DETAIL_CAST_ARROW_TOP} initialScrollKey={`${data.id}:cast:start`}>
+              {data.cast.map((c,index)=><CastCard key={c.id} member={c} scrollKey={index===0?`${data.id}:cast:start`:undefined} onPress={()=>{ navigate(buildPersonPath(c.id)); }} />)}
             </ScrollRow>
           </section>
         )}
 
-        <CompanyLogoSection networks={data.networks} productionCompanies={data.productionCompanies} />
+        <CompanyLogoSection networks={data.networks} productionCompanies={data.productionCompanies} detailKey={`${data.type}:${data.id}`} background={data.backdrop ?? data.poster} />
 
         {!!data.collection?.length&&(
-          <section>
+          <section style={{ marginTop: bigPicture && !hasCompanyLogos ? -26 : undefined }}>
             <SectionH title={data.collectionName || "Colección"} />
-            <ScrollRow gap={20} arrowTop={DETAIL_COLLECTION_ARROW_TOP} initialScrollKey={`${data.id}:collection`}>
+            <ScrollRow rowKey={`detail:${type}:${id}:collection`} gap={20} arrowTop={DETAIL_COLLECTION_ARROW_TOP} shadowGutter={DETAIL_COLLECTION_ROW_SHADOW_GUTTER} initialScrollKey={`${data.id}:collection`}>
               {data.collection.map(item=><CollectionCard key={`${item.type}:${item.id}`} item={item} onPress={()=>{
                 writeDetailMediaMeta({
                   id:item.id,
@@ -2507,24 +3426,39 @@ export default function DetailPage() {
                   description:item.description,
                   year:item.year ? Number(item.year) : undefined,
                 });
-                navigate(`/detail/${item.type}/${item.id}`);
+                navigate(buildDetailPath(item.type, item.id));
               }} />)}
             </ScrollRow>
           </section>
         )}
 
         {!!data.related?.length&&(
-          <section>
+          <section style={{ marginTop: bigPicture && !hasCompanyLogos && !data.collection?.length ? -26 : undefined }}>
             <SectionH title="Más como esto" />
-            <ScrollRow gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER} arrowTop={DETAIL_RELATED_ARROW_TOP}>
+            <ScrollRow rowKey={`detail:${type}:${id}:related`} gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER} arrowTop={DETAIL_RELATED_ARROW_TOP}>
               {data.related.map(r=>(
                 <div key={r.id}
-                  onClick={()=>navigate(`/detail/${r.media_type}/tmdb:${r.id}`)}
+                  onClick={()=>navigate(buildDetailPath(r.media_type, `tmdb:${r.id}`))}
+                  // En picture la card es foco del mando: tabIndex + escala, sin anillo blanco.
+                  tabIndex={bigPicture ? 0 : undefined}
+                  role={bigPicture ? "button" : undefined}
+                  aria-label={bigPicture ? r.title : undefined}
+                  onKeyDown={bigPicture ? (e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(buildDetailPath(r.media_type, `tmdb:${r.id}`)); } }) : undefined}
+                  onFocus={bigPicture ? (e=>{
+                    const card = e.currentTarget as HTMLDivElement;
+                    tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
+                    gsap.set(card, { boxShadow: "0 22px 46px rgba(0,0,0,0.56)" });
+                  }) : undefined}
+                  onBlur={bigPicture ? (e=>{
+                    const card = e.currentTarget as HTMLDivElement;
+                    tweenTo(card, { y: 0, scale: 1, zIndex: 1 }, 0.32);
+                    gsap.set(card, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+                  }) : undefined}
                   style={{ flexShrink:0,width:197,height:296,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
                   onMouseEnter={e=>{
                     const card = e.currentTarget as HTMLDivElement;
                     tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
-                    gsap.set(card, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
+                    gsap.set(card, { boxShadow: bigPicture ? "0 22px 46px rgba(0,0,0,0.56)" : "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
                   }}
                   onMouseLeave={e=>{
                     const card = e.currentTarget as HTMLDivElement;
@@ -2566,8 +3500,28 @@ export default function DetailPage() {
           </section>
         )}
       </div>
-
       </div>
+
+      {episodeOpen && episodeRequest && data ? (
+        <div ref={episodeSectionRef} data-aetherio-episode-section="true" style={bigPicture
+          ? { position:"fixed",inset:0,zIndex:4,overflow:"hidden",background:"transparent", visibility: episodeShown ? "visible" : "hidden", pointerEvents: episodeShown ? "auto" : "none" }
+          : { position:"absolute",inset:0,zIndex:4,minHeight:"100vh",overflowY:"auto",overflowX:"hidden",background:"transparent", visibility: episodeShown ? "visible" : "hidden", pointerEvents: episodeShown ? "auto" : "none" }}>
+          <Suspense fallback={null}>
+            <EpisodeSectionErrorBoundary
+              onRetry={() => setSectionAttempt(value => value + 1)}
+              onClose={closeEpisodeSection}
+              onError={() => setEpisodeSectionReady(true)}
+            >
+              <EpisodieSection
+                key={sectionAttempt}
+                embedded
+                queryOverride={episodeQueryOverride ?? undefined}
+                onReady={() => setEpisodeSectionReady(true)}
+              />
+            </EpisodeSectionErrorBoundary>
+          </Suspense>
+        </div>
+      ) : null}
       </div>
     </div>
   );
@@ -2576,39 +3530,56 @@ export default function DetailPage() {
 function CompanyLogoSection({
   networks,
   productionCompanies,
+  detailKey,
+  background,
 }: {
   networks?: MetaCompany[];
   productionCompanies?: MetaCompany[];
+  detailKey: string;
+  background?: string;
 }) {
   const hasNetworks = Boolean(networks?.length);
   const hasProduction = Boolean(productionCompanies?.length);
-  if (!hasNetworks && !hasProduction) return null;
+  const networkItems = hasNetworks ? networks!.slice(0, 8) : [];
+  const productionItems = hasProduction ? productionCompanies!.slice(0, 8) : [];
+  if (!networkItems.length && !productionItems.length) return null;
 
+  // Row espacial única (misma que ScrollRow/Home): con data-row-key el motor
+  // se mueve por índice y recuerda la columna al subir/bajar. Sin esto, bajar
+  // desde Reparto caía directo en "Más como esto" saltando los logos.
   return (
-    <section style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))",gap:18 }}>
-      {hasNetworks ? (
-        <CompanyGroup title="Cadena" kind="network" items={networks!} />
+    <section
+      data-row-key={`detail:${detailKey}:companies`}
+      data-row-count={networkItems.length + productionItems.length}
+      style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))",gap:18 }}
+    >
+      {networkItems.length ? (
+        <CompanyGroup title="Cadena" kind="network" items={networkItems} startIndex={0} background={background} />
       ) : null}
-      {hasProduction ? (
-        <CompanyGroup title="Producción" kind="company" items={productionCompanies!} />
+      {productionItems.length ? (
+        <CompanyGroup title="Producción" kind="company" items={productionItems} startIndex={networkItems.length} background={background} />
       ) : null}
     </section>
   );
 }
 
-function CompanyGroup({ title, kind, items }: { title: string; kind: "network" | "company"; items: MetaCompany[] }) {
+function CompanyGroup({ title, kind, items, startIndex, background }: { title: string; kind: "network" | "company"; items: MetaCompany[]; startIndex: number; background?: string }) {
   const navigate = useNavigate();
+  const bigPicture = useBigPictureActive();
 
   return (
     <div className="liquid-glass-dark" style={{ borderRadius:18,padding:"22px 24px",minHeight:138 }}>
-    <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",marginBottom:16,lineHeight:1.1 }}>{title}</h2>
+    <h2 style={{ fontSize:19,fontWeight:750,color:"var(--detail-h, rgba(255,255,255,0.6))",marginBottom:16,lineHeight:1.1 }}>{title}</h2>
       <div style={{ display:"flex",alignItems:"center",gap:14,flexWrap:"wrap" }}>
-        {items.slice(0, 8).map(item => (
+        {items.map((item, offset) => (
           <button
             key={`${title}-${item.id}`}
             type="button"
             title={item.name}
-            onClick={() => navigate(`/entity/${kind}/${encodeURIComponent(String(item.id))}`)}
+            aria-label={item.name}
+            data-item-index={startIndex + offset}
+            data-row-card=""
+            onClick={() => navigate(buildEntityPath(kind, item.id), { state: { fromDetailBackground: background } })}
             style={{ height:60,minWidth:116,maxWidth:188,borderRadius:14,border:"1px solid rgba(255,255,255,0.82)",background:"linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))",display:"flex",alignItems:"center",justifyContent:"center",padding:"10px 15px",overflow:"hidden",cursor:"pointer",boxShadow:"0 10px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.92)" }}
             onMouseEnter={event => {
               const el = event.currentTarget;
@@ -2620,6 +3591,16 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
               tweenTo(el, { y: 0 }, 0.22);
               gsap.set(el, { background: "linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))" });
             }}
+            onFocus={bigPicture ? event => {
+              const el = event.currentTarget;
+              tweenTo(el, { y: -2, scale: 1.06, zIndex: 5 }, 0.32);
+              gsap.set(el, { boxShadow: "0 18px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.35)" });
+            } : undefined}
+            onBlur={bigPicture ? event => {
+              const el = event.currentTarget;
+              tweenTo(el, { y: 0, scale: 1, zIndex: 1 }, 0.32);
+              gsap.set(el, { boxShadow: "0 10px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.92)" });
+            } : undefined}
           >
             {item.logo ? (
               <img src={item.logo} alt={item.name} loading="lazy" decoding="async" style={{ maxWidth:"100%",maxHeight:"100%",objectFit:"contain",filter:"drop-shadow(0 1px 2px rgba(0,0,0,0.16))" }} />
@@ -2636,7 +3617,7 @@ function CompanyGroup({ title, kind, items }: { title: string; kind: "network" |
 function SectionH({ title }:{title:string}) {
   return (
     <div className="detail-section-header" style={{ display:"flex",alignItems:"center",marginBottom:12, transition:"transform 0.32s cubic-bezier(0.16,1,0.3,1)" }}>
-      <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>{title}</h2>
+      <h2 style={{ fontSize:20,fontWeight:750,color:"var(--detail-h, rgba(255,255,255,0.6))",lineHeight:1.1 }}>{title}</h2>
     </div>
   );
 }
@@ -2645,18 +3626,22 @@ function TmdbCommentsSection({
   comments,
   loading,
   error,
+  detailKey,
 }: {
   comments: TmdbCommentReview[];
   loading: boolean;
   error: string;
+  detailKey?: string;
 }) {
+  const bigPicture = useBigPictureActive();
   if (!loading && !error && !comments.length) return null;
+  if (loading && bigPicture) return null;
 
   return (
     <section>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,marginBottom:12 }}>
         <div>
-          <h2 style={{ fontSize:19,fontWeight:750,color:"#fff",lineHeight:1.1 }}>Comentarios de TMDB</h2>
+          <h2 style={{ fontSize:20,fontWeight:750,color:"var(--detail-h, rgba(255,255,255,0.6))",lineHeight:1.1 }}>Comentarios de TMDB</h2>
           <p style={{ marginTop:6,fontSize:12,color:"rgba(255,255,255,0.42)" }}>Comentarios del título</p>
         </div>
       </div>
@@ -2669,7 +3654,7 @@ function TmdbCommentsSection({
           {[0, 1, 2].map(item => <div key={item} className="skeleton" style={{ width:320,height:144,borderRadius:14,flexShrink:0 }} />)}
         </div>
       ) : (
-        <ScrollRow gap={10}>
+        <ScrollRow gap={10} rowKey={detailKey ? `detail:${detailKey}:comments` : undefined} arrowTop={DETAIL_COMMENTS_ARROW_TOP} shadowGutter={DETAIL_COMMENTS_ROW_SHADOW_GUTTER}>
           {comments.slice(0, 18).map(comment => <TmdbCommentCard key={comment.id} comment={comment} />)}
         </ScrollRow>
       )}
@@ -2679,10 +3664,24 @@ function TmdbCommentsSection({
 
 function TmdbCommentCard({ comment }: { comment: TmdbCommentReview }) {
   const commentText = comment.comment;
+  const bigPicture = useBigPictureActive();
   return (
     <article
       className="liquid-glass-dark"
-      style={{ width:320,minHeight:144,flexShrink:0,borderRadius:14,padding:16,display:"flex",flexDirection:"column",gap:10,cursor:"default" }}
+      // En picture la card es foco del mando: tabIndex + escala, sin anillo blanco.
+      // Sin esto el motor espacial no la ve (article no es focuseable) y la row
+      // se saltaba al bajar desde Tráilers hacia Reparto.
+      tabIndex={bigPicture ? 0 : undefined}
+      aria-label={bigPicture ? `Comentario de ${comment.authorDisplayName}` : undefined}
+      onFocus={bigPicture ? (e=>{
+        tweenTo(e.currentTarget, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
+        gsap.set(e.currentTarget, { boxShadow: "0 22px 46px rgba(0,0,0,0.56)" });
+      }) : undefined}
+      onBlur={bigPicture ? (e=>{
+        tweenTo(e.currentTarget, { y: 0, scale: 1, zIndex: 1 }, 0.32);
+        gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+      }) : undefined}
+      style={{ width:320,minHeight:144,flexShrink:0,borderRadius:14,padding:16,display:"flex",flexDirection:"column",gap:10,cursor:"default",outline:"none" }}
     >
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12 }}>
         <div style={{ minWidth:0 }}>
@@ -2709,64 +3708,9 @@ function TmdbCommentCard({ comment }: { comment: TmdbCommentReview }) {
   );
 }
 
-function SeasonMenu({
-  seasons,
-  value,
-  onChange,
-}: {
-  seasons: NonNullable<DetailData["seasons"]>;
-  value: number;
-  onChange: (season: number) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  return (
-    <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => setOpen(current => !current)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          minHeight: 0,
-          border: "none",
-          background: "transparent",
-          color: "#fff",
-          borderRadius: 0,
-          padding: 0,
-          fontSize: 19,
-          fontWeight: 800,
-          lineHeight: 1,
-          cursor: "pointer",
-          fontFamily: "Inter, system-ui, sans-serif",
-          boxShadow: "none",
-          outline: "none",
-        }}
-      >
-        Temporada {value}
-        <ChevronDown size={16} style={{ color: "rgba(80,150,255,0.95)", flexShrink: 0 }} />
-      </button>
-      <ContextMenu
-        open={open}
-        anchorRef={buttonRef}
-        onClose={() => setOpen(false)}
-        placement="below-start"
-        width={154}
-        items={seasons.map(season => ({
-          label: `Temporada ${season.number}`,
-          icon: season.number === value ? <Check size={14} /> : undefined,
-          onSelect: () => onChange(season.number),
-        }))}
-      />
-    </>
-  );
-}
-
 function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=>void}) {
   const [logoFailed, setLogoFailed] = useState(false);
+  const bigPicture = useBigPictureActive();
   const image = item.backdrop || item.poster;
   return (
     <button
@@ -2781,6 +3725,14 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
         tweenTo(event.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
         gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
       }}
+      onFocus={bigPicture ? (event=>{
+        tweenTo(event.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
+        gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+      }) : undefined}
+      onBlur={bigPicture ? (event=>{
+        tweenTo(event.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
+        gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+      }) : undefined}
       style={{
         position:"relative",
         flexShrink:0,
@@ -2827,13 +3779,37 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
     </button>
   );
 }
-function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTop }:{children:ReactNode;gap?:number;initialScrollKey?:string;shadowGutter?:{top:number;bottom:number};arrowTop?:number|string}) {
+function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTop, rowKey }:{children:ReactNode;gap?:number;initialScrollKey?:string;shadowGutter?:{top:number;bottom:number};arrowTop?:number|string;rowKey?:string}) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [hovered, setHovered] = useState(false);
   const leftArrowRef = useRef<HTMLDivElement>(null);
   const rightArrowRef = useRef<HTMLDivElement>(null);
+
+  // Sistema de rows del Home: la row expone data-row-key/count y cada card
+  // directa lleva data-item-index + data-row-card. Así el motor espacial se
+  // mueve por índice (al final de la row se queda, no baja) y recuerda la
+  // columna al subir/bajar. Se asigna por DOM para no reestructurar el flex
+  // ni romper el scroll inicial por data-scroll-key. Sin rowKey, geométrico.
+  const rowCount = rowKey ? Children.count(children) : 0;
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row || !rowKey) return;
+    const kids = Array.from(row.children).filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.getAttribute("aria-hidden") !== "true",
+    );
+    kids.forEach((kid, index) => {
+      kid.setAttribute("data-item-index", String(index));
+      kid.setAttribute("data-row-card", "");
+    });
+    return () => {
+      kids.forEach(kid => {
+        kid.removeAttribute("data-item-index");
+        kid.removeAttribute("data-row-card");
+      });
+    };
+  }, [children, rowKey]);
 
   function updateScrollState() {
     const row = rowRef.current;
@@ -2901,6 +3877,13 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
     tweenTo(rightArrowRef.current, { opacity: hovered && canScrollRight ? 1 : 0 }, 0.45);
   }, [hovered, canScrollLeft, canScrollRight]);
 
+  // El scroller horizontal recorta por definición el desbordado vertical
+  // (overflow-x:auto convierte overflow-y:visible en auto). El gutter de
+  // sombra vive dentro del scrollport; el margen negativo lo compensa para
+  // no alterar el ritmo entre secciones (neto: +4 arriba, +12 abajo).
+  const topGutter = shadowGutter?.top ?? DETAIL_ROW_SHADOW_TOP_GUTTER;
+  const bottomGutter = shadowGutter?.bottom ?? DETAIL_ROW_SHADOW_BOTTOM_GUTTER;
+
   return (
     <div
       style={{ position:"relative" }}
@@ -2926,16 +3909,20 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
       </div>
       <div
         ref={rowRef}
+        data-row-scroller
+        data-focus-center
+        data-row-key={rowKey}
+        data-row-count={rowKey ? rowCount : undefined}
         style={{
           display: "flex",
           gap,
           overflowX: "auto",
           overflowY: "visible",
-          margin: "-12px calc(-1 * var(--app-safe-x)) -28px",
+          margin: `${-(topGutter - 4)}px calc(-1 * var(--app-safe-x)) ${-(bottomGutter - 12)}px`,
           // The horizontal scroller clips vertical overflow by definition. Keep
           // enough scrollport gutter for the scaled card and its shadow.
-          paddingTop: shadowGutter?.top ?? DETAIL_ROW_SHADOW_TOP_GUTTER,
-          paddingBottom: shadowGutter?.bottom ?? DETAIL_ROW_SHADOW_BOTTOM_GUTTER,
+          paddingTop: topGutter,
+          paddingBottom: bottomGutter,
           paddingLeft: "var(--app-safe-x)",
           paddingRight: "var(--app-safe-x)",
           scrollPaddingInline: 0,
@@ -2998,6 +3985,13 @@ function EpCard({
   const [focused, setFocused] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const bigPicture = useBigPictureActive();
+  // En picture sin botón "...": A/Enter corto reproduce, mantenido
+  // abre las opciones tras pulsación larga (350ms).
+  const longPress = useLongPressAction(bigPicture, {
+    onActivate: () => { if (!locked) onPlay(); },
+    onLongPress: () => { if (!locked) setMenuOpen(true); },
+  }, 350);
 
   return (
     <div
@@ -3006,17 +4000,27 @@ function EpCard({
       data-scroll-key={scrollKey}
       aria-disabled={locked}
       role="button"
-      tabIndex={locked ? -1 : 0}
+      // En Big Picture las bloqueadas (sin estrenar) sí pueden tener foco
+      // para ver info/fecha; el onClick/onKeyDown ya bloquea reproducir.
+      tabIndex={locked && !bigPicture ? -1 : 0}
+      data-long-press={bigPicture ? "true" : undefined}
       onClick={() => {
         if (!locked) onPlay();
       }}
-      onKeyDown={(event) => {
+      onKeyDown={bigPicture ? (event) => {
+        if (event.target !== event.currentTarget) return;
+        longPress.onKeyDown(event);
+      } : (event) => {
         if (event.target !== event.currentTarget || locked) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onPlay();
         }
       }}
+      onKeyUp={bigPicture ? (event) => {
+        if (event.target !== event.currentTarget) return;
+        longPress.onKeyUp(event);
+      } : undefined}
       style={{ opacity:locked ? 0.58 : 1, cursor:locked ? "not-allowed" : "pointer" }}
       onMouseEnter={(e)=>{
         setFocused(true);
@@ -3030,6 +4034,20 @@ function EpCard({
         tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
         gsap.set(card,{boxShadow:"none"});
       }}
+      // En picture el foco del mando espeja el hover: escala sin bordes.
+      // Las bloqueadas también escalan al tener foco (solo no reproducen).
+      onFocus={bigPicture ? (e)=>{
+        setFocused(true);
+        const card = e.currentTarget as HTMLDivElement;
+        tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
+        gsap.set(card,{boxShadow:"0 18px 40px rgba(0,0,0,0.42)"});
+      } : undefined}
+      onBlur={bigPicture ? (e)=>{
+        setFocused(false);
+        const card = e.currentTarget as HTMLDivElement;
+        tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
+        gsap.set(card,{boxShadow:"none"});
+      } : undefined}
     >
       <div className="detail-episode-card__media">
         {(ep.still ?? fallbackImage) ? (
@@ -3049,7 +4067,7 @@ function EpCard({
             <Check size={13} />
           </span>
         ) : null}
-        {!locked&&<button
+        {!locked && !bigPicture && <button
           ref={menuButtonRef}
           className="detail-episode-card__menu"
           type="button"
@@ -3073,7 +4091,7 @@ function EpCard({
       </div>
       {!locked&&<ContextMenu
         open={menuOpen}
-        anchorRef={menuButtonRef}
+        anchorRef={bigPicture ? cardRef : menuButtonRef}
         avoidRef={cardRef}
         onClose={() => setMenuOpen(false)}
         width={210}
@@ -3096,6 +4114,7 @@ function EpCard({
 
 function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
   const navigate = useNavigate();
+  const bigPicture = useBigPictureActive();
   const fallbackThumb = media.backdrop ?? media.poster ?? "";
   const initialThumb = trailer.thumbnail ?? (trailer.key ? `https://img.youtube.com/vi/${trailer.key}/maxresdefault.jpg` : fallbackThumb);
   const [thumbSrc, setThumbSrc] = useState(initialThumb);
@@ -3125,7 +4144,7 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     }));
 
     const q = new URLSearchParams({ type: media.type, id: media.id, trailer: "1" });
-    navigate(`/player?${q.toString()}`);
+    navigate(buildPlayerPath(q.toString()));
   }
 
   if (thumbFailed) return null;
@@ -3134,7 +4153,7 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     <button
       type="button"
       onClick={playTrailer}
-      style={{ flexShrink:0,width:399,height:224,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",padding:0,textAlign:"left" }}
+      style={{ flexShrink:0,width:399,height:224,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",boxShadow:"0 12px 28px rgba(0,0,0,0.28)",padding:0,textAlign:"left" }}
       onMouseEnter={e=>{
          tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
          gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
@@ -3143,6 +4162,14 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
          tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
          gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
        }}
+       onFocus={bigPicture ? (e=>{
+         tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
+         gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
+       }) : undefined}
+       onBlur={bigPicture ? (e=>{
+         tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+         gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
+       }) : undefined}
     >
       {thumbSrc ? (
         <img src={thumbSrc} alt={trailer.name}
@@ -3168,6 +4195,7 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
 function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>void;scrollKey?:string}) {
   const [imageFailed, setImageFailed] = useState(false);
   const [focused, setFocused] = useState(false);
+  const bigPicture = useBigPictureActive();
   const portraitAvailable = Boolean(member.profile_path) && !imageFailed;
   const initials = member.name
     .split(/\s+/)
@@ -3181,10 +4209,12 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
     tweenTo(element, { scale: focused ? 1.05 : 1, y: focused ? -4 : 0, zIndex: focused ? 5 : 1 }, 0.32);
     const portrait = element.querySelector<HTMLElement>("[data-cast-portrait]");
     if (portrait) {
+      // En picture el foco es solo escala: sin anillo blanco.
+      const ring = bigPicture ? "" : ", 0 0 0 1px rgba(255,255,255,0.18)";
       tweenTo(portrait, {
         scale: focused ? 1.05 : 1,
         boxShadow: focused
-          ? "0 18px 38px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.18)"
+          ? `0 18px 38px rgba(0,0,0,0.48)${ring}`
           : "0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)",
       }, 0.32);
     }

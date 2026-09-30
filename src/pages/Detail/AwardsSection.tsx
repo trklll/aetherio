@@ -109,7 +109,7 @@ export function AwardsSection({
   if (isLoading) {
     return (
       <section>
-        <h2 style={{ fontSize: 19, fontWeight: 750, color: "#fff", lineHeight: 1.1, marginBottom: 12 }}>Premios y festivales</h2>
+        <h2 style={{ fontSize: 19, fontWeight: 750, color: "var(--detail-h, rgba(255,255,255,0.6))", lineHeight: 1.1, marginBottom: 12 }}>Premios y festivales</h2>
         <p style={{ margin: 0, color: "rgba(255,255,255,0.55)", fontSize: 13 }}>Consultando premiaciones…</p>
       </section>
     );
@@ -118,7 +118,7 @@ export function AwardsSection({
   if (isError) {
     return (
       <section>
-        <h2 style={{ fontSize: 19, fontWeight: 750, color: "#fff", lineHeight: 1.1, marginBottom: 12 }}>Premios y festivales</h2>
+        <h2 style={{ fontSize: 19, fontWeight: 750, color: "var(--detail-h, rgba(255,255,255,0.6))", lineHeight: 1.1, marginBottom: 12 }}>Premios y festivales</h2>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <p style={{ margin: 0, color: "rgba(255,255,255,0.55)", fontSize: 13 }}>{errorMessage ?? "No se pudieron cargar las premiaciones."}</p>
           {onRetry && <button type="button" onClick={onRetry} style={{ border: "1px solid rgba(255,255,255,0.18)", borderRadius: 999, padding: "6px 12px", color: "#fff", background: "rgba(255,255,255,0.08)", cursor: "pointer", fontSize: 12, fontWeight: 650 }}>Reintentar</button>}
@@ -135,7 +135,7 @@ export function AwardsSection({
         : "Las premiaciones aún no se han sincronizado para esta obra.";
     return (
       <section>
-        <h2 style={{ fontSize: 19, fontWeight: 750, color: "#fff", lineHeight: 1.1, marginBottom: 12 }}>Premios y festivales</h2>
+        <h2 style={{ fontSize: 19, fontWeight: 750, color: "var(--detail-h, rgba(255,255,255,0.6))", lineHeight: 1.1, marginBottom: 12 }}>Premios y festivales</h2>
         <p style={{ margin: 0, color: "rgba(255,255,255,0.55)", fontSize: 13 }}>{message}</p>
       </section>
     );
@@ -145,7 +145,7 @@ export function AwardsSection({
 
   return (
     <section>
-      <h2 style={{ fontSize: 19, fontWeight: 750, color: "#fff", lineHeight: 1.1, marginBottom: 16 }}>
+      <h2 style={{ fontSize: 19, fontWeight: 750, color: "var(--detail-h, rgba(255,255,255,0.6))", lineHeight: 1.1, marginBottom: 16 }}>
         Premios y festivales
       </h2>
 

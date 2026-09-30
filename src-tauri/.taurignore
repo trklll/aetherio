@@ -1,0 +1,13 @@
+# Lo que ignora el watcher de `tauri dev` mientras busca esto.
+#
+# La CLI solo aplica su lista de exclusiones (node_modules/, target/, gen/,
+# Cargo.lock) cuando existe un .taurignore en el arbol. Sin este archivo el
+# watcher se come TODO src-tauri/ en recursivo.
+#
+# resources/ son ~60 MB y 2300+ archivos (runtime standalone de Next.js con su
+# node_modules). Peor: el server de posters arranca con current_dir dentro de ahi
+# y escribe data/mappings.json y data/catalog-epoch.json en cada arranque. Cada
+# escritura disparaba un rebuild -> reinicio -> escritura -> rebuild. Para siempre.
+#
+# No afecta al bundling: bundle.resources sigue leyendo la carpeta entera.
+resources/

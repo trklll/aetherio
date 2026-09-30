@@ -4,8 +4,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { MpvLaunchResult, MpvStatusSnapshot } from "../pages/Player/types.ts";
+import { installSpatialNavigation } from "../navigation/spatialNav.ts";
 
-export type RuntimeKind = "desktop" | "android-tv" | "android" | "web";
+export type RuntimeKind = "desktop" | "web";
 
 export interface PlaybackOpenRequest {
   target: string;
@@ -17,6 +18,11 @@ export interface PlaybackOpenRequest {
   privateTorrent?: boolean;
   providerSessionKey?: string;
   audioPassthrough?: boolean;
+  /**
+   * Reproduccion en directo. El backend reduce el buffer del demuxer: en un
+   * stream en vivo, el buffer de VOD ES la latencia que ve el usuario.
+   */
+  live?: boolean;
 }
 
 export interface PlaybackCapabilities {
@@ -37,6 +43,11 @@ export interface MpvVideoEnhancementResult {
   activeDeband: string;
 }
 
+export interface NativeVideoLightness {
+  average: number;
+  brightPixelRatio: number;
+}
+
 export function isTauriRuntime() {
   if (typeof window === "undefined") return false;
   const tauriWindow = window as Window & {
@@ -46,25 +57,7 @@ export function isTauriRuntime() {
   return Boolean(tauriWindow.__TAURI_INTERNALS__ || tauriWindow.__TAURI__);
 }
 
-export function isAndroidRuntime() {
-  if (typeof navigator === "undefined") return false;
-  return /android/i.test(navigator.userAgent);
-}
-
-export function isAndroidTvRuntime() {
-  if (!isAndroidRuntime()) return false;
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  if (/(android tv|aft|bravia|shield|chromecast|smart-tv|smarttv|googletv|leanback)/i.test(ua)) return true;
-  if (typeof window === "undefined") return false;
-  const landscapeTvSize = window.matchMedia("(min-width: 960px) and (orientation: landscape)").matches;
-  const noFinePointer = window.matchMedia("(hover: none), (pointer: coarse)").matches;
-  return landscapeTvSize && noFinePointer;
-}
-
 export function getRuntimeKind(): RuntimeKind {
-  if (isAndroidTvRuntime()) return "android-tv";
-  if (isAndroidRuntime()) return "android";
   if (isTauriRuntime()) return "desktop";
   return "web";
 }
@@ -74,10 +67,6 @@ export function installRuntimeDocumentClasses() {
 
   const apply = () => {
     const root = document.documentElement;
-    const android = isAndroidRuntime();
-    const androidTv = isAndroidTvRuntime();
-    root.classList.toggle("aetherio-android", android);
-    root.classList.toggle("aetherio-android-tv", androidTv);
     root.dataset.aetherioRuntime = getRuntimeKind();
   };
 
@@ -96,49 +85,26 @@ export function installRuntimeDocumentClasses() {
   };
 }
 
-export function installAndroidTvRemoteNavigation() {
-  if (typeof window === "undefined" || typeof document === "undefined") return () => undefined;
-
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (!isAndroidTvRuntime()) return;
-    if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) return;
-    const target = event.target as HTMLElement | null;
-    if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
-
-    const focusables = getFocusableElements();
-    if (!focusables.length) return;
-    const current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const currentIndex = current ? focusables.indexOf(current) : -1;
-    const direction = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
-    const nextIndex = currentIndex === -1
-      ? 0
-      : (currentIndex + direction + focusables.length) % focusables.length;
-    const next = focusables[nextIndex];
-    if (!next) return;
-    event.preventDefault();
-    next.focus({ preventScroll: true });
-    next.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-  };
-
-  window.addEventListener("keydown", onKeyDown, true);
-  return () => window.removeEventListener("keydown", onKeyDown, true);
+export function isBigPictureMode() {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.classList.contains("aetherio-big-picture");
 }
 
-function getFocusableElements() {
-  const nodes = Array.from(document.querySelectorAll<HTMLElement>([
-    "button:not([disabled])",
-    "a[href]",
-    "input:not([disabled])",
-    "select:not([disabled])",
-    "textarea:not([disabled])",
-    "[tabindex]:not([tabindex='-1'])",
-  ].join(",")));
-  return nodes.filter(element => {
-    if (element.getAttribute("aria-hidden") === "true") return false;
-    const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-  });
+export function isSpatialNavMode() {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.classList.contains("aetherio-big-picture")
+    || document.documentElement.classList.contains("aetherio-profile-selection");
+}
+
+/**
+ * Navegación con mando/teclado en modo espacial (big-picture).
+ * Delega en el motor espacial 2D (src/navigation/spatialNav.ts), port del
+ * foco direccional de Compose TV: vecino más cercano en la dirección, sin
+ * wrap en los bordes. El antiguo ciclado lineal en orden DOM no existe en
+ * el nativo y se eliminó.
+ */
+export function installSpatialRemoteNavigation() {
+  return installSpatialNavigation();
 }
 
 export async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -169,23 +135,38 @@ export async function listenOpenUrls(handler: (urls: string[]) => void) {
 }
 
 export async function takePendingOpenFiles() {
-  if (!isTauriRuntime() || isAndroidRuntime()) return [] as string[];
+  if (!isTauriRuntime()) return [] as string[];
   return invokeCommand<string[]>("take_pending_open_files");
 }
 
 export async function listenOpenFiles(handler: (paths: string[]) => void) {
-  if (!isTauriRuntime() || isAndroidRuntime()) return () => undefined;
+  if (!isTauriRuntime()) return () => undefined;
   return listenPlatformEvent<string[]>("aetherio-open-files", event => handler(event.payload));
 }
 
+/**
+ * Despertar con mando desde el hilo nativo (fase 3, aún sin implementar en Rust).
+ * Hoy lo emite el botón Start del hook web; cuando el watcher XInput exista
+ * emitirá este mismo evento Tauri y el frontend ya sabrá reaccionar.
+ */
+export async function listenGamepadWake(handler: () => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  try {
+    return await listenPlatformEvent("aetherio-gamepad-wake", () => handler());
+  } catch {
+    return () => undefined;
+  }
+}
+
 export async function listenWindowFileDrops(handler: (paths: string[]) => void) {
-  if (!isTauriRuntime() || isAndroidRuntime()) return () => undefined;
+  if (!isTauriRuntime()) return () => undefined;
   return getCurrentWindow().onDragDropEvent(event => {
     if (event.payload.type === "drop") handler(event.payload.paths);
   });
 }
 
 export async function openExternalUrl(url: string) {
+  if (!isSafeExternalUrl(url)) return;
   if (isTauriRuntime()) {
     try {
       await openUrl(url);
@@ -197,8 +178,27 @@ export async function openExternalUrl(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/**
+ * Solo https, mas http en localhost/loopback para desarrollo. Rechaza
+ * file:, data:, javascript:, magnet: y cualquier otro esquema antes de
+ * llegar al plugin opener o al fallback del navegador.
+ */
+export function isSafeExternalUrl(raw: string): boolean {
+  try {
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol === "https:") return true;
+    if (parsed.protocol === "http:") {
+      const host = parsed.hostname.toLowerCase();
+      return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+    }
+  } catch {
+    // URL invalida.
+  }
+  return false;
+}
+
 export async function isWindowFullscreen() {
-  if (!isTauriRuntime() || isAndroidRuntime()) return false;
+  if (!isTauriRuntime()) return false;
   try {
     return await getCurrentWindow().isFullscreen();
   } catch {
@@ -207,7 +207,6 @@ export async function isWindowFullscreen() {
 }
 
 export async function toggleWindowFullscreen() {
-  if (isAndroidRuntime()) return;
   try {
     await invokeCommand("toggle_window_fullscreen");
     return;
@@ -224,7 +223,7 @@ export async function toggleWindowFullscreen() {
 }
 
 export async function minimizeWindow() {
-  if (!isTauriRuntime() || isAndroidRuntime()) return;
+  if (!isTauriRuntime()) return;
   try {
     await getCurrentWindow().minimize();
   } catch {
@@ -232,8 +231,103 @@ export async function minimizeWindow() {
   }
 }
 
+export async function maximizeWindow() {
+  if (!isTauriRuntime()) return;
+  try {
+    await invokeCommand("toggle_window_maximize");
+    return;
+  } catch {
+    // Fall back to the JS window API when the native command is unavailable.
+  }
+  try {
+    const win = getCurrentWindow();
+    if (!(await win.isMaximized())) await win.maximize();
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** Trae la ventana al frente: show + unminimize + focus. Clave para el despertar con mando. */
+export async function showAndFocusWindow() {
+  if (!isTauriRuntime()) return;
+  try {
+    const win = getCurrentWindow();
+    await win.show().catch(() => undefined);
+    if (await win.isMinimized().catch(() => false)) {
+      await win.unminimize().catch(() => undefined);
+    }
+    await win.setFocus().catch(() => undefined);
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** Entrar en Big Picture estilo Steam: pantalla completa exclusiva. */
+export async function enterBigPictureWindow() {
+  if (!isTauriRuntime()) {
+    // Web: fullscreen del navegador (exige gesto del usuario; si el
+    // navegador lo rechaza se ignora y la clase CSS hace el resto).
+    try {
+      if (typeof document !== "undefined" && !document.fullscreenElement) {
+        await document.documentElement.requestFullscreen().catch(() => undefined);
+      }
+    } catch {
+      // Best-effort.
+    }
+    return;
+  }
+  await showAndFocusWindow();
+  try {
+    const win = getCurrentWindow();
+    if (!(await win.isMaximized().catch(() => true))) {
+      await maximizeWindow();
+    }
+    if (!(await win.isFullscreen().catch(() => true))) {
+      await toggleWindowFullscreen();
+    }
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** Salir de Big Picture: devuelve la ventana a modo ventana (simetría Steam). */
+export async function exitBigPictureWindow() {
+  if (!isTauriRuntime()) {
+    try {
+      if (typeof document !== "undefined" && document.fullscreenElement) {
+        await document.exitFullscreen().catch(() => undefined);
+      }
+    } catch {
+      // Best-effort.
+    }
+    return;
+  }
+  try {
+    const win = getCurrentWindow();
+    if (await win.isFullscreen().catch(() => false)) {
+      try {
+        await invokeCommand("toggle_window_fullscreen");
+      } catch {
+        await win.setFullscreen(false).catch(() => undefined);
+      }
+    }
+  } catch {
+    // Best-effort.
+  }
+}
+
+export function setBigPictureActive(active: boolean) {
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.toggle("aetherio-big-picture", active);
+  const title = active ? "Modo inmersivo de Aetherio" : "Aetherio";
+  document.title = title;
+  if (isTauriRuntime()) {
+    getCurrentWindow().setTitle(title).catch(() => undefined);
+  }
+}
+
 export async function closeWindow() {
-  if (!isTauriRuntime() || isAndroidRuntime()) return;
+  if (!isTauriRuntime()) return;
   try {
     await getCurrentWindow().close();
   } catch {
@@ -242,27 +336,10 @@ export async function closeWindow() {
 }
 
 export async function getPlaybackCapabilities(): Promise<PlaybackCapabilities> {
-  if (isAndroidRuntime()) {
-    return {
-      mpvBundled: true,
-      backend: "android-media3",
-      formats: ["https", "hls", "dash", "external-subtitles"],
-    };
-  }
   return invokeCommand<PlaybackCapabilities>("playback_capabilities");
 }
 
 export async function openNativePlayback(request: PlaybackOpenRequest): Promise<MpvLaunchResult> {
-  if (isAndroidRuntime()) {
-    return invokeCommand<MpvLaunchResult>("android_player_open", {
-      target: request.target,
-      subtitle: request.subtitle,
-      headers: request.headers,
-      fileIdx: request.fileIdx,
-      startTime: request.startTime,
-    });
-  }
-
   return invokeCommand<MpvLaunchResult>("open_mpv", {
     target: request.target,
     subtitle: request.subtitle,
@@ -273,15 +350,21 @@ export async function openNativePlayback(request: PlaybackOpenRequest): Promise<
     privateTorrent: request.privateTorrent,
     providerSessionKey: request.providerSessionKey,
     audioPassthrough: request.audioPassthrough,
+    live: request.live,
   });
+}
+
+/**
+ * Salta al borde del directo. No existe como comando mpv generico porque el
+ * "final" de un stream en vivo lo fija el demuxer segun el manifiesto, no la
+ * duracion conocida del archivo.
+ */
+export async function seekNativePlaybackToLive() {
+  await invokeCommand("mpv_seek_live");
 }
 
 export async function stopNativePlayback() {
   try {
-    if (isAndroidRuntime()) {
-      await invokeCommand("android_player_stop");
-      return;
-    }
     await invokeCommand("stop_mpv");
   } catch {
     // Stopping playback is intentionally best-effort during navigation cleanup.
@@ -289,18 +372,10 @@ export async function stopNativePlayback() {
 }
 
 export async function getNativePlaybackStatus(): Promise<MpvStatusSnapshot> {
-  if (isAndroidRuntime()) {
-    return invokeCommand<MpvStatusSnapshot>("android_player_status");
-  }
   return invokeCommand<MpvStatusSnapshot>("mpv_status");
 }
 
 export async function sendNativePlaybackCommand(command: unknown[]) {
-  if (isAndroidRuntime()) {
-    await invokeCommand("android_player_command", { command });
-    return;
-  }
-
   if (command[0] === "set_property") {
     const name = command[1];
     if (typeof name !== "string") throw new Error("Propiedad MPV invalida.");
@@ -312,17 +387,20 @@ export async function sendNativePlaybackCommand(command: unknown[]) {
 }
 
 export async function setNativeAutocrop(enabled: boolean) {
-  if (isAndroidRuntime()) return { enabled, sourceCropApplied: false };
   return invokeCommand("mpv_autocrop", { enabled });
 }
 
+export async function sampleNativeVideoLightness(): Promise<NativeVideoLightness | null> {
+  if (!isTauriRuntime()) return null;
+  return invokeCommand<NativeVideoLightness>("mpv_sample_video_lightness");
+}
+
 export async function setNativeMpvVideoProfile(profile: string) {
-  if (!isTauriRuntime() || isAndroidRuntime()) return;
+  if (!isTauriRuntime()) return;
   return invokeCommand<MpvVideoEnhancementResult>("set_mpv_video_profile", { profile });
 }
 
 export async function setNativeMpvSurfaceVisible(visible: boolean) {
-  if (isAndroidRuntime()) return;
   await invokeCommand("set_mpv_surface_visible", { visible });
 }
 
@@ -357,7 +435,7 @@ export async function setNativeMpvControlsBlur(
     subtitleBlurAlpha?: number;
   },
 ) {
-  if (!isTauriRuntime() || isAndroidRuntime()) return;
+  if (!isTauriRuntime()) return;
   await invokeCommand("set_mpv_controls_blur", {
     enabled,
     left: rect?.left ?? 0,

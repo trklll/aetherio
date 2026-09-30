@@ -5,6 +5,7 @@ import {
   parseSubtitleCuesFromText,
   sanitizeCuePreviewText,
   selectAutoSyncVisibleCues,
+  serializeWebVttCues,
 } from "./parser";
 
 const SRT = `1
@@ -83,5 +84,17 @@ describe("helpers", () => {
     expect(visible).toHaveLength(90);
     expect(visible[0].startTimeMs).toBe(16_000);
     expect(visible[89].startTimeMs).toBe(105_000);
+  });
+  it("parsea ASS y serializa WebVTT", () => {
+    const ass = `[Script Info]\nScriptType: v4.00+\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.20,0:00:03.40,Default,,0,0,0,,{\\pos(10,20)}Primera\\Nlinea\nDialogue: 0,0:00:05.00,0:00:07.00,Default,,0,0,0,,Segunda`;
+    const cues = parseSubtitleCuesFromText(ass, "https://x.com/sub.ass");
+    expect(cues).toHaveLength(2);
+    expect(cues[0]).toEqual({ startTimeMs: 1_200, endTimeMs: 3_400, text: "Primera\nlinea" });
+    expect(serializeWebVttCues(cues)).toContain("00:00:01.200 --> 00:00:03.400");
+  });
+  it("parsea TTML con begin y end", () => {
+    const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:00:02.250" end="00:00:04.500">Hola TTML</p></div></body></tt>`;
+    const cues = parseSubtitleCuesFromText(ttml, "https://x.com/sub.ttml");
+    expect(cues).toEqual([{ startTimeMs: 2_250, endTimeMs: 4_500, text: "Hola TTML" }]);
   });
 });

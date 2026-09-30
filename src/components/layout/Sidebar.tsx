@@ -4,8 +4,8 @@ import { useUIStore } from "../../store/uiStore";
 import clsx from "clsx";
 
 const NAV = [
-  { to: "/home",     icon: Home,        label: "Home" },
   { to: "/search",   icon: Search,      label: "Buscar" },
+  { to: "/home",     icon: Home,        label: "Inicio" },
   { to: "/library",  icon: BookMarked,  label: "Biblioteca" },
   { to: "/addons",   icon: Puzzle,      label: "Add-ons" },
   { to: "/settings", icon: Settings,    label: "Ajustes" },

@@ -15,6 +15,7 @@ import {
 import { AwardLogo } from "../../components/awards/AwardLogo";
 import "./person.css";
 import { gsap, scrollByGsap } from "../../utils/motion";
+import { buildDetailPath } from "../../utils/bigPictureDetail";
 
 const IMG = "https://image.tmdb.org/t/p";
 
@@ -706,7 +707,7 @@ function unique(values: string[]) {
 }
 
 function openCredit(navigate: ReturnType<typeof useNavigate>, credit: PersonCredit) {
-  navigate(`/detail/${credit.type}/tmdb:${credit.id}`);
+  navigate(buildDetailPath(credit.type, `tmdb:${credit.id}`));
 }
 
 function openAwardRecord(navigate: ReturnType<typeof useNavigate>, record: AwardRecord) {
@@ -719,7 +720,7 @@ function openAwardRecord(navigate: ReturnType<typeof useNavigate>, record: Award
         ? `anilist:${record.anilistId}`
         : null;
   if (externalId) {
-    navigate(`/detail/${type}/${encodeURIComponent(externalId)}`);
+    navigate(buildDetailPath(type, externalId));
     return;
   }
   // Ediciones antiguas pueden no tener todavía el enlace materializado en la
@@ -732,7 +733,7 @@ function openAwardRecord(navigate: ReturnType<typeof useNavigate>, record: Award
       : record.mediaType === "tv" || match.media_type === "tv"
         ? "series"
         : "movie";
-    navigate(`/detail/${resolvedType}/tmdb:${match.id}`);
+    navigate(buildDetailPath(resolvedType, `tmdb:${match.id}`));
   }).catch(() => {
     // Una coincidencia no verificable se mantiene sin navegación para evitar
     // abrir una película equivocada.

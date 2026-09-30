@@ -12,6 +12,22 @@ jobs:
     permissions:
       contents: write
 
+    env:
+      # SpatialPosters viaja dentro del instalador (server standalone + runtime
+      # de Node, ~140 MB), asi que hay que compilarlo antes de `tauri build`. El
+      # source esta pineado a un commit: con una rama, un cambio upstream rompe
+      # el release de Aetherio sin que se note. Para actualizar el server que
+      # viaja en la proxima release, cambialo por el commit que quieras.
+      SPATIALPOSTERS_REPO: TheAceOfficials/SpatialPosters
+      SPATIALPOSTERS_REF: 007c9b083b46994d59cf25676290372c8c6c2bee
+      # El checkout va en un subdirectorio del workspace y la ruta se pasa por
+      # entorno, porque el default del script (el repo hermano) no existe en el
+      # runner. Va a nivel de job y no de step a proposito: `tauri build` vuelve
+      # a correr `posters:stage` desde beforeBuildCommand y necesita la misma
+      # ruta. En esa segunda pasada el script detecta que los recursos ya estan
+      # al dia y no recompila.
+      SPATIALPOSTERS_SOURCE: ${{ github.workspace }}\SpatialPosters
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -36,6 +52,25 @@ jobs:
       - name: Install MPV runtime
         shell: pwsh
         run: ./scripts/install-mpv.ps1
+
+      # El server de posters no se commitea (~140 MB), se compila desde el
+      # checkout de arriba; la ruta la pone el env del job.
+      - name: Checkout SpatialPosters
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.SPATIALPOSTERS_REPO }}
+          ref: ${{ env.SPATIALPOSTERS_REF }}
+          path: SpatialPosters
+
+      - name: Install SpatialPosters dependencies
+        run: npm ci
+        working-directory: SpatialPosters
+
+      # `next build` no necesita ninguna credencial: la key de TMDB se lee por
+      # request (header x-api-key), que es lo que manda Aetherio.
+      - name: Build SpatialPosters
+        shell: pwsh
+        run: ./scripts/stage-spatialposters.ps1
 
       - name: Verify updater key lineage
         shell: pwsh

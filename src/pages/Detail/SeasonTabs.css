@@ -1,0 +1,62 @@
+/* Port 1:1 de SeasonTabs nativo (Aetherio Tv Native DetailScreen.kt):
+   SeasonPill alto 34, padding horizontal 14, radio 999, texto 16 Bold;
+   reposo = solo texto blanco 60%; seleccionada = pastilla blanca 13%;
+   enfocada = pastilla #F8F8F9 con texto #0B0C0E y escala 1.025.
+   Fila: gap 10, padding vertical 8. */
+
+.season-tabs {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: visible;
+  margin: 0 calc(-1 * var(--app-safe-x));
+  padding: 8px var(--app-safe-x);
+  scrollbar-width: none;
+}
+
+.season-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.season-tab {
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transform: scale(1);
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.season-tab.is-selected {
+  background: rgba(255, 255, 255, 0.13);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.season-tab:hover,
+.season-tab:focus,
+.season-tab.spatial-focus {
+  background: #f8f8f9;
+  color: #0b0c0e;
+  outline: none;
+  box-shadow: 0 0 0 2px #fff;
+  transform: scale(1.025);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .season-tab {
+    transition: none;
+  }
+}

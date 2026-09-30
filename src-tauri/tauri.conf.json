@@ -1,6 +1,6 @@
 {
 "productName": "Aetherio",
-  "version": "0.7.4",
+  "version": "0.9.0",
   "identifier": "com.aetherio",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -47,7 +47,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https: wss: ws://localhost:*; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; media-src 'self' http://127.0.0.1:* https:; frame-src 'self' https:; worker-src 'self' blob:; child-src 'self' blob: https:"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https: wss: ws://localhost:*; img-src 'self' data: https: http://127.0.0.1:*; font-src 'self' https://fonts.gstatic.com; media-src 'self' http://127.0.0.1:* https:; frame-src 'self' https:; worker-src 'self' blob:; child-src 'self' blob: https:"
     }
   },
   "plugins": {

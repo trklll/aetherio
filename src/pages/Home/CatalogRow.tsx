@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { BookmarkMinus, BookmarkPlus, Check, ChevronRight, Image as ImageIcon } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
 import type { HomePosterLayout } from "../../config/homePreferences";
-import { supportsAiringSchedule, useAiringSchedule } from "../../hooks/useAiringSchedule";
 import { useHorizontalVirtualWindow } from "../../hooks/useHorizontalVirtualWindow";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import { sanitizeLogoUrl } from "../../utils/artwork";
@@ -16,12 +15,11 @@ import {
   type HomeCardArtworkMode,
 } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { getPosterTagColor, pickSamplablePosterUrl } from "../../utils/posterTagColor";
 import SpatialPosterImage from "../../components/SpatialPosterImage";
 import { isSpatialPosterUrl } from "../../config/spatialPosters";
 import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { readHiddenMediaKeys } from "../../services/watchedVisibility";
-import { gsap, scrollByGsap, tweenTo, useGsapState } from "../../utils/motion";
+import { gsap, scrollByGsap, tweenTo } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
@@ -544,12 +542,9 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const navigate = useNavigate();
   const location = useLocation();
   const cardRef = useRef<HTMLDivElement>(null);
-  const scheduleEligible = supportsAiringSchedule(type, item.id);
-  const [scheduleNearViewport, setScheduleNearViewport] = useState(false);
-  const airingSchedule = useAiringSchedule(type, item.id, scheduleNearViewport);
-  const effectiveWatched = watched && !airingSchedule;
-  // Tinte sólido del tag de horario extraído del póster (como el #Hoy de BTTTR).
-  const [tagBackground, setTagBackground] = useState<string | null>(null);
+  // El horario de emisión ("Cada domingo") lo dibuja ahora SpatialPosters dentro
+  // del propio póster, así que ya no hace falta calcularlo ni superponerlo acá.
+  const effectiveWatched = watched;
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
@@ -568,9 +563,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   // Override manual del usuario → no tocar. Solo se resuelve SpatialPosters en vertical.
   const hasCustomPoster = Boolean(readHomeCardArtwork("poster", type, item.id) || cardPoster && cardPoster !== item.poster);
   // En formato top el número grande ya indica el puesto: pósters sin badges #Hoy.
-  // Con horario de emisión ("Cada domingo") el badge nuestro pisa al #Hoy de
-  // BTTTR: se pide el póster sin trend tags para que solo se vea el nuestro.
-  const posterOverrides = ranked || airingSchedule ? { rankingBadges: false } : undefined;
+  const posterOverrides = ranked ? { rankingBadges: false } : undefined;
   const resolvedPoster = useSpatialPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides, item.originalPoster);
   const verticalPoster = resolvedPoster.url ?? cardPoster;
   const fallbackPoster = item.originalPoster ?? resolvedPoster.original;
@@ -585,18 +578,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const customLogo = sanitizeLogoUrl(readHomeCardArtwork("logo", type, item.id));
   const logo = customLogo || sanitizeLogoUrl(item.logo);
   const showLogo = Boolean(logo && !logoFailed);
-  useEffect(() => {
-    if (!airingSchedule) return;
-    let cancelled = false;
-    setTagBackground(null);
-    const sampleUrl = pickSamplablePosterUrl(item.originalPoster, cardPoster, item.poster);
-    if (!sampleUrl) return;
-    void getPosterTagColor(sampleUrl).then(color => {
-      if (!cancelled && color) setTagBackground(color);
-    });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airingSchedule, cardPoster, item.originalPoster, item.poster]);
   const doubleDigitRank = ranked && rank >= 10;
   const rankedPosterLeft = doubleDigitRank ? RANKED_POSTER.doubleLeft : RANKED_POSTER.singleLeft;
   // En picture la card es foco espacial con la misma animación del hover.
@@ -655,24 +636,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     onActivate: openDetail,
     onLongPress: () => setMenuOpen(true),
   });
-
-  useEffect(() => {
-    if (!scheduleEligible || scheduleNearViewport) return;
-    const card = cardRef.current;
-    if (!card) return;
-    if (typeof IntersectionObserver === "undefined") {
-      setScheduleNearViewport(true);
-      return;
-    }
-
-    const observer = new IntersectionObserver(entries => {
-      if (!entries.some(entry => entry.isIntersecting)) return;
-      setScheduleNearViewport(true);
-      observer.disconnect();
-    }, { rootMargin: "280px" });
-    observer.observe(card);
-    return () => observer.disconnect();
-  }, [scheduleEligible, scheduleNearViewport]);
 
   useEffect(() => {
     const refresh = (event: Event) => {
@@ -931,8 +894,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
               <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
             </div>
           ) : null}
-          {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact background={tagBackground} /> : null}
-          {displayImage ? (
+{displayImage ? (
             <SpatialPosterImage
               data-card-artwork
               ref={imgElRef}
@@ -1023,7 +985,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
           </div>
         ) : null}
-         {airingSchedule && !effectiveWatched ? <AiringScheduleBadge label={airingSchedule.label} watched={effectiveWatched} compact={posterLayout === "vertical"} background={tagBackground} /> : null}
          {displayImage ? <SpatialPosterImage ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
          {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
@@ -1066,48 +1027,5 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     </div>
   );
 });
-
-function AiringScheduleBadge({ label, watched: _watched, compact, background }: { label: string; watched: boolean; compact: boolean; background?: string | null }) {
-  const badgeRef = useGsapState<HTMLDivElement>({ opacity: 1, y: 0 }, [label], 0.28);
-  // Mismo diseño que el tag #Hoy de BTTTR: pastilla sólida arriba centrada,
-  // pegada al borde superior, teñida con la paleta del póster. Crece a lo
-  // ancho en una sola línea; la fuente no cambia.
-  return (
-    <div
-      ref={badgeRef}
-      data-airing-schedule
-      title={label}
-      style={{
-        position: "absolute",
-        top: 0,
-        left: "50%",
-        translate: "-50% 0",
-        zIndex: 4,
-        maxWidth: "calc(100% - 8px)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: compact ? "8px 18px 10px" : "6px 14px 8px",
-        borderRadius: "0 0 10px 10px",
-        border: "none",
-        background: background ?? "#343b48",
-        color: "#fff",
-        textShadow: "none",
-        boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
-        opacity: 0,
-        fontSize: compact ? 15 : 12,
-        lineHeight: 1.25,
-        fontWeight: 700,
-        letterSpacing: 0,
-        textAlign: "center",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        pointerEvents: "none",
-      }}
-    >
-      <span style={{ minWidth: 0, whiteSpace: "nowrap" }}>{label}</span>
-    </div>
-  );
-}
 
 export default memo(CatalogRow);

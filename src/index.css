@@ -1,4 +1,4 @@
-﻿@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -94,6 +94,51 @@ body,
   --app-safe-top:24px;
   --app-safe-x:32px;
   --app-shell-nav-height:88px;
+
+  /* ── Sistema de márgenes de la app (fuente única de verdad) ─────────────
+     REGLA DEL REPO: el gutter lateral de cualquier página es
+     var(--app-gutter-x). Nada de literales sueltos (48px, 64px, 22px…).
+     --app-safe-x / --app-safe-top siguen siendo la materia prima (los
+     sobreescriben android-tv y móvil); los tokens de abajo son la API. */
+  --app-gutter-x:var(--app-safe-x);   /* gutter lateral del contenido      */
+  --app-gutter-y:var(--app-safe-top);  /* gutter superior del contenido     */
+  --app-gutter-bottom:48px;            /* separación entre bloques         */
+
+  /* Holgura que reserva la sidebar fija de Big Picture (.bp-rail). Cero
+     fuera de Big Picture; se enciende más abajo con :has(.bp-rail).
+       --app-rail-width  → alineación a la derecha de la pill, para el
+                            contenido que ocupa todo lo alto del viewport.
+       --app-rail-height → holgura REAL de la banda superior de la pill
+                            (top: calc(5% + 4px) + 53px de alto + respiro),
+                            para el contenido que arranca arriba (heroes). */
+  --app-rail-width:0px;
+  --app-rail-height:0px;
+
+  /* Inset final de una página: gutter + holgura de sidebar. */
+  --app-page-x:calc(var(--app-gutter-x) + var(--app-rail-width));
+  --app-page-y:calc(var(--app-gutter-y) + var(--app-rail-height));
+
+  /* Padding superior de los heroes. En Big Picture suma la banda de la pill
+     para que el logo de una ficha (producción/cadena) nunca quede debajo. */
+  --app-hero-top:calc(40px + var(--app-rail-height));
+
+  /* Escala de los shells de TV. El contenido de Big Picture se dibuja con
+     scale(1.2) desde arriba-izquierda, así que un gutter de N px se ve como
+     N×1.2. La sidebar es position:fixed y está FUERA de esa transform, por
+     eso su left se multiplica por la misma escala: así la pill queda
+     clavada en la misma línea vertical que el texto y las tarjetas. */
+  --app-bp-scale:1.2;
+}
+
+/* Big Picture monta las páginas de detalle (Entity/Detail) sin ningún
+   contenedor con padding, así que la holgura de la sidebar se propaga por
+   herencia: en cuanto existe .bp-rail, toda página que use --app-page-x/y o
+   --app-hero-top la esquiva sola, sin literales por página. */
+html:has(.bp-rail),
+html:has(.bp-rail) body,
+html:has(.bp-rail) #root {
+  --app-rail-width:80px;               /* 32px de gutter + 80px de rail   */
+  --app-rail-height:calc(5vh + 72px);  /* pill 5% + 4px + 53px + respiro  */
 }
 
 *,input,button,textarea,select{
@@ -136,6 +181,246 @@ html.aetherio-android-tv [tabindex]:focus-visible{
   box-shadow:0 0 0 7px rgba(255,255,255,0.16);
 }
 
+/* Anillo del motor espacial en Android TV: el foco movido por el mando
+   (eventos sint�ticos) no siempre activa :focus-visible, por eso el motor
+   marca el elemento con .spatial-focus. En big-picture no hay ning�n borde:
+   solo la animaci�n de enfoque de cada card. */
+html.aetherio-android-tv .spatial-focus{
+  outline:3px solid rgba(248,248,249,0.95);
+  outline-offset:3px;
+}
+
+/* En Big Picture (normal o shell preview) el foco del mando es escala,
+   sin anillo blanco. */
+html.aetherio-android-tv .big-picture--home-maximized .spatial-focus,
+html.aetherio-android-tv .shell-preview-app .spatial-focus{
+  outline:none !important;
+}
+
+/* Men� contextual: la selecci�n con mando/teclado es un velo blanco
+   transl�cido, nunca un borde blanco s�lido. Cubre el :focus-visible real
+   y la marca .spatial-focus del motor (los eventos sint�ticos del mando no
+   siempre activan :focus-visible). El !important gana al fondo inline del
+   bot�n y al anillo blanco de Android TV. */
+[data-aetherio-context-menu] button:focus,
+[data-aetherio-context-menu] button:focus-visible,
+[data-aetherio-context-menu] button.spatial-focus{
+  outline:none !important;
+  box-shadow:none !important;
+  border-color:transparent !important;
+  background-color:rgba(255,255,255,0.16) !important;
+}
+
+.artwork-picker__panel{
+  scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,0.15) transparent;
+  -ms-overflow-style:auto;
+}
+.artwork-picker__panel::-webkit-scrollbar{
+  width:3px;
+  height:3px;
+}
+.artwork-picker__panel::-webkit-scrollbar-track{
+  background:transparent;
+}
+.artwork-picker__panel::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,0.15);
+  border-radius:99px;
+}
+.artwork-picker__panel button:focus,
+.artwork-picker__panel button:focus-visible,
+.artwork-picker__panel button.spatial-focus{
+  outline:none !important;
+  border-color:rgba(255,255,255,0.88) !important;
+  box-shadow:0 0 0 3px rgba(255,255,255,0.26), 0 10px 26px rgba(0,0,0,0.42) !important;
+  transform:scale(1.018);
+}
+
+/* Reproductor Big Picture (estilo NuvioTV): solo el control que el
+   reconciliador identifica como actual recibe el velo blanco. */
+.bp-player-controls button[data-bar-active="true"],
+[data-player-skip]:focus-visible{
+  outline:none !important;
+  border-color:transparent !important;
+  background-color:rgba(255,255,255,0.94) !important;
+  color:#000 !important;
+  box-shadow:0 2px 14px rgba(0,0,0,0.45) !important;
+}
+/* spatialNav puede dejar la clase durante un frame en Android TV; nunca debe
+   ser una fuente de estilo para la barra. */
+html.aetherio-android-tv .bp-player-controls .spatial-focus{
+  outline:none !important;
+}
+/* Velo �nico de foco de los paneles flotantes del reproductor Big Picture
+   (portal fuera de la barra). React mantiene [data-bp-focus="true"] solo en
+   el control que coincide con document.activeElement. */
+[data-player-subtitle-panel-glass] button[data-bp-focus="true"],
+[data-player-sync-dialog-glass] button[data-bp-focus="true"],
+[data-player-episode-panel-glass] button[data-bp-focus="true"]{
+  outline:none !important;
+  border-color:transparent !important;
+  background-color:rgba(255,255,255,0.94) !important;
+  color:#000 !important;
+  box-shadow:0 2px 14px rgba(0,0,0,0.45) !important;
+}
+[data-player-subtitle-panel-glass] button[data-bp-focus="true"] span,
+[data-player-sync-dialog-glass] button[data-bp-focus="true"] span,
+[data-player-episode-panel-glass] button[data-bp-focus="true"] span,
+[data-player-subtitle-panel-glass] button[data-bp-focus="true"] p,
+[data-player-sync-dialog-glass] button[data-bp-focus="true"] p,
+[data-player-episode-panel-glass] button[data-bp-focus="true"] p{
+  color:#000 !important;
+}
+[data-player-subtitle-panel-glass] button[data-bp-focus="true"] svg,
+[data-player-sync-dialog-glass] button[data-bp-focus="true"] svg,
+[data-player-episode-panel-glass] button[data-bp-focus="true"] svg{
+  color:#000 !important;
+}
+/* Los portales tambi�n reciben foco sint�tico del mando. Todo bot�n que no
+   sea el control actual debe volver expl�citamente a su vidrio normal. */
+[data-player-subtitle-panel-glass] button:not([data-bp-focus="true"]),
+[data-player-sync-dialog-glass] button:not([data-bp-focus="true"]),
+[data-player-episode-panel-glass] button:not([data-bp-focus="true"]){
+  outline:none !important;
+  border-color:rgba(255,255,255,0.10) !important;
+  background-color:rgba(255,255,255,0.06) !important;
+  color:rgba(255,255,255,0.86) !important;
+  box-shadow:none !important;
+}
+[data-player-episode-panel-glass] button[aria-current="true"]:not([data-bp-focus="true"]){
+  background-color:rgba(255,255,255,0.15) !important;
+  border-color:rgba(255,255,255,0.16) !important;
+  color:rgba(255,255,255,0.98) !important;
+}
+[data-player-subtitle-panel-glass][data-subtitle-fullscreen] button[aria-current="true"]:not([data-bp-focus="true"]){
+  background-color:rgba(255,255,255,0.15) !important;
+  border-color:rgba(255,255,255,0.16) !important;
+  color:rgba(255,255,255,0.98) !important;
+}
+html.aetherio-android-tv [data-player-subtitle-panel-glass] button.spatial-focus,
+html.aetherio-android-tv [data-player-sync-dialog-glass] button.spatial-focus,
+html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
+  outline:none !important;
+}
+/* Episodios en Big Picture: el foco es solo el velo blanco, sin escala �
+   la escala 1.07 global recortaba la card contra los bordes del panel.
+   Gana a .big-picture--home-maximized button:focus por especificidad. */
+.big-picture--home-maximized [data-player-episode-panel-glass] button:focus,
+.big-picture--home-maximized [data-player-episode-panel-glass] button:focus-visible,
+.big-picture--home-maximized [data-player-episode-panel-glass] button.spatial-focus,
+.big-picture--home-maximized [data-player-episode-panel-glass] button[data-bp-focus="true"]{
+  transform:none !important;
+}
+/* Scroll de la lista como el global de Big Picture: oculto visualmente,
+   pero desplazable con el mando. */
+.big-picture--home-maximized [data-player-episode-panel-glass] [data-episode-list]{
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.big-picture--home-maximized [data-player-episode-panel-glass] [data-episode-list]::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
+}
+.bp-player-controls input[type="range"][data-bar-active="true"]{
+   outline:none;
+}
+
+/* El vidrio sigue siendo el mismo, pero el contenido cambia de tinta cuando
+   el artwork claro haria invisible el texto blanco. */
+.bp-player-controls--light,
+[data-player-contrast="light"] .bp-player-controls{
+  color:#16181d;
+}
+.bp-player-controls--light .text-white,
+.bp-player-controls--light [class*="text-white/"],
+[data-player-contrast="light"] [data-player-skip]{
+  color:#16181d !important;
+}
+.bp-player-controls--light svg,
+.bp-player-controls--light svg[fill="white"]{
+  color:#16181d;
+  fill:currentColor;
+}
+.bp-player-controls--light .player-timeline::-webkit-slider-runnable-track{
+  background:linear-gradient(
+    to right,
+    rgba(22,24,29,0.88) 0 var(--player-progress),
+    rgba(22,24,29,0.24) var(--player-progress) 100%
+  );
+}
+.bp-player-controls--light .player-timeline::-webkit-slider-thumb,
+.bp-player-controls--light .player-timeline::-moz-range-thumb{
+  background:#16181d;
+}
+.bp-player-controls--light .player-timeline::-moz-range-track{
+  background:rgba(22,24,29,0.24);
+}
+.bp-player-controls--light .player-timeline::-moz-range-progress{
+  background:rgba(22,24,29,0.88);
+}
+
+.bp-player-controls button:not([data-bar-active="true"]){
+  background-color:rgba(255,255,255,0.10) !important;
+  border-color:rgba(255,255,255,0.07) !important;
+  color:rgba(255,255,255,0.9) !important;
+  box-shadow:0 2px 10px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08) !important;
+}
+
+/* En fondos claros los botones transl�cidos se perciben como seleccionados.
+   Reserva el blanco s�lido para el elemento activo y deja el resto como vidrio
+   oscuro, manteniendo una lectura clara de la fila. */
+.bp-player-controls--light button:not([data-bar-active="true"]){
+  background-color:rgba(22,24,29,0.16) !important;
+  border-color:rgba(22,24,29,0.18) !important;
+  color:#16181d !important;
+  box-shadow:0 2px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.22) !important;
+}
+
+/* El foco del timeline debe poder localizarse sin depender del outline nativo
+   del input range, que en WebView puede no dibujarse. */
+.bp-player-controls input[type="range"][data-bar-active="true"]{
+  outline:none;
+  filter:none;
+}
+.bp-player-controls input[type="range"][data-bar-active="true"]::-webkit-slider-runnable-track{
+  height:3px;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.32);
+}
+.bp-player-controls input[type="range"][data-bar-active="true"]::-webkit-slider-thumb{
+  width:14px;
+  height:14px;
+  margin-top:-5.5px;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.68);
+}
+.bp-player-controls input[type="range"][data-bar-active="true"]::-moz-range-track,
+.bp-player-controls input[type="range"][data-bar-active="true"]::-moz-range-progress{
+  height:3px;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.32);
+}
+.bp-player-controls input[type="range"][data-bar-active="true"]::-moz-range-thumb{
+  width:14px;
+  height:14px;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.68);
+}
+.bp-player-controls--light input[type="range"][data-bar-active="true"]{
+  filter:none;
+}
+.bp-player-controls--light input[type="range"][data-bar-active="true"]::-webkit-slider-runnable-track,
+.bp-player-controls--light input[type="range"][data-bar-active="true"]::-moz-range-track,
+.bp-player-controls--light input[type="range"][data-bar-active="true"]::-moz-range-progress{
+  box-shadow:0 0 0 1px rgba(22,24,29,0.32);
+}
+.bp-player-controls--light input[type="range"][data-bar-active="true"]::-webkit-slider-thumb,
+.bp-player-controls--light input[type="range"][data-bar-active="true"]::-moz-range-thumb{
+  box-shadow:0 0 0 1px rgba(22,24,29,0.62);
+}
+[data-player-contrast="light"] [data-player-skip]{
+  border-color:rgba(22,24,29,0.16) !important;
+  background:rgba(255,255,255,0.86) !important;
+  box-shadow:0 18px 56px rgba(0,0,0,0.24) !important;
+}
+
 html.aetherio-android-tv .scroll-row{
   scroll-padding-left:var(--app-safe-x);
   scroll-padding-right:var(--app-safe-x);
@@ -148,8 +433,8 @@ html.aetherio-android-tv .scroll-row{
 
 .liquid-glass{
   background:rgba(255,255,255,0.16);
-  backdrop-filter:blur(16px) saturate(180%);
-  -webkit-backdrop-filter:blur(16px) saturate(180%);
+  backdrop-filter:blur(60px) saturate(200%);
+  -webkit-backdrop-filter:blur(60px) saturate(200%);
   border:1px solid rgba(225,230,238,0.15);
   box-shadow:0 2px 12px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.08);
 }
@@ -158,8 +443,8 @@ html.aetherio-android-tv .scroll-row{
   overflow:hidden;
   border-radius:18px;
   background:rgba(12,12,14,0.28);
-  backdrop-filter:blur(18px) saturate(175%);
-  -webkit-backdrop-filter:blur(18px) saturate(175%);
+  backdrop-filter:blur(60px) saturate(190%);
+  -webkit-backdrop-filter:blur(60px) saturate(190%);
   border:1px solid rgba(235,240,248,0.14);
   box-shadow:0 8px 26px rgba(0,0,0,0.34),inset 0 1px 0 rgba(255,255,255,0.09);
 }
@@ -192,14 +477,14 @@ html.aetherio-android-tv .scroll-row{
 }
 .liquid-glass-dark{
   background:rgba(0,0,0,0.65);
-  backdrop-filter:blur(14px) saturate(165%);
-  -webkit-backdrop-filter:blur(14px) saturate(165%);
+  backdrop-filter:blur(50px) saturate(185%);
+  -webkit-backdrop-filter:blur(50px) saturate(185%);
   border:1px solid rgba(225,230,238,0.08);
 }
 .liquid-glass-pill{
   background:rgba(255,255,255,0.12);
-  backdrop-filter:blur(10px) saturate(145%);
-  -webkit-backdrop-filter:blur(10px) saturate(145%);
+  backdrop-filter:blur(48px) saturate(175%);
+  -webkit-backdrop-filter:blur(48px) saturate(175%);
   border:1px solid rgba(225,230,238,0.09);
   border-radius:999px;
 }
@@ -213,6 +498,17 @@ html.aetherio-android-tv .scroll-row{
   background:linear-gradient(90deg,#1c1c1e 25%,#2c2c2e 50%,#1c1c1e 75%);
   background-size:200% 100%;
 }
+.aetherio-loading-spinner{
+  display:block;
+  width:46px;
+  height:46px;
+  border:3px solid rgba(255,255,255,0.18);
+  border-top-color:rgba(255,255,255,0.9);
+  border-radius:50%;
+  animation:aetherio-loading-spin 1.05s linear infinite;
+}
+@keyframes aetherio-loading-spin{to{transform:rotate(360deg);}}
+@media (prefers-reduced-motion:reduce){.aetherio-loading-spinner{animation:none;}}
 .scroll-row{
   display:flex;gap:12px;
   overflow-x:auto;overflow-y:visible;
@@ -266,7 +562,7 @@ html.aetherio-android-tv .scroll-row{
 .detail-award-logo-adaptive{
   /*
    * Los assets son negros: invert los convierte en blancos y difference los
-   * hace negros únicamente donde el backdrop es claro, incluso dentro de un
+   * hace negros �nicamente donde el backdrop es claro, incluso dentro de un
    * mismo logo.
    */
   filter:invert(1);
@@ -294,9 +590,20 @@ html.aetherio-android-tv .scroll-row{
 
 .home-page-scale,
 .entity-page-scale{
-  width:83.333333%;
-  transform:scale(1.2);
+  width:calc(100% / var(--app-bp-scale));
+  transform:scale(var(--app-bp-scale));
   transform-origin:top left;
+}
+/* Entity: shell propio con scroll program�tico (como el Detail) y sin
+   scrollbar visible en ning�n modo (estilo Steam, todo con mando). */
+.entity-scroll{
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.entity-scroll::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
 }
 .home-page-scale .home-page-hero{
   left:0 !important;
@@ -323,7 +630,8 @@ html.aetherio-android-tv .scroll-row{
 .detail-episode-card__media{
   position:relative;
   width:100%;
-  height:225px;
+  aspect-ratio:16 / 9;
+  height:auto;
   overflow:hidden;
   border-radius:14px;
   background:#2b2b2d;
@@ -491,4 +799,35 @@ html.aetherio-android-tv .scroll-row{
   .episode-actions{
     justify-content:center;
   }
+}
+
+/* Detail: headers de secci�n en gris; se iluminan en blanco cuando su row
+   tiene el foco (mando/teclado). El color vive en una variable heredada para
+   no pelear con los estilos inline: cada h2 usa
+   color: var(--detail-h, rgba(255,255,255,0.6)). */
+.detail-page-content section h2{
+  transition:color 0.25s ease;
+}
+.detail-page-content section:focus-within{
+  --detail-h:#fff;
+}
+
+/* Home: mismo lenguaje que el Detail � headers de row en gris, blancos
+   cuando su row tiene el foco (mando/teclado). Cada header usa
+   color: var(--home-h, rgba(255,255,255,0.6)). */
+section[data-row-key]:focus-within{
+  --home-h:#fff;
+}
+[data-row-header] span{
+  transition:color 0.25s ease;
+}
+
+/* Steam Big Picture: con el mando al mando (o en Big Picture) el cursor del SO
+   desaparece. El JS lo muestra de nuevo al mover el raton o al pulsar una tecla
+   real (la clase etherio-bp-hide-cursor se quita). Vive aquf (global) para
+   que tambien aplique en superficies fuera del chunk de Big Picture, como la
+   seleccion de perfil. */
+.aetherio-bp-hide-cursor,
+.aetherio-bp-hide-cursor * {
+  cursor: none !important;
 }

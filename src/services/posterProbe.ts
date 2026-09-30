@@ -15,8 +15,32 @@
 
 export type PosterImageLoader = (url: string) => Promise<void>;
 
-export const POSTER_PROBE_TIMEOUT_MS = 20_000;
-export const POSTER_PROBE_FAIL_TTL_MS = 5 * 60 * 1000;
+/**
+ * Presupuesto por verificación.
+ *
+ * OJO: esto es el timeout DE UNA VERIFICACIÓN, no del prewarm entero. Con 6
+ * conexiones simultáneas y ~260 posters, el último de la cola espera del orden
+ * de 260/6 x 2 s = ~90 s antes de empezar a cargar. Con el valor anterior
+ * (20 s) todos los que esperaban mas de eso se expiraban, se marcaban como
+ * fallidos y caían al póster de TMDB para el resto de la sesión: de ahí que
+ * solo se vieran los posters de las primeras filas.
+ *
+ * Tiene que ser holgado a propósito. El corte real lo hace el prewarm, que
+ * espera a todos los jobs; un poster que se cuelgue de verdad no bloquea la
+ * app porque ese outer timeout existe.
+ */
+export const POSTER_PROBE_TIMEOUT_MS = 180_000;
+
+/**
+ * Cuánto se recuerda un fallo antes de reintentar.
+ *
+ * Antes eran 5 min, y como los timeouts se disparaban en cadena, un póster que
+ * habia expirado por la cola quedaba marcado como roto durante toda la sesion.
+ * Bajado a 15 s: si el póster no estaba listo por congestión, se reintenta
+ * apenas la cola se vacía y el usuario termina viendo el poster de SpatialPosters
+ * en vez de quedarse con el de TMDB.
+ */
+export const POSTER_PROBE_FAIL_TTL_MS = 15 * 1000;
 // Sin lÃ­mite, un arranque en frÃ­o dispara cientos de verificaciones a la vez
 // y satura la conexiÃ³n (6 por host) y al propio la instancia de SpatialPosters: todo tarda mÃ¡s.
 // Un solo punto de estrangulamiento para probes de cards y prewarm.

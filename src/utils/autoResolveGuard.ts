@@ -1,4 +1,4 @@
-// Guardia de "auto-resolve" estilo NuvioTV.
+// Guardia de "auto-resolve".
 //
 // Cuando la pagina de episode entra en modo resolucion automatica de fuente
 // (reanudar / autoplay / primera fuente / reutilizar enlace) muestra un loader

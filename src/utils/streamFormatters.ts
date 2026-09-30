@@ -1,7 +1,7 @@
 import formatterManifest from "../assets/stream-tags/manifest.json";
 import type { MediaStream, StreamTechnicalMetadata } from "../types/stream.ts";
 
-export type StreamFormatCategory = "source" | "video" | "audio" | "channels";
+export type StreamFormatCategory = "source" | "video" | "audio" | "channels" | "special" | "service" | "language";
 
 export interface StreamFormatBadge {
   id: string;
@@ -58,6 +58,102 @@ const FORMATTER_ASSET_META: Record<string, FormatterAssetMeta> = {
   "audio-7.1.png": { id: "channels-7.1", label: "7.1 canales", category: "channels", order: 300 },
   "audio-6.1.png": { id: "channels-6.1", label: "6.1 canales", category: "channels", order: 301 },
   "audio-5.1.png": { id: "channels-5.1", label: "5.1 canales", category: "channels", order: 302 },
+  // ── Badges adicionales (aditivas: no reemplazan las de arriba) ──
+  // Special tags
+  "seadex-release.png": { id: "seadex-release", label: "SEADEX", category: "special", order: 5 },
+  "edition-directors-cut.png": { id: "edition-directors-cut", label: "DIR CUT", category: "special", order: 6 },
+  "edition-extended.png": { id: "edition-extended", label: "EXTENDED", category: "special", order: 7 },
+  "edition-true-hue.png": { id: "edition-true-hue", label: "TRUE-HUE", category: "special", order: 8 },
+  "edition-bw.png": { id: "edition-bw", label: "B&W", category: "special", order: 9 },
+  // Servicios de streaming
+  "gs-crave.png": { id: "gs-crave", label: "CRAVE", category: "service", order: 46 },
+  "s-nflx.png": { id: "s-nflx", label: "NETFLIX", category: "service", order: 47 },
+  "s-amzn.png": { id: "s-amzn", label: "PRIME", category: "service", order: 48 },
+  "s-atvp.png": { id: "s-atvp", label: "APPLE TV+", category: "service", order: 49 },
+  "s-dsnp.png": { id: "s-dsnp", label: "DISNEY+", category: "service", order: 50 },
+  "s-hmax.png": { id: "s-hmax", label: "MAX", category: "service", order: 51 },
+  "s-hulu.png": { id: "s-hulu", label: "HULU", category: "service", order: 52 },
+  "s-pcok.png": { id: "s-pcok", label: "PEACOCK", category: "service", order: 53 },
+  "s-pamp.png": { id: "s-pamp", label: "PARAMOUNT+", category: "service", order: 54 },
+  "s-croll.png": { id: "s-croll", label: "CRUNCHYROLL", category: "service", order: 55 },
+  // Tiers adicionales (conviven con los tiers T1-T3 propios)
+  "web-unranked.png": { id: "web-unranked", label: "WEB Unranked", category: "source", order: 56 },
+  "web-6.png": { id: "web-6", label: "WEB 6", category: "source", order: 57 },
+  "web-5.png": { id: "web-5", label: "WEB 5", category: "source", order: 58 },
+  "web-4.png": { id: "web-4", label: "WEB 4", category: "source", order: 59 },
+  "web-3.png": { id: "web-3", label: "WEB 3", category: "source", order: 60 },
+  "web-2.png": { id: "web-2", label: "WEB 2", category: "source", order: 61 },
+  "web-1.png": { id: "web-1", label: "WEB 1", category: "source", order: 62 },
+  "blu-ray-unranked.png": { id: "blu-ray-unranked", label: "BLU-RAY Unranked", category: "source", order: 63 },
+  "blu-ray-8.png": { id: "blu-ray-8", label: "BLU-RAY 8", category: "source", order: 64 },
+  "blu-ray-7.png": { id: "blu-ray-7", label: "BLU-RAY 7", category: "source", order: 65 },
+  "blu-ray-6.png": { id: "blu-ray-6", label: "BLU-RAY 6", category: "source", order: 66 },
+  "blu-ray-5.png": { id: "blu-ray-5", label: "BLU-RAY 5", category: "source", order: 67 },
+  "blu-ray-4.png": { id: "blu-ray-4", label: "BLU-RAY 4", category: "source", order: 68 },
+  "blu-ray-3.png": { id: "blu-ray-3", label: "BLU-RAY 3", category: "source", order: 69 },
+  "blu-ray-2.png": { id: "blu-ray-2", label: "BLU-RAY 2", category: "source", order: 70 },
+  "blu-ray-1.png": { id: "blu-ray-1", label: "BLU-RAY 1", category: "source", order: 71 },
+  "remux-unranked.png": { id: "remux-unranked", label: "REMUX Unranked", category: "source", order: 72 },
+  "remux-3.png": { id: "remux-3", label: "REMUX 3", category: "source", order: 73 },
+  "remux-2.png": { id: "remux-2", label: "REMUX 2", category: "source", order: 74 },
+  "remux-1.png": { id: "remux-1", label: "REMUX 1", category: "source", order: 75 },
+  "q-br.png": { id: "q-br", label: "Best Remux", category: "source", order: 76 },
+  "q-bb.png": { id: "q-bb", label: "Best BluRay", category: "source", order: 77 },
+  "q-bw.png": { id: "q-bw", label: "Best WebDL", category: "source", order: 78 },
+  "q-gr.png": { id: "q-gr", label: "Good Remux", category: "source", order: 79 },
+  "q-gb.png": { id: "q-gb", label: "Good BluRay", category: "source", order: 80 },
+  "q-gw.png": { id: "q-gw", label: "Good WebDL", category: "source", order: 81 },
+  "q-or.png": { id: "q-or", label: "OK Remux", category: "source", order: 82 },
+  "q-ob.png": { id: "q-ob", label: "OK BluRay", category: "source", order: 83 },
+  "q-ow.png": { id: "q-ow", label: "OK WebDL", category: "source", order: 84 },
+  "grl-hdtv.png": { id: "grl-hdtv", label: "HDTV", category: "source", order: 85 },
+  "q-b.png": { id: "q-b", label: "BluRay", category: "source", order: 86 },
+  "q-w.png": { id: "q-w", label: "WebDL", category: "source", order: 87 },
+  "q-wr.png": { id: "q-wr", label: "WebRip", category: "source", order: 88 },
+  "q-r.png": { id: "q-r", label: "Remux", category: "source", order: 89 },
+  // Video extra (resolución baja, 3D, IMAX Enhanced, combos, codecs, bit depth)
+  "gr-480p-sd.png": { id: "gr-480p-sd", label: "480p", category: "video", order: 103 },
+  "gv-dvd-rip.png": { id: "gv-dvd-rip", label: "DVD RIP", category: "video", order: 125 },
+  "v-imax-e.png": { id: "v-imax-e", label: "IMAX Enhanced", category: "video", order: 126 },
+  "v-3d.png": { id: "v-3d", label: "3D", category: "video", order: 127 },
+  "a-at-dv.png": { id: "a-at-dv", label: "Atmos+DV", category: "video", order: 128 },
+  "a-th-dv.png": { id: "a-th-dv", label: "TrueHD+DV", category: "video", order: 129 },
+  "a-dp-dv.png": { id: "a-dp-dv", label: "DD++DV", category: "video", order: 130 },
+  "a-dd-dv.png": { id: "a-dd-dv", label: "DD+DV", category: "video", order: 131 },
+  "video-codec-avc.png": { id: "video-codec-avc", label: "AVC", category: "video", order: 140 },
+  "video-codec-hevc.png": { id: "video-codec-hevc", label: "HEVC", category: "video", order: 141 },
+  "bit-depth-8bit.png": { id: "bit-depth-8bit", label: "8-Bit", category: "video", order: 142 },
+  "bit-depth-10bit.png": { id: "bit-depth-10bit", label: "10-Bit", category: "video", order: 143 },
+  // Audio extra
+  "a-aac.png": { id: "a-aac", label: "AAC", category: "audio", order: 232 },
+  "a-flac.png": { id: "a-flac", label: "FLAC", category: "audio", order: 233 },
+  "a-opus.png": { id: "a-opus", label: "OPUS", category: "audio", order: 234 },
+  "a-mp3.png": { id: "a-mp3", label: "MP3", category: "audio", order: 235 },
+  "a-pcm.png": { id: "a-pcm", label: "PCM", category: "audio", order: 236 },
+  // Canales extra
+  "ch-20.png": { id: "ch-20", label: "2.0 canales", category: "channels", order: 303 },
+  // Idiomas
+  "l-en.png": { id: "l-en", label: "Inglés", category: "language", order: 400 },
+  "l-es.png": { id: "l-es", label: "Español", category: "language", order: 401 },
+  "l-fr.png": { id: "l-fr", label: "Francés", category: "language", order: 402 },
+  "l-de.png": { id: "l-de", label: "Alemán", category: "language", order: 403 },
+  "l-it.png": { id: "l-it", label: "Italiano", category: "language", order: 404 },
+  "l-pt-br.png": { id: "l-pt-br", label: "Portugués BR", category: "language", order: 405 },
+  "l-pt-pt.png": { id: "l-pt-pt", label: "Portugués", category: "language", order: 406 },
+  "l-tr.png": { id: "l-tr", label: "Turco", category: "language", order: 407 },
+  "l-pl.png": { id: "l-pl", label: "Polaco", category: "language", order: 408 },
+  "l-uk.png": { id: "l-uk", label: "Ucraniano", category: "language", order: 409 },
+  "l-id.png": { id: "l-id", label: "Indonesio", category: "language", order: 410 },
+  "l-th.png": { id: "l-th", label: "Tailandés", category: "language", order: 411 },
+  "l-vi.png": { id: "l-vi", label: "Vietnamita", category: "language", order: 412 },
+  "l-ja.png": { id: "l-ja", label: "Japonés", category: "language", order: 413 },
+  "l-ko.png": { id: "l-ko", label: "Coreano", category: "language", order: 414 },
+  "l-zh.png": { id: "l-zh", label: "Chino", category: "language", order: 415 },
+  "l-hi.png": { id: "l-hi", label: "Hindi", category: "language", order: 416 },
+  "l-ar.png": { id: "l-ar", label: "Árabe", category: "language", order: 417 },
+  "l-ru.png": { id: "l-ru", label: "Ruso", category: "language", order: 418 },
+  "l-el.png": { id: "l-el", label: "Griego", category: "language", order: 419 },
+  "l-mu.png": { id: "l-mu", label: "Multi-Audio", category: "language", order: 420 },
 };
 
 function slugify(text: string): string {
@@ -115,6 +211,15 @@ function metadataBadges(metadata?: StreamTechnicalMetadata): StreamFormatBadge[]
   if (height && height >= 2160) add("resolution-2160p");
   else if (height && height >= 1080) add("resolution-1080p");
   else if (height && height >= 720) add("resolution-720p");
+  else if (height && height >= 480) add("gr-480p-sd");
+
+  const videoCodec = metadata.videoCodec?.toLowerCase() ?? "";
+  if (/\b(?:hevc|h[ ._-]?265|x265)\b/.test(videoCodec)) add("video-codec-hevc");
+  else if (/\b(?:avc|h[ ._-]?264|x264)\b/.test(videoCodec)) add("video-codec-avc");
+
+  const bitDepth = String(metadata.bitDepth ?? "").toLowerCase();
+  if (/hi10p|\b10([\s._-]?bit|b)?\b/.test(bitDepth)) add("bit-depth-10bit");
+  else if (/\b8([\s._-]?bit|b)\b/.test(bitDepth)) add("bit-depth-8bit");
 
   const audioCodec = metadata.audioCodec?.toLowerCase() ?? "";
   if (/\batmos\b|joc/.test(audioCodec)) add("atmos");
@@ -125,6 +230,11 @@ function metadataBadges(metadata?: StreamTechnicalMetadata): StreamFormatBadge[]
   else if (/\bdts[ ._-]?hd[ ._-]?ma\b/.test(audioCodec)) add("dts-hd-ma");
   else if (/\bdts[ ._-]?hd\b/.test(audioCodec)) add("dts-hd");
   else if (/\bdts\b/.test(audioCodec)) add("dts");
+  else if (/\baac\b/.test(audioCodec)) add("a-aac");
+  else if (/\bflac\b/.test(audioCodec)) add("a-flac");
+  else if (/\bopus\b/.test(audioCodec)) add("a-opus");
+  else if (/\bmp3\b/.test(audioCodec)) add("a-mp3");
+  else if (/\b(?:pcm|lpcm)\b/.test(audioCodec)) add("a-pcm");
 
   const dynamicRange = metadata.dynamicRange?.toLowerCase() ?? "";
   if (/dolby[ ._-]?vision|dovi|dv/.test(dynamicRange)) add("dolby-vision");
@@ -136,6 +246,7 @@ function metadataBadges(metadata?: StreamTechnicalMetadata): StreamFormatBadge[]
   if (metadata.audioChannels === 8) add("channels-7.1");
   else if (metadata.audioChannels === 7) add("channels-6.1");
   else if (metadata.audioChannels === 6) add("channels-5.1");
+  else if (metadata.audioChannels === 2) add("ch-20");
   return result;
 }
 

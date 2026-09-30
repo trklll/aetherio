@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { MediaStream } from "../types/stream.ts";
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
+import type { AutoSyncGlobalMode } from "../pages/Player/subtitleSync/autoSyncPreference.ts";
 import {
   clampNextEpisodeThresholdMinutes,
   clampNextEpisodeThresholdPercent,
@@ -35,11 +36,16 @@ export interface PlaybackPreferences {
   nextEpisodeThresholdMinutesBeforeEnd: number;
   preferredSubtitleLanguage: string;
   addonSubtitleLoadMode: AddonSubtitleLoadMode;
+  /**
+   * Cuando se sincroniza un subtitulo automaticamente al seleccionarlo:
+   * `learned` solo en titulos ya sincronizados, `on` en todos, `off` nunca.
+   */
+  autoSubtitleSync: AutoSyncGlobalMode;
   /** When true, the desktop runtime advertises what is being watched to Discord. */
   enableDiscordRichPresence: boolean;
   /** Cuando termina la película/serie, muestra la página "Up Next" con recomendación y mini reproductor. */
   upNextEnabled: boolean;
-  /** Umbral de pelis estilo Nuvio (shouldShowMovieRecommendation): % puro, 80-100. */
+  /** Umbral de pelis (shouldShowMovieRecommendation): % puro, 80-100. */
   postPlayMovieThresholdPercent: number;
 }
 
@@ -74,6 +80,7 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   postPlayMovieThresholdPercent: 90,
   preferredSubtitleLanguage: "spa",
   addonSubtitleLoadMode: "preferred",
+  autoSubtitleSync: "learned",
   enableDiscordRichPresence: true,
   upNextEnabled: true,
 };
@@ -262,6 +269,7 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
     ),
     preferredSubtitleLanguage: normalizeLanguage(preferences.preferredSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.preferredSubtitleLanguage),
     addonSubtitleLoadMode: preferences.addonSubtitleLoadMode === "all" ? "all" : "preferred",
+    autoSubtitleSync: normalizeAutoSubtitleSync((preferences as Record<string, unknown>).autoSubtitleSync),
     enableDiscordRichPresence: typeof preferences.enableDiscordRichPresence === "boolean" ? preferences.enableDiscordRichPresence : DEFAULT_PLAYBACK_PREFERENCES.enableDiscordRichPresence,
     upNextEnabled: typeof preferences.upNextEnabled === "boolean" ? preferences.upNextEnabled : DEFAULT_PLAYBACK_PREFERENCES.upNextEnabled,
     postPlayMovieThresholdPercent: clampPostPlayMovieThresholdPercent(
@@ -279,6 +287,11 @@ function normalizeLanguage(value: unknown, fallback: string) {
 function normalizeHardwareDecoding(value: unknown): HardwareDecodingMode {
   if (value === "enabled" || value === "disabled") return value;
   return "auto";
+}
+
+function normalizeAutoSubtitleSync(value: unknown): AutoSyncGlobalMode {
+  if (value === "on" || value === "off" || value === "learned") return value;
+  return DEFAULT_PLAYBACK_PREFERENCES.autoSubtitleSync;
 }
 
 function normalizeLanguageText(value: string | null | undefined) {

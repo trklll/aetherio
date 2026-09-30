@@ -78,9 +78,14 @@ pub fn start(cache_dir: PathBuf) -> Result<u16, String> {
 
     std::thread::spawn(move || {
         let client = match reqwest::blocking::Client::builder()
-            // El primer render en frio puede tardar 5 s o mas; 30 s es holgado
-            // para que un poster lento no provoque un fallback en el cliente.
-            .timeout(Duration::from_secs(30))
+            // El timeout cubre render + espera en la cola de SpatialPosters. En un
+            // arranque en frio se piden ~260 posters y el server renderiza a 8
+            // concurrentes: un poster del final de la cola puede esperar mas de
+            // un minuto antes de empezar. Con 30 s el proxy cortaba antes de
+            // tiempo y devolvia 502, y el cliente caia al poster de TMDB. Tiene
+            // que ser holgado; el corte de verdad lo hace el prewarm del lado
+            // del frontend, no este proxy.
+            .timeout(Duration::from_secs(240))
             .user_agent("Aetherio-PosterCache/1.0")
             .build()
         {
@@ -89,10 +94,27 @@ pub fn start(cache_dir: PathBuf) -> Result<u16, String> {
         };
 
         for request in server.incoming_requests() {
+            // Sondenaje de disponibilidad. El frontend usa esta misma ruta para
+            // preguntar si la instancia responde, asi que el proxy tiene que
+            // saber contestar: si devuelve 404, el sondeo lo toma por caido y
+            // desactiva todos los posters.
+            if request.url().split('?').next() == Some("/manifest.json") {
+                let _ = request.respond(with_cors((
+                    br#"{"service":"aetherio-poster-cache"}"#.to_vec(),
+                    "application/json; charset=utf-8".to_string(),
+                    200,
+                )));
+                continue;
+            }
+
             let Some((media_type, id, query)) = parse_poster_path(request.url()) else {
-                let _ = request.respond(
-                    Response::from_string("poster not found").with_status_code(StatusCode(404)),
-                );
+                // Con CORS tambien en el 404: sin el, el navegador bloquea la
+                // respuesta y el frontend no puede ni ver que fue un 404.
+                let _ = request.respond(with_cors((
+                    b"poster not found".to_vec(),
+                    "text/plain; charset=utf-8".to_string(),
+                    404,
+                )));
                 continue;
             };
 
@@ -124,22 +146,28 @@ pub fn start(cache_dir: PathBuf) -> Result<u16, String> {
     Ok(bound)
 }
 
-/// Valida `/poster/{movie|tv}/{id}?{query}`. Devolver `None` en vez de un 400:
-/// si la ruta no es nuestra, se responde 404 y el frontend cae a TMDB.
+/// Valida `/api/poster/{movie|tv}/{id}?{query}`.
+///
+/// La ruta es **exactamente** la de SpatialPosters a proposito: el frontend solo
+/// cambia la base por la del proxy, no la ruta. Si aqui se usara otra, cada
+/// poster caeria en 404 sin que se note por que.
+///
+/// Devolver `None` en vez de un 400: si la ruta no es nuestra, se responde 404
+/// con CORS y el frontend cae al poster de TMDB.
 fn parse_poster_path(url: &str) -> Option<(String, String, String)> {
     let (path, query) = match url.split_once('?') {
         Some((path, query)) => (path, query),
         None => (url, ""),
     };
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    if parts.len() != 3 || parts[0] != "poster" {
+    if parts.len() != 4 || parts[0] != "api" || parts[1] != "poster" {
         return None;
     }
-    let media_type = parts[1];
+    let media_type = parts[2];
     if media_type != "movie" && media_type != "tv" {
         return None;
     }
-    let id = parts[2];
+    let id = parts[3];
     if id.is_empty() || id.len() > 12 || !id.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -372,14 +400,16 @@ pub fn poster_cache_url() -> Option<String> {
 mod tests {
     use super::*;
 
+    /// La ruta real que pide el frontend. Si esto se rompe, todos los posters
+    /// devuelven 404 y el cache local queda sin usar.
     #[test]
-    fn acepta_las_dos_rutas_de_poster() {
+    fn acepta_la_ruta_exacta_del_frontend() {
         assert_eq!(
-            parse_poster_path("/poster/movie/155?region=MX&lang=es"),
+            parse_poster_path("/api/poster/movie/155?region=MX&lang=es"),
             Some(("movie".into(), "155".into(), "region=MX&lang=es".into()))
         );
         assert_eq!(
-            parse_poster_path("/poster/tv/1399"),
+            parse_poster_path("/api/poster/tv/1399"),
             Some(("tv".into(), "1399".into(), String::new()))
         );
     }
@@ -388,20 +418,89 @@ mod tests {
     fn rechaza_ruinas_que_no_son_de_poster() {
         for url in [
             "/api/health",
-            "/poster/movie",
-            "/poster/anime/155",
-            "/poster/movie/abc",
-            "/poster/movie/155/extra",
+            "/manifest.json",
+            "/api/poster/movie",
+            "/api/poster/anime/155",
+            "/api/poster/movie/abc",
+            "/api/poster/movie/155/extra",
+            "/poster/movie/155",
             "/youtube/abc/video",
         ] {
             assert_eq!(parse_poster_path(url), None, "{url} deberia rechazarse");
         }
     }
 
+    /// El parser puede estar bien y el servidor igual responder mal. Este test
+    /// levanta el proxy de verdad y le pega con las URLs exactas que arma el
+    /// frontend, que es donde se rompio la primera vez.
+    #[test]
+    fn el_proxy_responde_por_http_a_lo_que_pide_el_frontend() {
+        let dir = std::env::temp_dir().join("aetherio-poster-cache-http");
+        let _ = std::fs::remove_dir_all(&dir);
+        let bound = start(dir.clone()).expect("el cache deberia arrancar");
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("cliente");
+
+        // 1. El sondeo de disponibilidad tiene que dar 200 y CORS, o el
+        //    frontend marca la instancia como caida y apaga todos los posters.
+        let sonda = client
+            .get(format!("http://127.0.0.1:{bound}/manifest.json"))
+            .send()
+            .expect("el probe deberia responder");
+        assert_eq!(sonda.status(), 200, "el probe necesita 200");
+        assert_eq!(
+            sonda
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*"),
+            "sin ACAO el navegador bloquea el probe entero"
+        );
+
+        // 2. Un poster que no existe en cache se responde con una ruta de
+        //    verdad, no con 404 de "no la conozco". Aqui no hay upstream, asi
+        //    que el status esperado es 502; lo que importa es que NO sea 404,
+        //    que es lo que distingue "ruta equivocada" de "cache vacio".
+        let miss = client
+            .get(format!(
+                "http://127.0.0.1:{bound}/api/poster/movie/155?region=MX"
+            ))
+            .send()
+            .expect("el miss deberia responder");
+        assert_ne!(
+            miss.status().as_u16(),
+            404,
+            "404 significa que la ruta no es la que espera el frontend"
+        );
+
+        // 3. Una ruta genuinamente ajena si es 404, y con CORS para que el
+        //    navegador la pueda leer en vez de reportar un error opaco.
+        let basura = client
+            .get(format!("http://127.0.0.1:{bound}/no/existe"))
+            .send()
+            .expect("deberia responder 404");
+        assert_eq!(basura.status(), 404);
+        assert_eq!(
+            basura
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*"),
+            "el 404 tambien necesita CORS"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn rechaza_un_query_absurdo() {
         let enorme = "a".repeat(2000);
-        assert_eq!(parse_poster_path(&format!("/poster/movie/155?{enorme}")), None);
+        assert_eq!(
+            parse_poster_path(&format!("/api/poster/movie/155?{enorme}")),
+            None
+        );
     }
 
     #[test]

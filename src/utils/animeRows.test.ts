@@ -49,6 +49,17 @@ describe("dedupeAnimeHomeRows", () => {
     expect(rows[1].items).toHaveLength(1);
   });
 
+  it("normaliza los títulos de próximas estrenos y favoritos", () => {
+    const rows = dedupeAnimeHomeRows([
+      entry("upcoming", "Lo que viene", 1, [item("mal:1", "Próximo", 1)]),
+      entry("favorites", "Las más queridas del momento", 2, [item("mal:2", "Favorito", 2)]),
+    ]);
+    expect(rows.map(row => row.name)).toEqual([
+      "Próximos animes a estrenar",
+      "Los animes más queridos del momento",
+    ]);
+  });
+
   it("omite filas que quedan vacías de verdad", () => {
     const rows = dedupeAnimeHomeRows([
       entry("a", "A", 1, [item("tmdb:1", "X", 1)]),

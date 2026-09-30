@@ -55,7 +55,16 @@ export default function FloatingActionButton({ icon, onClick, title, animateOnCl
       title={title}
       aria-label={title}
       type="button"
-      style={{ willChange: "transform, opacity, filter" }}
+      style={{
+        willChange: "transform, opacity, filter",
+        // Cristal reforzado: sobre fondos oscuros/planos el blur solo no se
+        // aprecia; el relleno lechoso + borde hacen visible el frosted glass.
+        background: "rgba(255,255,255,0.22)",
+        backdropFilter: "blur(20px) saturate(170%)",
+        WebkitBackdropFilter: "blur(20px) saturate(170%)",
+        border: "1px solid rgba(255,255,255,0.18)",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12)",
+      }}
     >
       {icon}
     </button>

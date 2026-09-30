@@ -65,17 +65,6 @@ pub fn all_recommended_sites() -> Vec<ScraperSite> {
         },
         // ── Stream Aggregators ────────────────────────────────────────────
         ScraperSite {
-            id: "okru",
-            name: "OK.ru",
-            base_url: "https://ok.ru",
-            category: SiteCategory::DedicatedServer,
-            search_style: SearchStyle::QueryParam,
-            search_path: "/video/search?st.v.sq={query}",
-            types: &["movie"],
-            enabled_by_default: true,
-        },
-        // ── Stream Aggregators ────────────────────────────────────────────
-        ScraperSite {
             id: "cineby",
             name: "Cineby",
             base_url: "https://cineby.at",

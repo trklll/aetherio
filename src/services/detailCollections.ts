@@ -1,7 +1,9 @@
 import { tmdbFetch } from "../config/apiKeys.ts";
+import { jikanRequest } from "./jikanClient.ts";
+import { fetchTmdbArtwork } from "./tmdbArtworkService.ts";
+import { tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
 
 const IMG = "https://image.tmdb.org/t/p";
-const JIKAN = "https://api.jikan.moe/v4";
 const WIKIDATA_SPARQL = "https://query.wikidata.org/sparql";
 
 export interface DetailCollectionItem {
@@ -51,32 +53,16 @@ function yearFrom(value: unknown) {
   return /^\d{4}$/.test(year) ? year : undefined;
 }
 
-async function fetchTmdbArtwork(type: string, id: number) {
+async function fetchArtwork(type: string, id: number) {
   const tmdbMediaType = type === "movie" ? "movie" : "tv";
-  let endpoint = `/${tmdbMediaType}/${id}`;
-  let [detail, images] = await Promise.all([
-    tmdbFetch<any>(endpoint, { params: { language: "es-ES" } }),
-    tmdbFetch<any>(`${endpoint}/images`, { params: { include_image_language: "es,en,null" } }),
-  ]);
-  if (!detail && tmdbMediaType === "tv") {
-    endpoint = `/movie/${id}`;
-    [detail, images] = await Promise.all([
-      tmdbFetch<any>(endpoint, { params: { language: "es-ES" } }),
-      tmdbFetch<any>(`${endpoint}/images`, { params: { include_image_language: "es,en,null" } }),
-    ]);
-  }
-  const logos = images?.logos ?? [];
-  const logo = logos.find((item: any) => item.iso_639_1 === "es")
-    ?? logos.find((item: any) => item.iso_639_1 === "en")
-    ?? logos.find((item: any) => item.iso_639_1 == null)
-    ?? logos[0];
+  const artwork = await fetchTmdbArtwork(tmdbMediaType, id);
   return {
-    poster: detail?.poster_path ? `${IMG}/w342${detail.poster_path}` : undefined,
-    backdrop: detail?.backdrop_path ? `${IMG}/original${detail.backdrop_path}` : undefined,
-    logo: logo?.file_path ? `${IMG}/w500${logo.file_path}` : undefined,
-    title: detail?.name ?? detail?.title,
-    description: detail?.overview,
-    year: yearFrom(detail?.first_air_date ?? detail?.release_date),
+    poster: artwork ? tmdbImageUrl(artwork.posterPath, "w342") : undefined,
+    backdrop: artwork ? tmdbImageUrl(artwork.backdropPath, "original") : undefined,
+    logo: artwork ? tmdbImageUrl(artwork.logoPath, "w500") : undefined,
+    title: artwork?.title,
+    description: artwork?.description,
+    year: artwork?.year,
   };
 }
 
@@ -86,7 +72,7 @@ async function fetchMovieCollection(request: CollectionRequest): Promise<DetailC
   const payload = await tmdbFetch<any>(`/collection/${collection.id}`, { params: { language: "es-ES" } });
   const parts = (payload?.parts ?? []).filter((item: any) => Number(item.id) !== request.tmdbId);
   const items = await Promise.all(parts.map(async (item: any): Promise<DetailCollectionItem> => {
-    const artwork = await fetchTmdbArtwork("movie", Number(item.id));
+    const artwork = await fetchArtwork("movie", Number(item.id));
     return {
       id: `tmdb:${item.id}`,
       title: item.title ?? item.original_title ?? "",
@@ -167,7 +153,7 @@ async function fetchWikidataSeriesCollection(request: CollectionRequest): Promis
   }
 
   const items = await Promise.all(tmdbIds.map(async (tmdbId): Promise<DetailCollectionItem> => {
-    const artwork = await fetchTmdbArtwork("series", tmdbId);
+    const artwork = await fetchArtwork("series", tmdbId);
     return {
       id: `tmdb:${tmdbId}`,
       title: artwork.title ?? "",
@@ -185,7 +171,7 @@ async function fetchWikidataSeriesCollection(request: CollectionRequest): Promis
 }
 
 async function fetchJikanAnime(malId: string) {
-  const payload = await fetchJson(`${JIKAN}/anime/${encodeURIComponent(malId)}`);
+  const payload = await jikanRequest<{ data?: any }>(`/anime/${encodeURIComponent(malId)}`);
   return payload?.data ?? null;
 }
 
@@ -273,7 +259,7 @@ async function fetchAniListFranchise(request: CollectionRequest): Promise<Detail
     if (!id || seen.has(key)) continue;
     seen.add(key);
     const artwork: { poster?: string; backdrop?: string; logo?: string } = resolved
-      ? await fetchTmdbArtwork(type, resolved.id)
+      ? await fetchArtwork(type, resolved.id)
       : {};
     items.push({
       id,
@@ -299,7 +285,9 @@ async function fetchAnimeFranchise(request: CollectionRequest): Promise<DetailCo
   const cacheKey = malId || `title:${request.title.toLowerCase()}`;
   const cached = malFranchiseCache.get(cacheKey);
   if (cached) return cached.length ? { name: "Franquicia", items: cached } : null;
-  const payload = malId ? await fetchJson(`${JIKAN}/anime/${encodeURIComponent(malId)}/relations`) : null;
+  const payload = malId
+    ? await jikanRequest<{ data?: any[] }>(`/anime/${encodeURIComponent(malId)}/relations`)
+    : null;
   const relations = (payload?.data ?? []).flatMap((relation: any) => relation.entry ?? []);
   const seen = new Set<string>();
   const items: DetailCollectionItem[] = [];
@@ -317,7 +305,7 @@ async function fetchAnimeFranchise(request: CollectionRequest): Promise<DetailCo
     if (seen.has(key) || (resolved?.id === request.tmdbId)) continue;
     seen.add(key);
     const artwork: { poster?: string; backdrop?: string; logo?: string } = resolved
-      ? await fetchTmdbArtwork(resolved.type, resolved.id)
+      ? await fetchArtwork(resolved.type, resolved.id)
       : {};
     items.push({
       id,

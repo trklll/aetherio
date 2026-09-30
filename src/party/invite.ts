@@ -1,4 +1,5 @@
 import { isCompleteRoomCode, normalizeRoomCode } from "./protocol";
+import { buildPlayerPath } from "../utils/bigPictureDetail";
 
 /**
  * Invitaciones a salas Party: además del código de 6 caracteres se puede
@@ -77,13 +78,17 @@ export function parsePartyJoinDeepLink(rawUrl: string): PartyInvite | null {
   }
 }
 
-/** Ruta del reproductor para el contenido de una sala (invitado directo). */
-export function buildPlayerPathForMedia(media: { type: string; id: string; season?: number; episode?: number } | null): string | null {
+/**
+ * Ruta del reproductor para el contenido de una sala (invitado directo).
+ * Consciente de Big Picture: dentro de `/big-picture` devuelve
+ * `/big-picture/player?...` para no escapar a modo normal.
+ */
+export function buildPlayerPathForMedia(media: { type: string; id: string; season?: number; episode?: number } | null, pathname?: string): string | null {
   if (!media || !media.type || !media.id) return null;
   const params = new URLSearchParams({ type: media.type, id: media.id });
   if (media.season != null) params.set("season", String(media.season));
   if (media.episode != null) params.set("ep", String(media.episode));
-  return `/player?${params.toString()}`;
+  return buildPlayerPath(params.toString(), pathname);
 }
 
 export function writePendingPartyJoin(invite: PartyInvite): void {

@@ -1,4 +1,5 @@
 ﻿import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
@@ -24,6 +25,16 @@ export default defineConfig(async () => ({
     },
   },
   clearScreen: false,
+  optimizeDeps: {
+    // Sin esto vite recorre todos los .html del repo, incluidos los del webui
+    // vendorizado de librqbit, cuyas dependencias no estan instaladas: el
+    // escaneo falla y el arranque del dev server se queda colgado.
+    entries: ["index.html"],
+  },
+  test: {
+    // Las especificaciones de `e2e/` corren con Playwright, no con vitest.
+    exclude: [...configDefaults.exclude, "e2e/**"],
+  },
   server: {
     port: 1420,
     strictPort: true,

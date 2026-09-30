@@ -93,7 +93,7 @@ interface AdapterProviderCandidate {
 // are intentionally independent from the order in which manifests happen to
 // finish downloading. The per-provider overrides are backed by live checks;
 // the default keeps built-in Latino adapters ahead of unrelated/custom repos.
-const DEFAULT_ADAPTER_REPOSITORY_PRIORITY = ["adrianjael", "kennethjys", "yoruix"] as const;
+const DEFAULT_ADAPTER_REPOSITORY_PRIORITY = ["adrianjael", "kennethjys", "yoruix", "eclipsia"] as const;
 const ADAPTER_REPOSITORY_PRIORITY: Record<string, readonly string[]> = {
   cuevanaubd: ["adrianjael"],
   embed69: ["kennethjys", "adrianjael"],

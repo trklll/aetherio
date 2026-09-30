@@ -10,6 +10,17 @@ import type { CatalogRowData, MediaItem } from "../types/ui.ts";
  */
 export const ANIME_ROW_MIN_ITEMS = 10;
 
+function nativeAnimeRowTitle(title: string) {
+  const normalized = title.trim().toLowerCase();
+  if (normalized === "en emisión") return "Anime en emisión";
+  if (normalized === "la comunidad lo recomienda") return "Anime recomendado por la comunidad";
+  if (normalized === "las más queridas del momento" || normalized === "los animes más queridos del momento") return "Los animes más queridos del momento";
+  if (normalized === "lo que viene" || normalized === "próximos animes a estrenar") return "Próximos animes a estrenar";
+  if (normalized === "las que están arrasando") return "Anime en tendencia";
+  if (normalized === "fenómenos populares") return "Anime popular";
+  return title;
+}
+
 export interface AnimeRowInput {
   entry: { id: string; title: string; order: number };
   items: MediaItem[];
@@ -51,7 +62,7 @@ export function dedupeAnimeHomeRows(
       addonName: "Aetherio",
       catalogId: entry.id,
       type: "anime",
-      name: entry.title,
+      name: nativeAnimeRowTitle(entry.title),
       subtitle: "Actualizado con TMDB",
       items: deduped,
       order: entry.order,

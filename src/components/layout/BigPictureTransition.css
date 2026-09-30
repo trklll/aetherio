@@ -1,0 +1,74 @@
+/* Velo cinematográfico de la transición normal <-> Big Picture (estilo Steam).
+   Lo anima GSAP desde bigPictureTransition.ts; aquí solo la base visual.
+   Vive en document.body, por encima de todo el chrome (curtain: 1400). */
+
+#aetherio-bp-mode {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(120% 90% at 50% 42%, #222222 0%, #1b1b1b 58%, #151515 100%);
+  will-change: opacity;
+}
+
+#aetherio-bp-mode [data-bp-mode-glow] {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(42% 32% at 50% 46%, rgba(255, 255, 255, 0.07), transparent 70%);
+  will-change: transform, opacity;
+}
+
+#aetherio-bp-mode [data-bp-mode-brand] {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: clamp(28px, 6vw, 96px);
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform, opacity, visibility;
+}
+
+#aetherio-bp-mode [data-bp-mode-brand]::before {
+  position: absolute;
+  width: min(62vw, 880px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.055), transparent 68%);
+  content: "";
+  filter: blur(18px);
+}
+
+#aetherio-bp-mode [data-bp-mode-brand-logo] {
+  position: relative;
+  display: block;
+  width: min(42vw, 560px);
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 26px 54px rgba(0, 0, 0, 0.72));
+  user-select: none;
+  will-change: transform;
+}
+
+#aetherio-bp-mode [data-bp-mode-brand-logo][data-bp-mode-logo="normal"] {
+  width: min(30vw, 410px);
+}
+
+@media (max-width: 640px) {
+  #aetherio-bp-mode [data-bp-mode-brand-logo] {
+    width: min(70vw, 460px);
+  }
+
+  #aetherio-bp-mode [data-bp-mode-brand-logo][data-bp-mode-logo="normal"] {
+    width: min(52vw, 350px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #aetherio-bp-mode {
+    display: none;
+  }
+}

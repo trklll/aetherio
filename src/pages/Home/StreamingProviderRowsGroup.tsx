@@ -8,7 +8,9 @@ import netflixLogo from "../../assets/netflix-logo.png";
 import primeVideoLogo from "../../assets/prime-video-logo.png";
 import type { HomePosterLayout } from "../../config/homePreferences";
 import type { CatalogRowData } from "../../types/ui";
+import type { ShellPreviewRequest } from "../../utils/shellPreview";
 import { tweenTo } from "../../utils/motion";
+import { useBigPictureActive } from "../../navigation/spatialNav.ts";
 import CatalogRow from "./CatalogRow";
 
 export interface StreamingProviderTheme {
@@ -110,6 +112,7 @@ interface StreamingProviderRowsGroupProps {
   seriesRow: CatalogRowData;
   moviesRow: CatalogRowData;
   posterLayout: HomePosterLayout;
+  onOpenPreview?: (request: ShellPreviewRequest) => void;
 }
 
 function catalogUrl(row: CatalogRowData, title: string) {
@@ -125,7 +128,7 @@ function catalogUrl(row: CatalogRowData, title: string) {
   return `/catalog?${params.toString()}`;
 }
 
-export default function StreamingProviderRowsGroup({ provider, seriesRow, moviesRow, posterLayout }: StreamingProviderRowsGroupProps) {
+export default function StreamingProviderRowsGroup({ provider, seriesRow, moviesRow, posterLayout, onOpenPreview }: StreamingProviderRowsGroupProps) {
   const navigate = useNavigate();
   const logoRef = useRef<HTMLImageElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -243,6 +246,7 @@ export default function StreamingProviderRowsGroup({ provider, seriesRow, movies
             hideHeader
             embedded
             onScrollOriginChange={handleSeriesOriginChange}
+            onOpenPreview={onOpenPreview}
           />
         </div>
         <div style={{ height: 1, margin: "0 0 0 2px", background: `linear-gradient(to right, ${provider.accent} 0%, rgba(255,255,255,0.07) 22%, transparent 82%)`, opacity: 0.32 }} />
@@ -253,6 +257,7 @@ export default function StreamingProviderRowsGroup({ provider, seriesRow, movies
             hideHeader
             embedded
             onScrollOriginChange={handleMoviesOriginChange}
+            onOpenPreview={onOpenPreview}
           />
         </div>
       </div>
@@ -261,6 +266,28 @@ export default function StreamingProviderRowsGroup({ provider, seriesRow, movies
 }
 
 function ProviderLink({ label, accentSoft, onClick }: { label: string; accentSoft: string; onClick: () => void }) {
+  // En picture no hay navegación a catálogos: pill solo visual, sin foco ni click.
+  const bigPicture = useBigPictureActive();
+  if (bigPicture) {
+    return (
+      <span
+        style={{
+          height: 34,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 12px",
+          borderRadius: 999,
+          border: "1px solid rgba(255,255,255,0.09)",
+          background: "rgba(255,255,255,0.055)",
+          color: "rgba(255,255,255,0.72)",
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
+        {label}
+      </span>
+    );
+  }
   return (
     <button
       type="button"

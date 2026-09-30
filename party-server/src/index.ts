@@ -662,7 +662,7 @@ function sanitizeStreamOffer(raw: unknown): PartyStreamOffer | null {
   const target = typeof input.target === "string" ? input.target.trim() : "";
   if (!target || target.length > MAX_STREAM_TARGET_LEN) return null;
   if (input.kind !== "https" && input.kind !== "p2p") return null;
-  if (input.kind === "https" && !/^https?:/i.test(target)) return null;
+  if (input.kind === "https" && !/^https:/i.test(target)) return null;
   if (input.kind === "p2p" && !/^magnet:/i.test(target)) return null;
   const offer: PartyStreamOffer = { target, kind: input.kind };
   if (typeof input.fileIdx === "number" && Number.isFinite(input.fileIdx)) offer.fileIdx = Math.trunc(input.fileIdx);
@@ -686,7 +686,7 @@ function sanitizeStreamOffer(raw: unknown): PartyStreamOffer | null {
       if (!item || typeof item !== "object") continue;
       const raw = item as Record<string, unknown>;
       const url = typeof raw.url === "string" ? raw.url.trim() : "";
-      if (!url || !/^https?:/i.test(url) || url.length > MAX_STREAM_SUBTITLE_URL_LEN) continue;
+      if (!url || !/^https:/i.test(url) || url.length > MAX_STREAM_SUBTITLE_URL_LEN) continue;
       const entry: { url: string; lang?: string; title?: string } = { url };
       const lang = typeof raw.lang === "string" ? raw.lang.trim().slice(0, 16) : "";
       if (lang) entry.lang = lang;

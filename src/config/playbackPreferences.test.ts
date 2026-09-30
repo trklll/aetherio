@@ -60,3 +60,29 @@ describe("defaults de seleccion de stream (instalacion limpia / nuevos usuarios)
     expect(prefs.reuseLastLink).toBe(false);
   });
 });
+
+describe("Auto Sync automatico", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    mockStorage();
+  });
+
+  it("por defecto solo sincroniza los titulos ya aprendidos", () => {
+    expect(getPlaybackPreferences().autoSubtitleSync).toBe("learned");
+    expect(DEFAULT_PLAYBACK_PREFERENCES.autoSubtitleSync).toBe("learned");
+  });
+
+  it("las preferencias legacy sin la clave quedan en modo aprendido", () => {
+    mockStorage({ [PLAYBACK_PREFERENCES_STORAGE_KEY]: JSON.stringify({ firstAudioLanguage: "eng" }) });
+    expect(getPlaybackPreferences().autoSubtitleSync).toBe("learned");
+  });
+
+  it("respeta los tres modos validos y descarta los demas", () => {
+    for (const mode of ["on", "off", "learned"] as const) {
+      mockStorage({ [PLAYBACK_PREFERENCES_STORAGE_KEY]: JSON.stringify({ autoSubtitleSync: mode }) });
+      expect(getPlaybackPreferences().autoSubtitleSync).toBe(mode);
+    }
+    mockStorage({ [PLAYBACK_PREFERENCES_STORAGE_KEY]: JSON.stringify({ autoSubtitleSync: "siempre" }) });
+    expect(getPlaybackPreferences().autoSubtitleSync).toBe("learned");
+  });
+});

@@ -1,6 +1,8 @@
 import { sanitizeLogoUrl } from "./artwork";
+import { ensureOriginalTmdbImage } from "./tmdbArtwork";
 import type { MdbListRatings } from "../config/mdblist.ts";
 import { getScopedStorageKey } from "./localProfiles";
+import { preloadArtworkImage } from "../services/posterArtworkCache";
 
 const DETAIL_MEDIA_META_KEY = "aetherio-detail-media-meta-v1";
 const DETAIL_BACKGROUND_OVERRIDE_KEY = "aetherio-detail-background-override-v1";
@@ -73,7 +75,7 @@ export function writeDetailMediaMeta(seed: MediaMetadataSeed) {
     type: seed.type,
     name: seed.name,
     poster: seed.poster,
-    background: seed.background,
+    background: ensureOriginalTmdbImage(seed.background) ?? seed.background,
     logo: seed.logo,
     description: seed.description,
     year: seed.year,
@@ -110,6 +112,7 @@ export function writeDetailBackgroundOverride(type: string, id: string, backgrou
     const map = raw ? JSON.parse(raw) as Record<string, string> : {};
     map[entryKey(type, id)] = background;
     window.localStorage.setItem(storageKey, JSON.stringify(map));
+    void preloadArtworkImage(background);
   } catch {
     // User-selected backgrounds are best-effort.
   }
@@ -142,7 +145,8 @@ export function writeDetailLogoOverride(type: string, id: string, logo: string) 
 }
 
 export function resolveDetailBackground(type?: string, id?: string, fallback?: string) {
-  return readDetailBackgroundOverride(type, id) ?? fallback;
+  const background = readDetailBackgroundOverride(type, id) ?? fallback;
+  return ensureOriginalTmdbImage(background) ?? background;
 }
 
 export function normalizeAddonMediaMeta(raw: any, fallbackType?: string, sourceName?: string): MediaMetadataSeed | null {

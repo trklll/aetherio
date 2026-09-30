@@ -84,3 +84,13 @@ Thumbs.db
 # Se genera con "npm run posters:stage"; son ~60 MB y 2300+ archivos.
 src-tauri/resources/spatialposters/
 src-tauri/resources/bin/
+
+# Logos de deportes (~76 MB, 2100+ archivos). Vienen de
+# scripts/download-football-logos.mjs y en `public/` terminarian dentro de
+# dist/, o sea dentro del instalador. Se regeneran, no se versionan.
+/public/assets/football-logos/
+
+# Salidas de depuracion (capturas de probes y del reporte de Playwright).
+/artifacts/
+/test-output.json
+/aetheriotvlogo.png

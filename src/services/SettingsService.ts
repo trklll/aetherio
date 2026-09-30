@@ -127,15 +127,19 @@ type WorkerMessage =
 const EXTERNAL_EXTENSION_PROJECT_NAME = ["Sea", "nime"].join("");
 const EXTERNAL_EXTENSION_PROJECT_SLUG = EXTERNAL_EXTENSION_PROJECT_NAME.toLowerCase();
 const DEFAULT_MANIFEST_URLS = [
-  "https://island.clap.ing/api/extensions/anime-torrent-providers/seadex/seadex.json",
+  "/extensions/seadex/seadex.json",
   "https://island.clap.ing/api/extensions/anime-torrent-providers/animetosho/animetosho.json",
   `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeKai/manifest.json`,
   `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeSaturn/manifest.json`,
   `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeUnity/animeunity.json`,
   `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeWorld/manifest.json`,
   `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/GojoWtf/manifest.json`,
-  `https://raw.githubusercontent.com/dot-fx/${EXTERNAL_EXTENSION_PROJECT_SLUG}-extensions/master/src/TPB/manifest.json`,
-  "https://island.clap.ing/api/extensions/anime-torrent-providers/nyaa/nyaa.json",
+  `https://raw.githubusercontent.com/9lfx/${EXTERNAL_EXTENSION_PROJECT_SLUG}-extensions/master/src/AnimeFLV/manifest.json`,
+  `https://raw.githubusercontent.com/9lfx/${EXTERNAL_EXTENSION_PROJECT_SLUG}-extensions/master/src/TPB/manifest.json`,
+  "https://raw.githubusercontent.com/Seanime-contributions/Seanime-Providers/main/src/anime/AnimeAV1/manifest.json",
+  "https://raw.githubusercontent.com/Seanime-contributions/Seanime-Providers/main/src/anime/animesaturnmirror/manifest.json",
+  "https://raw.githubusercontent.com/Seanime-contributions/Seanime-Providers/main/src/anime/animeunitymirror/manifest.json",
+  "/extensions/nyaa/nyaa.json",
 ];
 const CONFIG_STORAGE_KEY = ["aetherio-sea", "nime-config"].join("");
 const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -157,6 +161,9 @@ const __httpPending = new Map();
 let __userConfig = {};
 
 class MediaExtensionBuffer extends Uint8Array {
+  static isBuffer(value) {
+    return value instanceof MediaExtensionBuffer || value instanceof Uint8Array;
+  }
   static from(value, encoding) {
     if (typeof value === "string") {
       const mode = String(encoding || "utf8").toLowerCase();
@@ -647,6 +654,14 @@ export async function getMediaExtensionInventory(refresh = false): Promise<Media
   return { installed, errors };
 }
 
+// Defaults locales que corrigen manifiestos remotos desactualizados.
+// AnimeKai trae baseUrl https://anikai.to (dominio muerto, verificado
+// 2026-09-22); el dominio vivo es https://www.animekai.at. El valor guardado
+// por el usuario siempre tiene prioridad sobre este override.
+const MANIFEST_FIELD_DEFAULT_OVERRIDES: Record<string, Record<string, string>> = {
+  animekai: { baseUrl: "https://www.animekai.at" },
+};
+
 function getUserConfig(manifest: MediaExtensionManifest): Record<string, string> {
   let saved: Record<string, Record<string, string>> = {};
   try {
@@ -654,7 +669,10 @@ function getUserConfig(manifest: MediaExtensionManifest): Record<string, string>
   } catch {}
   return Object.fromEntries((manifest.userConfig?.fields ?? []).map(field => [
     field.name,
-    saved[manifest.id]?.[field.name] ?? field.default ?? "",
+    saved[manifest.id]?.[field.name]
+      ?? MANIFEST_FIELD_DEFAULT_OVERRIDES[manifest.id]?.[field.name]
+      ?? field.default
+      ?? "",
   ]));
 }
 
@@ -690,8 +708,8 @@ async function loadPayload(manifest: MediaExtensionManifest) {
 
 async function runExtension<T>(manifest: MediaExtensionManifest, args: Record<string, unknown>): Promise<T> {
   const source = await loadPayload(manifest);
-  const dependencyUrl = new URL("provider-runtime-deps.js", window.location.href).toString();
-  const typescriptDependencyUrl = new URL("extension-typescript-deps.js", window.location.href).toString();
+  const dependencyUrl = new URL("/provider-runtime-deps.js", window.location.href).toString();
+  const typescriptDependencyUrl = new URL("/extension-typescript-deps.js", window.location.href).toString();
   const runtime = WORKER_RUNTIME
     .replace("__DEPENDENCY_URL__", JSON.stringify(dependencyUrl))
     .replace("__TYPESCRIPT_DEPENDENCY_URL__", JSON.stringify(typescriptDependencyUrl));

@@ -2,14 +2,18 @@ import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import BackButton from "./BackButton";
 import TopNav from "./TopNav";
+import { isContextMenuOpen } from "../ui/ContextMenu";
 import WindowControls from "./WindowControls";
 import HomePartyModal, { PartyHomeButton, PartyPendingJoinHandler } from "../../party/HomePartyModal";
 import { toggleWindowFullscreen } from "../../utils/windowControls";
-import { isAndroidRuntime, listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
+import { listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
 import { gsap, installInertialScroll, springTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
 import { consumeAutoResolveBackPress } from "../../utils/autoResolveGuard";
+import { buildPlayerBackPath } from "../../utils/bigPictureDetail";
+import { useBackAction } from "../../input/inputActions";
 import { useParty } from "../../party/PartyContext";
+import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
@@ -24,6 +28,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const scrollPositionsRef = useRef(new Map<string, number>());
   const routeHistoryRef = useRef(new Map<number, string>());
   const activeScrollKeyRef = useRef(makeScrollKey(loc.pathname, loc.search));
+  const pendingScrollRafRef = useRef<number | null>(null);
   const backChromeRef = useRef<HTMLDivElement>(null);
   const actionChromeRef = useRef<HTMLDivElement>(null);
   const partyChromeRef = useRef<HTMLDivElement>(null);
@@ -112,8 +117,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : (controlsZone || !scrolled);
   // Party button (top-left, no back button): same hide-on-scroll as window controls.
   const partyVisible = controlsZone || backZone || !scrolled;
-
-  const androidRuntime = isAndroidRuntime();
 
   useEffect(() => {
     const el = backChromeRef.current;
@@ -227,6 +230,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [isPlayer, showBack]);
 
+  // Guardar la posicion de scroll de forma CONTINUA, no al navegar. Al cambiar de
+  // ruta el contenido viejo se desmonta antes de que monte el nuevo: hay un
+  // instante en que el shell queda corto y el navegador recorta scrollTop a 0.
+  // Leyendolo en el useLayoutEffect de la navegacion se guardaba ese 0 ya
+  // recortado y la posicion se perdia para siempre (volver a la card exacta).
+  useEffect(() => {
+    const shell = scrollRef.current;
+    if (!shell) return;
+    const onScroll = () => {
+      scrollPositionsRef.current.set(activeScrollKeyRef.current, shell.scrollTop);
+    };
+    shell.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => shell.removeEventListener("scroll", onScroll);
+  }, []);
+
   useLayoutEffect(() => {
     const shell = scrollRef.current;
     if (!shell) return;
@@ -239,20 +258,60 @@ export default function AppShell({ children }: { children: ReactNode }) {
     const previousKey = activeScrollKeyRef.current;
     if (previousKey === nextKey) return;
 
-    scrollPositionsRef.current.set(previousKey, shell.scrollTop);
-
+    // La posicion de la page saliente ya esta guardada por el listener de scroll
+    // de arriba: aqui ya estaria recortada a 0.
     stopInertialScroll(shell);
     const homeScroll = loc.pathname === "/home" ? getHomeScroll()?.vertical : undefined;
     const nextScroll = scrollPositionsRef.current.get(nextKey) ?? homeScroll ?? 0;
-    shell.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
     activeScrollKeyRef.current = nextKey;
+
+    if (pendingScrollRafRef.current !== null) {
+      cancelAnimationFrame(pendingScrollRafRef.current);
+      pendingScrollRafRef.current = null;
+    }
+    shell.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
+
+    // Volver a una page que carga su contenido de forma asincrona (buscador,
+    // catalogos, home) arrive con el contenedor casi sin alto: el scrollTo de
+    // arriba lo recorta a 0 y la posicion se pierde. Se reintenta en frames
+    // siguientes hasta que el destino sea alcanzable, y se corta en cuanto el
+    // usuario toca la rueda para no pelear con el scroll manual.
+    if (nextScroll > 0) {
+      let lastApplied = shell.scrollTop;
+      let attempts = 0;
+      const tick = () => {
+        const current = scrollRef.current;
+        if (!current || activeScrollKeyRef.current !== nextKey) {
+          pendingScrollRafRef.current = null;
+          return;
+        }
+        attempts += 1;
+        // Scroll manual: se respeta y se abandona el reintento.
+        if (Math.abs(current.scrollTop - lastApplied) > 1) {
+          pendingScrollRafRef.current = null;
+          return;
+        }
+        current.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
+        lastApplied = current.scrollTop;
+        if (Math.abs(current.scrollTop - nextScroll) <= 1 || attempts > 60) {
+          pendingScrollRafRef.current = null;
+          return;
+        }
+        pendingScrollRafRef.current = requestAnimationFrame(tick);
+      };
+      pendingScrollRafRef.current = requestAnimationFrame(tick);
+    }
   }, [loc.pathname, navigationScrollKey]);
+
+  useEffect(() => () => {
+    if (pendingScrollRafRef.current !== null) cancelAnimationFrame(pendingScrollRafRef.current);
+  }, []);
 
   useEffect(() => {
     const shell = scrollRef.current;
-    if (!shell || androidRuntime || isPlayer || isEpisodePage) return;
+    if (!shell || isPlayer || isEpisodePage) return;
     return installInertialScroll(shell);
-  }, [androidRuntime, isEpisodePage, isPlayer, navigationScrollKey]);
+  }, [isEpisodePage, isPlayer, navigationScrollKey]);
 
   useEffect(() => {
     if (!isPlayer) {
@@ -314,24 +373,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
       if (event.key === "F11") {
         event.preventDefault();
         void toggleWindowFullscreen();
-        return;
       }
-
-      const isEscape = event.key === "Escape" || event.key === "Esc" || event.code === "Escape";
-      if (!isEscape) return;
-
-      // Don't intercept Escape on input/textarea/search contexts.
-      const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      goBack();
     };
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);
+
+  // B del mando / Esc / Borrar (acción central `back` de inputActions).
+  // El hook ya cede ante inputs nativos; aquí solo se añaden los guardias
+  // propios del shell (menú contextual y popup de sinopsis se cierran solos).
+  useBackAction(() => {
+    // Con menú contextual abierto, B/Escape lo cierra a él (su handler lo
+    // consume); no navegar atrás encima.
+    if (isContextMenuOpen()) return;
+    // Popup de sinopsis del detail en Big Picture (sin X): B/Escape lo
+    // cierra a él; no navegar atrás encima.
+    if (typeof document !== "undefined" && document.querySelector("[data-aetherio-synopsis-popup]")) return;
+    // Sección Episodie dentro del Detail: la cierra el propio Detail (misma
+    // página, mismo fondo); no navegar encima.
+    if (typeof document !== "undefined" && document.querySelector("[data-aetherio-episode-section]")) return;
+    goBack();
+  });
 
   useEffect(() => {
     let disposed = false;
@@ -368,9 +431,41 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [loc.pathname, loc.search]);
 
   function goBack() {
-    // Loader de auto-resolve activo (estilo NuvioTV): atras/ESC cancela el
+    // Loader de auto-resolve activo: atras/ESC cancela el
     // autoplay y revela el picker manual en vez de salir de la pagina.
     if (consumeAutoResolveBackPress()) return;
+
+    // Reproductor: siempre a la page de Episodie (picker de fuentes) del mismo
+    // medio. Va ANTES del chequeo de la sección porque las pages cacheadas siguen
+    // montadas ocultas (Activity) y su `data-aetherio-episode-section` envenena el
+    // DOM: sin esto el gesto se consumía aquí y el Player no se movía.
+    if (loc.pathname === "/player") {
+      const streamsPath = buildPlayerBackPath(loc.search, loc.pathname);
+      void stopNativePlayback()
+        .finally(() => {
+          if (streamsPath) {
+            navigate(streamsPath, { replace: true });
+            return;
+          }
+          navigate(-1);
+        });
+      return;
+    }
+
+    // Sección Episodie dentro del Detail: limpia el request de la ubicación
+    // actual y permanece en el mismo Detail / backdrop. Solo en rutas de
+    // detalle: fuera de ellas el marcador solo puede venir de una page cacheada.
+    if (isDetailPage && typeof document !== "undefined" && document.querySelector("[data-aetherio-episode-section]")) {
+      const currentState = loc.state && typeof loc.state === "object"
+        ? { ...(loc.state as Record<string, unknown>) }
+        : {};
+      delete currentState.episodeRequest;
+      navigate(`${loc.pathname}${loc.search}`, {
+        replace: true,
+        state: Object.keys(currentState).length ? currentState : null,
+      });
+      return;
+    }
 
     if (isDetailPage) {
       const historyIndex = getRouterHistoryIndex();
@@ -407,32 +502,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (loc.pathname === "/player") {
-      const params = new URLSearchParams(loc.search);
-      const type = params.get("type");
-      const id = params.get("id");
-      const season = params.get("season");
-      const episode = params.get("ep");
-      const streamParams = type && id ? new URLSearchParams({ type, id }) : null;
-      if (streamParams && season) streamParams.set("season", season);
-      if (streamParams && episode) streamParams.set("ep", episode);
-      if (streamParams && params.get("fromSearch") === "1") {
-        streamParams.set("fromSearch", "1");
-        const searchQuery = params.get("q");
-        if (searchQuery) streamParams.set("q", searchQuery);
-      }
-      if (streamParams) streamParams.set("fromPlayer", "1");
-      const streamsPath = streamParams ? `/episode?${streamParams.toString()}` : null;
-      void stopNativePlayback()
-        .finally(() => {
-          if (streamsPath) {
-            navigate(streamsPath, { replace: true });
-            return;
-          }
-          navigate(-1);
-        });
-      return;
-    }
     navigate(-1);
   }
 
@@ -502,7 +571,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             transformOrigin: "top right",
           }}
         >
-          {!androidRuntime && (!isPlayer || showBack) && (
+          {(!isPlayer || showBack) && (
             <WindowControls />
           )}
         </div>
@@ -528,28 +597,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function makeScrollKey(pathname: string, search: string) {
-  if (pathname === "/settings") return pathname;
-  return `${pathname}${search}`;
-}
-
 function getRouterHistoryIndex() {
   const index = window.history.state?.idx;
   return typeof index === "number" && Number.isInteger(index) ? index : null;
-}
-
-function findDetailReturnDelta(
-  history: Map<number, string>,
-  currentIndex: number,
-  currentPath: string,
-) {
-  for (let index = currentIndex - 1; index >= 0; index -= 1) {
-    const candidate = history.get(index);
-    if (!candidate) continue;
-    const pathname = candidate.split("?")[0];
-    if (pathname === "/episode" || pathname === "/streams" || pathname === "/player") continue;
-    if (candidate === currentPath) continue;
-    return index - currentIndex;
-  }
-  return null;
 }

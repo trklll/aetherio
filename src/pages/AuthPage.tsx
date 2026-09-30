@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { ArrowRight, Eye, EyeOff, HardDrive, LockKeyhole, Mail, UserRound } from "lucide-react";
 import aetherioLogo from "../assets/aetheriologo.png";
 import aniListLogo from "../assets/logoauth/anilist_logo_icon_247617.png";
@@ -28,8 +29,9 @@ export default function AuthPage({
   onAuthenticated: (user: AetherioUser) => void;
   onContinueLocal: () => void;
 }) {
+  const location = useLocation();
   const rootRef = useRef<HTMLElement>(null);
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(() => new URLSearchParams(location.search).get("auth") === "register" ? "register" : "login");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

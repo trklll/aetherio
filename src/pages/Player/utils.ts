@@ -1,5 +1,5 @@
 import { tmdbFetch } from "../../config/apiKeys";
-import { isAndroidRuntime, openNativePlayback } from "../../runtime/platform";
+import { openNativePlayback } from "../../runtime/platform";
 import type { MediaStream, StreamKind, StreamQuery } from "../../types/stream";
 import { getDirectPlaybackUrl, hasP2pPlayback } from "../../utils/playableMedia";
 import { getPlaybackPreferences } from "../../config/playbackPreferences";
@@ -10,6 +10,14 @@ export const SELECTED_ENGINE_KEY = "aetherio-selected-engine";
 export const SELECTED_MEDIA_META_KEY = "aetherio-selected-media-meta";
 export const SELECTED_PLAYBACK_OVERRIDES_KEY = "aetherio-selected-playback-overrides";
 export const AUTO_NEXT_SOURCE_KEY = "aetherio-auto-next-source";
+/**
+ * Alternativas https que el Player reintenta solo cuando una fuente muere.
+ *
+ * Vive aqui y no en el componente porque tambien la escribe quien prepara la
+ * sesion de un directo (`primeLivePlaybackSession`): sin esta clave, un evento
+ * con varias fuentes se queda clavado en la primera muerta.
+ */
+export const DIRECT_STREAM_FALLBACKS_KEY = "aetherio-direct-stream-fallbacks";
 export const TMDB = "https://api.themoviedb.org/3";
 export const IMG = "https://image.tmdb.org/t/p";
 export const DETAIL_LOGO_KEY = "aetherio-detail-logo";
@@ -113,6 +121,12 @@ export function formatTime(value: number) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+export function isLocalPlaybackStream(stream: MediaStream | null | undefined) {
+  return stream?.behaviorHints?.localFile === true
+    && typeof stream.url === "string"
+    && stream.url.trim().length > 0;
+}
+
 export function getPlaybackTarget(stream: MediaStream | null | undefined) {
   if (!stream) return "";
   const localFile = stream.behaviorHints?.localFile === true
@@ -195,16 +209,25 @@ export function extractHttpHeaders(stream: MediaStream): Record<string, string> 
   return headers;
 }
 
-export async function openExternal(stream: MediaStream, subtitle?: string, startTime = 0, episode?: number) {
+export async function openExternal(
+  stream: MediaStream,
+  subtitle?: string,
+  startTime = 0,
+  episode?: number,
+  live = false,
+) {
   const target = getPlaybackTarget(stream);
   if (!target) return { result: null, error: "La fuente no tiene URL reproducible." };
-  const normalizedStartTime = Number.isFinite(startTime) ? Math.max(0, startTime) : 0;
+  // Un directo nunca arranca en un offset: el borde lo fija el demuxer al leer
+  // el manifiesto, asi que forzar `startTime` dejaria al reproductor esperando
+  // en una posicion que todavia no existe.
+  const normalizedStartTime = live ? 0 : Number.isFinite(startTime) ? Math.max(0, startTime) : 0;
   try {
     const headers = extractHttpHeaders(stream);
     const providerSessionKey = typeof stream.behaviorHints?.providerHttpSessionKey === "string"
       ? stream.behaviorHints.providerHttpSessionKey.trim()
       : "";
-    const requestedBackend = isAndroidRuntime() ? "android-media3" : "mpv";
+    const requestedBackend = "mpv";
     const audioPassthrough = getPlaybackPreferences().audioPassthrough;
     console.info("[AETHERIO:PLAYER:OPEN_NATIVE] request", {
       backend: requestedBackend,
@@ -217,6 +240,7 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       hasHeaders: Object.keys(headers).length > 0,
       targetKind: getStreamKind(stream),
       targetHost: /^https?:/i.test(target) ? new URL(target).hostname : undefined,
+      live,
     });
     const result = await openNativePlayback({
       target,
@@ -228,6 +252,7 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
       privateTorrent: getStreamKind(stream) === "p2p" && hasPrivateTorrentHint(stream),
       providerSessionKey: providerSessionKey || undefined,
       audioPassthrough,
+      live,
     });
     console.info("[AETHERIO:PLAYER:OPEN_NATIVE] response", {
       requestedBackend,
@@ -243,7 +268,7 @@ export async function openExternal(stream: MediaStream, subtitle?: string, start
     return { result, error: null };
   } catch (error) {
     console.error("[AETHERIO:PLAYER:OPEN_NATIVE] error", {
-      backend: isAndroidRuntime() ? "android-media3" : "mpv",
+      backend: "mpv",
       streamId: stream.id,
       error: String(error),
       targetKind: getStreamKind(stream),

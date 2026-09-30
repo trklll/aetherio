@@ -82,7 +82,7 @@ export function buildShareableOffer(stream: MediaStream | null): { offer?: Party
 
   const target = getPlaybackTarget(stream);
   if (!target || target.length > MAX_TARGET_LEN) return { reason: "destino inválido" };
-  if (kind === "https" && !/^https?:/i.test(target)) return { reason: "destino inválido" };
+  if (kind === "https" && !/^https:/i.test(target)) return { reason: "destino inválido" };
   if (kind === "p2p") {
     if (!/^magnet:/i.test(target)) return { reason: "destino inválido" };
     if (magnetHasCredentials(target)) return { reason: "magnet con credenciales" };
@@ -108,7 +108,7 @@ export function sanitizeSharedSubtitles(subtitles: unknown): Array<{ url: string
     if (!item || typeof item !== "object") continue;
     const raw = item as Record<string, unknown>;
     const url = typeof raw.url === "string" ? raw.url.trim() : "";
-    if (!url || !/^https?:/i.test(url) || url.length > MAX_SHARED_SUBTITLE_URL_LEN) continue;
+    if (!url || !/^https:/i.test(url) || url.length > MAX_SHARED_SUBTITLE_URL_LEN) continue;
     const entry: { url: string; lang?: string; title?: string } = { url };
     const lang = typeof raw.lang === "string" ? raw.lang.trim().slice(0, 16)
       : typeof raw.language === "string" ? raw.language.trim().slice(0, 16) : "";

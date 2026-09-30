@@ -3,6 +3,12 @@ import { createPortal } from "react-dom";
 import { gsap, tweenTo, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
 import { getContextGlassStyle } from "./glassSurface";
 
+/** Hay algún menú contextual abierto (portal con data-aetherio-context-menu). */
+export function isContextMenuOpen(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.querySelector("[data-aetherio-context-menu]") !== null;
+}
+
 export interface ContextMenuItem {
   label: string;
   description?: string;
@@ -36,6 +42,10 @@ export default function ContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: -9999, top: -9999 });
   const [mounted, setMounted] = useState(open);
+  // Foco previo a la apertura: al cerrar con B/Escape se devuelve aquí (o al
+  // ancla) para seguir con el mando donde estaba.
+  const prevFocusRef = useRef<HTMLElement | null>(null);
+  const hadOpenedRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -49,6 +59,41 @@ export default function ContextMenu({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [anchorRef, onClose, open]);
+
+  // B del mando / Escape cierra el menú y consume el evento para que no
+  // dispare la navegación de la página (ir atrás / salir de Big Picture).
+  // En captura: precede a los handlers de burbuja (página, pickers); los de
+  // captura en window (rail, AppShell) llevan su propia guarda.
+  // Tab queda atrapado ciclando dentro del menú (zona exclusiva).
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Tab") {
+        const items = Array.from(
+          menuRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? [],
+        ).filter(el => el.getBoundingClientRect().width >= 2);
+        if (!items.length) {
+          event.preventDefault();
+          return;
+        }
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        const inside = active instanceof HTMLElement && menuRef.current?.contains(active);
+        if ((event.shiftKey && (active === first || !inside)) || (!event.shiftKey && (active === last || !inside))) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus({ preventScroll: true });
+        }
+        return;
+      }
+      if (event.key !== "Escape" && event.key !== "Esc" && event.code !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [onClose, open]);
 
   useLayoutEffect(() => {
     if (!mounted) return;
@@ -167,6 +212,36 @@ export default function ContextMenu({
     // §3/§4 — critically damped spring, no bounce, interruptible
     springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { duration: 0.36, damping: 1.0 });
   }, [open, mounted, position.left, position.top, width, items.length, anchorRef]);
+
+  // Al abrir: recordar el foco previo y llevarlo al primer item (el motor
+  // espacial queda atrapado dentro mientras haya menú abierto).
+  useEffect(() => {
+    if (open) {
+      prevFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+  }, [open ]);
+
+  useEffect(() => {
+    if (!open || !mounted || !menuRef.current) return;
+    menuRef.current.querySelector<HTMLElement>("button:not([disabled])")?.focus({ preventScroll: true });
+  }, [open, mounted]);
+
+  // Al cerrar con B/Escape (o click fuera): devolver el foco al ancla (o al
+  // previo) para seguir con el mando donde estaba. Solo si el foco sigue
+  // dentro del menú o quedó perdido; no robarlo si ya cayó en otro control.
+  useEffect(() => {
+    if (open) {
+      hadOpenedRef.current = true;
+      return;
+    }
+    if (!hadOpenedRef.current) return;
+    hadOpenedRef.current = false;
+    const active = document.activeElement;
+    const inside = active instanceof HTMLElement && menuRef.current?.contains(active);
+    if (inside || active === document.body || !active) {
+      (anchorRef.current ?? prevFocusRef.current)?.focus({ preventScroll: true });
+    }
+  }, [open, anchorRef]);
 
   if (!mounted) return null;
 

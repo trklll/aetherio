@@ -1,3 +1,7 @@
+// Capa P2P en desarrollo: gran parte de la API aún no tiene llamantes externos.
+// Se permite dead_code hasta cablear fetch_range/store_chunk/sources al resto.
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};

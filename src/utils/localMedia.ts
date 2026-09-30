@@ -4,6 +4,7 @@ import {
   SELECTED_PLAYBACK_OVERRIDES_KEY,
   SELECTED_STREAM_KEY,
 } from "../pages/Player/utils";
+import { buildPlayerPath } from "./bigPictureDetail";
 
 export const LOCAL_FILES_DROPPED_EVENT = "aetherio-local-files-dropped";
 
@@ -56,7 +57,7 @@ export function prepareLocalMediaPlayback(mediaPath: string, subtitlePaths: stri
   sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
   sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({ name: filename }));
   sessionStorage.removeItem(SELECTED_PLAYBACK_OVERRIDES_KEY);
-  return `/player?local=${Date.now()}`;
+  return buildPlayerPath(`local=${Date.now()}`);
 }
 
 export function dispatchLocalSubtitleDrop(paths: string[]) {

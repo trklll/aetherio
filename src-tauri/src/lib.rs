@@ -1,5 +1,8 @@
 mod discord_rpc;
-mod p2p;
+mod embedded_subtitles;
+mod poster_cache;
+mod poster_server;
+pub mod p2p;
 mod scraper;
 mod secure_credentials;
 
@@ -8,29 +11,31 @@ use std::{
     ffi::{CStr, CString},
     fs::{self, OpenOptions},
     io::{Read, Write},
+    net::{IpAddr, ToSocketAddrs},
     os::raw::{c_char, c_int, c_void},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     ptr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
 };
 
+use base64::Engine as _;
 use libloading::Library;
-#[cfg(not(target_os = "android"))]
+
 use librqbit::{
     dht::PersistentDhtConfig,
     http_api::{HttpApi, HttpApiOptions},
     Api, Session, SessionOptions,
 };
 use reqwest::blocking::Client;
-#[cfg(not(target_os = "android"))]
+
 use std::sync::mpsc;
-use tauri::{Emitter, Manager, Runtime};
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 fn playback_capabilities(app: tauri::AppHandle) -> serde_json::Value {
@@ -50,141 +55,6 @@ fn playback_capabilities(app: tauri::AppHandle) -> serde_json::Value {
         "platform": std::env::consts::OS,
         "formats": ["hls", "dash", "mkv", "hdr", "atmos", "external-subtitles", "p2p", "torrent", "magnet"]
     })
-}
-
-#[cfg(target_os = "android")]
-struct AndroidPlayerPlugin<R: Runtime>(tauri::plugin::PluginHandle<R>);
-
-#[cfg(target_os = "android")]
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AndroidPlayerOpenArgs {
-    target: String,
-    subtitle: Option<String>,
-    headers: Option<HashMap<String, String>>,
-    file_idx: Option<usize>,
-    start_time: Option<f64>,
-}
-
-#[cfg(target_os = "android")]
-#[derive(serde::Serialize)]
-struct AndroidPlayerCommandArgs {
-    command: Vec<serde_json::Value>,
-}
-
-fn init_android_player_bridge<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    tauri::plugin::Builder::new("aetherio-player")
-        .setup(|_app, _api| {
-            #[cfg(target_os = "android")]
-            {
-                let handle = _api.register_android_plugin(
-                    "com.administrator.aetherio.player",
-                    "AetherioPlayerPlugin",
-                )?;
-                _app.manage(AndroidPlayerPlugin(handle));
-            }
-            Ok(())
-        })
-        .build()
-}
-
-#[cfg(target_os = "android")]
-fn run_android_player_plugin<R: Runtime, T: serde::de::DeserializeOwned>(
-    app: tauri::AppHandle<R>,
-    command: &str,
-    payload: impl serde::Serialize,
-) -> Result<T, String> {
-    let handle = app.state::<AndroidPlayerPlugin<R>>();
-    handle
-        .0
-        .run_mobile_plugin(command, payload)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn android_player_open<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    target: String,
-    subtitle: Option<String>,
-    headers: Option<HashMap<String, String>>,
-    file_idx: Option<usize>,
-    start_time: Option<f64>,
-) -> Result<serde_json::Value, String> {
-    #[cfg(target_os = "android")]
-    {
-        return run_android_player_plugin(
-            app,
-            "open",
-            AndroidPlayerOpenArgs {
-                target,
-                subtitle,
-                headers,
-                file_idx,
-                start_time,
-            },
-        );
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, target, subtitle, headers, file_idx, start_time);
-        Err(String::from(
-            "El reproductor Android TV solo esta disponible en Android.",
-        ))
-    }
-}
-
-#[tauri::command]
-fn android_player_stop<R: Runtime>(app: tauri::AppHandle<R>) -> Result<serde_json::Value, String> {
-    #[cfg(target_os = "android")]
-    {
-        return run_android_player_plugin(app, "stop", serde_json::json!({}));
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(serde_json::json!({}))
-    }
-}
-
-#[tauri::command]
-fn android_player_command<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    command: Vec<serde_json::Value>,
-) -> Result<serde_json::Value, String> {
-    #[cfg(target_os = "android")]
-    {
-        return run_android_player_plugin(app, "command", AndroidPlayerCommandArgs { command });
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, command);
-        Ok(serde_json::json!({}))
-    }
-}
-
-#[tauri::command]
-fn android_player_status<R: Runtime>(
-    app: tauri::AppHandle<R>,
-) -> Result<serde_json::Value, String> {
-    #[cfg(target_os = "android")]
-    {
-        return run_android_player_plugin(app, "getLastSession", serde_json::json!({}));
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(serde_json::json!({
-            "timePos": 0,
-            "duration": 0,
-            "pause": true,
-            "fileLoaded": false,
-            "tracks": []
-        }))
-    }
 }
 
 #[tauri::command]
@@ -285,6 +155,168 @@ const SUBTITLE_DOWNLOAD_MAX_ATTEMPTS: usize = 3;
 const SUBTITLE_DOWNLOAD_RETRY_DELAY_MS: u64 = 350;
 const SUBTITLE_DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 12;
 const SUBTITLE_DOWNLOAD_TOTAL_TIMEOUT_SECS: u64 = 25;
+const EMBEDDED_SUBTITLE_BUDGET_BYTES: usize = 24 * 1024 * 1024;
+const PLAYBACK_TRANSPORT_MAX_REDIRECTS: usize = 5;
+const PLAYBACK_TRANSPORT_CONNECT_TIMEOUT_SECS: u64 = 6;
+const PLAYBACK_TRANSPORT_TOTAL_TIMEOUT_SECS: u64 = 10;
+
+/// Extrae la pista de subtitulos de texto embebida del video como WebVTT.
+///
+/// Sirve como referencia de Auto Sync: si el subtitulo que eligio el usuario
+/// viene desincronizado y el archivo trae su propia pista, se comparan entre si.
+/// Devuelve `None` cuando el contenedor no tiene subtitulos de texto.
+#[tauri::command]
+async fn embedded_subtitle_text(
+    url: Option<String>,
+    local_path: Option<String>,
+    language: Option<String>,
+    stream_url: Option<String>,
+    headers: Option<HashMap<String, String>>,
+) -> Result<Option<String>, String> {
+    let language = language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    if let Some(path) = local_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let path = path.to_string();
+        return tauri::async_runtime::spawn_blocking(move || {
+            use embedded_subtitles::ByteSource;
+            let source = embedded_subtitles::FileSource::open(&path)?;
+            let total = source.total_len().unwrap_or(0);
+            embedded_subtitles::extract_embedded_webvtt(
+                &source,
+                total,
+                language.as_deref(),
+                EMBEDDED_SUBTITLE_BUDGET_BYTES,
+            )
+        })
+        .await
+        .map_err(|error| format!("Fallo la lectura del archivo local: {}", error))?;
+    }
+
+    let url = url.unwrap_or_default().trim().to_string();
+    if url.is_empty()
+        || url.len() > 4096
+        || !(url.starts_with("http://") || url.starts_with("https://"))
+        || url.contains(['\r', '\n'])
+    {
+        return Err(String::from("URL de video invalida."));
+    }
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| String::from("URL de video invalida."))?;
+    if !is_public_http_url(&parsed) {
+        return Err(String::from("URL de video no permitida."));
+    }
+
+    let stream_host = stream_url.as_deref().and_then(extract_uri_host);
+    let same_host = match (extract_uri_host(&url), stream_host) {
+        (Some(video), Some(stream)) => video.eq_ignore_ascii_case(&stream),
+        _ => false,
+    };
+    let forwarded = if same_host { headers } else { None };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let redirect_count = Arc::new(AtomicUsize::new(0));
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(SUBTITLE_DOWNLOAD_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::custom(move |attempt: reqwest::redirect::Attempt| {
+                let safe = attempt.url().scheme() == "https" && is_public_http_url(attempt.url());
+                if redirect_count.fetch_add(1, Ordering::AcqRel) >= 3 || !safe {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
+            .build()
+            .map_err(|error| format!("No se pudo crear el cliente HTTP: {}", error))?;
+
+        let total = remote_media_length(&client, &url, forwarded.as_ref())?;
+        if total == 0 {
+            return Ok(None);
+        }
+        let source = embedded_subtitles::HttpSource::new(
+            client,
+            url,
+            forwarded.map(|map| map.into_iter().collect()).unwrap_or_default(),
+            total,
+        );
+        embedded_subtitles::extract_embedded_webvtt(
+            &source,
+            total,
+            language.as_deref(),
+            EMBEDDED_SUBTITLE_BUDGET_BYTES,
+        )
+    })
+    .await
+    .map_err(|error| format!("Fallo la lectura de subtitulos embebidos: {}", error))?
+}
+
+/// Descubre el tama├▒o total del recurso: HEAD primero y, si el servidor no lo
+/// dice, un Range de un byte para leer el Content-Range.
+fn remote_media_length(
+    client: &Client,
+    url: &str,
+    headers: Option<&HashMap<String, String>>,
+) -> Result<u64, String> {
+    let build = |method: reqwest::Method, range: Option<&str>| {
+        let mut request = client
+            .request(method, url)
+            .header("User-Agent", "Aetherio/0.7.4")
+            .header("Accept", "video/*,application/octet-stream,*/*");
+        if let Some(range) = range {
+            request = request.header(reqwest::header::RANGE, range);
+        }
+        if let Some(map) = headers {
+            for (key, value) in map {
+                let lower = key.to_ascii_lowercase();
+                if matches!(
+                    lower.as_str(),
+                    "range" | "host" | "connection" | "transfer-encoding" | "accept-encoding" | "content-length"
+                ) {
+                    continue;
+                }
+                request = request.header(key.as_str(), value.as_str());
+            }
+        }
+        request.send()
+    };
+
+    if let Ok(response) = build(reqwest::Method::HEAD, None) {
+        if let Some(length) = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            if length > 0 {
+                return Ok(length);
+            }
+        }
+    }
+
+    let response = build(reqwest::Method::GET, Some("bytes=0-0"))
+        .map_err(|error| format!("No se pudo consultar el tama├▒o del video: {}", error))?;
+    if let Some(range) = response
+        .headers()
+        .get("content-range")
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some(total) = range.rsplit('/').next().and_then(|value| value.trim().parse::<u64>().ok()) {
+            return Ok(total);
+        }
+    }
+    if let Some(length) = response.content_length() {
+        return Ok(length);
+    }
+    Ok(0)
+}
 
 #[tauri::command]
 async fn fetch_subtitle_text(
@@ -301,6 +333,14 @@ async fn fetch_subtitle_text(
     }
     if url.contains(['\r', '\n']) {
         return Err(String::from("URL de subtitulo invalida."));
+    }
+    // SSRF: solo destinos publicos. Reutiliza el mismo guard que el
+    // provider HTTP (bloquea loopback, red privada, literales numericos
+    // no canonicos y esquemas no http/https).
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| String::from("URL de subtitulo invalida."))?;
+    if !is_public_http_url(&parsed) {
+        return Err(String::from("URL de subtitulo no permitida."));
     }
 
     let subtitle_host = extract_uri_host(&url);
@@ -331,6 +371,218 @@ async fn fetch_subtitle_text(
     })
     .await
     .map_err(|error| format!("Fallo la tarea de descarga de subtitulos: {}", error))?
+}
+
+#[tauri::command]
+async fn cache_subtitle_text(
+    app: tauri::AppHandle,
+    text: String,
+) -> Result<String, String> {
+    if !text.starts_with("WEBVTT") || text.len() > 8 * 1024 * 1024 {
+        return Err(String::from("El subtitulo generado es invalido."));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache_dir = app
+            .path()
+            .app_cache_dir()
+            .map_err(|error| format!("No se pudo abrir la cache local: {}", error))?
+            .join("subtitle-sync");
+        fs::create_dir_all(&cache_dir)
+            .map_err(|error| format!("No se pudo crear la cache de subtitulos: {}", error))?;
+        let now = std::time::SystemTime::now();
+        if let Ok(entries) = fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata
+                        .modified()
+                        .ok()
+                        .and_then(|modified| now.duration_since(modified).ok())
+                        .map(|age| age > Duration::from_secs(24 * 60 * 60))
+                        .unwrap_or(false)
+                    {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+        let path = cache_dir.join(format!(
+            "auto-sync-{}-{}.vtt",
+            std::process::id(),
+            chrono_like_timestamp()
+        ));
+        fs::write(&path, text.as_bytes())
+            .map_err(|error| format!("No se pudo guardar el subtitulo sincronizado: {}", error))?;
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|error| format!("Fallo la cache de subtitulos: {}", error))?
+}
+
+#[tauri::command]
+async fn seekr_load_track(
+    api_key: String,
+    lookup_path: String,
+) -> Result<serde_json::Value, String> {
+    let api_key = api_key.trim().to_string();
+    if api_key.len() < 8 || api_key.len() > 512 || api_key.contains(['\r', '\n']) {
+        return Err(String::from("Clave de Seekr invalida."));
+    }
+    if !lookup_path.starts_with("/sprites?") || lookup_path.contains(['\r', '\n']) {
+        return Err(String::from("Consulta de Seekr invalida."));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let redirect_count = Arc::new(AtomicUsize::new(0));
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::custom(move |attempt: reqwest::redirect::Attempt| {
+                let safe = attempt.url().scheme() == "https" && is_public_http_url(attempt.url());
+                if redirect_count.fetch_add(1, Ordering::AcqRel) >= 3 || !safe {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
+            .build()
+            .map_err(|error| format!("No se pudo crear el cliente de Seekr: {}", error))?;
+        let lookup_url = format!("https://api.seekr.tv{}", lookup_path);
+        let lookup = client
+            .get(&lookup_url)
+            .header("X-API-Key", &api_key)
+            .send()
+            .map_err(|error| format!("Seekr no respondio: {}", error))?
+            .error_for_status()
+            .map_err(|error| format!("Seekr rechazo la consulta: {}", error))?
+            .json::<serde_json::Value>()
+            .map_err(|error| format!("Respuesta de Seekr invalida: {}", error))?;
+        let vtt_url = lookup
+            .get("vtt_url")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| String::from("Seekr no devolvio una pista de previews."))?;
+        let mut signed_url = reqwest::Url::parse(vtt_url)
+            .map_err(|_| String::from("URL de previews de Seekr invalida."))?;
+        if signed_url.scheme() != "https" || !is_public_http_url(&signed_url) {
+            return Err(String::from("URL de previews de Seekr no permitida."));
+        }
+        signed_url.query_pairs_mut().append_pair("st", "1");
+        let vtt = client
+            .get(signed_url)
+            .send()
+            .map_err(|error| format!("No se pudo cargar la pista de previews: {}", error))?
+            .error_for_status()
+            .map_err(|error| format!("Seekr no pudo entregar los previews: {}", error))?
+            .text()
+            .map_err(|error| format!("VTT de Seekr invalido: {}", error))?;
+        if vtt.len() > 4 * 1024 * 1024 {
+            return Err(String::from("La pista de previews es demasiado grande."));
+        }
+        Ok(serde_json::json!({
+            "vtt": vtt,
+            "scale": lookup.get("scale").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
+            "sourceDurationMs": lookup.get("source_duration_ms").and_then(serde_json::Value::as_i64).unwrap_or(0)
+        }))
+    })
+    .await
+    .map_err(|error| format!("Fallo la tarea de Seekr: {}", error))?
+}
+
+#[tauri::command]
+async fn seekr_fetch_sprite(url: String) -> Result<serde_json::Value, String> {
+    let parsed = reqwest::Url::parse(url.trim())
+        .map_err(|_| String::from("URL de sprite de Seekr invalida."))?;
+    if parsed.scheme() != "https" || !is_public_http_url(&parsed) {
+        return Err(String::from("URL de sprite de Seekr no permitida."));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let redirect_count = Arc::new(AtomicUsize::new(0));
+        let response = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::custom(move |attempt: reqwest::redirect::Attempt| {
+                let safe = attempt.url().scheme() == "https" && is_public_http_url(attempt.url());
+                if redirect_count.fetch_add(1, Ordering::AcqRel) >= 3 || !safe {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
+            .build()
+            .map_err(|error| format!("No se pudo crear el cliente de sprites: {}", error))?
+            .get(parsed)
+            .send()
+            .map_err(|error| format!("No se pudo cargar el sprite: {}", error))?
+            .error_for_status()
+            .map_err(|error| format!("Seekr no pudo entregar el sprite: {}", error))?;
+        let mime_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.split(';').next().unwrap_or("image/png").trim().to_string())
+            .filter(|value| matches!(value.as_str(), "image/png" | "image/jpeg" | "image/webp"))
+            .unwrap_or_else(|| "image/png".to_string());
+        let bytes = response
+            .bytes()
+            .map_err(|error| format!("No se pudo leer el sprite: {}", error))?;
+        if bytes.is_empty() || bytes.len() > 12 * 1024 * 1024 {
+            return Err(String::from("Sprite de Seekr invalido."));
+        }
+        Ok(serde_json::json!({
+            "base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            "mimeType": mime_type
+        }))
+    })
+    .await
+    .map_err(|error| format!("Fallo la carga del sprite: {}", error))?
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(value) => {
+            let [first, second, ..] = value.octets();
+            !value.is_private()
+                && !value.is_loopback()
+                && !value.is_link_local()
+                && !value.is_broadcast()
+                && !value.is_documentation()
+                && !value.is_unspecified()
+                && !value.is_multicast()
+                && first != 0
+                && first < 224
+                && !(first == 100 && (64..=127).contains(&second))
+        }
+        IpAddr::V6(value) => {
+            if value.is_loopback() || value.is_unspecified() || value.is_multicast() {
+                return false;
+            }
+            if let Some(mapped) = value.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(mapped));
+            }
+            let segments = value.segments();
+            let unique_local = segments[0] & 0xfe00 == 0xfc00;
+            let link_local = segments[0] & 0xffc0 == 0xfe80;
+            let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+            !unique_local && !link_local && !documentation
+        }
+    }
+}
+
+fn is_public_http_url(url: &reqwest::Url) -> bool {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return false;
+    }
+    let host = match url.host_str() {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => return false,
+    };
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return is_public_ip(ip);
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addresses: Vec<_> = match (host, port).to_socket_addrs() {
+        Ok(values) => values.collect(),
+        Err(_) => return false,
+    };
+    !addresses.is_empty() && addresses.into_iter().all(|address| is_public_ip(address.ip()))
 }
 
 fn extract_uri_host(raw: &str) -> Option<String> {
@@ -366,9 +618,17 @@ fn execute_subtitle_download(
     same_host: bool,
     headers: Option<&HashMap<String, String>>,
 ) -> Result<String, String> {
+    let redirect_count = Arc::new(AtomicUsize::new(0));
     let mut request = Client::builder()
         .connect_timeout(Duration::from_secs(SUBTITLE_DOWNLOAD_CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(SUBTITLE_DOWNLOAD_TOTAL_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt: reqwest::redirect::Attempt| {
+            if redirect_count.fetch_add(1, Ordering::AcqRel) >= 5 || !is_public_http_url(attempt.url()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .build()
         .map_err(|error| format!("No se pudo crear el cliente HTTP: {}", error))?
         .get(url);
@@ -472,7 +732,7 @@ fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[cfg(not(target_os = "windows"))]
     {
         if window.is_maximized().map_err(|error| error.to_string())? {
             window.unmaximize().map_err(|error| error.to_string())
@@ -480,29 +740,14 @@ fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
             window.maximize().map_err(|error| error.to_string())
         }
     }
-
-    #[cfg(target_os = "android")]
-    {
-        let _ = window;
-        Ok(())
-    }
 }
 
 #[tauri::command]
 fn toggle_window_fullscreen(window: tauri::WebviewWindow) -> Result<(), String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let is_fullscreen = window.is_fullscreen().map_err(|error| error.to_string())?;
-        window
-            .set_fullscreen(!is_fullscreen)
-            .map_err(|error| error.to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        let _ = window;
-        Ok(())
-    }
+    let is_fullscreen = window.is_fullscreen().map_err(|error| error.to_string())?;
+    window
+        .set_fullscreen(!is_fullscreen)
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Default)]
@@ -685,7 +930,7 @@ struct MpvSession {
     p2p: Option<P2pPlaybackInfo>,
 }
 
-#[cfg(not(target_os = "android"))]
+
 struct P2pState {
     server: Mutex<Option<P2pServer>>,
     resolve_lock: Mutex<()>,
@@ -695,9 +940,10 @@ struct P2pState {
     cache_generation: Arc<AtomicU64>,
     chunk_store: Mutex<Option<p2p::SharedChunkStore>>,
     tracker: Mutex<Option<p2p::TrackerServer>>,
+    enginefs_registry: p2p::SharedEnginefsRegistry,
 }
 
-#[cfg(not(target_os = "android"))]
+
 impl Default for P2pState {
     fn default() -> Self {
         Self {
@@ -709,42 +955,39 @@ impl Default for P2pState {
             cache_generation: Arc::new(AtomicU64::new(0)),
             chunk_store: Mutex::new(None),
             tracker: Mutex::new(None),
+            enginefs_registry: Arc::new(p2p::EnginefsRegistry::new()),
         }
     }
 }
 
-#[cfg(target_os = "android")]
-#[derive(Default)]
-struct P2pState;
-
-#[cfg(not(target_os = "android"))]
 struct P2pServer {
     base_url: String,
     shutdown: Arc<AtomicBool>,
     stopped: mpsc::Receiver<()>,
+    enginefs: p2p::enginefs::EnginefsHandle,
 }
 
-#[cfg(not(target_os = "android"))]
+
 const P2P_HTTP_ATTEMPT_TIMEOUT_MS: u64 = 20_000;
-#[cfg(not(target_os = "android"))]
+
 const P2P_HTTP_MAX_ATTEMPTS: usize = 2;
 // Primer tier: 1 pieza típica de torrent (~2 MiB) → reproducción instantánea
-#[cfg(not(target_os = "android"))]
+
 const P2P_PREFETCH_TARGET_BYTES: usize = 2 * 1024 * 1024;
 // Segundo tier: mínimo viable si el grace ha expirado (~1 MiB)
-#[cfg(not(target_os = "android"))]
+
 const P2P_PREFETCH_MIN_BYTES: usize = 1 * 1024 * 1024;
 // Tercer tier: si el rate es alto, esperamos más para evitar stutter (~8 MiB)
-#[cfg(not(target_os = "android"))]
+
 const P2P_PREFETCH_LARGE_BYTES: usize = 8 * 1024 * 1024;
 // Grace: tras 10s aceptamos el mínimo viable
-#[cfg(not(target_os = "android"))]
+
 const P2P_PREFETCH_GRACE_MS: u64 = 10_000;
-#[cfg(not(target_os = "android"))]
+
 const P2P_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
-#[cfg(not(target_os = "android"))]
+
 const P2P_CACHE_MAX_ENTRIES: usize = 2;
-#[cfg(not(target_os = "android"))]
+
 const P2P_CACHE_MAX_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 
 impl MpvSession {
@@ -919,6 +1162,7 @@ struct CachedYouTubeStream {
 struct YouTubeState {
     streams: Arc<Mutex<HashMap<String, CachedYouTubeStream>>>,
     proxy_port: u16,
+    app: Arc<Mutex<Option<tauri::AppHandle>>>,
 }
 
 fn youtube_proxy_header(name: &[u8], value: &[u8]) -> Option<tiny_http::Header> {
@@ -927,6 +1171,7 @@ fn youtube_proxy_header(name: &[u8], value: &[u8]) -> Option<tiny_http::Header> 
 
 fn start_youtube_proxy(
     streams: Arc<Mutex<HashMap<String, CachedYouTubeStream>>>,
+    app: Arc<Mutex<Option<tauri::AppHandle>>>,
 ) -> Result<u16, String> {
     let server = tiny_http::Server::http("127.0.0.1:0")
         .map_err(|error| format!("No se pudo iniciar el proxy local de YouTube: {error}"))?;
@@ -949,20 +1194,47 @@ fn start_youtube_proxy(
         for request in server.incoming_requests() {
             let path = request.url().split('?').next().unwrap_or("");
             let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
-            let track =
-                if parts.len() == 3 && parts[0] == "youtube" && valid_youtube_video_id(parts[1]) {
-                    streams.lock().ok().and_then(|entries| {
-                        entries.get(parts[1]).and_then(|entry| match parts[2] {
-                            "video" => Some(entry.video.clone()),
-                            "audio" => entry.audio.clone(),
-                            _ => None,
-                        })
-                    })
+            let (video_id, kind) =
+                if parts.len() == 3 && parts[0] == "youtube" && valid_youtube_video_id(parts[1])
+                    && (parts[2] == "video" || parts[2] == "audio")
+                {
+                    (parts[1].to_string(), parts[2].to_string())
                 } else {
-                    None
+                    let _ = request.respond(
+                        tiny_http::Response::from_string("stream not found")
+                            .with_status_code(tiny_http::StatusCode(404)),
+                    );
+                    continue;
                 };
 
-            let Some(track) = track else {
+            // googlevideo valida la coherencia del cliente: reenviar las
+            // cabeceras del WebView adem├ís del Range que pide el <video>.
+            let mut forwarded: Vec<(String, String)> = Vec::new();
+            for name in [
+                "Range",
+                "User-Agent",
+                "Referer",
+                "Origin",
+                "Accept",
+                "Accept-Language",
+            ] {
+                if let Some(header) = request
+                    .headers()
+                    .iter()
+                    .find(|header| header.field.equiv(name))
+                {
+                    forwarded.push((name.to_string(), header.value.as_str().to_string()));
+                }
+            }
+
+            let mut track = streams.lock().ok().and_then(|entries| {
+                entries.get(&video_id).and_then(|entry| match kind.as_str() {
+                    "video" => Some(entry.video.clone()),
+                    _ => entry.audio.clone(),
+                })
+            });
+
+            let Some(mut track) = track.take() else {
                 let _ = request.respond(
                     tiny_http::Response::from_string("stream not found")
                         .with_status_code(tiny_http::StatusCode(404)),
@@ -970,16 +1242,35 @@ fn start_youtube_proxy(
                 continue;
             };
 
-            let mut upstream_request = client.get(&track.url);
-            if let Some(range) = request
-                .headers()
-                .iter()
-                .find(|header| header.field.equiv("Range"))
-            {
-                upstream_request = upstream_request.header("Range", range.value.as_str());
-            }
+            // Las URLs firmadas de googlevideo caducan o se invalidan: ante
+            // 403/404/410 se re-resuelve una vez con yt-dlp y se reintenta.
+            let mut refreshed = false;
+            let outcome = loop {
+                let mut upstream_request = client.get(&track.url);
+                for (name, value) in &forwarded {
+                    upstream_request = upstream_request.header(name, value);
+                }
+                let upstream = match upstream_request.send() {
+                    Ok(upstream) => upstream,
+                    Err(error) => {
+                        break Err(format!("upstream failed: {error}"));
+                    }
+                };
+                let status = upstream.status().as_u16();
+                if (status == 403 || status == 404 || status == 410) && !refreshed {
+                    refreshed = true;
+                    match refresh_youtube_track(&app, &streams, &video_id, &kind) {
+                        Some(fresh) => {
+                            track = fresh;
+                            continue;
+                        }
+                        None => break Ok(upstream),
+                    }
+                }
+                break Ok(upstream);
+            };
 
-            match upstream_request.send() {
+            match outcome {
                 Ok(upstream) => {
                     let status = upstream.status().as_u16();
                     let content_length = upstream
@@ -1013,9 +1304,9 @@ fn start_youtube_proxy(
                     );
                     let _ = request.respond(response);
                 }
-                Err(error) => {
+                Err(message) => {
                     let _ = request.respond(
-                        tiny_http::Response::from_string(format!("upstream failed: {error}"))
+                        tiny_http::Response::from_string(message)
                             .with_status_code(tiny_http::StatusCode(502)),
                     );
                 }
@@ -1026,13 +1317,49 @@ fn start_youtube_proxy(
     Ok(port)
 }
 
+/// Re-resuelve las pistas de un video con yt-dlp y actualiza la cach├⌐ del
+/// proxy. Devuelve la pista pedida (`video`/`audio`) o None si falla.
+fn refresh_youtube_track(
+    app: &Arc<Mutex<Option<tauri::AppHandle>>>,
+    streams: &Arc<Mutex<HashMap<String, CachedYouTubeStream>>>,
+    video_id: &str,
+    kind: &str,
+) -> Option<YouTubeRemoteTrack> {
+    let handle = app.lock().ok()?.clone()?;
+    let (info, video, audio) = resolve_youtube_tracks(&handle, video_id).ok()?;
+    let track = match kind {
+        "video" => video.clone(),
+        _ => audio.clone()?,
+    };
+    if let Ok(mut entries) = streams.lock() {
+        if let Some(entry) = entries.get_mut(video_id) {
+            // Las URLs del proxy (value.url/audio_url) siguen valiendo: solo
+            // se refrescan las pistas remotas y los metadatos.
+            entry.video = video;
+            entry.audio = audio;
+            entry.resolved_at = Instant::now();
+            entry.value.title = info.title;
+            entry.value.duration = info.duration;
+            entry.value.width = info.width;
+            entry.value.height = info.height;
+            entry.value.format_id = info.format_id;
+            entry.value.has_audio = info.has_audio;
+            entry.value.mime_type = info.mime_type;
+            entry.value.audio_mime_type = info.audio_mime_type;
+        }
+    }
+    Some(track)
+}
+
 impl YouTubeState {
     fn new() -> Result<Self, String> {
         let streams = Arc::new(Mutex::new(HashMap::new()));
-        let proxy_port = start_youtube_proxy(Arc::clone(&streams))?;
+        let app = Arc::new(Mutex::new(None));
+        let proxy_port = start_youtube_proxy(Arc::clone(&streams), Arc::clone(&app))?;
         Ok(Self {
             streams,
             proxy_port,
+            app,
         })
     }
 }
@@ -1235,6 +1562,123 @@ async fn youtube_search(
     .map_err(|error| format!("Fallo la tarea de busqueda en YouTube: {}", error))?
 }
 
+/// Resuelve las pistas directas de googlevideo para un video de YouTube
+/// mediante yt-dlp. Compartida por el comando `youtube_resolve_stream` y por
+/// el proxy loopback (que la usa para refrescar URLs caducadas ante un 403).
+fn resolve_youtube_tracks(
+    app: &tauri::AppHandle,
+    video_id: &str,
+) -> Result<(YouTubeStreamInfo, YouTubeRemoteTrack, Option<YouTubeRemoteTrack>), String> {
+    let args = vec![
+        String::from("--no-warnings"),
+        String::from("--no-playlist"),
+        String::from("--socket-timeout"),
+        String::from("8"),
+        String::from("--retries"),
+        String::from("1"),
+        String::from("--extractor-retries"),
+        String::from("1"),
+        String::from("-S"),
+        // Orden expl├¡cito: m├íxima resoluci├│n hasta 1080p primero, luego fps,
+        // HDR, c├│dec de video/audio y bitrate. Sin esto yt-dlp podr├¡a devolver
+        // 720p/480p aunque exista 1080p para el mismo video.
+        String::from("res:1080,fps,hdr:12,vcodec:avc:m4a,acodec:m4a,br,asr,proto"),
+        String::from("-f"),
+        // The loopback proxy lets the WebView play YouTube's adaptive video
+        // and audio tracks without contacting googlevideo.com.
+        // Techo 1080p (el hero no necesita 4K y pesa): dentro de ese techo
+        // siempre la m├íxima resoluci├│n disponible, con fallback a muxed.
+        String::from("bestvideo[height<=1080][protocol^=http]+bestaudio[protocol^=http]/bestvideo[height<=1080]+bestaudio/best[protocol^=http][height<=1080][vcodec!=none][acodec!=none]/best[height<=1080]"),
+        String::from("--print"),
+        String::from("%(.{id,title,duration,url,ext,width,height,format_id,vcodec,acodec,requested_formats})j"),
+        format!("https://www.youtube.com/watch?v={}", video_id),
+    ];
+    let stdout = run_ytdlp(app, &args)?;
+    let value = stdout
+        .lines()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .ok_or_else(|| String::from("yt-dlp no devolvio un stream reproducible."))?;
+    let returned_id = value.get("id").and_then(|entry| entry.as_str()).unwrap_or("");
+    if returned_id != video_id {
+        return Err(String::from("yt-dlp resolvio un video diferente al solicitado."));
+    }
+    let requested_formats = value
+        .get("requested_formats")
+        .and_then(|entry| entry.as_array());
+    let video_format = requested_formats
+        .and_then(|formats| {
+            formats.iter().find(|format| {
+                format.get("vcodec").and_then(|entry| entry.as_str()) != Some("none")
+            })
+        })
+        .unwrap_or(&value);
+    let audio_format = requested_formats.and_then(|formats| {
+        formats.iter().find(|format| {
+            format.get("vcodec").and_then(|entry| entry.as_str()) == Some("none")
+                && format.get("acodec").and_then(|entry| entry.as_str()) != Some("none")
+        })
+    });
+    let track_from_value =
+        |format: &serde_json::Value, kind: &str| -> Result<YouTubeRemoteTrack, String> {
+            let url = format
+                .get("url")
+                .and_then(|entry| entry.as_str())
+                .filter(|entry| entry.starts_with("https://") || entry.starts_with("http://"))
+                .ok_or_else(|| format!("yt-dlp no devolvio la pista de {kind}."))?;
+            let extension = format
+                .get("ext")
+                .and_then(|entry| entry.as_str())
+                .unwrap_or("mp4");
+            let media_kind = if kind == "audio" { "audio" } else { "video" };
+            Ok(YouTubeRemoteTrack {
+                url: url.to_string(),
+                mime_type: format!("{media_kind}/{extension}"),
+            })
+        };
+    let video = track_from_value(video_format, "video")?;
+    let audio = audio_format
+        .map(|format| track_from_value(format, "audio"))
+        .transpose()?;
+    let has_muxed_audio = video_format
+        .get("acodec")
+        .and_then(|entry| entry.as_str())
+        .is_some_and(|codec| codec != "none");
+    // Los metadatos deben salir del track de video elegido (requested_formats),
+    // no del nivel superior: con bestvideo+bestaudio el nivel superior puede
+    // no reflejar la resoluci├│n real (p. ej. reportar 720p cuando se eligi├│
+    // 1080p). Sin esto el frontend no puede verificar la calidad 1080p.
+    let reported_width = video_format
+        .get("width")
+        .and_then(|entry| entry.as_u64())
+        .or_else(|| value.get("width").and_then(|entry| entry.as_u64()));
+    let reported_height = video_format
+        .get("height")
+        .and_then(|entry| entry.as_u64())
+        .or_else(|| value.get("height").and_then(|entry| entry.as_u64()));
+    let reported_format_id = video_format
+        .get("format_id")
+        .and_then(|entry| entry.as_str())
+        .or_else(|| value.get("format_id").and_then(|entry| entry.as_str()))
+        .map(str::to_string);
+    Ok((YouTubeStreamInfo {
+        video_id: video_id.to_string(),
+        url: String::new(),
+        audio_url: None,
+        title: value
+            .get("title")
+            .and_then(|entry| entry.as_str())
+            .unwrap_or("")
+            .to_string(),
+        duration: value.get("duration").and_then(|entry| entry.as_f64()),
+        width: reported_width,
+        height: reported_height,
+        format_id: reported_format_id,
+        has_audio: audio.is_some() || has_muxed_audio,
+        mime_type: video.mime_type.clone(),
+        audio_mime_type: audio.as_ref().map(|track| track.mime_type.clone()),
+    }, video, audio))
+}
+
 #[tauri::command]
 async fn youtube_resolve_stream(
     app: tauri::AppHandle,
@@ -1255,93 +1699,7 @@ async fn youtube_resolve_stream(
     let resolver_app = app.clone();
     let resolver_id = video_id.clone();
     let (mut stream, video, audio) = tauri::async_runtime::spawn_blocking(move || {
-        let args = vec![
-            String::from("--no-warnings"),
-            String::from("--no-playlist"),
-            String::from("--socket-timeout"),
-            String::from("8"),
-            String::from("--retries"),
-            String::from("1"),
-            String::from("--extractor-retries"),
-            String::from("1"),
-            String::from("-f"),
-            // The loopback proxy lets the WebView play YouTube's highest-quality
-            // adaptive video and audio tracks without contacting googlevideo.com.
-            String::from("bestvideo[protocol^=http]+bestaudio[protocol^=http]/best[protocol^=http][vcodec!=none][acodec!=none]"),
-            String::from("--print"),
-            String::from("%(.{id,title,duration,url,ext,width,height,format_id,vcodec,acodec,requested_formats})j"),
-            format!("https://www.youtube.com/watch?v={}", resolver_id),
-        ];
-        let stdout = run_ytdlp(&resolver_app, &args)?;
-        let value = stdout
-            .lines()
-            .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .ok_or_else(|| String::from("yt-dlp no devolvio un stream reproducible."))?;
-        let returned_id = value.get("id").and_then(|entry| entry.as_str()).unwrap_or("");
-        if returned_id != resolver_id {
-            return Err(String::from("yt-dlp resolvio un video diferente al solicitado."));
-        }
-        let requested_formats = value
-            .get("requested_formats")
-            .and_then(|entry| entry.as_array());
-        let video_format = requested_formats
-            .and_then(|formats| {
-                formats.iter().find(|format| {
-                    format.get("vcodec").and_then(|entry| entry.as_str()) != Some("none")
-                })
-            })
-            .unwrap_or(&value);
-        let audio_format = requested_formats.and_then(|formats| {
-            formats.iter().find(|format| {
-                format.get("vcodec").and_then(|entry| entry.as_str()) == Some("none")
-                    && format.get("acodec").and_then(|entry| entry.as_str()) != Some("none")
-            })
-        });
-        let track_from_value =
-            |format: &serde_json::Value, kind: &str| -> Result<YouTubeRemoteTrack, String> {
-                let url = format
-                    .get("url")
-                    .and_then(|entry| entry.as_str())
-                    .filter(|entry| entry.starts_with("https://") || entry.starts_with("http://"))
-                    .ok_or_else(|| format!("yt-dlp no devolvio la pista de {kind}."))?;
-                let extension = format
-                    .get("ext")
-                    .and_then(|entry| entry.as_str())
-                    .unwrap_or("mp4");
-                let media_kind = if kind == "audio" { "audio" } else { "video" };
-                Ok(YouTubeRemoteTrack {
-                    url: url.to_string(),
-                    mime_type: format!("{media_kind}/{extension}"),
-                })
-            };
-        let video = track_from_value(video_format, "video")?;
-        let audio = audio_format
-            .map(|format| track_from_value(format, "audio"))
-            .transpose()?;
-        let has_muxed_audio = video_format
-            .get("acodec")
-            .and_then(|entry| entry.as_str())
-            .is_some_and(|codec| codec != "none");
-        Ok((YouTubeStreamInfo {
-            video_id: resolver_id,
-            url: String::new(),
-            audio_url: None,
-            title: value
-                .get("title")
-                .and_then(|entry| entry.as_str())
-                .unwrap_or("")
-                .to_string(),
-            duration: value.get("duration").and_then(|entry| entry.as_f64()),
-            width: value.get("width").and_then(|entry| entry.as_u64()),
-            height: value.get("height").and_then(|entry| entry.as_u64()),
-            format_id: value
-                .get("format_id")
-                .and_then(|entry| entry.as_str())
-                .map(str::to_string),
-            has_audio: audio.is_some() || has_muxed_audio,
-            mime_type: video.mime_type.clone(),
-            audio_mime_type: audio.as_ref().map(|track| track.mime_type.clone()),
-        }, video, audio))
+        resolve_youtube_tracks(&resolver_app, &resolver_id)
     })
     .await
     .map_err(|error| format!("Fallo la tarea de resolucion de YouTube: {}", error))??;
@@ -1682,6 +2040,10 @@ fn empty_mpv_status_snapshot() -> serde_json::Value {
         "fileLoaded": false,
         "pausedForCache": false,
         "cacheBufferingState": 0,
+        "cacheSpeedBytesPerSecond": 0,
+        "demuxerCacheIdle": true,
+        "eofReached": false,
+        "demuxerCacheDuration": 0,
         "chapter": serde_json::Value::Null,
         "chapterList": [],
         "tracks": [],
@@ -1746,6 +2108,10 @@ fn update_cached_mpv_status(app: &tauri::AppHandle, event_id: c_int, payload: &s
         "file-loaded" => "fileLoaded",
         "paused-for-cache" => "pausedForCache",
         "cache-buffering-state" => "cacheBufferingState",
+        "cache-speed" => "cacheSpeedBytesPerSecond",
+        "demuxer-cache-idle" => "demuxerCacheIdle",
+        "eof-reached" => "eofReached",
+        "demuxer-cache-duration" => "demuxerCacheDuration",
         "chapter" => "chapter",
         "chapter-list" => "chapterList",
         "track-list" => "tracks",
@@ -1770,6 +2136,10 @@ fn observe_mpv_properties(client: &Arc<MpvClient>) {
         "file-loaded",
         "paused-for-cache",
         "cache-buffering-state",
+        "cache-speed",
+        "demuxer-cache-idle",
+        "eof-reached",
+        "demuxer-cache-duration",
         "chapter",
         "chapter-list",
         "track-list",
@@ -1930,7 +2300,7 @@ fn emit_mpv_startup_status(app: tauri::AppHandle, window_label: String) {
     });
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn p2p_log(event: &str, payload: serde_json::Value) {
     let path = p2p_log_path();
     let line = serde_json::json!({
@@ -2012,7 +2382,7 @@ struct P2pPlaybackInfo {
     cleanup_lock: Arc<Mutex<()>>,
 }
 
-#[cfg(not(target_os = "android"))]
+
 #[derive(Clone)]
 struct CachedP2pTorrent {
     server_url: String,
@@ -2025,7 +2395,7 @@ struct CachedP2pTorrent {
     cached_bytes: u64,
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn delete_cached_p2p_torrent(entry: &CachedP2pTorrent, reason: &str) {
     let delete_url = format!("{}/torrents/{}/delete", entry.server_url, entry.torrent_id);
     p2p_log(
@@ -2102,7 +2472,7 @@ fn delete_cached_p2p_torrent(entry: &CachedP2pTorrent, reason: &str) {
     );
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn cleanup_p2p_torrent(info: P2pPlaybackInfo) {
     let _cleanup = match info.cleanup_lock.lock() {
         Ok(lock) => lock,
@@ -2243,7 +2613,7 @@ fn cleanup_p2p_torrent(info: P2pPlaybackInfo) {
     });
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn discard_p2p_torrent(info: P2pPlaybackInfo, reason: &str) {
     let _cleanup = match info.cleanup_lock.lock() {
         Ok(lock) => lock,
@@ -2269,7 +2639,7 @@ fn discard_p2p_torrent(info: P2pPlaybackInfo, reason: &str) {
     delete_cached_p2p_torrent(&entry, reason);
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn schedule_p2p_cleanup(info: Option<P2pPlaybackInfo>) {
     if let Some(info) = info {
         thread::spawn(move || {
@@ -2279,7 +2649,7 @@ fn schedule_p2p_cleanup(info: Option<P2pPlaybackInfo>) {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn take_pending_p2p(state: &P2pState) -> Option<P2pPlaybackInfo> {
     match state.pending.lock() {
         Ok(mut pending) => pending.take(),
@@ -2287,7 +2657,7 @@ fn take_pending_p2p(state: &P2pState) -> Option<P2pPlaybackInfo> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn set_pending_p2p(state: &P2pState, info: P2pPlaybackInfo) {
     match state.pending.lock() {
         Ok(mut pending) => *pending = Some(info),
@@ -2295,7 +2665,7 @@ fn set_pending_p2p(state: &P2pState, info: P2pPlaybackInfo) {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn clear_pending_p2p(state: &P2pState, info: &P2pPlaybackInfo) {
     let mut pending = match state.pending.lock() {
         Ok(pending) => pending,
@@ -2310,7 +2680,7 @@ fn clear_pending_p2p(state: &P2pState, info: &P2pPlaybackInfo) {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn resume_cached_p2p_torrent(
     state: &P2pState,
     client: &Client,
@@ -2410,17 +2780,6 @@ fn resume_cached_p2p_torrent(
     Ok(Some(cached))
 }
 
-#[cfg(target_os = "android")]
-fn take_pending_p2p(_state: &P2pState) -> Option<P2pPlaybackInfo> {
-    None
-}
-
-#[cfg(target_os = "android")]
-fn cleanup_p2p_torrent(_info: P2pPlaybackInfo) {}
-
-#[cfg(target_os = "android")]
-fn schedule_p2p_cleanup(_info: Option<P2pPlaybackInfo>) {}
-
 struct PendingP2pCleanup(Option<P2pPlaybackInfo>);
 
 impl PendingP2pCleanup {
@@ -2467,7 +2826,7 @@ fn is_p2p_target(target: &str) -> bool {
     canonical_btih(value).is_some()
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn normalize_magnet_target(target: &str) -> Result<String, String> {
     let value = target.trim();
     let magnet = if value.to_ascii_lowercase().starts_with("magnet:") {
@@ -2600,7 +2959,7 @@ fn playback_target_log_summary(target: &str) -> String {
     format!("<opaque-target len={}>", trimmed.len())
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn validate_p2p_server(base_url: &str) -> bool {
     let ok = Client::builder()
         .timeout(Duration::from_secs(2))
@@ -2616,8 +2975,27 @@ fn validate_p2p_server(base_url: &str) -> bool {
     ok
 }
 
-#[cfg(not(target_os = "android"))]
+
+fn validate_enginefs_server(enginefs_base_url: &str) -> bool {
+    let url = format!("{}/heartbeat", enginefs_base_url);
+    let ok = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()
+        .and_then(|client| client.get(url).send().ok())
+        .map(|response| response.status().is_success())
+        .unwrap_or(false);
+    p2p_log(
+        "enginefs_validate",
+        serde_json::json!({ "baseUrl": enginefs_base_url, "ok": ok }),
+    );
+    ok
+}
+
+
 fn stop_p2p_server(server: P2pServer, reason: &str) {
+    // Orden de apagado: primero el adaptador EngineFS, despu├⌐s la API nativa.
+    p2p::enginefs::stop_enginefs_server(server.enginefs);
     p2p_log(
         "server_stop_requested",
         serde_json::json!({ "baseUrl": server.base_url, "reason": reason }),
@@ -2630,7 +3008,7 @@ fn stop_p2p_server(server: P2pServer, reason: &str) {
     );
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn invalidate_p2p_server(state: &P2pState, expected_base_url: &str, reason: &str) {
     let server = {
         let mut current = match state.server.lock() {
@@ -2650,6 +3028,9 @@ fn invalidate_p2p_server(state: &P2pState, expected_base_url: &str, reason: &str
     if let Some(server) = server {
         stop_p2p_server(server, reason);
     }
+    // Las URLs EngineFS antiguas no sobreviven a un reinicio: el registry se
+    // limpia para que un hash nunca resuelva al torrent de otra sesi├│n.
+    state.enginefs_registry.clear();
     let _cache_operation = match state.cache_ops.lock() {
         Ok(lock) => lock,
         Err(poisoned) => poisoned.into_inner(),
@@ -2680,7 +3061,7 @@ fn invalidate_p2p_server(state: &P2pState, expected_base_url: &str, reason: &str
     }
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn dir_total_size(path: &Path) -> u64 {
     let Ok(meta) = path.symlink_metadata() else { return 0 };
     if meta.is_file() {
@@ -2694,7 +3075,7 @@ fn dir_total_size(path: &Path) -> u64 {
     total
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration, max_bytes: u64) -> Result<(), String> {
     if cache_root.file_name().and_then(|value| value.to_str()) != Some("p2p") {
         return Err(String::from("Se rechazo limpiar una ruta P2P inesperada."));
@@ -2769,7 +3150,7 @@ fn sweep_stale_p2p_cache(cache_root: &Path, max_age: Duration, max_bytes: u64) -
     Ok(())
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String, String> {
     let stale_server = {
         let mut current = state
@@ -2777,7 +3158,9 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
             .lock()
             .map_err(|_| String::from("No se pudo acceder al motor P2P."))?;
         if let Some(server) = current.as_ref() {
-            if validate_p2p_server(&server.base_url) {
+            if validate_p2p_server(&server.base_url)
+                && validate_enginefs_server(&server.enginefs.base_url)
+            {
                 return Ok(server.base_url.clone());
             }
         }
@@ -2981,6 +3364,21 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         .map_err(|_| String::from("El servidor P2P no inicio a tiempo."))??;
     p2p_log("server_ready", serde_json::json!({ "baseUrl": base_url }));
 
+    // El adaptador EngineFS traduce el contrato Stremio hacia la API nativa.
+    // Si no arranca, se detiene tambi├⌐n la API nativa para no dejar capas
+    // a medias.
+    let enginefs = match p2p::enginefs::start_enginefs_server(
+        base_url.clone(),
+        state.enginefs_registry.clone(),
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            shutdown.store(true, Ordering::Release);
+            let _ = stopped_rx.recv_timeout(Duration::from_secs(3));
+            return Err(error);
+        }
+    };
+
     let mut server = state
         .server
         .lock()
@@ -3001,11 +3399,12 @@ fn ensure_p2p_server(app: &tauri::AppHandle, state: &P2pState) -> Result<String,
         base_url: base_url.clone(),
         shutdown,
         stopped: stopped_rx,
+        enginefs,
     });
     Ok(base_url)
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn p2p_episode_file_score(name: &str, episode: usize) -> i32 {
     let escaped_episode = format!("0*{}", episode);
     let patterns = [
@@ -3045,7 +3444,7 @@ fn p2p_episode_file_score(name: &str, episode: usize) -> i32 {
     score
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn choose_p2p_file(
     details: &serde_json::Value,
     requested: Option<usize>,
@@ -3118,7 +3517,7 @@ fn choose_p2p_file(
     Ok(selected)
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn p2p_file_length(details: &serde_json::Value, file_idx: usize) -> Option<u64> {
     details
         .get("files")
@@ -3129,7 +3528,7 @@ fn p2p_file_length(details: &serde_json::Value, file_idx: usize) -> Option<u64> 
         .filter(|length| *length > 0)
 }
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(test)]
 mod p2p_file_tests {
     use super::{
         canonical_btih, choose_p2p_file, magnet_cache_key, p2p_episode_file_score,
@@ -3195,7 +3594,7 @@ mod p2p_file_tests {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+
 #[derive(Debug)]
 struct P2pPostError {
     message: String,
@@ -3203,7 +3602,7 @@ struct P2pPostError {
     restart_server: bool,
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn post_p2p_magnet(
     client: &Client,
     url: &str,
@@ -3275,7 +3674,7 @@ fn post_p2p_magnet(
     })
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn post_p2p_magnet_with_retry(
     app: &tauri::AppHandle,
     state: &P2pState,
@@ -3311,7 +3710,7 @@ fn post_p2p_magnet_with_retry(
     Err(String::from("No se pudo preparar el torrent P2P."))
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn finalize_p2p_playback_target(
     state: &P2pState,
     base_url: String,
@@ -3323,23 +3722,56 @@ fn finalize_p2p_playback_target(
     cache_resumed: bool,
     reused_inspected_peers: usize,
 ) -> Result<ResolvedPlaybackTarget, String> {
-    let stream_url = format!(
-        "{}/torrents/{}/stream/{}",
-        base_url, torrent_id, selected_file_idx
-    );
     let info_hash = details
         .get("info_hash")
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
-    let hash_stream_url = if info_hash.is_empty() {
+    let normalized_hash = if info_hash.is_empty() {
         None
     } else {
-        Some(format!(
-            "{}/torrents/{}/stream/{}",
-            base_url, info_hash, selected_file_idx
-        ))
+        p2p::enginefs::normalize_info_hash(&info_hash)
     };
+    let enginefs_base_url = state
+        .server
+        .lock()
+        .ok()
+        .and_then(|server| server.as_ref().map(|server| server.enginefs.base_url.clone()));
+    // URL p├║blica EngineFS para MPV (primaria); la nativa queda como
+    // fallback y como URL de control/cleanup en `P2pPlaybackInfo.server_url`.
+    let (stream_url, hash_stream_url) =
+        match (enginefs_base_url, normalized_hash) {
+            (Some(enginefs_base), Some(hash)) => {
+                state.enginefs_registry.register_or_get(
+                    &hash,
+                    p2p::enginefs::EnginefsEntry {
+                        native_torrent_id: torrent_id.clone(),
+                        details: details.clone(),
+                        selected_file: selected_file_idx,
+                        created_at: Instant::now(),
+                        last_access: Instant::now(),
+                    },
+                );
+                (
+                    format!("{}/{}/{}", enginefs_base, hash, selected_file_idx),
+                    Some(format!(
+                        "{}/torrents/{}/stream/{}",
+                        base_url, torrent_id, selected_file_idx
+                    )),
+                )
+            }
+            _ => (
+                format!("{}/torrents/{}/stream/{}", base_url, torrent_id, selected_file_idx),
+                if info_hash.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "{}/torrents/{}/stream/{}",
+                        base_url, info_hash, selected_file_idx
+                    ))
+                },
+            ),
+        };
     let expected_file_size = p2p_file_length(&details, selected_file_idx);
     let p2p_info = P2pPlaybackInfo {
         server_url: base_url.clone(),
@@ -3394,7 +3826,7 @@ fn finalize_p2p_playback_target(
     })
 }
 
-#[cfg(not(target_os = "android"))]
+
 fn resolve_p2p_playback_target(
     app: &tauri::AppHandle,
     state: &P2pState,
@@ -3551,18 +3983,6 @@ fn resolve_p2p_playback_target(
     .map(Some)
 }
 
-#[cfg(target_os = "android")]
-fn resolve_p2p_playback_target(
-    _app: &tauri::AppHandle,
-    _state: &P2pState,
-    _target: &str,
-    _file_idx: Option<usize>,
-    _episode: Option<usize>,
-) -> Result<Option<ResolvedPlaybackTarget>, String> {
-    Ok(None)
-}
-
-#[cfg(not(target_os = "android"))]
 fn wait_until_p2p_stream_ready(
     id_stream_url: &str,
     hash_stream_url: Option<&str>,
@@ -3802,7 +4222,7 @@ fn wait_until_p2p_stream_ready(
     ))
 }
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(test)]
 mod p2p_readiness_tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
@@ -4085,6 +4505,7 @@ const ALLOWED_MPV_PROPERTIES: &[&str] = &[
     "hwdec",
     "playlist-pos",
     "loop",
+    "loop-file",
     "video-align-x",
     "video-align-y",
     "video-pan-x",
@@ -4307,6 +4728,56 @@ fn video_enhancement_configuration(
     }
 }
 
+#[cfg(test)]
+mod video_enhancement_tests {
+    use super::{anime4k_shader_names, video_enhancement_configuration};
+
+    const PROFILES: &[&str] = &[
+        "off",
+        "fast:mode-a",
+        "fast:mode-b",
+        "fast:mode-c",
+        "fast:mode-aa",
+        "fast:mode-bb",
+        "fast:mode-ca",
+        "hq:mode-a",
+        "hq:mode-b",
+        "hq:mode-c",
+        "hq:mode-aa",
+        "hq:mode-bb",
+        "hq:mode-ca",
+        "fast:cnn-2x-medium",
+        "hq:cnn-2x-very-large",
+        "fast:denoise-cnn-2x-very-large",
+        "hq:cnn-2x-ultra-large",
+        "fsr:quality",
+        "vsr:nvidia-2x",
+        "scaler:ewa-lanczossharp",
+        "scaler:spline36",
+        "deband:balanced",
+    ];
+
+    #[test]
+    fn every_menu_profile_has_a_native_configuration() {
+        for profile in PROFILES {
+            let configuration = video_enhancement_configuration(profile)
+                .unwrap_or_else(|| panic!("missing native configuration for {profile}"));
+            assert!(!configuration.kind.is_empty());
+            assert!(!configuration.scale.is_empty());
+            if configuration.kind == "anime4k" || configuration.kind == "fsr" {
+                assert!(!configuration.shader_names.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_profiles_are_rejected() {
+        assert!(video_enhancement_configuration("anime4k:mode-a").is_none());
+        assert!(video_enhancement_configuration("fsr:ultra").is_none());
+        assert!(anime4k_shader_names("unknown").is_none());
+    }
+}
+
 fn normalize_command(command: Vec<serde_json::Value>) -> Result<serde_json::Value, String> {
     if command.is_empty() {
         return Err(String::from("Comando MPV invalido."));
@@ -4317,6 +4788,198 @@ fn normalize_command(command: Vec<serde_json::Value>) -> Result<serde_json::Valu
         }
     }
     Ok(serde_json::Value::Array(command))
+}
+
+/// Cadena de redireccion recorrida antes de abrir un destino de reproduccion.
+struct PlaybackTransportChain {
+    /// URL donde acaba realmente el medio.
+    final_url: String,
+    /// Host del primer salto que bajo a HTTP plano, si lo hubo.
+    insecure_host: Option<String>,
+    /// Saltos recorridos; solo se usa para el log.
+    hops: usize,
+}
+
+/// Veredicto de transporte para un destino de reproduccion.
+enum PlaybackTransportVerdict {
+    /// Se pudo verificar y toda la cadena es HTTPS.
+    Secure {
+        hops: usize,
+        /// Host que sirve el medio tras la ultima redireccion, si se resolvio.
+        final_host: Option<String>,
+    },
+    /// Hay un salto en HTTP plano: el video travels sin cifrar.
+    Insecure { host: String },
+    /// La comprobacion no pudo completarse. No bloquea: una red inestable no
+    /// debe dejar de reproducir, y solo un `http` observado es un veredicto.
+    Unverified { reason: String },
+}
+
+fn send_playback_probe(
+    client: &reqwest::Client,
+    url: &str,
+    headers: Option<&HashMap<String, String>>,
+    ranged: bool,
+) -> reqwest::RequestBuilder {
+    let mut request = if ranged {
+        client.get(url).header(reqwest::header::RANGE, "bytes=0-0")
+    } else {
+        client.head(url)
+    };
+    if let Some(map) = headers {
+        for (key, value) in map {
+            let lower = key.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "range" | "host" | "connection" | "transfer-encoding" | "content-length"
+            ) {
+                continue;
+            }
+            request = request.header(key, value);
+        }
+    }
+    request.header(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    )
+}
+
+/// Lee solo las cabeceras del destino. HEAD primero porque no consume cuerpo;
+/// si el servidor lo rechaza (405/501/403, habitual en CDN firmados) se repite
+/// con un GET de un byte, que es lo que esos CDN necesitan para emitir el redirect.
+async fn probe_playback_url(
+    client: &reqwest::Client,
+    url: &str,
+    headers: Option<&HashMap<String, String>>,
+) -> Result<reqwest::Response, String> {
+    let head = send_playback_probe(client, url, headers, false)
+        .send()
+        .await
+        .map_err(|error| format!("No se pudo verificar la fuente: {}", error))?;
+    let status = head.status();
+    if status.is_redirection() || status.is_success() {
+        return Ok(head);
+    }
+    if matches!(status.as_u16(), 403 | 405 | 501) {
+        return send_playback_probe(client, url, headers, true)
+            .send()
+            .await
+            .map_err(|error| format!("No se pudo verificar la fuente: {}", error));
+    }
+    Ok(head)
+}
+
+/// Camina la cadena de redirecciones de `target` unicamente por cabeceras.
+///
+/// Un add-on puede publicar un target HTTPS que responde 302 hacia un host HTTP:
+/// el jugador seguiria ese redirect por dentro y el video viajaria sin cifrar,
+/// sin que ninguna comprobacion previa sobre la URL declarada lo detecte. Aqui
+/// se ve donde acaba realmente el medio antes de arrancar.
+///
+/// Devuelve `Err` solo si la propia comprobacion falla (DNS, TLS, timeout). Un
+/// salto `http` observado no es un error de la comprobacion: se reporta en
+/// `insecure_host` para que el llamador lo trate como veredicto.
+async fn inspect_playback_transport(
+    target: &str,
+    headers: Option<&HashMap<String, String>>,
+) -> Result<PlaybackTransportChain, String> {
+    // `reqwest::Client` asincrono a proposito: el de blocking no se puede usar
+    // dentro de un comando async sin bloquear el runtime de Tauri.
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(PLAYBACK_TRANSPORT_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(PLAYBACK_TRANSPORT_TOTAL_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("No se pudo crear el cliente HTTP: {}", error))?;
+
+    let mut current = target.trim().to_string();
+    let mut hops = 0usize;
+
+    loop {
+        let parsed = reqwest::Url::parse(&current)
+            .map_err(|error| format!("URL de reproduccion invalida: {}", error))?;
+
+        // magnet:, rtmp:, file: locales y demas no pasan por la red HTTP.
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Ok(PlaybackTransportChain {
+                final_url: current,
+                insecure_host: None,
+                hops,
+            });
+        }
+        if !is_public_http_url(&parsed) {
+            return Err(String::from(
+                "El destino de esta fuente apunta a una red privada.",
+            ));
+        }
+        // Se corta aqui a proposito: un host en HTTP plano no se contacta nunca,
+        // asi que no se le filtra la peticion ni se consume su token.
+        if parsed.scheme() == "http" {
+            return Ok(PlaybackTransportChain {
+                insecure_host: parsed.host_str().map(str::to_string),
+                final_url: current,
+                hops,
+            });
+        }
+
+        let response = probe_playback_url(&client, &current, headers).await?;
+        if !response.status().is_redirection() {
+            return Ok(PlaybackTransportChain {
+                final_url: current,
+                insecure_host: None,
+                hops,
+            });
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let Some(location) = location else {
+            return Ok(PlaybackTransportChain {
+                final_url: current,
+                insecure_host: None,
+                hops,
+            });
+        };
+        if hops >= PLAYBACK_TRANSPORT_MAX_REDIRECTS {
+            return Err(format!(
+                "La fuente encadena mas de {} redirecciones.",
+                PLAYBACK_TRANSPORT_MAX_REDIRECTS
+            ));
+        }
+        current = reqwest::Url::parse(&current)
+            .and_then(|base| base.join(&location))
+            .map_err(|_| String::from("La fuente devuelve una redireccion invalida."))?
+            .to_string();
+        hops += 1;
+    }
+}
+
+async fn verify_playback_transport(
+    target: &str,
+    headers: Option<&HashMap<String, String>>,
+) -> PlaybackTransportVerdict {
+    if !target.trim().to_ascii_lowercase().starts_with("http") {
+        return PlaybackTransportVerdict::Secure {
+            hops: 0,
+            final_host: None,
+        };
+    }
+    match inspect_playback_transport(target, headers).await {
+        Ok(chain) => match chain.insecure_host {
+            Some(host) => PlaybackTransportVerdict::Insecure { host },
+            None => PlaybackTransportVerdict::Secure {
+                hops: chain.hops,
+                final_host: reqwest::Url::parse(&chain.final_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_string)),
+            },
+        },
+        Err(reason) => PlaybackTransportVerdict::Unverified { reason },
+    }
 }
 
 #[tauri::command]
@@ -4331,6 +4994,7 @@ async fn open_mpv(
     start_time: Option<f64>,
     private_torrent: Option<bool>,
     audio_passthrough: Option<bool>,
+    live: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if target.trim().is_empty() {
         return Err(String::from("La fuente no tiene URL reproducible."));
@@ -4345,6 +5009,51 @@ async fn open_mpv(
             "Los torrents privados estan bloqueados hasta poder aislarlos en una sesion sin DHT.",
         ));
     }
+    // Un directo nunca se reanuda desde una posicion guardada: se abre pegado al
+    // borde. Un target no reproducible (magnet sin swarm, o URL de P2P) se trata
+    // como VOD aunque el frontend lo marque como live.
+    let is_live = live.unwrap_or(false) && !is_p2p_target(&target) && !looks_like_ytdlp_url(&target);
+
+    // Un target HTTPS puede redirigir a un host HTTP. El player seguira ese
+    // redirect por dentro, asi que el unico punto donde se puede cortar es aqui:
+    // antes de arrancar mpv y con la cadena ya resuelta.
+    match verify_playback_transport(&target, headers.as_ref()).await {
+        PlaybackTransportVerdict::Secure { hops, final_host } => {
+            mpv_bridge_log(
+                "transport_verified",
+                serde_json::json!({
+                    "target": playback_target_log_summary(&target),
+                    "hops": hops,
+                    "finalHost": final_host,
+                }),
+            );
+        }
+        PlaybackTransportVerdict::Insecure { host } => {
+            mpv_bridge_log(
+                "transport_rejected",
+                serde_json::json!({
+                    "target": playback_target_log_summary(&target),
+                    "insecureHost": host,
+                }),
+            );
+            return Err(format!(
+                "Esta fuente entrega el video sin cifrar (redirige a HTTP en {}). \
+                 Por eso no se reproduce: el trafico podria ser manipulado en camino.",
+                if host.is_empty() { "un host sin cifrar" } else { &host }
+            ));
+        }
+        PlaybackTransportVerdict::Unverified { reason } => {
+            // Fall open: no se pudo comprobar, no es prueba de nada inseguro.
+            mpv_bridge_log(
+                "transport_unverified",
+                serde_json::json!({
+                    "target": playback_target_log_summary(&target),
+                    "reason": reason,
+                }),
+            );
+        }
+    }
+
     mpv_bridge_log(
         "open_requested",
         serde_json::json!({
@@ -4355,6 +5064,7 @@ async fn open_mpv(
             "episode": episode,
             "startTime": start_time,
             "audioPassthrough": audio_passthrough.unwrap_or(false),
+            "live": is_live,
         }),
     );
 
@@ -4459,6 +5169,25 @@ async fn open_mpv(
 
     let ytdl_enabled = looks_like_ytdlp_url(&target);
 
+    // En VOD el buffer se dimensiona para no perder saltos y mantener una ventana
+    // de retroceso amplia. En directo ese mismo buffer ES la latencia: 30s de
+    // cache-secs mas 20s de readahead se traducen en ~25-50s de retraso respecto
+    // al borde.
+    //
+    // Para live se deja un readahead corto, pero no mas corto de lo necesario:
+    // un segmento HLS de directo dura 4-6s, asi que con readahead de 1-2s mpv
+    // se queda esperando datos que no llegan a tiempo y la carga se agota antes
+    // de reproducir un solo frame (el sintoma era "no pudo cargar esta fuente"
+    // con la red perfectamente buena). 3s mantiene el retraso en 3-5s y deja
+    // respirar al demuxer. El buffer por delante sube a 64MiB para que un
+    // segmento lento no lo tumbe, y `demuxer-max-back-bytes` se agranda para
+    // conservar la ventana DVR sin penalizar el borde.
+    let (cache_secs, readahead_secs, max_bytes, max_back_bytes) = if is_live {
+        ("2", "3", "64MiB", "256MiB")
+    } else {
+        ("30", "20", "512MiB", "128MiB")
+    };
+
     for (name, value) in [
         ("terminal", "no"),
         ("force-window", "immediate"),
@@ -4470,8 +5199,8 @@ async fn open_mpv(
         ("cache-pause", "yes"),
         ("cache-pause-initial", "no"),
         ("cache-pause-wait", "1"),
-        ("cache-secs", "30"),
-        ("demuxer-readahead-secs", "20"),
+        ("cache-secs", cache_secs),
+        ("demuxer-readahead-secs", readahead_secs),
         ("stream-buffer-size", "1MiB"),
         ("network-timeout", "15"),
         ("hwdec", "auto-safe"),
@@ -4491,10 +5220,16 @@ async fn open_mpv(
         ("blend-subtitles", "video"),
         ("sub-font", "Inter"),
         ("cookies", "yes"),
-        ("demuxer-max-bytes", "512MiB"),
-        ("demuxer-max-back-bytes", "128MiB"),
+        ("demuxer-max-bytes", max_bytes),
+        ("demuxer-max-back-bytes", max_back_bytes),
     ] {
         mpv_set_option_string(&client, name, value)?;
+    }
+    if is_live {
+        // Reconexion agresiva: en un directo la caida de un segmento es la
+        // razon principal de un freeze, y el proveedor reinicia el manifiesto
+        // antes que el usuario llegue a notarlo.
+        mpv_set_option_string(&client, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=4")?;
     }
     if audio_passthrough.unwrap_or(false) {
         mpv_set_option_string(&client, "audio-spdif", "ac3,eac3,dts,dts-hd,truehd")?;
@@ -4506,8 +5241,15 @@ async fn open_mpv(
     mpv_set_option_string(&client, "log-file", &log_path.display().to_string())?;
 
     if let Some(headers) = headers {
+        // MPV ignora User-Agent/Referer cuando solo van en http-header-fields:
+        // usa las opciones dedicadas `user-agent` y `referrer`. Muchos hosts
+        // (Zilla, UPNShare, Voe) devuelven 403 con el UA por defecto de libmpv,
+        // lo que el frontend muestra como "MPV no pudo cargar esta fuente".
+        // Se extraen aqu├¡ (case-insensitive) y el resto sigue a header-fields.
         let mut header_fields: Vec<String> = Vec::new();
         let mut total_len = 0usize;
+        let mut dedicated_user_agent: Option<String> = None;
+        let mut dedicated_referrer: Option<String> = None;
         for (key, value) in headers {
             let normalized_key = key.trim();
             let normalized_value = value
@@ -4523,6 +5265,19 @@ async fn open_mpv(
             } else {
                 normalized_value
             };
+            if normalized_key.eq_ignore_ascii_case("user-agent") {
+                dedicated_user_agent = Some(safe_value);
+                continue;
+            }
+            if normalized_key.eq_ignore_ascii_case("referer")
+                || normalized_key.eq_ignore_ascii_case("referrer")
+            {
+                // `referrer` de MPV cubre playlist + segmentos HLS. No se
+                // duplica en header-fields: doble Referer hace que algunos
+                // hosts rechacen la petici├│n.
+                dedicated_referrer = Some(safe_value);
+                continue;
+            }
             let header_line = format!("{}: {}", normalized_key, safe_value);
             total_len += header_line.len();
             if total_len > MAX_HTTP_HEADERS_TOTAL_LEN {
@@ -4533,6 +5288,12 @@ async fn open_mpv(
                 break;
             }
             header_fields.push(header_line);
+        }
+        if let Some(user_agent) = dedicated_user_agent {
+            mpv_set_option_string(&client, "user-agent", &user_agent)?;
+        }
+        if let Some(referrer) = dedicated_referrer {
+            mpv_set_option_string(&client, "referrer", &referrer)?;
         }
         if !header_fields.is_empty() {
             mpv_set_option_string(&client, "http-header-fields", &header_fields.join(","))?;
@@ -4983,9 +5744,49 @@ async fn mpv_set_property(
     .map_err(|error| format!("Fallo la tarea de propiedad MPV: {}", error))?
 }
 
+/// Salta al borde del directo.
+///
+/// En un stream en vivo `time-pos` es la posicion del playhead, no un offset
+/// fijo: el "final" lo fija el demuxer segun lo que ha leido del manifiesto. Por
+/// eso no vale un `seek relative +N` (se queda en el final *congelado* del
+/// segmento en curso) y hay que calcular el borde desde el buffer y hacer un
+/// salto absoluto. Devuelve la posicion a la que ha saltado.
 #[tauri::command]
-async fn mpv_autocrop(app: tauri::AppHandle, enabled: bool) -> Result<serde_json::Value, String> {
+async fn mpv_seek_live(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let client = {
+        let state = app.state::<MpvState>();
+        current_mpv_client(&state)?
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let position = mpv_get_property_string(&client, "time-pos")
+            .ok()
+            .and_then(|value| value.trim().parse::<f64>().ok());
+        let buffered = mpv_get_property_string(&client, "demuxer-cache-duration")
+            .ok()
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .unwrap_or(0.0)
+            .max(0.0);
+
+        let Some(position) = position else {
+            return Err(String::from("MPV no tiene una posicion activa todavia."));
+        };
+        // Se salta al final del buffer con un margen: apuntar exactamente al
+        // ultimo byte deja al reproductor sin reserva y cualquier micro-corte se
+        // convierte en un freeze visible.
+        let margin = (buffered - 0.35).max(0.0);
+        let target = position + margin;
+        mpv_command_value_async(
+            &client,
+            serde_json::json!(["seek", target, "absolute+exact"]),
+        )?;
+        Ok(serde_json::json!({ "position": target }))
+    })
+    .await
+    .map_err(|error| format!("Fallo la tarea de salto al directo: {}", error))?
+}
+
+#[tauri::command]
+async fn mpv_autocrop(app: tauri::AppHandle, enabled: bool) -> Result<serde_json::Value, String> {    let client = {
         let state = app.state::<MpvState>();
         current_mpv_client(&state)?
     };
@@ -5065,6 +5866,82 @@ fn mpv_autocrop_for_client(
             "warning": warning
         }))
     }
+}
+
+fn sample_mpv_video_lightness_for_client(
+    client: Arc<MpvClient>,
+) -> Result<serde_json::Value, String> {
+    let screenshot_path = std::env::temp_dir().join(format!(
+        "aetherio-lightness-{}-{}.png",
+        std::process::id(),
+        chrono_like_timestamp()
+    ));
+    let _ = fs::remove_file(&screenshot_path);
+
+    let command = serde_json::json!([
+        "screenshot-to-file",
+        screenshot_path.display().to_string(),
+        "video"
+    ]);
+    mpv_command_value_async(&client, command)?;
+    if !wait_for_screenshot(&screenshot_path) {
+        let _ = fs::remove_file(&screenshot_path);
+        return Err(String::from("MPV no genero screenshot para muestrear luminancia."));
+    }
+
+    let result = (|| {
+        let image = image::ImageReader::open(&screenshot_path)
+            .map_err(|error| format!("No se pudo abrir screenshot de MPV: {}", error))?
+            .decode()
+            .map_err(|error| format!("No se pudo leer screenshot de MPV: {}", error))?
+            .to_rgb8();
+        let width = image.width();
+        let height = image.height();
+        let x_step = (width / 160).max(1) as usize;
+        let y_step = (height / 90).max(1) as usize;
+        let mut total = 0.0f32;
+        let mut bright = 0usize;
+        let mut count = 0usize;
+
+        for y in (0..height).step_by(y_step) {
+            for x in (0..width).step_by(x_step) {
+                let pixel = image.get_pixel(x, y);
+                let luminance = (0.2126 * f32::from(pixel[0])
+                    + 0.7152 * f32::from(pixel[1])
+                    + 0.0722 * f32::from(pixel[2]))
+                    / 255.0;
+                total += luminance;
+                if luminance >= 0.78 {
+                    bright += 1;
+                }
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return Err(String::from("Screenshot de MPV vacio."));
+        }
+
+        Ok(serde_json::json!({
+            "average": total / count as f32,
+            "brightPixelRatio": bright as f32 / count as f32
+        }))
+    })();
+    let _ = fs::remove_file(&screenshot_path);
+    result
+}
+
+#[tauri::command]
+async fn mpv_sample_video_lightness(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let client = {
+        let state = app.state::<MpvState>();
+        current_mpv_client(&state)?
+    };
+    tauri::async_runtime::spawn_blocking(move || sample_mpv_video_lightness_for_client(client))
+        .await
+        .map_err(|error| format!("Fallo la tarea de luminancia MPV: {}", error))?
 }
 
 fn chrono_like_timestamp() -> u128 {
@@ -5360,10 +6237,14 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(init_android_player_bridge())
         .setup(|app| {
-            #[cfg(target_os = "android")]
-            let _ = app;
+            // El proxy loopback de YouTube necesita el AppHandle para
+            // re-resolver con yt-dlp cuando googlevideo invalida una URL (403).
+            if let Some(state) = app.try_state::<YouTubeState>() {
+                if let Ok(mut slot) = state.app.lock() {
+                    *slot = Some(app.app_handle().clone());
+                }
+            }
 
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             {
@@ -5394,10 +6275,10 @@ pub fn run() {
             fetch_introdb_segments,
             fetch_mdblist_ratings,
             fetch_subtitle_text,
-            android_player_open,
-            android_player_stop,
-            android_player_command,
-            android_player_status,
+            embedded_subtitle_text,
+            cache_subtitle_text,
+            seekr_load_track,
+            seekr_fetch_sprite,
             toggle_window_maximize,
             toggle_window_fullscreen,
             take_pending_open_files,
@@ -5408,6 +6289,8 @@ pub fn run() {
             set_mpv_video_profile,
             mpv_set_property,
             mpv_autocrop,
+            mpv_seek_live,
+            mpv_sample_video_lightness,
             mpv_status,
             stop_mpv,
             trakt_oauth_configured,
@@ -5424,7 +6307,11 @@ pub fn run() {
             discord_rpc::discord_rpc_start,
             discord_rpc::discord_rpc_stop,
             discord_rpc::discord_rpc_set_activity,
-            discord_rpc::discord_rpc_clear
+            discord_rpc::discord_rpc_clear,
+            poster_server::start_posters_server,
+            poster_server::stop_posters_server,
+            poster_server::posters_server_status,
+            poster_cache::poster_cache_url
         ])
         .on_window_event(|window, event| {
             let state = window.state::<MpvState>();
@@ -5435,6 +6322,14 @@ pub fn run() {
                 schedule_p2p_cleanup(stop_current_mpv(&state));
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // El server de posters es hijo de la app: si Aetherio se cierra, el
+            // server se apaga. Sin esto queda un node.exe ocupando el puerto
+            // 3000 y ~200 MB de RAM sin que nadie lo pida.
+            if let tauri::RunEvent::Exit = event {
+                poster_server::stop();
+            }
+        });
 }

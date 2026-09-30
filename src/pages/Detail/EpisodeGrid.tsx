@@ -4,6 +4,7 @@ import { Play } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
 import { sanitizeLogoUrl } from "../../utils/artwork";
+import { buildDetailPath, buildPersonPath, buildPlayerPath } from "../../utils/bigPictureDetail";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { pickPreferredTmdbBackdrop } from "../../utils/tmdbArtwork";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
@@ -184,7 +185,7 @@ export default function DetailSectionPage() {
                     poster: item.poster,
                     background: item.background,
                   });
-                  navigate(`/detail/${item.type}/tmdb:${item.id}`);
+                  navigate(buildDetailPath(item.type, `tmdb:${item.id}`));
                 }}
               />
             ))}
@@ -219,7 +220,7 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
           logo: media.logo,
           background: media.background ?? media.poster,
         }));
-        navigate(`/player?${new URLSearchParams({ type, id, trailer: "1" }).toString()}`);
+        navigate(buildPlayerPath(new URLSearchParams({ type, id, trailer: "1" }).toString()));
       }}
       style={{ position: "relative", width: 399, height: 224, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer", textAlign: "left" }}
     >
@@ -236,7 +237,7 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
 function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: boolean }) {
   const navigate = useNavigate();
   const [imgFailed, setImgFailed] = useState(false);
-  const handleClick = disabled ? undefined : () => navigate(`/person/${person.id}`);
+  const handleClick = disabled ? undefined : () => navigate(buildPersonPath(person.id));
   const hasImage = Boolean(person.image) && !imgFailed;
   return (
     <button type="button" onClick={handleClick} disabled={disabled} style={{ width: 211, border: "none", background: "none", padding: 0, cursor: disabled ? "default" : "pointer", textAlign: "center" }}>
