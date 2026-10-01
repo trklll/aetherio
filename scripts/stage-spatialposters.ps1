@@ -123,7 +123,23 @@ function Get-NewestSourceWrite {
     return $newest
 }
 
-$standalone = Join-Path $Source ".next\standalone\server.js"
+# Next.js arma `.next/standalone` replicando la ruta del proyecto respecto de la
+# raiz del repo. Cuando el source esta en un subdirectorio (que es el caso del
+# vendor, en `vendor/spatialposters/`), el server no queda en
+# `.next/standalone/server.js` sino en `.next/standalone/vendor/spatialposters/
+# server.js`. Buscarlo solo en la raiz daba "no se encontro server.js" y hacia
+# fallar el build aunque el standalone estuviera perfecto.
+$standaloneRoot = Join-Path $Source ".next\standalone"
+$standalone = Join-Path $standaloneRoot "server.js"
+if (-not (Test-Path -LiteralPath $standalone)) {
+    $nested = Get-ChildItem -LiteralPath $standaloneRoot -Filter "server.js" -Recurse -File -ErrorAction SilentlyContinue |
+        Sort-Object { $_.FullName.Length } |
+        Select-Object -First 1
+    if ($nested) {
+        $standalone = $nested.FullName
+        Write-Host "    (server standalone encontrado en $($nested.FullName.Substring($standaloneRoot.Length + 1)))"
+    }
+}
 $staged = Join-Path $ServerDir "server.js"
 $needsBuild = $true
 $reason = "no hay build standalone"
