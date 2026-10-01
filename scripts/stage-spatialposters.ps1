@@ -43,14 +43,28 @@ function Write-Warn($msg) { Write-Host "    !   $msg" -ForegroundColor Yellow }
 function Write-Fail($msg) { Write-Host "    X   $msg" -ForegroundColor Red; exit 1 }
 
 if (-not $Source) {
-    # En CI no existe el repo hermano: el workflow clona SpatialPosters y pasa
-    # la ruta por SPATIALPOSTERS_SOURCE. En local manda ese valor si esta
-    # puesto y, si no, el hermano del repo.
+    # El CI puede sobreescribir la ruta. Antes era la unica forma de compilar en
+    # GitHub Actions; ahora puede faltarle y aun asi cae al vendor.
     $Source = $env:SPATIALPOSTERS_SOURCE
 }
 if (-not $Source) {
-    # Mismo default que spatialposters.ps1: hermano del repo de Aetherio.
-    $Source = Join-Path $RepoRoot "..\SpatialPosters"
+    # Por defecto se compila el SpatialPosters que viaja en `vendor/`, que es
+    # parte de este repo y por lo tanto esta siempre en la version que se
+    # publico. Antes el default era el clon hermano y el CI clonaba el repo
+    # upstream pineado a un commit: los cambios hechos en local no llegaban al
+    # instalador sin que nadie se enterara, que es como se perdio una release
+    # entera de badges.
+    $Source = Join-Path $RepoRoot "vendor\spatialposters"
+}
+if (-not (Test-Path -LiteralPath $Source)) {
+    # Fallback: un clon hermano, por si se esta trabajando sobre SpatialPosters
+    # fuera del vendor y se quiere probar sin stagear. En el CI esto no aplica,
+    # porque ahi `vendor/` viene en el checkout.
+    $Sibling = Join-Path $RepoRoot "..\SpatialPosters"
+    if (Test-Path -LiteralPath $Sibling) {
+        Write-Warn "No existe vendor/spatialposters; se usa el clon hermano $Sibling."
+        $Source = $Sibling
+    }
 }
 $Source = [System.IO.Path]::GetFullPath($Source)
 

@@ -27,8 +27,12 @@ SpatialPosters (AGPL-3.0) se mantiene en su propio programa.
 dentro de Aetherio como recursos: al abrir la app el server arranca solo, y al
 cerrarla se apaga. El usuario no instala Node, no clona nada, no configura URLs.
 
+El **source** de SpatialPosters tambien viaja en el repo, en `vendor/spatialposters/`.
+Los cambios de los badges (tamaño, idioma, el de dia de emision) se hacen ahi y se
+commitean junto a Aetherio, no en un clon aparte.
+
 El build de release lo hace solo: `beforeBuildCommand` en `tauri.conf.json` es
-`npm run build && npm run posters:stage`, así que no hay forma de empaquetar Aetherio
+`npm run build && npm run posters:stage`, asi que no hay forma de empaquetar Aetherio
 sin los posters. Para relanzarlo a mano:
 
 ```bash
@@ -42,25 +46,28 @@ src-tauri/resources/spatialposters/   -> build standalone de Next.js (57 MB)
 src-tauri/resources/bin/node.exe      -> runtime Node portable (89 MB)
 ```
 
-### Cómo lo consigue el CI
+### Como lo consigue el CI
 
-En local el script busca el source en el repo hermano (`../SpatialPosters`). En el
-runner de GitHub Actions ese directorio no existe, así que `posters:stage` haría
-`exit 1` y el build entero se caería. Por eso `release.yml`:
+El source de SpatialPosters vive **dentro de este repo**, en `vendor/spatialposters/`,
+traido con `git subtree` (historial preservado). El CI no clona nada: compila el
+vendor que ya viene en el checkout de Aetherio.
 
-1. hace checkout de [SpatialPosters](https://github.com/TheAceOfficials/SpatialPosters)
-   en `SpatialPosters/`, pineado a un commit con `SPATIALPOSTERS_REF`;
-2. le corre `npm ci`;
-3. llama a `stage-spatialposters.ps1`, que recibe la ruta por `SPATIALPOSTERS_SOURCE`.
+1. corre `npm ci` en `vendor/spatialposters`;
+2. llama a `stage-spatialposters.ps1`, que compila el build standalone y lo deja en
+   `src-tauri/resources/spatialposters/`;
+3. corre `scripts/verify-staged-spatialposters.mjs`, que **falla el build** si el
+   bundle resultante no contiene los cambios de este repo.
 
-Ese env está a nivel de job, no de step, a propósito: `tauri build` vuelve a correr
-`posters:stage` desde `beforeBuildCommand` y necesita la misma ruta. En esa segunda
-pasada el script detecta que los recursos ya están al día y no recompila (unos 3 s).
+Ese paso 3 existe por una release perdida: el CI clonaba SpatialPosters upstream
+pineado a un commit, y los cambios de badges se hacian en el clon local. El build
+era verde, el release salio, y el instalador traia "Binge-Worthy" en ingles y las
+etiquetas en su tamano original. Nada fallo porque no habia nada que fallara. La
+verificacion busca cadenas que solo existen si el codigo del vendor llego, asi que
+un build viejo o truncado ahora se detecta en el runner y no en la pantalla.
 
-**Para actualizar el server que viaja en la próxima release**, cambia
-`SPATIALPOSTERS_REF` en `.github/workflows/release.yml` por el commit que quieras.
-Se pinea a un commit y no a una rama a propósito: con una rama, un cambio upstream
-rompe el release de Aetherio sin que se note.
+**Para actualizar el server que viaja en la proxima release** se cambia el codigo en
+`vendor/spatialposters/` y se commitea junto a Aetherio. Para traer mejoras de
+SpatialPosters upstream: `git subtree pull`.
 
 `next build` **no necesita ninguna credencial**: la key de TMDB se lee por request
 (header `x-api-key` o `?api_key=`), que es lo que manda Aetherio. El server arranca

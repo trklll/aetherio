@@ -717,19 +717,21 @@ fn normalize_mdblist_media_provider(raw: &str) -> Option<&'static str> {
 fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            IsZoomed, ShowWindow, SW_MAXIMIZE, SW_RESTORE,
-        };
-
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as _;
-        unsafe {
-            if IsZoomed(hwnd) != 0 {
-                ShowWindow(hwnd, SW_RESTORE);
-            } else {
-                ShowWindow(hwnd, SW_MAXIMIZE);
-            }
-        }
-        Ok(())
+        // En Windows, `SW_MAXIMIZE` (maximizar) deja un hueco: la ventana no
+        // cubre la barra de tareas y queda una franja negra (o gris, segun el
+        // tema) al pie de la pantalla. Eso no es un problema de CSS, la barra de
+        // tareas no es parte de la pagina: es que la ventana es mas chica que el
+        // monitor.
+        //
+        // Por eso "maximizar" en Windows se hace con fullscreen real
+        // (`set_fullscreen`), que si cubre toda la pantalla. El criterio para
+        // volver es `is_fullscreen` y no `IsZoomed`, porque al entrar por
+        // `set_fullscreen` la ventana no queda "zoomed" segun la API clasica.
+        // Por lo demas el comportamiento es el mismo: alterna.
+        let is_fullscreen = window.is_fullscreen().map_err(|error| error.to_string())?;
+        window
+            .set_fullscreen(!is_fullscreen)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(not(target_os = "windows"))]

@@ -288,6 +288,18 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<PosterServerStatus, Strin
         command.env(key, value);
     }
 
+    // Sin este flag, cada vez que Aetherio abre su Ventana de consola salta
+    // delante de la app con el titulo "next-server". El usuario la ve, le
+    // molesta, y no hay forma de cerrarla sin matar el server de posters.
+    // CREATE_NO_WINDOW = 0x0800_0000: crea el proceso sin consola, igual que
+    // si se hubiera lanzado desde un proceso que ya era GUI.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
     let child = command.spawn().map_err(|e| format!("No se pudo lanzar Node: {e}"))?;
 
     let pid = child.id();
