@@ -1,0 +1,759 @@
+"use client"
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import { toast } from "sonner"
+import type { TMDBImage } from "@/lib/types"
+import { LANG_NAMES, groupBy } from "@/lib/utils"
+import { PosterBtn } from "@/components/PosterBtn"
+import { PosterTabs } from "@/components/PosterTabs"
+import { FitDebugPanel } from "@/components/FitDebugPanel"
+import { usePSelector } from "@/lib/context"
+import { useT } from "@/lib/contexts/TranslationContext"
+import { usePosterEditor } from "@/lib/contexts/PosterEditorContext"
+import { usePosterFit } from "@/lib/usePosterFit"
+import { RotateCcw, Check, Clock, Sparkles, ArrowUpDown, EyeOff, Eye, ChevronDown, Link, Plus, Trash2, Grid2X2, Grid3X3, RefreshCw } from "lucide-react"
+import { BladeSpinner } from "@/components/ui/BladeSpinner"
+
+interface Props {
+  posters: TMDBImage[]
+  posterActivePath: string | null
+  lang: string
+  selectPoster: (img: TMDBImage) => void
+  activeGroup?: string
+  onActiveGroupChange?: (key: string) => void
+  showTabs?: boolean
+}
+
+export function PosterOptions({ posters, posterActivePath, lang, selectPoster, activeGroup: controlledActiveGroup, onActiveGroupChange, showTabs = true }: Props) {
+  const selectedLogo = usePSelector((v) => v.selectedLogo)
+  const selected = usePSelector((v) => v.selected)
+  const mappingsMap = usePSelector((v) => v.mappingsMap)
+  const autoSaveExcludedPosters = usePSelector((v) => v.autoSaveExcludedPosters)
+  const refreshPosters = usePSelector((v) => v.refreshPosters)
+  const { t } = useT()
+  const ed = usePosterEditor()
+
+  const [isRefreshing, setIsRefreshing] = useState(false)
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return
+    setIsRefreshing(true)
+    try {
+      await refreshPosters()
+      toast.success(t("ui.postersRefreshed") || "Refreshed latest posters from TMDB!")
+    } catch {
+      toast.error(t("ui.refreshFailed") || "Failed to refresh posters")
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
+  const excludedSet = useMemo(() => new Set(ed.excludedPosters), [ed.excludedPosters])
+
+  const storageKey = useMemo(() => {
+    return selected?.id ? `spatial_custom_posters_${selected.id}` : "spatial_custom_posters_global"
+  }, [selected?.id])
+
+  const [customPosters, setCustomPosters] = useState<TMDBImage[]>([])
+  const [customUrlInput, setCustomUrlInput] = useState("")
+  const [showUrlInput, setShowUrlInput] = useState(false)
+  const [gridCols, setGridCols] = useState<2 | 3>(2)
+  const [isResolvingUrl, setIsResolvingUrl] = useState(false)
+
+  // Load saved custom posters from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(storageKey)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) setCustomPosters(parsed)
+      } else {
+        setCustomPosters([])
+      }
+    } catch {
+      setCustomPosters([])
+    }
+  }, [storageKey])
+
+  const saveCustomPosters = (list: TMDBImage[]) => {
+    setCustomPosters(list)
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(list))
+    } catch (err) {
+      console.error("Failed to save custom posters:", err)
+    }
+  }
+
+  const handleAddCustomUrl = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmed = customUrlInput.trim()
+    if (!trimmed || (!trimmed.startsWith("http://") && !trimmed.startsWith("https://"))) {
+      toast.error(t("ui.invalidUrl") || "Please enter a valid HTTP/HTTPS URL")
+      return
+    }
+
+    // Resolve the URL to a direct image URL (handles Pinterest, Reddit, Imgur, etc.)
+    let imageUrl = trimmed
+    const looksLikePage =
+      trimmed.includes("pin.it") ||
+      trimmed.includes("pinterest.com") ||
+      trimmed.includes("reddit.com") ||
+      trimmed.includes("redd.it") ||
+      trimmed.includes("imgur.com/a/") ||
+      trimmed.includes("imgur.com/gallery/") ||
+      (!trimmed.match(/\.(jpg|jpeg|png|webp|gif|avif)(\?|$)/i) &&
+        !trimmed.includes("i.pinimg.com") &&
+        !trimmed.includes("i.redd.it") &&
+        !trimmed.includes("i.imgur.com") &&
+        !trimmed.includes("share.redd.it"))
+
+    if (looksLikePage) {
+      setIsResolvingUrl(true)
+      try {
+        const res = await fetch(`/api/resolve-image?url=${encodeURIComponent(trimmed)}`)
+        const data = await res.json()
+        if (!res.ok || !data.imageUrl) {
+          toast.error(
+            data.error
+              ? `${t("ui.urlResolveFailed") || "Could not resolve URL"}: ${data.error}`
+              : (t("ui.urlResolveFailed") || "Could not find an image at that URL")
+          )
+          setIsResolvingUrl(false)
+          return
+        }
+        imageUrl = data.imageUrl
+      } catch {
+        toast.error(t("ui.urlResolveFailed") || "Could not resolve URL — check your connection")
+        setIsResolvingUrl(false)
+        return
+      } finally {
+        setIsResolvingUrl(false)
+      }
+    }
+
+    if (customPosters.some((p) => p.file_path === imageUrl)) {
+      toast.error(t("ui.urlExists") || "Poster URL already added")
+      return
+    }
+    const newPoster: TMDBImage = {
+      file_path: imageUrl,
+      width: 1000,
+      height: 1500,
+      iso_639_1: null,
+      vote_average: 0
+    }
+    const updated = [newPoster, ...customPosters]
+    saveCustomPosters(updated)
+    setCustomUrlInput("")
+    setShowUrlInput(false)
+    selectPoster(newPoster)
+    toast.success(t("ui.urlAdded") || "Custom poster added!")
+  }
+
+  const handleRemoveCustomPoster = (filePath: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    const updated = customPosters.filter((p) => p.file_path !== filePath)
+    saveCustomPosters(updated)
+
+    if (ed.excludedPosters.includes(filePath)) {
+      const nextExcluded = ed.excludedPosters.filter((p) => p !== filePath)
+      ed.setExcludedPosters(nextExcluded)
+    }
+    if (ed.rotationPosters.includes(filePath)) {
+      const nextRotation = ed.rotationPosters.filter((p) => p !== filePath)
+      ed.setRotationPosters(nextRotation)
+    }
+
+    if (posterActivePath === filePath) {
+      const fallback = posters[0] || updated[0]
+      if (fallback) selectPoster(fallback)
+    }
+
+    toast.success(t("ui.posterRemoved") || "Custom poster removed")
+  }
+
+  const cleanPosters = useMemo(() => {
+    const userClean = customPosters.filter((img) => !excludedSet.has(img.file_path))
+    const defaultClean = posters.filter((img) => img.iso_639_1 === null && !excludedSet.has(img.file_path))
+    return [...userClean, ...defaultClean]
+  }, [posters, excludedSet, customPosters])
+
+  const hasClean = cleanPosters.length > 0
+  const langGroups = useMemo(
+    () => Object.entries(groupBy(posters.filter((img) => img.iso_639_1 !== null), (img) => img.iso_639_1 || "other")).sort(([a], [b]) => {
+      if (a === lang) return -1; if (b === lang) return 1
+      if (a === "en") return -1; if (b === "en") return 1
+      return a.localeCompare(b)
+    }),
+    [lang, posters],
+  )
+
+  const posterTabs = useMemo(() => {
+    const tabs: { key: string; label: string; count: number }[] = []
+    if (hasClean) tabs.push({ key: "clean", label: "Clean", count: cleanPosters.length })
+    for (const [language, imgs] of langGroups) {
+      const unexcludedCount = imgs.filter(img => !excludedSet.has(img.file_path)).length
+      if (unexcludedCount > 0) tabs.push({ key: language, label: LANG_NAMES[language] || language, count: unexcludedCount })
+    }
+    if (excludedSet.size > 0) {
+      tabs.push({ key: "excluded", label: t("ui.excluded") || "Excluded", count: excludedSet.size })
+    }
+    return tabs
+  }, [hasClean, cleanPosters.length, langGroups, excludedSet.size, t, excludedSet])
+
+  const [internalActiveGroup, setInternalActiveGroup] = useState("clean")
+  const activeGroup = controlledActiveGroup ?? internalActiveGroup
+  const setActiveGroup = onActiveGroupChange ?? setInternalActiveGroup
+
+  useEffect(() => {
+    if (posterTabs.length > 0 && !posterTabs.some((t) => t.key === activeGroup)) {
+      setActiveGroup(posterTabs[0]?.key ?? "clean")
+    }
+  }, [posterTabs, activeGroup, setActiveGroup])
+
+  let idx = 0
+
+  const { bestFitPath, results, loading: fitLoading, error: fitError } = usePosterFit({
+    enabled: ed.defaultLogoFitEnabled,
+    selectedLogo: selectedLogo,
+    cleanPosters,
+    logoScale: ed.logoScale,
+    logoOffsetX: ed.logoOffsetX,
+    logoOffsetY: ed.logoOffsetY,
+    hasBadges: ed.globalBadges,
+  })
+
+  const scoreMap = useMemo(() => new Map(results.map((r) => [r.posterPath, r.adjustedScore])), [results])
+  const hasFitData = results.length > 0
+
+  const bestResult = bestFitPath ? results.find((r) => r.posterPath === bestFitPath) : undefined
+  const bestScore = bestResult?.adjustedScore ?? 0
+  const bestPoster = bestFitPath ? cleanPosters.find((p) => p.file_path === bestFitPath) : undefined
+  const isBestSelected = bestPoster ? posterActivePath === bestPoster.file_path : false
+
+  const isSavedPoster = useMemo(() => {
+    if (!selected) return false
+    const mediaType = selected.media_type === "tv" ? "tv" : "movie"
+    return mappingsMap.has(`${mediaType}:${selected.id}`)
+  }, [mappingsMap, selected])
+
+  const topFitRotationPosters = useMemo(() => {
+    if (results.length === 0) return []
+    const cleanPosterPaths = new Set(cleanPosters.map((poster) => poster.file_path))
+    return results
+      .filter((result) => cleanPosterPaths.has(result.posterPath))
+      .slice(0, 10)
+      .map((result) => result.posterPath)
+  }, [cleanPosters, results])
+
+  const populatedRotationRef = useRef(false)
+  useEffect(() => {
+    populatedRotationRef.current = false
+  }, [selected?.id])
+  useEffect(() => {
+    if (isSavedPoster) return
+    if (topFitRotationPosters.length === 0 || fitLoading) return
+    if (ed.rotationPosters.length > 0) { populatedRotationRef.current = false; return }
+    if (populatedRotationRef.current) return
+    populatedRotationRef.current = true
+    ed.setRotationPosters(topFitRotationPosters)
+    if (ed.defaultAutoRotateClean && topFitRotationPosters.length > 1) {
+      ed.setAutoRotateClean(true)
+    }
+  }, [topFitRotationPosters, fitLoading, isSavedPoster]) // eslint-disable-line react-hooks/exhaustive-deps -- intentionally only on fit results
+
+  const [sortByFit, setSortByFit] = useState(false)
+  const [showFitDebug, setShowFitDebug] = useState(false)
+  const autoSelectedFitKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setSortByFit(false)
+    autoSelectedFitKeyRef.current = null
+  }, [selected?.id])
+
+  const autoSelectFitKey = useMemo(() => {
+    if (!ed.defaultLogoFitEnabled || !bestPoster || !selectedLogo) return null
+    return JSON.stringify([
+      bestPoster.file_path,
+      cleanPosters.map((poster) => poster.file_path),
+      selectedLogo.file_path,
+      ed.globalBadges,
+    ])
+  }, [
+    bestPoster,
+    cleanPosters,
+    ed.defaultLogoFitEnabled,
+    ed.globalBadges,
+    selectedLogo,
+  ])
+
+  useEffect(() => {
+    if (isSavedPoster) {
+      autoSelectedFitKeyRef.current = null
+      return
+    }
+    if (!autoSelectFitKey || !bestPoster || fitLoading) {
+      if (!autoSelectFitKey) autoSelectedFitKeyRef.current = null
+      return
+    }
+    if (isBestSelected) {
+      autoSelectedFitKeyRef.current = autoSelectFitKey
+      return
+    }
+    if (autoSelectedFitKeyRef.current === autoSelectFitKey) return
+    autoSelectedFitKeyRef.current = autoSelectFitKey
+    setSortByFit(true)
+    selectPoster(bestPoster)
+  }, [autoSelectFitKey, bestPoster, fitLoading, isBestSelected, isSavedPoster, selectPoster])
+
+  const displayPosters = useMemo(() => {
+    if (!sortByFit) return cleanPosters
+    return [...cleanPosters].sort(
+      (a, b) => (scoreMap.get(b.file_path) ?? -1) - (scoreMap.get(a.file_path) ?? -1),
+    )
+  }, [sortByFit, cleanPosters, scoreMap])
+
+  const [visibleCleanCount, setVisibleCleanCount] = useState(12)
+  const [visibleLangCount, setVisibleLangCount] = useState(12)
+
+  useEffect(() => {
+    setVisibleCleanCount(12)
+    setVisibleLangCount(12)
+  }, [selected?.id, activeGroup, sortByFit])
+
+  const visibleCleanPosters = useMemo(() => {
+    return displayPosters.slice(0, visibleCleanCount)
+  }, [displayPosters, visibleCleanCount])
+
+  const activeClean = activeGroup === "clean"
+  const activeLangImgs = useMemo(() => {
+    if (activeGroup === "excluded") {
+      const customExcluded = customPosters.filter((img) => excludedSet.has(img.file_path))
+      const defaultExcluded = posters.filter((img) => excludedSet.has(img.file_path))
+      return [...customExcluded, ...defaultExcluded]
+    }
+    const rawImgs = !activeClean ? langGroups.find(([l]) => l === activeGroup)?.[1] ?? [] : []
+    return rawImgs.filter((img) => !excludedSet.has(img.file_path))
+  }, [activeClean, langGroups, activeGroup, posters, customPosters, excludedSet])
+
+  const visibleLangImgs = useMemo(() => {
+    return activeLangImgs.slice(0, visibleLangCount)
+  }, [activeLangImgs, visibleLangCount])
+
+  const toggleRotation = (filePath: string) => {
+    ed.setRotationPosters((prev) => {
+      if (prev.includes(filePath)) return prev.filter((f) => f !== filePath)
+      return [...prev, filePath]
+    })
+  }
+
+  const toggleAutoRotateClean = () => {
+    const next = !ed.autoRotateClean
+    if (next && ed.rotationPosters.length === 0 && topFitRotationPosters.length > 0) {
+      ed.setRotationPosters(topFitRotationPosters)
+    }
+    ed.setAutoRotateClean(next)
+  }
+
+  const [excludedSaveState, setExcludedSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
+
+  const toggleExcludePoster = (filePath: string) => {
+    const prevExcluded = ed.excludedPosters
+    const prevRotation = ed.rotationPosters
+    const isExcluding = !ed.excludedPosters.includes(filePath)
+    const nextExcluded = isExcluding
+      ? Array.from(new Set([...ed.excludedPosters, filePath]))
+      : ed.excludedPosters.filter((p) => p !== filePath)
+    const nextRotationPosters = isExcluding
+      ? ed.rotationPosters.filter((path) => path !== filePath)
+      : ed.rotationPosters
+    
+    ed.setExcludedPosters(nextExcluded)
+    ed.setRotationPosters(nextRotationPosters)
+    setExcludedSaveState("saving")
+
+    let fallback: TMDBImage | undefined
+    if (posterActivePath === filePath && isExcluding) {
+      fallback =
+        cleanPosters.find((poster) => poster.file_path !== filePath) ??
+        posters.find((poster) => poster.file_path !== filePath && !nextExcluded.includes(poster.file_path))
+      if (fallback) selectPoster(fallback)
+    }
+
+    autoSaveExcludedPosters(nextExcluded, nextRotationPosters, fallback)
+      .then(() => { setExcludedSaveState("saved"); toast.success(isExcluding ? t("ui.posterExcluded") : (t("ui.posterRestored") || "Poster restored")) })
+      .catch(() => {
+        ed.setExcludedPosters(prevExcluded)
+        ed.setRotationPosters(prevRotation)
+        setExcludedSaveState("error")
+        toast.error(t("ui.saveError"))
+      })
+  }
+
+  function shortPath(p: string): string {
+    return p.length > 18 ? `${p.slice(0, 10)}...${p.slice(-6)}` : p
+  }
+
+  function scoreClass(s: number): string {
+    if (s >= 0.65) return "text-green-400"
+    if (s >= 0.45) return "text-amber-400"
+    return "text-danger"
+  }
+
+  return (
+    <div>
+      {showTabs && (
+        <div className="space-y-2 mb-3">
+          {/* Row 1: Dedicated 100% width scrollable PosterTabs */}
+          <div className="w-full min-w-0">
+            <PosterTabs tabs={posterTabs} activeGroup={activeGroup} onSelect={setActiveGroup} />
+          </div>
+
+          {/* Row 2: Grid Switcher + Refresh button */}
+          <div className="flex items-center justify-between gap-2 px-0.5 mb-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400">{t("ui.view") || "View"}</span>
+              <div className="flex items-center bg-white/5 border border-white/10 rounded-xl p-0.5 shadow-sm">
+                <button
+                  type="button"
+                  aria-label="2 columns large view"
+                  onClick={() => setGridCols(2)}
+                  className={`p-1.5 rounded-lg text-xs transition-all ${gridCols === 2 ? "bg-zinc-100 text-zinc-950 font-bold shadow-sm" : "text-zinc-400 hover:text-white"}`}
+                  title="Large view (2 cols)"
+                >
+                  <Grid2X2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="3 columns compact view"
+                  onClick={() => setGridCols(3)}
+                  className={`p-1.5 rounded-lg text-xs transition-all ${gridCols === 3 ? "bg-zinc-100 text-zinc-950 font-bold shadow-sm" : "text-zinc-400 hover:text-white"}`}
+                  title="Compact view (3 cols)"
+                >
+                  <Grid3X3 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Refresh posters from TMDB"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="h-8 px-2.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white text-xs font-medium transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50 active:scale-95"
+              title="Refresh posters from TMDB"
+            >
+              {isRefreshing ? (
+                <BladeSpinner size="14px" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              <span>{t("ui.refresh") || "Refresh"}</span>
+            </button>
+          </div>
+
+          {/* Row 3 (Relocated): Custom URL button */}
+          <div className="px-0.5 mb-2">
+            <button
+              type="button"
+              aria-label="Add custom poster URL"
+              onClick={() => setShowUrlInput(!showUrlInput)}
+              className={`w-full h-8 px-3 rounded-xl border transition-all flex items-center justify-center gap-1.5 text-xs font-medium shadow-sm ${
+                showUrlInput
+                  ? "bg-zinc-100 text-zinc-950 border-white/80 font-bold"
+                  : "bg-white/5 border-white/10 text-zinc-300 hover:text-white hover:bg-white/10"
+              }`}
+            >
+              <Link className="w-3.5 h-3.5" />
+              <span>{t("ui.customUrl")}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showUrlInput && (
+        <form onSubmit={handleAddCustomUrl} className="flex gap-2 mb-3 p-1.5 rounded-xl bg-white/[0.04] border border-white/10 backdrop-blur-md shadow-lg transition-all">
+          <div className="relative flex-1">
+            {isResolvingUrl ? (
+              <BladeSpinner size="14px" className="absolute left-2.5 top-1/2 -translate-y-1/2" />
+            ) : (
+              <Link className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+            )}
+            <input
+              type="text"
+              value={customUrlInput}
+              onChange={(e) => setCustomUrlInput(e.target.value)}
+              placeholder={t("ui.customImportPh") || "Paste image URL, Pinterest or Reddit link…"}
+              disabled={isResolvingUrl}
+              className="w-full bg-black/50 border border-white/10 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-accent-orange/60 transition-colors disabled:opacity-60"
+              autoFocus
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isResolvingUrl}
+            className="px-3 rounded-lg bg-accent-orange text-white hover:bg-orange-500 font-semibold text-xs transition-all flex items-center gap-1 shadow-md hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait disabled:scale-100"
+          >
+            {isResolvingUrl ? (
+              <BladeSpinner size="14px" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
+            {isResolvingUrl ? (t("ui.resolving") || "Resolving…") : (t("ui.add") || "Add")}
+          </button>
+        </form>
+      )}
+
+      {activeClean && hasClean && (
+        <div className="bg-white/[0.03] border border-white/[0.08] rounded-xl p-2.5 space-y-2 mb-3 backdrop-blur-sm">
+          {isBestSelected && (
+            <div className="editor-pill w-fit text-xs font-semibold py-1 px-2.5">
+              <Check className="w-3.5 h-3.5" />{t("ui.bestFitSelected")}
+            </div>
+          )}
+          
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            {ed.rotationPosters.length > 1 && (
+              <div className="flex items-center justify-between w-full">
+                <span className="text-[11px] text-muted flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />{t("ui.autoRotate")}</span>
+                <button type="button"
+                  aria-label={ed.autoRotateClean ? t("ui.removeFromRotation") : t("ui.autoRotate")}
+                  onClick={toggleAutoRotateClean}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition-all ${ed.autoRotateClean ? "bg-accent-orange/20 text-accent-orange border-accent-orange/25 animate-pulse-ring" : "bg-white/5 text-muted border-white/10"}`}
+                >
+                  {ed.autoRotateClean ? <><Check className="w-3 h-3 inline mr-1" />ON</> : "OFF"}
+                </button>
+              </div>
+            )}
+
+            {hasFitData && (
+              <div className="flex items-center justify-between w-full pt-1 border-t border-white/[0.05]">
+                <span className="control-label text-[11px] flex items-center gap-1.5"><ArrowUpDown className="w-3.5 h-3.5" />{t("ui.posterOrder")}</span>
+                <div className="segmented-control">
+                  <button type="button"
+                    aria-label={t("ui.sortByTmdb")}
+                    onClick={() => setSortByFit(false)}
+                    className={`segmented-option text-[11px] px-2.5 py-1 ${!sortByFit ? "segmented-option-active" : ""}`}
+                  >
+                    {t("ui.tmdb")}
+                  </button>
+                  <button type="button"
+                    aria-label={t("ui.sortByBestFit")}
+                    onClick={() => setSortByFit(true)}
+                    className={`segmented-option text-[11px] px-2.5 py-1 ${sortByFit ? "segmented-option-active" : ""}`}
+                  >
+                    {t("ui.bestFit")}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {(bestPoster && !isBestSelected && !fitLoading) && (
+            <button type="button"
+              aria-label={t("ui.chooseBestPosterAria")}
+              onClick={() => selectPoster(bestPoster)}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg transition-all duration-150 bg-accent-orange/15 text-accent-orange hover:bg-accent-orange/25 active:scale-[0.98] border border-accent-orange/20"
+            >
+              <Sparkles className="w-3.5 h-3.5" />{t("ui.chooseBestPoster")}
+            </button>
+          )}
+          {fitLoading && (
+            <div className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400">
+              <BladeSpinner size="14px" />{t("ui.analyzing")}
+            </div>
+          )}
+          {fitError && !fitLoading && (
+            <div className="px-3 py-1.5 text-xs text-amber-400/90 leading-relaxed">
+              {fitError}
+            </div>
+          )}
+          {hasFitData && (
+            <button
+              type="button"
+              aria-label={showFitDebug ? t("ui.hideDebug") : t("ui.showDebug")}
+              onClick={() => setShowFitDebug((v) => !v)}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-medium rounded-lg transition-all duration-150 text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.03]"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+              {showFitDebug ? t("ui.hide") : t("ui.debugFit")}
+            </button>
+          )}
+        </div>
+      )}
+
+      {activeClean && hasClean && (
+        <>
+          <div className={`grid ${gridCols === 2 ? "grid-cols-2 gap-3" : "grid-cols-3 gap-2"} transition-all duration-200`}>
+            {visibleCleanPosters.map((img) => {
+              const stagger = idx++
+              const inRotation = ed.rotationPosters.includes(img.file_path)
+              const isBestFit = bestFitPath === img.file_path
+              const showBadge = isBestFit && bestScore >= 0.45
+              const isHighScore = bestScore >= 0.65
+              const isCustom = img.file_path.startsWith("http://") || img.file_path.startsWith("https://")
+
+              return (
+                <div key={img.file_path} className={`relative group rounded-xl overflow-hidden transition-all duration-200 ${isBestFit && bestScore >= 0.45 ? `ring-1 ${isHighScore ? "ring-orange-400/70 shadow-[0_0_18px_rgba(232,93,42,0.15)]" : "ring-amber-400/50"}` : ""}`}>
+                  <PosterBtn staggerIndex={stagger} img={img} active={posterActivePath === img.file_path} onSelect={selectPoster} />
+                  
+                  {isCustom && (
+                    <div className="absolute top-1.5 left-1.5 z-20 px-1.5 py-0.5 rounded-full bg-accent-orange/90 backdrop-blur-md text-[9px] font-bold text-white flex items-center gap-1 shadow-md">
+                      <Link className="w-2.5 h-2.5" /> URL
+                    </div>
+                  )}
+
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/70 via-black/30 to-transparent opacity-100 sm:opacity-60 group-hover:opacity-100 transition-opacity duration-150" />
+                  
+                  {showBadge && (
+                    <div className={`fit-badge z-20 ${isHighScore ? "fit-badge-amber" : ""}`}>
+                      <Sparkles className="w-2.5 h-2.5 inline mr-0.5" />
+                      {isHighScore ? t("ui.bestFit") : t("ui.bestFitAlt")}
+                    </div>
+                  )}
+
+                  <div className="absolute top-1.5 right-1.5 z-20 flex flex-col gap-1.5 opacity-90 sm:opacity-75 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150">
+                    {isCustom && (
+                      <button
+                        type="button"
+                        aria-label="Delete custom poster"
+                        onClick={(e) => handleRemoveCustomPoster(img.file_path, e)}
+                        className="w-7 h-7 rounded-full flex items-center justify-center backdrop-blur-md shadow-lg transition-all duration-200 hover:scale-110 bg-red-600/90 text-white hover:bg-red-500 border border-white/10"
+                        title="Delete custom poster"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      aria-label={inRotation ? t("ui.removeFromRotation") : t("ui.addToRotation")}
+                      onClick={(e) => { e.stopPropagation(); toggleRotation(img.file_path) }}
+                      className={`w-7 h-7 rounded-full flex items-center justify-center backdrop-blur-md shadow-lg transition-all duration-200 hover:scale-110 border border-white/10 ${inRotation ? "bg-accent-orange text-white" : "bg-black/80 text-white/90 hover:bg-accent-orange hover:text-white"}`}
+                      title={inRotation ? t("ui.removeFromRotation") : t("ui.addToRotation")}
+                    >
+                      {inRotation ? <Check className="w-3.5 h-3.5" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      aria-label={t("ui.excludePoster")}
+                      onClick={(e) => { e.stopPropagation(); toggleExcludePoster(img.file_path) }}
+                      className="w-7 h-7 rounded-full flex items-center justify-center backdrop-blur-md shadow-lg transition-all duration-200 hover:scale-110 bg-black/80 text-white/90 hover:bg-amber-500 hover:text-white border border-white/10"
+                      title={t("ui.excludePoster")}
+                    >
+                      <EyeOff className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {displayPosters.length > visibleCleanCount && (
+            <button
+              type="button"
+              aria-label={t("ui.loadMorePostersAria")}
+              onClick={() => setVisibleCleanCount((prev) => prev + 12)}
+              className="btn-secondary w-full mt-3 py-2 px-3 text-xs"
+            >
+              <ChevronDown className="w-4 h-4" />
+              {t("ui.loadMorePosters", { count: Math.min(12, displayPosters.length - visibleCleanCount) })}
+              <span className="text-[10px] text-zinc-500 font-normal">{t("ui.xOfY", { current: visibleCleanCount, total: displayPosters.length })}</span>
+            </button>
+          )}
+        </>
+      )}
+
+      {activeClean && showFitDebug && hasFitData && (
+        <FitDebugPanel results={results} bestResult={bestResult} shortPath={shortPath} scoreClass={scoreClass} t={t} />
+      )}
+
+      {activeClean && !hasClean && (
+        <p className="text-center py-12 text-muted text-xs">{t("ui.loading")}</p>
+      )}
+
+      {!activeClean && (
+        <>
+          <div className={`grid ${gridCols === 2 ? "grid-cols-2 gap-3" : "grid-cols-3 gap-2"} transition-all duration-200`}>
+            {visibleLangImgs.map((img) => {
+              const stagger = idx++
+              const isExcluded = excludedSet.has(img.file_path)
+              const isCustom = img.file_path.startsWith("http://") || img.file_path.startsWith("https://")
+
+              return (
+                <div key={img.file_path} className="relative group rounded-xl overflow-hidden">
+                  <PosterBtn staggerIndex={stagger} img={img} active={posterActivePath === img.file_path} onSelect={selectPoster} />
+                  
+                  {isCustom && (
+                    <div className="absolute top-1.5 left-1.5 z-20 px-1.5 py-0.5 rounded-full bg-accent-orange/90 backdrop-blur-md text-[9px] font-bold text-white flex items-center gap-1 shadow-md">
+                      <Link className="w-2.5 h-2.5" /> URL
+                    </div>
+                  )}
+
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/70 via-black/30 to-transparent opacity-100 sm:opacity-60 group-hover:opacity-100 transition-opacity" />
+                  
+                  <div className="absolute top-1.5 right-1.5 z-20 flex flex-col gap-1.5 opacity-90 sm:opacity-75 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                    {isCustom && (
+                      <button
+                        type="button"
+                        aria-label="Delete custom poster"
+                        onClick={(e) => handleRemoveCustomPoster(img.file_path, e)}
+                        className="w-7 h-7 rounded-full flex items-center justify-center backdrop-blur-md shadow-lg transition-all duration-200 hover:scale-110 bg-red-600/90 text-white hover:bg-red-500 border border-white/10"
+                        title="Delete custom poster"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      aria-label={isExcluded ? (t("ui.restorePoster") || "Restore") : t("ui.excludePoster")}
+                      onClick={(e) => { e.stopPropagation(); toggleExcludePoster(img.file_path) }}
+                      className={`w-7 h-7 rounded-full flex items-center justify-center backdrop-blur-md shadow-lg transition-all duration-200 hover:scale-110 ${isExcluded ? "bg-accent-orange text-white" : "bg-black/80 text-white/90 hover:bg-amber-500 hover:text-white border border-white/10"}`}
+                      title={isExcluded ? (t("ui.restorePoster") || "Restore") : t("ui.excludePoster")}
+                    >
+                      {isExcluded ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {activeLangImgs.length > visibleLangCount && (
+            <button
+              type="button"
+              aria-label={t("ui.loadMorePostersAria")}
+              onClick={() => setVisibleLangCount((prev) => prev + 12)}
+              className="btn-secondary w-full mt-3 py-2 px-3 text-xs"
+            >
+              <ChevronDown className="w-4 h-4" />
+              {t("ui.loadMorePosters", { count: Math.min(12, activeLangImgs.length - visibleLangCount) })}
+              <span className="text-[10px] text-zinc-500 font-normal">{t("ui.xOfY", { current: visibleLangCount, total: activeLangImgs.length })}</span>
+            </button>
+          )}
+        </>
+      )}
+
+      {activeClean && ed.rotationPosters.length > 0 && (
+        <p className="text-[11px] text-zinc-500 mt-1.5 px-1">{ed.rotationPosters.length} {t("ui.selectedCount", { count: ed.rotationPosters.length })}</p>
+      )}
+      {activeClean && ed.excludedPosters.length > 0 && (
+        <div className="mt-2 flex items-center justify-between rounded-lg border border-surface2/70 bg-white/5 px-2.5 py-2">
+          <span className="text-[11px] text-muted flex items-center gap-1.5">
+            <span>{ed.excludedPosters.length} {ed.excludedPosters.length === 1 ? t("ui.excludedCountOne") : t("ui.excludedCountMany")}</span>
+            {excludedSaveState === "saving" && <span className="text-[10px] text-zinc-500 animate-pulse">{t("ui.saveStateSaving")}</span>}
+            {excludedSaveState === "saved" && <span className="text-[10px] text-green-500">{t("ui.saveStateSaved")}</span>}
+            {excludedSaveState === "error" && <span className="text-[10px] text-danger">{t("ui.saveStateError")}</span>}
+          </span>
+          <button type="button" onClick={() => { ed.setExcludedPosters([]); setExcludedSaveState("saving"); autoSaveExcludedPosters([], ed.rotationPosters).then(() => { setExcludedSaveState("saved"); toast.success(t("ui.cancel")) }).catch(() => { setExcludedSaveState("error"); toast.error(t("ui.saveError")) }) }} className="text-[11px] text-accent-orange hover:text-orange-300">
+            {t("ui.restore")}
+          </button>
+        </div>
+      )}
+
+      {posters.length === 0 && <p className="text-center py-12 text-muted">{t("ui.loading")}</p>}
+    </div>
+  )
+}

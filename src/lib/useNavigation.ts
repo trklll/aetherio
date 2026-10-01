@@ -1,0 +1,119 @@
+"use client"
+
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import type { SearchResult, TMDBImage } from "./types"
+import { pushView, replaceView, goBack, type View } from "./router"
+
+export function useNavigation() {
+  const [view, setViewState] = useState<View>("edit")
+  const [selected, setSelected] = useState<SearchResult | null>(null)
+  const [previewPoster, setPreviewPoster] = useState<TMDBImage | null>(null)
+  const [selectedLogo, setSelectedLogo] = useState<TMDBImage | null>(null)
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [posters, setPosters] = useState<TMDBImage[]>([])
+  const [logos, setLogos] = useState<TMDBImage[]>([])
+  const fetchIdRef = useRef(0)
+
+  const [sourceView, setSourceView] = useState<View | null>(null)
+
+  const setView = useCallback((v: View) => {
+    setViewState(v)
+  }, [])
+
+  // Router centralizzato: gestisce history + stato view insieme.
+  const router = useMemo(() => ({
+    push: (v: View) => { pushView(v); setViewState(v) },
+    replace: (v: View) => { replaceView(v); setViewState(v) },
+    back: () => { goBack() },
+  }), [])
+
+  const resetState = useCallback(() => {
+    ++fetchIdRef.current
+    setViewState("edit")
+    setSelected(null)
+    setPreviewPoster(null)
+    setSelectedLogo(null)
+    setPreviewId(null)
+    setPosters([])
+    setLogos([])
+    setSourceView(null)
+  }, [])
+
+  const incrementFetchId = useCallback(() => {
+    return ++fetchIdRef.current
+  }, [])
+
+  const navigateToPoster = useCallback((item: SearchResult, _source?: string) => {
+    const src = (_source as View) || view || "edit"
+    setSourceView(src)
+    replaceView(src)
+    pushView("edit", { source: src, item })
+  }, [view])
+
+  const goHome = useCallback(() => {
+    setViewState("edit")
+    setSelected(null)
+    setPreviewPoster(null)
+    setSelectedLogo(null)
+    setPreviewId(null)
+    setPosters([])
+    setSourceView(null)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: PopStateEvent) => {
+      incrementFetchId()
+      const source = e.state?.source
+      const targetView = e.state?.view || source
+
+      if (targetView === "cataloghi" || source === "cataloghi") {
+        setViewState("cataloghi")
+        setSelected(null)
+        setPreviewPoster(null)
+        setSelectedLogo(null)
+        setPreviewId(null)
+      } else if (targetView === "myposters" || source === "myposters") {
+        setViewState("myposters")
+        setSelected(null)
+        setPreviewPoster(null)
+        setSelectedLogo(null)
+        setPreviewId(null)
+      } else if (targetView === "search" || source === "search") {
+        setViewState("search")
+        setSelected(null)
+        setPreviewPoster(null)
+        setSelectedLogo(null)
+        setPreviewId(null)
+      } else if (targetView === "edit") {
+        setViewState("edit")
+        if (!e.state?.selected) {
+          setSelected(null)
+          setPreviewPoster(null)
+          setSelectedLogo(null)
+          setPreviewId(null)
+        }
+      } else {
+        resetState()
+      }
+    }
+    addEventListener("popstate", handler)
+    return () => removeEventListener("popstate", handler)
+  }, [resetState, incrementFetchId])
+
+  return {
+    view, setView,
+    router,
+    sourceView, setSourceView,
+    selected, setSelected,
+    previewPoster, setPreviewPoster,
+    selectedLogo, setSelectedLogo,
+    previewId, setPreviewId,
+    posters, setPosters,
+    logos, setLogos,
+    fetchIdRef,
+    incrementFetchId,
+    navigateToPoster,
+    goHome,
+    resetState,
+  }
+}

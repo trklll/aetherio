@@ -1,0 +1,30 @@
+import { defineConfig } from "vitest/config"
+import path from "path"
+
+export default defineConfig({
+  test: {
+    environment: "jsdom",
+    testTimeout: 20000,
+    setupFiles: ["./src/__tests__/setup.ts"],
+    exclude: [
+      "node_modules/**",
+      ".kilo/**",
+      ".claude/**",
+      ".next/**",
+      "e2e/**",
+      "test-results/**",
+      "playwright-report/**",
+    ],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/lib/**/*.ts", "src/components/**/*.tsx"],
+      exclude: ["src/generated/**", "src/lib/render-version.ts", "src/**/__tests__/**"],
+    },
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+})
