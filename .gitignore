@@ -93,4 +93,3 @@ src-tauri/resources/bin/
 # Salidas de depuracion (capturas de probes y del reporte de Playwright).
 /artifacts/
 /test-output.json
-/aetheriotvlogo.png
