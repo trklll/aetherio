@@ -132,8 +132,14 @@ function Get-NewestSourceWrite {
 $standaloneRoot = Join-Path $Source ".next\standalone"
 $standalone = Join-Path $standaloneRoot "server.js"
 if (-not (Test-Path -LiteralPath $standalone)) {
+    # Next copia tambien `server.js` dentro de `next/dist/...` (testmode, reglas
+    # de typescript). Ordenar solo por largo de ruta no alcanza porque en el CI la
+    # raiz del repo es corta y los empates cambian de lado. Se descartan los que
+    # estan bajo `node_modules` y, entre los que quedan, el de menor profundidad
+    # (menos barras invertidas) y luego el de ruta mas corta.
     $nested = Get-ChildItem -LiteralPath $standaloneRoot -Filter "server.js" -Recurse -File -ErrorAction SilentlyContinue |
-        Sort-Object { $_.FullName.Length } |
+        Where-Object { $_.FullName -notmatch "\\node_modules\\" } |
+        Sort-Object @{ Expression = { ($_.FullName -split '\\').Count } }, @{ Expression = { $_.FullName.Length } } |
         Select-Object -First 1
     if ($nested) {
         $standalone = $nested.FullName
