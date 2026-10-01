@@ -50,6 +50,28 @@ Comprobación segura:
 gh secret list --repo trklll/aetherio
 ```
 
+### El token de `gh` necesita el scope `workflow`
+
+Cualquier commit que toque `.github/workflows/` queda rechazado por GitHub con
+`refusing to allow an OAuth App to create or update workflow ... without
+workflow scope`, y no se puede esquivar por la API: `gh auth refresh` es el
+único camino. Si el push se rechaza con eso:
+
+```powershell
+gh auth refresh -h github.com -s workflow
+```
+
+Se abre el navegador, se confirma, y el token queda con el scope. Comprobarlo
+sin imprimir el token:
+
+```powershell
+gh auth status | Select-String "Token scopes"
+```
+
+Vale la pena tenerlo concedido de antemano: sin ese scope, un cambio en
+`release.yml` —que es justamente lo que hay que tocar cuando cambia el proceso
+de build— deja el repo en un estado en el que no se puede publicar.
+
 ## Secretos requeridos en Cloudflare
 
 El Worker conserva, entre otros, los secretos OAuth, el token de publicación y
@@ -135,6 +157,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-mpv.ps1 -Ver
 
 Si el script no admite `-VerifyOnly`, revisar el pin y sus URLs sin modificar
 el runtime instalado. No iniciar un release con una URL de MPV rota.
+
+#### El build local no es suficiente
+
+`npm run build` y `cargo check` pasan con archivos que están en tu disco y no
+están commiteados, que es exactamente el fallo que tumbó el primer intento de
+0.9.0: `src/utils/bigPictureTransition.ts` importaba `aetheriotvlogo.png`, que
+nunca se había versionado. En local el PNG estaba, así que Vite lo encontraba; en
+el runner no estaba y el build moría con
+`Could not resolve "../../aetheriotvlogo.png"`.
+
+La única comprobación que no miente es un clon limpio:
+
+```powershell
+$clean = "$env:TEMP\aetherio-clean-build"
+Remove-Item -Recurse -Force $clean -ErrorAction SilentlyContinue
+git clone --depth 1 --branch main "file:///$((Get-Location).Path -replace '\\','/')" $clean
+Set-Location $clean
+npm ci
+npm run build
+```
+
+Cualquier asset que el código importe tiene que estar commiteado. Si algo aparece
+en tu `.gitignore` pero el código lo importa, es un bug esperando a CI.
 
 ### 5. Crear el commit de release
 

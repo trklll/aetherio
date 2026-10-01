@@ -35,12 +35,36 @@ sin los posters. Para relanzarlo a mano:
 npm run posters:stage
 ```
 
-Qué genera (y **no** se commitea: ~60 MB y 2300+ archivos):
+Qué genera (y **no** se commitea: ~140 MB y 2300+ archivos):
 
 ```
-src-tauri/resources/spatialposters/   -> build standalone de Next.js (41 MB)
-src-tauri/resources/bin/node.exe      -> runtime Node portable (83 MB)
+src-tauri/resources/spatialposters/   -> build standalone de Next.js (57 MB)
+src-tauri/resources/bin/node.exe      -> runtime Node portable (89 MB)
 ```
+
+### Cómo lo consigue el CI
+
+En local el script busca el source en el repo hermano (`../SpatialPosters`). En el
+runner de GitHub Actions ese directorio no existe, así que `posters:stage` haría
+`exit 1` y el build entero se caería. Por eso `release.yml`:
+
+1. hace checkout de [SpatialPosters](https://github.com/TheAceOfficials/SpatialPosters)
+   en `SpatialPosters/`, pineado a un commit con `SPATIALPOSTERS_REF`;
+2. le corre `npm ci`;
+3. llama a `stage-spatialposters.ps1`, que recibe la ruta por `SPATIALPOSTERS_SOURCE`.
+
+Ese env está a nivel de job, no de step, a propósito: `tauri build` vuelve a correr
+`posters:stage` desde `beforeBuildCommand` y necesita la misma ruta. En esa segunda
+pasada el script detecta que los recursos ya están al día y no recompila (unos 3 s).
+
+**Para actualizar el server que viaja en la próxima release**, cambia
+`SPATIALPOSTERS_REF` en `.github/workflows/release.yml` por el commit que quieras.
+Se pinea a un commit y no a una rama a propósito: con una rama, un cambio upstream
+rompe el release de Aetherio sin que se note.
+
+`next build` **no necesita ninguna credencial**: la key de TMDB se lee por request
+(header `x-api-key` o `?api_key=`), que es lo que manda Aetherio. El server arranca
+apuntando a `TMDB_BASE_URL=https://trkll.aetherio.workers.dev/api/tmdb`.
 
 El script es idempotente y detecta antigüedad, así que llamarlo de más no cuesta nada:
 
