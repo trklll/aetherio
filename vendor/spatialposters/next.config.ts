@@ -28,6 +28,15 @@ const nextConfig: NextConfig = {
   // (.nft.json) e il build fallisce con
   // "ENOENT .next/next-server.js.nft.json" — lì si usa l'output default.
   output: process.env.VERCEL ? undefined : "standalone",
+  // Next infiere que estamos en un monorepo si hay un lockfile o un
+  // package.json en un directorio padre, y en ese caso acota el file tracing a
+  // ese padre: el standalone sale incompleto o no sale. En Aetherio el source
+  // vive en `vendor/spatialposters/`, o sea dentro de dos package.json, y el
+  // build del CI no generaba `.next/standalone` (compilaba bien, 36 paginas
+  // estaticas, y despues el staging no encontraba el server). Fijar la raiz del
+  // tracing al directorio del proyecto hace que se comporte igual sin importar
+  // donde este clonado.
+  outputFileTracingRoot: __dirname,
   // React Compiler: ottimizza automaticamente il re-rendering dei componenti,
   // riducendo la necessita' di useMemo/useCallback manuali.
   reactCompiler: true,

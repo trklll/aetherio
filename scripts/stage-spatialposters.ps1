@@ -137,13 +137,29 @@ if (-not (Test-Path -LiteralPath $standalone)) {
     # raiz del repo es corta y los empates cambian de lado. Se descartan los que
     # estan bajo `node_modules` y, entre los que quedan, el de menor profundidad
     # (menos barras invertidas) y luego el de ruta mas corta.
-    $nested = Get-ChildItem -LiteralPath $standaloneRoot -Filter "server.js" -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -notmatch "\\node_modules\\" } |
+    #
+    # La busqueda baja desde el source, no desde `standalone/`, a proposito: si
+    # el build se escribio en otro distDir, el standalone tampoco esta en
+    # `.next/standalone` y el error pasaba a ser "no existe la carpeta" en vez de
+    # "no encontre el server".
+    $searchRoot = Join-Path $Source ".next"
+    $nested = Get-ChildItem -LiteralPath $searchRoot -Filter "server.js" -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\standalone\\" -and $_.FullName -notmatch "\\node_modules\\" } |
         Sort-Object @{ Expression = { ($_.FullName -split '\\').Count } }, @{ Expression = { $_.FullName.Length } } |
         Select-Object -First 1
     if ($nested) {
         $standalone = $nested.FullName
-        Write-Host "    (server standalone encontrado en $($nested.FullName.Substring($standaloneRoot.Length + 1)))"
+        Write-Host "    (server standalone encontrado en $($nested.FullName.Substring($searchRoot.Length + 1)))"
+    } else {
+        # Diagnostico: si el build corrio pero no hay standalone, casi siempre es
+        # que `output: "standalone"` no se aplico. Sin esto el log solo decia
+        # "no se encontro server.js" y no decia por que.
+        $nextDir = Join-Path $Source ".next"
+        if (Test-Path -LiteralPath $nextDir) {
+            Write-Warn "hay .next pero ningun standalone/server.js dentro."
+            Write-Host "    (contenido de .next: $(((Get-ChildItem -LiteralPath $nextDir -Directory -EA SilentlyContinue).Name) -join ', '))"
+            Write-Host "    (VERCEL='$env:VERCEL' NEXT_DIST_DIR='$env:NEXT_DIST_DIR' -> si VERCEL esta puesto, next.config.ts deja output en default)"
+        }
     }
 }
 $staged = Join-Path $ServerDir "server.js"
