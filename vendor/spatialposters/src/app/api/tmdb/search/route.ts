@@ -1,0 +1,33 @@
+import { NextRequest } from "next/server"
+import { searchMulti, type TMDBMediaResult } from "@/lib/tmdb"
+import { rateLimit, rateLimitKey, rateLimitResponse } from "@/lib/rate-limit"
+import { cacheGet, cacheSet } from "@/lib/cache"
+import { jsonGzip } from "@/lib/json-response"
+
+export async function GET(req: NextRequest) {
+  const rl = await rateLimit(rateLimitKey(req), "search")
+  if (!rl.ok) return rateLimitResponse(rl.retAfter)
+  const rawQuery = req.nextUrl.searchParams.get("q")
+  const query = rawQuery ? rawQuery.trim().slice(0, 100) : null
+  const language = req.nextUrl.searchParams.get("language") || "it-IT"
+  const apiKey = req.nextUrl.searchParams.get("api_key") || undefined
+  const page = parseInt(req.nextUrl.searchParams.get("page") || "1", 10)
+  const acceptEncoding = req.headers.get("accept-encoding")
+  if (!query || query.length < 2) {
+    return jsonGzip({ results: [], total_results: 0, total_pages: 0 }, 200, undefined, acceptEncoding)
+  }
+  // Cache key normalizzato (trim + lowercase): la ricerca TMDB è case-insensitive,
+  // così "Avatar" e "avatar" condividono lo stesso entry e non si generano miss inutili.
+  const cacheKey = `search:${query.toLowerCase()}:${language}:${page}`
+  const cached = cacheGet<{ results: TMDBMediaResult[]; total_results: number; total_pages: number }>(cacheKey)
+  if (cached) return jsonGzip(cached, 200, undefined, acceptEncoding)
+  try {
+    const data = await searchMulti(query, language, apiKey, page)
+    const results = (data.results || []).filter((r) => (r.media_type === "movie" || r.media_type === "tv") && r.poster_path)
+    const body = { results, total_results: data.total_results || 0, total_pages: data.total_pages || 0 }
+    cacheSet(cacheKey, body, ["tmdb", "search"])
+    return jsonGzip(body, 200, { "Cache-Control": "public, max-age=300, s-maxage=1800" }, acceptEncoding)
+  } catch {
+    return jsonGzip({ results: [], total_results: 0, total_pages: 0 }, 200, { "Cache-Control": "no-store" }, acceptEncoding)
+  }
+}

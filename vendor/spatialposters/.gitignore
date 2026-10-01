@@ -1,0 +1,100 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.next-e2e/
+/.next-e2e-probe/
+/.next-load/
+/.next-bench/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# runtime data
+/data/
+
+# opencode
+/opencode.json
+/vibeguard.config.json
+/.opencode/
+/CLAUDE.md
+/AGENTS.md
+/agents.md
+/.agents/
+
+# vercel
+.vercel
+
+# test
+/test_color/
+/test-results/
+/playwright-report/
+
+# dev server logs
+dev-server*.log
+
+# claude / misc
+.claude/
+.git-rewrite/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+MARKETING.md
+$null
+
+# ai tool configs (local copies)
+/.aider-desk/
+/.qwen/
+/.serena/
+
+# graphify knowledge graph (regenerable output)
+/graphify-out/
+
+# default next.js starter assets (unused)
+public/file.svg
+public/globe.svg
+public/next.svg
+public/vercel.svg
+public/window.svg
+
+# skill lockfile (auto-generated)
+skills-lock.json
+.env
+
+# kilo project config (contains API keys via env refs, machine-specific)
+/.kilo/kilo.json
+.aider*
+
+# probe temporanei
+.probe-*
+.od-probe-*
+

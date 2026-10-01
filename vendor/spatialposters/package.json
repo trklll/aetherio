@@ -1,0 +1,64 @@
+{
+  "name": "spatialposters",
+  "version": "1.10.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/write-app-version.mjs && node scripts/write-render-version.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/write-app-version.mjs && node scripts/write-render-version.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "pretest": "node scripts/write-app-version.mjs && node scripts/write-render-version.mjs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:visual": "playwright test e2e/pictorium-visual.spec.ts",
+    "e2e:visual:clean": "node -e \"require('node:fs').rmSync('.next-e2e',{recursive:true,force:true})\" && playwright test e2e/pictorium-visual.spec.ts",
+    "verify": "npx tsc --noEmit && npx eslint . && npm run test && npm run build",
+    "reset-pin": "node scripts/reset-pin.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/noto-sans-symbols-2": "^5.3.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "@vercel/kv": "^3.0.0",
+    "lucide-react": "^1.35.0",
+    "next": "^16.3.3",
+    "qrcode": "^1.5.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sharp": "^0.35.4",
+    "sonner": "^2.0.8",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/node": "^26",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.3",
+    "jsdom": "^30.0.1",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  },
+  "optionalDependencies": {
+    "lightningcss-linux-x64-gnu": "^1.33.0"
+  }
+}
