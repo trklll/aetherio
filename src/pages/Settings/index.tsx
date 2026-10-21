@@ -58,7 +58,6 @@ import {
   type SpatialPosterSettings,
 } from "../../config/spatialPosters";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData } from "../../types/ui";
 import {
@@ -132,7 +131,6 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const addons = useAddonStore(state => state.addons);
   const { rows: catalogRows, loading: catalogLoading } = useHomeCatalogs(addons);
-  const { gradient } = useProfileGradient();
   const homePreferences = useHomePreferences();
   const [localHomePreferences, setLocalHomePreferences] = useState<HomePreferences>(homePreferences);
   const [keys, setKeys] = useState<ApiKeys>(() => getApiKeys());
@@ -149,16 +147,6 @@ export default function SettingsPage() {
   const [profilePin, setProfilePin] = useState("");
   const [profileAvatar, setProfileAvatar] = useState<string | undefined>(() => getActiveProfile()?.avatarDataUrl);
   const [profileError, setProfileError] = useState("");
-
-  useEffect(() => {
-    if (gradient) {
-      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
-    }
-
-    return () => {
-      document.documentElement.style.removeProperty("--aetherio-page-bg");
-    };
-  }, [gradient]);
 
   useEffect(() => {
     setKeys(getApiKeys());

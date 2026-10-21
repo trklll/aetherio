@@ -5,7 +5,6 @@ import { ChevronLeft } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { gsap } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 import type { MediaItem } from "../../types/ui";
@@ -104,19 +103,9 @@ export default function GenreListingPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const genre = params.get("genre") ?? "";
-  const { gradient } = useProfileGradient();
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollShellRef = useRef<HTMLElement | null>(null);
   const restoredScrollRef = useRef(false);
-
-  useEffect(() => {
-    if (gradient) {
-      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
-    }
-    return () => {
-      document.documentElement.style.removeProperty("--aetherio-page-bg");
-    };
-  }, [gradient]);
 
   const cachedItems = genre ? readPageDataCache<MediaItem[]>("genre", genre) : null;
   const { data: items = cachedItems ?? [], isLoading } = useQuery({

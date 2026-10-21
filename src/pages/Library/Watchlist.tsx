@@ -149,7 +149,7 @@ function AniListSyncBanner({
         <p className="mt-1 text-xs font-semibold text-white/48">
           {error || (count
             ? `${count} animes sincronizados. El progreso se actualiza al completar episodios.`
-            : "Conecta AniList al iniciar sesiÃ³n para importar y mantener tu lista.")}
+            : "Conecta AniList al iniciar sesión para importar y mantener tu lista.")}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -168,7 +168,7 @@ function AniListSyncBanner({
           className="gsap-transition inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-xs font-black text-black disabled:opacity-55"
         >
           <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
-          {syncing ? "Sincronizandoâ€¦" : "Sincronizar ahora"}
+          {syncing ? "Sincronizando…" : "Sincronizar ahora"}
         </button>
       </div>
     </div>
@@ -219,7 +219,7 @@ function LibrarySummary({ entriesVersion }: { entriesVersion: number }) {
   return (
     <div className="grid gap-3 md:grid-cols-3">
       <Metric icon={<LibraryIcon size={18} />} label="Guardados por actividad" value={stats.total} />
-      <Metric icon={<Film size={18} />} label="Peliculas vistas" value={stats.movies} />
+      <Metric icon={<Film size={18} />} label="Películas vistas" value={stats.movies} />
       <Metric icon={<Tv size={18} />} label="Series vistas" value={stats.shows} />
     </div>
   );

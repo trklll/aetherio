@@ -5,6 +5,7 @@ import type { ContinueWatchingEntry } from "../../utils/continueWatching";
 import type { SavedLibraryItem } from "../../utils/library";
 import { getScopedStorageKey } from "../../utils/localProfiles";
 import { tmdbFetch } from "../../config/apiKeys";
+import { isSpatialPosterUrl } from "../../config/spatialPosters";
 import { fetchAnilistDiscover } from "../../services/anilist";
 
 export type LibrarySort = "added_desc" | "added_asc" | "title_asc" | "title_desc";
@@ -15,6 +16,12 @@ export interface LibraryItem {
   addedAt: number;
   listKey: string;
   listLabel: string;
+}
+
+export function getLibraryPoster(item: Pick<MediaItem, "originalPoster" | "poster" | "background">): string | undefined {
+  return [item.originalPoster, item.poster, item.background].find(
+    (url): url is string => typeof url === "string" && url.length > 0 && !isSpatialPosterUrl(url),
+  );
 }
 
 export interface FacetOption {
@@ -120,6 +127,7 @@ export function buildLibraryItems(
         type: normalizeType(entry.type),
         name: entry.name,
         poster: entry.poster,
+        originalPoster: entry.originalPoster,
         background: entry.background ?? entry.episodeStill,
         logo: entry.logo,
       },

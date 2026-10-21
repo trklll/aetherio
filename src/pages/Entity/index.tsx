@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { tmdbFetch } from "../../config/apiKeys";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
 import CatalogRow from "../Home/CatalogRow";
 import { rankEntityRows, type EntityPopularityCandidate, type EntityPopularityRow } from "./entityRanking";
 import { rowKey as makeRowKey } from "../../store/homeScrollStore";
@@ -44,7 +43,6 @@ type EntityRowData = EntityPopularityRow<EntityMediaItem>;
 export default function EntityPage() {
   const { kind: rawKind, id } = useParams<{ kind: EntityKind; id: string }>();
   const location = useLocation();
-  const { gradient } = useProfileGradient();
   const [entity, setEntity] = useState<EntityData | null>(null);
   const [rows, setRows] = useState<EntityRowData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,17 +66,6 @@ export default function EntityPage() {
     prev: null,
     curr: shrinkBackdrop(fromDetailBackground),
   }));
-
-  useEffect(() => {
-    if (gradient) {
-      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
-    } else {
-      document.documentElement.style.removeProperty("--aetherio-page-bg");
-    }
-    return () => {
-      document.documentElement.style.removeProperty("--aetherio-page-bg");
-    };
-  }, [gradient]);
 
   useEffect(() => {
     const kind = normalizeEntityKind(rawKind);

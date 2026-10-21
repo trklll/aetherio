@@ -14,10 +14,12 @@ import { buildPlayerBackPath } from "../../utils/bigPictureDetail";
 import { useBackAction } from "../../input/inputActions";
 import { useParty } from "../../party/PartyContext";
 import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn";
+import { useProfileGradient } from "../../hooks/useProfileGradient";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const navigate = useNavigate();
+  const { gradient } = useProfileGradient();
   const isPlayer = loc.pathname === "/player";
   const isEpisodePage = loc.pathname === "/episode" || loc.pathname === "/streams";
   const isDetailPage = loc.pathname.startsWith("/detail/");
@@ -117,6 +119,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const controlsVisible = isPlayer ? (playerChromeVisible || controlsZone) : (controlsZone || !scrolled);
   // Party button (top-left, no back button): same hide-on-scroll as window controls.
   const partyVisible = controlsZone || backZone || !scrolled;
+
+  // Las páginas normales se conservan con Activity al navegar. El fondo global
+  // debe pertenecer al shell, no a cada página cacheada, para que el cleanup de
+  // una ruta antigua no borre el gradiente de la ruta activa.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (gradient) root.style.setProperty("--aetherio-page-bg", gradient);
+    else root.style.removeProperty("--aetherio-page-bg");
+    return () => {
+      root.style.removeProperty("--aetherio-page-bg");
+    };
+  }, [gradient]);
 
   useEffect(() => {
     const el = backChromeRef.current;

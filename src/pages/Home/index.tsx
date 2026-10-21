@@ -6,7 +6,6 @@ import {
   useHomePreferences,
 } from "../../config/homePreferences";
 import { useHomeCatalogs } from "../../hooks/useCatalogs";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import { getHomeScroll, saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
@@ -46,7 +45,6 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
   const addons = useAddonStore(s => s.addons);
   const homePreferences = useHomePreferences();
   const { rows, heroItems, loading } = useHomeCatalogs(addons, homePreferences.contentOrientation, homePreferences.bothPreference);
-  const { gradient } = useProfileGradient();
   const restoredVerticalRef = useRef(false);
   const pageRef = useRef<HTMLDivElement>(null);
   const infoRevealStartedRef = useRef(false);
@@ -154,15 +152,6 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
   useEffect(() => {
     onContentVisibleChange?.(homeInfoVisible);
   }, [homeInfoVisible, onContentVisibleChange]);
-
-  useEffect(() => {
-    if (gradient) {
-      document.documentElement.style.setProperty("--aetherio-page-bg", gradient)
-    }
-    return () => {
-      document.documentElement.style.removeProperty("--aetherio-page-bg")
-    }
-  }, [gradient])
 
   useLayoutEffect(() => {
     if (loading || restoredVerticalRef.current) return;

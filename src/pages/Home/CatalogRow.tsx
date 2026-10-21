@@ -759,6 +759,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
                 logo: item.logo,
                 background: detailBackground,
                 poster: item.poster,
+                originalPoster: item.originalPoster,
               });
             },
           }] : []),

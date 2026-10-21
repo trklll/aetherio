@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { useAddonStore } from "../../store/addonStore";
 import { useMediaSearch } from "../../hooks/useMediaSearch";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
@@ -55,7 +54,6 @@ export default function SearchPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const addons = useAddonStore(state => state.addons);
-  const { gradient } = useProfileGradient();
   const normalizedQuery = useMemo(() => (params.get("q") ?? "").trim(), [params]);
   const literal = params.get("literal") === "1";
   const { results, loading, correction, response } = useMediaSearch({
@@ -66,15 +64,6 @@ export default function SearchPage() {
     allowCorrection: !literal,
   });
   const headingQuery = correction && !literal ? correction.correctedQuery : normalizedQuery;
-
-  useEffect(() => {
-    if (gradient) {
-      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
-    }
-    return () => {
-      document.documentElement.style.removeProperty("--aetherio-page-bg");
-    };
-  }, [gradient]);
 
   function openResult(item: UnifiedSearchResult) {
     writeDetailMediaMeta(item);

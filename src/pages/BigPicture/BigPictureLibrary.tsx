@@ -23,10 +23,8 @@ import {
   Trophy,
   Tv,
 } from "lucide-react";
-import SpatialPosterImage from "../../components/SpatialPosterImage";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import { ANILIST_LIBRARY_CHANGED_EVENT, readAniListLibrary } from "../../integrations/aniList";
-import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { buildDetailPath } from "../../utils/bigPictureDetail";
 import {
   CONTINUE_WATCHING_EVENT,
@@ -34,7 +32,7 @@ import {
 } from "../../utils/continueWatching";
 import { LIBRARY_CHANGED_EVENT, readSavedLibrary } from "../../utils/library";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { buildLibraryItems, type LibraryItem } from "../Library/libraryLogic";
+import { buildLibraryItems, getLibraryPoster, type LibraryItem } from "../Library/libraryLogic";
 import "./BigPictureLibrary.css";
 
 /** Un icono de la navegación: de lucide (forwardRef) o propio (función normal). */
@@ -421,41 +419,19 @@ function LibraryCard({ item, index }: { item: LibraryItem; index: number }) {
   const navigate = useNavigate();
   const media = item.media;
   const type = normalizeType(media.type);
-  const resolved = useSpatialPoster(media.id, type, media.poster, false, undefined, media.originalPoster);
   const [failed, setFailed] = useState(false);
-  const loadedRef = useRef(false);
-  const imgRef = useRef<HTMLImageElement | null>(null);
+  const poster = getLibraryPoster(media);
 
   useEffect(() => {
     setFailed(false);
-    loadedRef.current = false;
-  }, [resolved.url]);
-
-  const poster = resolved.url ?? media.poster;
-  const fallback = resolved.original ?? media.originalPoster;
-  const image = resolved.pending ? "" : failed && fallback ? fallback : (poster ?? media.background ?? "");
-
-  // SpatialPosters genera bajo demanda y a veces la petición se cuelga sin
-  // error: a los 15s se cae al póster original en vez de dejar un hueco.
-  useEffect(() => {
-    if (!poster || !fallback || failed) return;
-    const el = imgRef.current;
-    if (el && el.currentSrc === poster && el.complete && el.naturalWidth > 0) {
-      loadedRef.current = true;
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      if (!loadedRef.current) setFailed(true);
-    }, 15000);
-    return () => window.clearTimeout(timer);
-  }, [poster, fallback, failed]);
+  }, [poster]);
 
   const openDetail = useCallback(() => {
     writeDetailMediaMeta({
       id: media.id,
       type,
       name: media.name,
-      poster: media.poster,
+      poster,
       background: media.background,
       logo: media.logo,
       description: media.description,
@@ -476,20 +452,14 @@ function LibraryCard({ item, index }: { item: LibraryItem; index: number }) {
         title={media.name}
         onClick={openDetail}
       >
-        {image ? (
-          <SpatialPosterImage
-            ref={imgRef}
-            src={image}
+        {poster && !failed ? (
+          <img
+            src={poster}
             alt=""
             loading="lazy"
             decoding="async"
             draggable={false}
-            onLoad={() => {
-              loadedRef.current = true;
-            }}
-            onError={() => {
-              if (fallback) setFailed(true);
-            }}
+            onError={() => setFailed(true)}
           />
         ) : (
           <span className="bp-library__fallback">{media.name}</span>

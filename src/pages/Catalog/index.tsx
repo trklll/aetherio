@@ -10,7 +10,6 @@ import { applySpatialPosterToUrl, extractTmdbId, isSpatialPosterUrl } from "../.
 import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
 import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 import { buildDetailPath } from "../../utils/bigPictureDetail";
@@ -266,17 +265,7 @@ export default function CatalogPage({ bigPicture = false }: { bigPicture?: boole
   const title = useMemo(() => normalizeCatalogTitle(rawTitle, type, addonId), [rawTitle, type, addonId]);
   const extraParams = useMemo(() => readExtraParams(params.get("extras")), [params]);
   const addon = useMemo(() => addons.find(item => item.id === addonId), [addonId, addons]);
-  const { gradient } = useProfileGradient();
   const cacheKey = `${addonId}:${catalogId}:${type}:${JSON.stringify(extraParams)}`;
-
-  useEffect(() => {
-    if (gradient) {
-      document.documentElement.style.setProperty("--aetherio-page-bg", gradient);
-    }
-    return () => {
-      document.documentElement.style.removeProperty("--aetherio-page-bg");
-    };
-  }, [gradient]);
 
   const cachedItems = readPageDataCache<MediaItem[]>("catalog", cacheKey);
   const [items, setItems] = useState<MediaItem[]>(() => cachedItems ?? []);

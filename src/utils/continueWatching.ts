@@ -26,6 +26,7 @@ export interface ContinueWatchingEntry {
   logo?: string;
   background?: string;
   poster?: string;
+  originalPoster?: string;
   episodeStill?: string;
   season?: number;
   episode?: number;
@@ -476,6 +477,7 @@ export function markMediaAsWatched(input: {
   logo?: string;
   background?: string;
   poster?: string;
+  originalPoster?: string;
 }) {
   const mediaKey = buildMediaKey(input.type, input.id);
   const key = `${mediaKey}:0:0`;
@@ -491,6 +493,7 @@ export function markMediaAsWatched(input: {
     logo: sanitizeLogoUrl(input.logo) ?? existing?.logo,
     background: input.background ?? existing?.background,
     poster: input.poster ?? existing?.poster,
+    originalPoster: input.originalPoster ?? existing?.originalPoster,
     episodeStill: existing?.episodeStill,
     season: 0,
     episode: 0,
