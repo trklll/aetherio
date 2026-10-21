@@ -14,6 +14,7 @@ import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow";
 import type { MediaStream } from "../../types/stream";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
 import { fetchDetailCollection, type DetailCollectionItem } from "../../services/detailCollections";
+import { isYoutubeTrailerKey, TRAILER_PROBE_MIN_WIDTH, youtubeTrailerThumbnail } from "../../services/trailerProbe";
 import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
 import { fetchAnilistIdByMalId } from "../../services/anilist";
 import {
@@ -58,6 +59,7 @@ import { pickTmdbSearchCandidate, type TmdbSearchCandidate } from "../../utils/t
 import { formatAirDate, formatRuntime, runtimeMinutes } from "../../utils/mediaLabels";
 import { DETAIL_ENTER_CONTENT_EVENT, DETAIL_EXIT_HERO_EVENT, useBigPictureActive } from "../../navigation/spatialNav.ts";
 import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
+import { usePlayableTrailers } from "../../hooks/usePlayableTrailers";
 import { GAMEPAD_ACTION_EVENT } from "../../hooks/useGamepad.ts";
 import { consumeAutoResolveBackPress } from "../../utils/autoResolveGuard.ts";
 
@@ -878,10 +880,37 @@ function findNextEpisode(
 }
 
 function extractYoutubeId(value?: string) {
-  if (!value) return undefined;
+  if (!value || typeof value !== "string") return undefined;
   const plain = value.match(/^[a-zA-Z0-9_-]{8,}$/)?.[0];
   if (plain && !value.includes("/") && !value.includes(".")) return plain;
   return value.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/)?.[1];
+}
+
+function trailerIdentity(trailer: Trailer): string {
+  const key = typeof trailer.key === "string" ? trailer.key.trim() : "";
+  if (key) return `key:${key}`;
+  const stream = trailer.stream;
+  if (stream?.id) return `stream:${stream.id}`;
+  if (stream?.url) return `url:${stream.url}`;
+  if (stream?.externalUrl) return `url:${stream.externalUrl}`;
+  if (stream?.infoHash) return `hash:${stream.infoHash}:${stream.fileIdx ?? 0}`;
+  const name = typeof trailer.name === "string" ? trailer.name.trim().toLowerCase() : "";
+  return `name:${name}`;
+}
+
+/** Une trailers de addon y de TMDB sin duplicar el mismo video. */
+function mergeTrailers(...groups: Array<Trailer[] | undefined | null>): Trailer[] {
+  const merged: Trailer[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const trailer of group ?? []) {
+      const identity = trailerIdentity(trailer);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      merged.push(trailer);
+    }
+  }
+  return merged;
 }
 
 function mapAddonTrailers(meta: any, addon: any): Trailer[] | undefined {
@@ -915,7 +944,7 @@ function mapAddonTrailers(meta: any, addon: any): Trailer[] | undefined {
       },
     };
   }).filter((item): item is Trailer => item !== null);
-  return trailers.length ? trailers.slice(0, 8) : undefined;
+  return trailers.length ? trailers : undefined;
 }
 
 function mapAddonSeasons(meta: any): DetailData["seasons"] | undefined {
@@ -2029,7 +2058,7 @@ backdropBlurAmountRef.current = 0;
           director: mapAddonDirector(m) ?? d.director,
           productionCompanies: Array.isArray(m.productionCompanies) ? m.productionCompanies : d.productionCompanies,
           networks: Array.isArray(m.networks) ? m.networks : d.networks,
-          trailers: addonTrailers ?? d.trailers,
+          trailers: addonTrailers ? mergeTrailers(d.trailers, addonTrailers) : d.trailers,
           related: mergeRelatedItems(d.related, addonRelated),
           seasons: mergeSeasons(d.seasons, addonSeasons),
           backgroundOptions: uniqueBackgroundOptions([...(d.backgroundOptions ?? []), ...addonBackgroundOptions]),
@@ -2306,8 +2335,9 @@ backdropBlurAmountRef.current = 0;
       }
 
        if (explicitTmdbIdentity || !d.director){ const crew = [...(main.credits?.crew ?? []), ...(main.aggregate_credits?.crew ?? [])]; const dir = crew.find((c:any)=>c.job==="Director" || c.jobs?.some((j:any)=>j.job==="Director")); if(dir) { d.director=dir.name; d.directorId=dir.id; } }
-      const trailerResults = (main.videos?.results??[]).filter((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));
-      if (!d.trailers?.length) d.trailers=trailerResults.slice(0,5).map((v:any)=>({key:v.key,name:v.name}));
+      const trailerResults = (main.videos?.results??[]).filter((v:any)=>v?.site==="YouTube"&&(v?.type==="Trailer"||v?.type==="Teaser")&&isYoutubeTrailerKey(v?.key));
+      const tmdbTrailers = trailerResults.slice(0,5).map((v:any)=>({key:v.key,name:v.name}));
+      if (tmdbTrailers.length) d.trailers=mergeTrailers(d.trailers, tmdbTrailers);
       d.related=mergeRelatedItems(d.related, buildRelatedItems(main, t));
 
       const collectionPromise = fetchDetailCollection({
@@ -2317,13 +2347,14 @@ backdropBlurAmountRef.current = 0;
         title: d.name,
         tmdbData: main,
       }).catch(() => null);
-      if (!d.trailers?.length && !trailerResults.length) {
+      if (!trailerResults.length) {
         void tmdbFetch<any>(`${ep2}/videos`, { params: { language: "en-US" } }).then(videosJson => {
           const fallbackTrailers = (videosJson?.results ?? [])
-            .filter((video: any) => video?.site === "YouTube" && (video?.type === "Trailer" || video?.type === "Teaser"))
+            .filter((video: any) => video?.site === "YouTube" && (video?.type === "Trailer" || video?.type === "Teaser") && isYoutubeTrailerKey(video?.key))
             .slice(0, 5)
             .map((video: any) => ({ key: video.key, name: video.name }));
-          if (fallbackTrailers.length) patchDetail({ trailers: fallbackTrailers });
+          if (!fallbackTrailers.length || !isCurrent()) return;
+          patchDetail({ trailers: mergeTrailers(d.trailers, fallbackTrailers) });
         }).catch(() => undefined);
       }
 
@@ -2472,6 +2503,8 @@ backdropBlurAmountRef.current = 0;
       .filter(entry => detailEntryMatches(data, entry) && isResumableDetailEntry(entry))
       .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
   }, [data, playbackEntries]);
+
+  const { trailers: playableTrailers, ready: trailersReady } = usePlayableTrailers(data?.trailers);
 
   const focusEpisodeEntry = useMemo(() => {
     if (!data) return null;
@@ -3646,18 +3679,18 @@ function updateBackdropBlur(scrollTop: number) {
           </section>
         )}
 
-        {!!data.trailers?.length&&(
+        {!!playableTrailers.length&&(
           <section style={{ marginTop: bigPicture && !isMovie && (curSeason || Boolean(specialSeason?.episodes.length)) ? -26 : undefined }}>
             <SectionH title="Tráilers" />
             <ScrollRow rowKey={`detail:${type}:${id}:trailers`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_TRAILER_ARROW_TOP} shadowGutter={DETAIL_TRAILER_ROW_SHADOW_GUTTER}>
-              {data.trailers.map((t,index)=><TrailerCard key={t.key ?? `trailer-${index}`} trailer={t} media={data} />)}
+              {playableTrailers.slice(0,8).map((t,index)=><TrailerCard key={t.key ?? `trailer-${index}`} trailer={t} media={data} />)}
             </ScrollRow>
           </section>
         )}
 
         <div
           ref={commentsSectionRef}
-          style={!isMovie && Boolean(specialSeason?.episodes.length) && !data.trailers?.length
+          style={!isMovie && Boolean(specialSeason?.episodes.length) && trailersReady && !playableTrailers.length
             ? { marginTop: bigPicture ? -76 : -32 }
             : undefined}
         >
@@ -4387,9 +4420,22 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
   const navigate = useNavigate();
   const bigPicture = useBigPictureActive();
   const fallbackThumb = media.backdrop ?? media.poster ?? "";
-  const initialThumb = trailer.thumbnail ?? (trailer.key ? `https://img.youtube.com/vi/${trailer.key}/maxresdefault.jpg` : fallbackThumb);
+  const trailerKey = typeof trailer.key === "string" ? trailer.key.trim() : undefined;
+  const initialThumb = trailerKey ? youtubeTrailerThumbnail(trailerKey) : trailer.thumbnail ?? fallbackThumb;
   const [thumbSrc, setThumbSrc] = useState(initialThumb);
   const [thumbFailed, setThumbFailed] = useState(false);
+
+  function fallbackThumbnail() {
+    if (trailerKey && /maxresdefault/.test(thumbSrc)) {
+      setThumbSrc(youtubeTrailerThumbnail(trailerKey, "hq"));
+      return;
+    }
+    if (!trailerKey && fallbackThumb && thumbSrc !== fallbackThumb) {
+      setThumbSrc(fallbackThumb);
+      return;
+    }
+    setThumbFailed(true);
+  }
 
   function playTrailer() {
     const stream: MediaStream = trailer.stream ?? {
@@ -4445,11 +4491,10 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
     >
       {thumbSrc ? (
         <img src={thumbSrc} alt={trailer.name}
-          onError={() => {
-            if (trailer.key && /maxresdefault/.test(thumbSrc)) {
-              setThumbSrc(`https://img.youtube.com/vi/${trailer.key}/hqdefault.jpg`);
-            } else {
-              setThumbFailed(true);
+          onError={fallbackThumbnail}
+          onLoad={e => {
+            if (trailerKey && e.currentTarget.naturalWidth > 0 && e.currentTarget.naturalWidth < TRAILER_PROBE_MIN_WIDTH) {
+              fallbackThumbnail();
             }
           }}
           loading="lazy"

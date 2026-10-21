@@ -1,5 +1,4 @@
 import { tmdbFetch } from "../config/apiKeys.ts";
-import { jikanRequest } from "./jikanClient.ts";
 import { fetchTmdbArtwork } from "./tmdbArtworkService.ts";
 import { tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
 
@@ -30,9 +29,7 @@ interface CollectionRequest {
   tmdbData: any;
 }
 
-const malFranchiseCache = new Map<string, DetailCollectionItem[]>();
 const wikidataSeriesCache = new Map<number, DetailCollectionResult | null>();
-const malToTmdbCache = new Map<string, { id: number; type: "movie" | "series" }>();
 
 async function fetchJson(url: string, init?: RequestInit) {
   try {
@@ -45,10 +42,6 @@ async function fetchJson(url: string, init?: RequestInit) {
   } catch {
     return null;
   }
-}
-
-function tmdbType(type: string) {
-  return type === "movie" ? "movie" : "tv";
 }
 
 function yearFrom(value: unknown) {
@@ -173,157 +166,17 @@ async function fetchWikidataSeriesCollection(request: CollectionRequest): Promis
   return result.items.length ? result : null;
 }
 
-async function fetchJikanAnime(malId: string) {
-  const payload = await jikanRequest<{ data?: any }>(`/anime/${encodeURIComponent(malId)}`);
-  return payload?.data ?? null;
-}
-
-async function searchJikanAnime(title: string) {
-  const body = JSON.stringify({
-    query: `query($search: String){ Media(search: $search, type: ANIME){ idMal title{ english romaji } } }`,
-    variables: { search: title },
-  });
-  const payload = await fetchJson("https://graphql.anilist.co", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body,
-  });
-  const media = payload?.data?.Media;
-  if (!media) return null;
-  const malId = Number(media.idMal);
-  return Number.isFinite(malId) && malId > 0 ? String(malId) : null;
-}
-
-async function resolveMalToTmdb(malId: string, preferredType: "movie" | "series") {
-  const cached = malToTmdbCache.get(malId);
-  if (cached) return cached;
-  const anime = await fetchJikanAnime(malId);
-  const title = anime?.title_english || anime?.title;
-  if (!title) return null;
-  const inferredType: "movie" | "series" = String(anime.type).toLowerCase() === "movie" ? "movie" : "series";
-  const types = Array.from(new Set([preferredType, inferredType]));
-  for (const type of types) {
-    const result = await tmdbFetch<any>(`/search/${tmdbType(type)}`, { params: { query: title, language: "en-US" } });
-    const id = Number(result?.results?.[0]?.id);
-    if (id > 0) {
-      const resolved = { id, type };
-      malToTmdbCache.set(malId, resolved);
-      return resolved;
-    }
-  }
-  return null;
-}
-
-async function fetchAniListFranchise(request: CollectionRequest): Promise<DetailCollectionItem[]> {
-  const payload = await fetchJson("https://graphql.anilist.co", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      query: `query ($search: String) {
-        Media(search: $search, type: ANIME) {
-          relations {
-            edges {
-              relationType
-              node {
-                id
-                idMal
-                format
-                seasonYear
-                description(asHtml: false)
-                title { english romaji }
-                coverImage { extraLarge large }
-                bannerImage
-              }
-            }
-          }
-        }
-      }`,
-      variables: { search: request.title },
-    }),
-  });
-  const edges = payload?.data?.Media?.relations?.edges ?? [];
-  const seen = new Set<string>();
-  const items: DetailCollectionItem[] = [];
-  for (const edge of edges) {
-    if (items.length >= 10) break;
-    const node = edge?.node;
-    const title = node?.title?.english || node?.title?.romaji;
-    if (!title) continue;
-    const type: "movie" | "series" = node.format === "MOVIE" ? "movie" : "series";
-    const id = node.idMal ? `mal:${node.idMal}` : node.id ? `anilist:${node.id}` : "";
-    const key = `${type}:${id}`;
-    if (!id || seen.has(key)) continue;
-    seen.add(key);
-    items.push({
-      id,
-      title,
-      type,
-      description: node.description,
-      poster: node.coverImage?.extraLarge ?? node.coverImage?.large,
-      backdrop: node.bannerImage ?? node.coverImage?.large,
-      year: yearFrom(node.seasonYear),
-    });
-  }
-  return items;
-}
-
-async function fetchAnimeFranchise(request: CollectionRequest): Promise<DetailCollectionResult | null> {
-  const isAnime = request.mediaId.startsWith("mal:")
-    || (request.tmdbData?.original_language === "ja" && request.tmdbData?.genres?.some((genre: any) => genre.id === 16));
-  if (!isAnime) return null;
-  const malId = request.mediaId.startsWith("mal:") ? request.mediaId.slice(4) : "";
-  const cacheKey = malId || `title:${request.title.toLowerCase()}`;
-  const cached = malFranchiseCache.get(cacheKey);
-  if (cached) return cached.length ? { name: "Franquicia", items: cached } : null;
-  // AniList returns franchise relations and artwork in one request. Prefer it
-  // to Jikan's rate-limited series of relation/detail lookups; use Jikan only
-  // when AniList has no usable relations.
-  const aniListItems = await fetchAniListFranchise(request);
-  if (aniListItems.length) {
-    malFranchiseCache.set(cacheKey, aniListItems);
-    return { name: "Franquicia", items: aniListItems };
-  }
-  const fallbackMalId = malId || await searchJikanAnime(request.title);
-  const payload = fallbackMalId
-    ? await jikanRequest<{ data?: any[] }>(`/anime/${encodeURIComponent(fallbackMalId)}/relations`)
-    : null;
-  const relations = (payload?.data ?? []).flatMap((relation: any) => relation.entry ?? []);
-  const seen = new Set<string>();
-  const items: DetailCollectionItem[] = [];
-  for (const relation of relations) {
-    if (items.length >= 10) break;
-    const relationMalId = String(relation?.mal_id ?? "");
-    if (!relationMalId) continue;
-    const anime = await fetchJikanAnime(relationMalId);
-    const title = anime?.title_english || anime?.title;
-    if (!title) continue;
-    const type: "movie" | "series" = String(anime.type).toLowerCase() === "movie" ? "movie" : "series";
-    const resolved = await resolveMalToTmdb(relationMalId, type);
-    const id = resolved ? `tmdb:${resolved.id}` : `mal:${relationMalId}`;
-    const key = `${type}:${id}`;
-    if (seen.has(key) || (resolved?.id === request.tmdbId)) continue;
-    seen.add(key);
-    const artwork: { poster?: string; backdrop?: string; logo?: string } = resolved
-      ? await fetchArtwork(resolved.type, resolved.id)
-      : {};
-    items.push({
-      id,
-      title,
-      type,
-      description: anime.synopsis,
-      poster: artwork.poster,
-      backdrop: artwork.backdrop,
-      logo: artwork.logo,
-      year: yearFrom(anime.year),
-    });
-  }
-  malFranchiseCache.set(cacheKey, items);
-  return items.length ? { name: "Franquicia", items } : null;
+function isAnimeRequest(request: CollectionRequest) {
+  const genres = Array.isArray(request.tmdbData?.genres) ? request.tmdbData.genres : [];
+  return request.mediaType === "anime"
+    || request.mediaId.startsWith("mal:")
+    || genres.some((genre: any) => String(genre?.name ?? "").toLowerCase() === "anime")
+    || (request.tmdbData?.original_language === "ja"
+      && genres.some((genre: any) => Number(genre?.id) === 16));
 }
 
 export async function fetchDetailCollection(request: CollectionRequest): Promise<DetailCollectionResult | null> {
-  const anime = await fetchAnimeFranchise(request);
-  if (anime?.items.length) return anime;
+  if (isAnimeRequest(request)) return null;
   if (request.mediaType === "movie") return fetchMovieCollection(request);
   return fetchWikidataSeriesCollection(request);
 }

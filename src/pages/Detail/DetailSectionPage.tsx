@@ -10,6 +10,8 @@ import { pickPreferredTmdbBackdrop } from "../../utils/tmdbArtwork";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import type { MediaStream } from "../../types/stream";
 import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
+import { TRAILER_PROBE_MIN_WIDTH, youtubeTrailerThumbnail } from "../../services/trailerProbe";
+import { usePlayableTrailers } from "../../hooks/usePlayableTrailers";
 
 const IMG = "https://image.tmdb.org/t/p";
 
@@ -18,7 +20,6 @@ type SectionKind = "trailers" | "cast" | "related";
 interface TrailerItem {
   key: string;
   name: string;
-  thumbnail: string;
 }
 
 interface PersonItem {
@@ -141,11 +142,14 @@ export default function DetailSectionPage() {
     };
   }, [id, params, sectionKind, type]);
 
+  const { trailers: playableTrailers, ready: trailersReady } = usePlayableTrailers(trailers);
+  const trailersLoading = sectionKind === "trailers" && (!trailersReady || loading);
+
   const count = useMemo(() => {
-    if (sectionKind === "trailers") return trailers.length;
+    if (sectionKind === "trailers") return playableTrailers.length;
     if (sectionKind === "cast") return people.length;
     return related.length;
-  }, [people.length, related.length, sectionKind, trailers.length]);
+  }, [people.length, playableTrailers.length, related.length, sectionKind]);
 
   return (
     <PageContainer>
@@ -153,15 +157,19 @@ export default function DetailSectionPage() {
         <header style={{ marginBottom: 22 }}>
           <h1 style={{ fontSize: 21, fontWeight: 800, color: "#fff", lineHeight: 1.1 }}>{title}</h1>
           <p style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
-            {loading ? "Cargando..." : `${count} elementos`}
+            {loading || trailersLoading ? "Cargando..." : `${count} elementos`}
           </p>
         </header>
 
         {error ? <div className="liquid-glass-dark rounded-[18px] p-5 text-sm text-white/68">{error}</div> : null}
 
-        {sectionKind === "trailers" ? (
+        {sectionKind === "trailers" && !loading && trailersReady && !playableTrailers.length && !error ? (
+          <div className="liquid-glass-dark rounded-[18px] p-5 text-sm text-white/68">No hay tráilers disponibles.</div>
+        ) : null}
+
+        {sectionKind === "trailers" && playableTrailers.length ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(347px, 347px))", gap: 18 }}>
-            {trailers.map(item => <TrailerGridCard key={item.key} item={item} media={media} type={type} id={id} />)}
+            {playableTrailers.map(item => <TrailerGridCard key={item.key} item={item} media={media} type={type} id={id} />)}
           </div>
         ) : null}
 
@@ -198,6 +206,8 @@ export default function DetailSectionPage() {
 
 function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: MediaHeader; type: string; id: string }) {
   const navigate = useNavigate();
+  const [thumbSrc, setThumbSrc] = useState(() => youtubeTrailerThumbnail(item.key));
+  const [thumbFailed, setThumbFailed] = useState(false);
   const stream: MediaStream = {
     id: `tmdb-trailer-${item.key}`,
     addonId: "tmdb",
@@ -208,6 +218,14 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
     ytId: item.key,
     behaviorHints: { background: media.background, poster: media.poster },
   };
+
+  function fallbackThumbnail() {
+    if (/maxresdefault/.test(thumbSrc)) {
+      setThumbSrc(youtubeTrailerThumbnail(item.key, "hq"));
+      return;
+    }
+    setThumbFailed(true);
+  }
 
   return (
     <button
@@ -225,7 +243,21 @@ function TrailerGridCard({ item, media, type, id }: { item: TrailerItem; media: 
       }}
       style={{ position: "relative", width: 399, height: 224, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer", textAlign: "left" }}
     >
-      <img src={item.thumbnail} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+      {!thumbFailed ? (
+        <img
+          src={thumbSrc}
+          alt={item.name}
+          loading="lazy"
+          decoding="async"
+          onError={fallbackThumbnail}
+          onLoad={e => {
+            if (e.currentTarget.naturalWidth > 0 && e.currentTarget.naturalWidth < TRAILER_PROBE_MIN_WIDTH) {
+              fallbackThumbnail();
+            }
+          }}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : null}
       <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.28) 48%, transparent 100%)" }} />
       <div style={{ position: "absolute", left: 12, right: 12, bottom: 12 }}>
         <p style={{ fontSize: 14, fontWeight: 800, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</p>
@@ -306,8 +338,7 @@ function mapTrailers(results: unknown): TrailerItem[] {
     .filter((item: any) => item?.site === "YouTube" && (item?.type === "Trailer" || item?.type === "Teaser") && typeof item?.key === "string")
     .map((item: any) => ({
       key: item.key,
-      name: item.name ?? "Trailer",
-      thumbnail: `https://img.youtube.com/vi/${item.key}/maxresdefault.jpg`,
+      name: typeof item.name === "string" && item.name.trim() ? item.name : "Trailer",
     }));
 }
 
