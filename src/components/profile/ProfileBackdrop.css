@@ -1,6 +1,4 @@
-/* Fondo compartido de las pages de identidad (Profiles y Quick Start).
-   Origen: el bloque .profile-selection-bg de ProfileSelection.css, extraído
-   para que Quick Start use el mismo fondo y no una copia que se desvía. */
+/* Fondo de avatar compartido por selección de perfil, Quick Start y AppShell. */
 
 .profile-selection-bg {
   position: fixed;
@@ -9,6 +7,10 @@
   overflow: hidden;
   pointer-events: none;
   background: #1a1a1a;
+}
+
+.app-shell-profile-backdrop {
+  z-index: -1;
 }
 
 .profile-selection-bg-img {

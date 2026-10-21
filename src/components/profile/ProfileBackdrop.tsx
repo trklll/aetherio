@@ -6,10 +6,11 @@ interface ProfileBackdropProps {
   /** Segunda imagen durante el crossfade (avatar que entra). */
   nextImageUrl?: string | null;
   transitioning?: boolean;
+  className?: string;
 }
 
 /**
- * Fondo de las pages de identidad (Profiles y Quick Start).
+ * Fondo de perfil basado en el avatar, compartido por selección, Quick Start y AppShell.
  *
  * Es el mismo bloque que usaba Profiles —imagen del avatar con blur(70px)
  * saturate(1.3) más los degradados— extraído para que Quick Start comparta
@@ -21,9 +22,10 @@ export default function ProfileBackdrop({
   imageUrl,
   nextImageUrl,
   transitioning = false,
+  className,
 }: ProfileBackdropProps) {
   return (
-    <div className="profile-selection-bg" aria-hidden="true">
+    <div className={`profile-selection-bg ${className ?? ""}`} aria-hidden="true">
       {imageUrl ? (
         <img
           src={imageUrl}

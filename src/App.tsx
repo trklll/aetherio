@@ -652,7 +652,7 @@ function makePageCacheKey(location: Location) {
 }
 
 function RouteFallback() {
-  return <div style={{ minHeight: "100vh", background: "#1f1f1f" }} />;
+  return <div style={{ minHeight: "100vh" }} />;
 }
 
 function getTraktCallbackKey(rawUrl: string) {

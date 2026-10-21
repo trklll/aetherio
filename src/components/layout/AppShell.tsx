@@ -14,12 +14,13 @@ import { buildPlayerBackPath } from "../../utils/bigPictureDetail";
 import { useBackAction } from "../../input/inputActions";
 import { useParty } from "../../party/PartyContext";
 import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn";
-import { useProfileGradient } from "../../hooks/useProfileGradient";
+import ProfileBackdrop from "../profile/ProfileBackdrop";
+import { getActiveProfile, LOCAL_PROFILES_CHANGED_EVENT } from "../../utils/localProfiles";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const navigate = useNavigate();
-  const { gradient } = useProfileGradient();
+  const [profileAvatar, setProfileAvatar] = useState(() => getActiveProfile()?.avatarDataUrl ?? null);
   const isPlayer = loc.pathname === "/player";
   const isEpisodePage = loc.pathname === "/episode" || loc.pathname === "/streams";
   const isDetailPage = loc.pathname.startsWith("/detail/");
@@ -120,17 +121,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // Party button (top-left, no back button): same hide-on-scroll as window controls.
   const partyVisible = controlsZone || backZone || !scrolled;
 
-  // Las páginas normales se conservan con Activity al navegar. El fondo global
-  // debe pertenecer al shell, no a cada página cacheada, para que el cleanup de
-  // una ruta antigua no borre el gradiente de la ruta activa.
   useEffect(() => {
-    const root = document.documentElement;
-    if (gradient) root.style.setProperty("--aetherio-page-bg", gradient);
-    else root.style.removeProperty("--aetherio-page-bg");
-    return () => {
-      root.style.removeProperty("--aetherio-page-bg");
+    const updateProfileAvatar = () => {
+      setProfileAvatar(getActiveProfile()?.avatarDataUrl ?? null);
     };
-  }, [gradient]);
+    updateProfileAvatar();
+    window.addEventListener(LOCAL_PROFILES_CHANGED_EVENT, updateProfileAvatar);
+    window.addEventListener("storage", updateProfileAvatar);
+    return () => {
+      window.removeEventListener(LOCAL_PROFILES_CHANGED_EVENT, updateProfileAvatar);
+      window.removeEventListener("storage", updateProfileAvatar);
+    };
+  }, []);
 
   useEffect(() => {
     const el = backChromeRef.current;
@@ -526,10 +528,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
         height: "100vh",
         width: "100vw",
         overflow: "hidden",
-        background: `${isPlayer && playerTransparent ? "transparent" : isPlayer ? "#000" : isPersonPage ? "#2b2b2d" : "transparent"}`,
+        isolation: "isolate",
+        background: `${isPlayer && playerTransparent ? "transparent" : isPlayer ? "#000" : "transparent"}`,
         color: "#fff",
       }}
     >
+      {!isPlayer ? <ProfileBackdrop imageUrl={profileAvatar} className="app-shell-profile-backdrop" /> : null}
       <div
         className="absolute inset-x-0 top-0 z-50"
         style={{ height: "var(--app-shell-nav-height)", paddingTop: "var(--app-safe-top)" }}
