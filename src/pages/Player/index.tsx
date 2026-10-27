@@ -48,6 +48,7 @@ import {
   stopNativePlayback,
 } from "../../runtime/platform";
 import type { ChapterOption, MpvStatusSnapshot, MpvTrack, VideoScaleMode } from "./types";
+import EpisodePanel from "./EpisodePanel";
 import SourcePanel from "./SourcePanel";
 import SourceResolver from "./SourceResolver";
 import PlayerControls from "./PlayerControls";
@@ -443,8 +444,8 @@ export default function PlayerPage() {
     [safeStream],
   );
   const isIframeStream = safeStream?.behaviorHints?.scraperPlayback === "iframe";
-  // La ruta conserva identidad propia (back links, deep links), pero el
-  // reproductor comparte la presentacion inmersiva en ambos modos.
+  // Ambos modos comparten la superficie inmersiva; el modo TV mantiene su
+  // barra y su panel lateral clásicos mediante `legacyTv`.
   const isBigPictureRoute = isBigPictureLocation();
   const isBigPicturePlayer = true;
   const trailerRequested = params.get("trailer") === "1";
@@ -584,6 +585,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
   const currentEpisode = query?.season && query?.episode
     ? episodeOptions.find(ep => ep.episode === query.episode) ?? null
     : null;
+  const currentOverview = currentEpisode?.overview?.trim() || "Sin descripción disponible para este episodio.";
 
   const streamBehaviorBackground = typeof safeStream?.behaviorHints?.background === "string" ? safeStream.behaviorHints.background : "";
   const streamBehaviorPoster = typeof safeStream?.behaviorHints?.poster === "string" ? safeStream.behaviorHints.poster : "";
@@ -2892,7 +2894,8 @@ function activateFocusedControl() {
 // el mando (B o cruceta arriba) y el teclado (flecha arriba): una sola accion
 // para que ambos caminos devuelvan la barra al estado anterior.
 function closeEpisodeRow() {
-  setBigPictureEpisodesOpen(false);
+  if (isBigPictureRoute) setActiveSidePanel(null);
+  else setBigPictureEpisodesOpen(false);
   focusBarTimeline();
 }
 usePlayerGamepad({
@@ -2952,6 +2955,12 @@ usePlayerGamepad({
     focusPlayerOverlay();
   },
   openEpisodesOrSources: () => {
+    if (isBigPictureRoute && episodeOptions.length > 0) {
+      setActiveSidePanel("episodes");
+      holdControls();
+      focusPlayerOverlay();
+      return;
+    }
     if (episodeOptions.length > 0) {
       holdControls();
       setGamepadBarMode(true);
@@ -4195,6 +4204,24 @@ if (!stream) {
         </button>
       ) : null}
 
+      {isBigPictureRoute ? (
+        <EpisodePanel
+          visible={activeSidePanel === "episodes" && showPanelToggle}
+          title={title}
+          streamName={mediaTitle}
+          seriesLogoUrl={seriesLogoUrl}
+          currentEpisode={currentEpisode}
+          currentOverview={currentOverview}
+          items={panelItems}
+          hasEpisodeOptions={episodeOptions.length > 0}
+          canGoPrevEpisode={canGoPrevEpisode}
+          canGoNextEpisode={canGoNextEpisode}
+          bigPicture
+          onClose={() => setActiveSidePanel(null)}
+          onNavigateEpisode={navigateEpisode}
+        />
+      ) : null}
+
       <SourcePanel
         visible={activeSidePanel === "sources"}
         streams={availableStreams}
@@ -4248,6 +4275,7 @@ if (!stream) {
       <PlayerControls
         active={controlsReady && controlsActive && !showUpNext}
         bigPicture={isBigPicturePlayer}
+        legacyTv={isBigPictureRoute}
         currentMetaTitle={currentMetaTitle}
         streamingServiceBadge={streamingServiceBadge}
         videoFormatBadges={videoFormatBadges}

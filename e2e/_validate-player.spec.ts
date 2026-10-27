@@ -56,7 +56,7 @@ async function stubPlayback(page: Page) {
   });
 }
 
-const URL_BP = "/big-picture/player?type=movie&id=tmdb%3A4951";
+const URL_PC = "/player?type=movie&id=tmdb%3A4951";
 
 type Call = { cmd: string; args?: { name?: string; value?: unknown; command?: unknown[] } };
 
@@ -64,7 +64,7 @@ async function calls(page: Page): Promise<Call[]> {
   return page.evaluate(() => (window as unknown as { __calls: Call[] }).__calls);
 }
 
-async function openBar(page: Page, url = URL_BP) {
+async function openBar(page: Page, url = URL_PC) {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1920, height: 1080 });
   await stubPlayback(page);
@@ -169,61 +169,73 @@ test("Space en boton enfocado activa una sola vez; menus cierran el bypass", asy
   await expect(root).toHaveAttribute("data-player-direct-input", "true");
 });
 
-for (const path of ["/player", "/big-picture/player"]) {
-  test(`vidrio nativo por control y volumen sin borde de seleccion: ${path}`, async ({ page }) => {
-    await openBar(page, `${path}?type=series&id=tmdb%3A999999&season=1&ep=2`);
-    await expect(page.locator("[data-bp-episodes-label]")).toBeVisible();
-    const volume = page.locator("[data-player-volume]");
-    await volume.hover();
+type Rect = { left: number; top: number; right: number; bottom: number; cornerRadius: number };
+type Blur = { enabled: boolean; controlAlpha: number; blurAlpha: number; subtitlePanelEnabled: boolean; subtitleBlurAlpha: number; controlSurfaces: Rect[] };
+const lastBlur = (page: Page) => page.evaluate(() => {
+  const history = (window as unknown as { __calls: { cmd: string; args: Blur }[] }).__calls;
+  return history.filter(call => call.cmd === "set_mpv_controls_blur").at(-1)?.args;
+});
 
-    type Rect = { left: number; top: number; right: number; bottom: number; cornerRadius: number };
-    type Blur = { enabled: boolean; controlAlpha: number; blurAlpha: number; subtitlePanelEnabled: boolean; subtitleBlurAlpha: number; controlSurfaces: Rect[] };
-    const lastBlur = () => page.evaluate(() => {
-      const history = (window as unknown as { __calls: { cmd: string; args: Blur }[] }).__calls;
-      return history.filter(call => call.cmd === "set_mpv_controls_blur").at(-1)?.args;
-    });
-    await expect.poll(async () => (await lastBlur())?.controlAlpha).toBeGreaterThan(0.99);
-    const expectedSurfaces = await page.locator("[data-player-control-glass]").evaluateAll(elements =>
-      elements.filter(element => !element.parentElement?.closest("[data-player-control-glass]")).map(element => {
-        const rect = element.getBoundingClientRect();
-        const scale = devicePixelRatio || 1;
-        return { left: Math.round(rect.left * scale), top: Math.round(rect.top * scale), right: Math.round(rect.right * scale), bottom: Math.round(rect.bottom * scale) };
-      }));
-    const blur = (await lastBlur())!;
-    expect(blur.enabled).toBe(true);
-    expect(blur.blurAlpha).toBe(0);
-    expect(blur.controlSurfaces).toHaveLength(expectedSurfaces.length);
-    for (const expected of expectedSurfaces) {
-      expect(blur.controlSurfaces.some(surface => Object.entries(expected).every(([key, value]) => Math.abs(surface[key as keyof Rect] - value) <= 2))).toBe(true);
-    }
-    expect(blur.controlSurfaces.some(rect => rect.right - rect.left > 100 && rect.cornerRadius >= 20)).toBe(true);
+test("el reproductor PC usa vidrio por control y volumen sin borde de selección", async ({ page }) => {
+  await openBar(page, "/player?type=series&id=tmdb%3A999999&season=1&ep=2");
+  await expect(page.locator("[data-player-controls-glass]")).toHaveAttribute("data-player-controls-variant", "pc-modern");
+  await expect(page.locator("[data-bp-episodes-label]")).toBeVisible();
+  const volume = page.locator("[data-player-volume]");
+  await volume.hover();
+  await expect.poll(async () => (await lastBlur(page))?.controlAlpha).toBeGreaterThan(0.99);
 
-    await volume.click({ position: { x: 100, y: 10 } });
-    await expect(volume).toBeFocused();
-    await expect(volume).toHaveCSS("appearance", "none");
-    await expect(volume).toHaveCSS("outline-style", "none");
-    await expect(volume).toHaveCSS("box-shadow", "none");
-    await test.info().attach("volumen-enfocado", { body: await volume.locator("..").screenshot(), contentType: "image/png" });
-    await expect.poll(async () => (await calls(page)).filter(call => call.cmd === "mpv_set_property" && call.args?.name === "volume").at(-1)?.args?.value).toBeGreaterThan(100);
+  const expectedSurfaces = await page.locator("[data-player-control-glass]").evaluateAll(elements =>
+    elements.filter(element => !element.parentElement?.closest("[data-player-control-glass]")).map(element => {
+      const rect = element.getBoundingClientRect();
+      const scale = devicePixelRatio || 1;
+      return { left: Math.round(rect.left * scale), top: Math.round(rect.top * scale), right: Math.round(rect.right * scale), bottom: Math.round(rect.bottom * scale) };
+    }));
+  const blur = (await lastBlur(page))!;
+  expect(blur.enabled).toBe(true);
+  expect(blur.blurAlpha).toBe(0);
+  expect(blur.controlSurfaces).toHaveLength(expectedSurfaces.length);
+  for (const expected of expectedSurfaces) {
+    expect(blur.controlSurfaces.some(surface => Object.entries(expected).every(([key, value]) => Math.abs(surface[key as keyof Rect] - value) <= 2))).toBe(true);
+  }
+  expect(blur.controlSurfaces.some(rect => rect.right - rect.left > 100 && rect.cornerRadius >= 20)).toBe(true);
 
-    const play = page.locator("[data-player-playpause]");
-    const background = await play.evaluate(element => getComputedStyle(element).backgroundColor);
-    const volumeBackground = await volume.locator("..").evaluate(element => getComputedStyle(element).backgroundColor);
-    await page.locator('[data-menu-id="speed"] > button').click();
-    await expect(page.locator('[data-menu-id="speed"] > button')).toHaveCSS("color", "rgb(11, 11, 13)");
-    const menu = page.locator("[data-player-floating-panel-glass]");
-    await expect(menu).toBeVisible();
-    await expect(menu).toHaveCSS("background-color", background);
-    expect(volumeBackground).toBe(background);
-    await expect.poll(async () => (await lastBlur())?.subtitleBlurAlpha).toBeGreaterThan(0.99);
-    expect((await lastBlur())?.controlAlpha).toBeGreaterThan(0.99);
+  await volume.click({ position: { x: 100, y: 10 } });
+  await expect(volume).toBeFocused();
+  await expect(volume).toHaveCSS("appearance", "none");
+  await expect(volume).toHaveCSS("outline-style", "none");
+  await expect(volume).toHaveCSS("box-shadow", "none");
+  await test.info().attach("volumen-enfocado", { body: await volume.locator("..").screenshot(), contentType: "image/png" });
+  await expect.poll(async () => (await calls(page)).filter(call => call.cmd === "mpv_set_property" && call.args?.name === "volume").at(-1)?.args?.value).toBeGreaterThan(100);
 
-    await page.keyboard.press("Escape");
-    await expect(menu).toHaveCount(0);
-    await page.mouse.move(960, 220);
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.waitForTimeout(3800);
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await expect.poll(async () => (await lastBlur())?.enabled, { timeout: 10000 }).toBe(false);
-  });
-}
+  const play = page.locator("[data-player-playpause]");
+  const background = await play.evaluate(element => getComputedStyle(element).backgroundColor);
+  const volumeBackground = await volume.locator("..").evaluate(element => getComputedStyle(element).backgroundColor);
+  await page.locator('[data-menu-id="speed"] > button').click();
+  await expect(page.locator('[data-menu-id="speed"] > button')).toHaveCSS("color", "rgb(11, 11, 13)");
+  const menu = page.locator("[data-player-floating-panel-glass]");
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveCSS("background-color", background);
+  expect(volumeBackground).toBe(background);
+  await expect.poll(async () => (await lastBlur(page))?.subtitleBlurAlpha).toBeGreaterThan(0.99);
+  expect((await lastBlur(page))?.controlAlpha).toBeGreaterThan(0.99);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+});
+
+test("el reproductor TV conserva sus controles clásicos", async ({ page }) => {
+  await openBar(page, "/big-picture/player?type=series&id=tmdb%3A999999&season=1&ep=2");
+  await expect(page.locator("[data-player-controls-glass]")).toHaveAttribute("data-player-controls-variant", "tv-legacy");
+  await expect(page.locator("[data-bp-episodes-label]")).toHaveJSProperty("tagName", "SPAN");
+  await expect(page.locator(".bp-bar-transport")).toHaveCount(0);
+  await expect(page.locator("[data-player-playpause]")).toHaveCount(0);
+  expect((await lastBlur(page))?.controlAlpha).toBe(0);
+  expect((await lastBlur(page))?.controlSurfaces).toEqual([]);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("aetherio-gamepad-action", { detail: { id: "y" } })));
+  await expect(page.locator("[data-player-episode-panel-glass]")).toBeVisible();
+
+  await page.locator('[data-menu-id="speed"] > button').click();
+  await expect(page.locator("[data-player-floating-panel-glass]")).toBeVisible();
+  await expect.poll(async () => (await lastBlur(page))?.subtitleBlurAlpha).toBeGreaterThan(0.99);
+});

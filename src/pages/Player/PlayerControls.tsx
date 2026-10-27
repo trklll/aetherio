@@ -123,6 +123,8 @@ interface PlayerControlsProps {
   onGoLive?: () => void;
   /** Variante Big Picture (/big-picture/player): layout sin guía de mando. */
   bigPicture?: boolean;
+  /** La ruta TV conserva la barra anterior; la barra nueva se reserva a PC. */
+  legacyTv?: boolean;
   /** Menú flotante activo, elevado a PlayerPage para que el mando (X) lo abra. */
   openMenu: string | null;
   onOpenMenuChange: (next: string | null) => void;
@@ -224,6 +226,7 @@ export default function PlayerControls({
   liveDvrProgress = 1,
   onGoLive,
   bigPicture,
+  legacyTv = false,
   openMenu,
   onOpenMenuChange,
   showPanelToggle,
@@ -880,7 +883,7 @@ useEffect(() => {
       const scale = window.devicePixelRatio || 1;
       const r = (v: number) => Math.round(v * scale);
       const player = controlsRef.current?.parentElement;
-      const controlSurfaces = bigPicture && player
+      const controlSurfaces = bigPicture && !legacyTv && player
         ? Array.from(player.querySelectorAll<HTMLElement>("[data-player-control-glass], [data-player-skip]"))
           .filter(element => !element.parentElement?.closest("[data-player-control-glass]"))
           .map(element => {
@@ -941,7 +944,7 @@ useEffect(() => {
       }
       const alpha = {
         blurAlpha: bigPicture ? 0 : barAlphaRef.current.v,
-        controlAlpha: bigPicture ? barAlphaRef.current.v : 0,
+        controlAlpha: bigPicture && !legacyTv ? barAlphaRef.current.v : 0,
         episodeBlurAlpha: episodeAlphaRef.current.v,
         subtitleBlurAlpha: subtitleAlphaRef.current.v,
       };
@@ -954,7 +957,7 @@ useEffect(() => {
         alpha.controlAlpha > 0.01 ||
         alpha.episodeBlurAlpha > 0.01 ||
         alpha.subtitleBlurAlpha > 0.01 ||
-        active ||
+        (!legacyTv && active) ||
         !!activeSidePanel ||
         !!openMenu ||
         !!subtitleSyncOpen;
@@ -977,7 +980,7 @@ useEffect(() => {
       }, 16);
     };
 
-    const targetBar = active && !controlsLocked ? 1 : 0;
+    const targetBar = legacyTv ? 0 : (active && !controlsLocked ? 1 : 0);
     const targetEpisode = activeSidePanel || episodesRowOpen ? 1 : 0;
     const targetSubtitle = openMenu || subtitleSyncOpen ? 1 : 0;
 
@@ -1053,7 +1056,7 @@ useEffect(() => {
       }
       if (nativeRetryTimer !== null) window.clearTimeout(nativeRetryTimer);
     };
-  }, [active, activeSidePanel, bigPicture, controlsLocked, episodesMounted, episodesRowOpen, nativeSurfaceVisible, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
+  }, [active, activeSidePanel, bigPicture, controlsLocked, episodesMounted, episodesRowOpen, legacyTv, nativeSurfaceVisible, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
 
   function runControlAction(action: () => void) {
     setOpenMenu(null);
@@ -1120,6 +1123,7 @@ useEffect(() => {
       <div
         ref={controlsGlassRef}
         data-player-controls-glass
+        data-player-controls-variant={legacyTv ? "tv-legacy" : "pc-modern"}
         className={bigPicture
           ? `bp-player-controls relative mx-auto w-full px-[clamp(28px,6.4vw,132px)] pb-[clamp(20px,3.6vh,42px)] pt-[clamp(30px,7vh,84px)]`
           : "relative mx-auto w-full max-w-[1240px] overflow-hidden rounded-[26px] px-5 py-3.5 shadow-[0_30px_90px_rgba(0,0,0,0.76)] will-change-transform"}
@@ -1502,7 +1506,19 @@ useEffect(() => {
           </div>
         ) : null}
 
-        {bigPicture ? (
+        {bigPicture && legacyTv && showPanelToggle ? (
+          <div className="mt-[clamp(12px,2vh,26px)] flex flex-wrap items-center gap-x-[clamp(20px,1.8vw,34px)] gap-y-1">
+            <span
+              data-bp-episodes-label
+              aria-expanded={episodesRowOpen}
+              className="bp-eyebrow truncate text-[clamp(15px,1.15vw,20px)] font-semibold leading-[1.2] text-white/72"
+            >
+              Episodios
+            </span>
+          </div>
+        ) : null}
+
+        {bigPicture && !legacyTv ? (
           <div className="bp-bar-transport mt-[clamp(12px,2vh,26px)] flex flex-wrap items-center justify-between gap-x-[clamp(16px,2vw,34px)] gap-y-2">
             <div className="flex flex-wrap items-center gap-2.5">
               <IconButton label="Retroceder 10 segundos" disabled={transportLocked} onClick={() => runControlAction(() => onJump(-10))}>

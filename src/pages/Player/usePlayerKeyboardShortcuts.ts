@@ -87,6 +87,17 @@ export function usePlayerKeyboardShortcuts({
 
       if (event.key === "Tab") {
         handlersRef.current.revealControls();
+        const target = event.target;
+        const alreadyInControls = target instanceof HTMLElement
+          && Boolean(target.closest("[data-player-controls-glass]"));
+        const pcControls = document.querySelector('[data-player-controls-variant="pc-modern"]');
+        if (!alreadyInControls && pcControls) {
+          event.preventDefault();
+          window.requestAnimationFrame(() => {
+            document.querySelector<HTMLElement>("[data-player-controls-glass] [data-player-timeline]:not([disabled])")
+              ?.focus({ preventScroll: true });
+          });
+        }
         return;
       }
 
