@@ -169,6 +169,20 @@ test("Space en boton enfocado activa una sola vez; menus cierran el bypass", asy
   await expect(root).toHaveAttribute("data-player-direct-input", "true");
 });
 
+test("la pantalla de pausa sustituye la barra aunque conserve el foco", async ({ page }) => {
+  await openBar(page);
+  const play = page.locator("[data-player-playpause]");
+  await play.focus();
+  await page.keyboard.press("Space");
+  await expect.poll(async () => (await calls(page))
+    .filter(call => call.cmd === "mpv_set_property" && call.args?.name === "pause").at(-1)?.args?.value)
+    .toBe(true);
+
+  const pauseScreen = page.locator("[data-player-pause-screen]");
+  await expect(pauseScreen).toBeVisible({ timeout: 10_000 });
+  await expect(controlsLayer(page)).toHaveCSS("pointer-events", "none");
+});
+
 type Rect = { left: number; top: number; right: number; bottom: number; cornerRadius: number };
 type Blur = { enabled: boolean; controlAlpha: number; blurAlpha: number; subtitlePanelEnabled: boolean; subtitleBlurAlpha: number; controlSurfaces: Rect[] };
 const lastBlur = (page: Page) => page.evaluate(() => {

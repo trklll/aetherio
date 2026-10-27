@@ -4273,7 +4273,7 @@ if (!stream) {
       />
 
       <PlayerControls
-        active={controlsReady && controlsActive && !showUpNext}
+        active={controlsReady && controlsActive && !showUpNext && !pauseScreenVisible}
         bigPicture={isBigPicturePlayer}
         legacyTv={isBigPictureRoute}
         currentMetaTitle={currentMetaTitle}
