@@ -12,15 +12,16 @@ describe("providerRuntimeDepsUrl", () => {
       .toBe("tauri://localhost/provider-runtime-deps.js");
   });
 
-  it("uses the bundled 4KHDHub adapter", () => {
-    expect(getBuiltinProviderScriptPath("yoruix:4khdhub")).toBe("/aetherio-4khdhub.js");
+  it("does not bundle provider scripts in the app", () => {
+    expect(getBuiltinProviderScriptPath("yoruix:4khdhub")).toBeNull();
     expect(getBuiltinProviderScriptPath("yoruix:vidlink")).toBeNull();
   });
 });
 
 describe("provider retirement", () => {
-  it("limits the curated Range7 repository to 2Peckle", () => {
-    expect(isProviderManifestScraperAllowed("range7", "2peckle")).toBe(true);
+  it("does not allow old bundled source repositories", () => {
+    expect(isProviderManifestScraperAllowed("aetherio-hub", "4khdhub")).toBe(true);
+    expect(isProviderManifestScraperAllowed("range7", "2peckle")).toBe(false);
     expect(isProviderManifestScraperAllowed("range7", "4khdhub")).toBe(false);
   });
 

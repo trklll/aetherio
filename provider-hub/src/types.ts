@@ -44,9 +44,13 @@ export interface ProviderRecord {
   id: string;
   name: string;
   description?: string;
+  /** URL del logo del scraper, preservada desde el manifest del repo original. */
+  logo?: string;
   enabled: boolean;
   supportedTypes: DesktopMediaType[];
   contentLanguage?: string[];
+  /** Enlace remoto de proveniencia del script (se usa si no hay copia en KV). */
+  scriptUrl?: string;
   /** "drop": para móvil se descartan streams que exigen cabeceras; "keep": se dejan sin cabeceras. */
   mobileHeaders: "drop" | "keep";
   origin: "default" | "kv";

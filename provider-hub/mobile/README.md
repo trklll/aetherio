@@ -38,16 +38,18 @@ reemplazar `id`/URL codificadas en el APK por el manifest del hub:
    solo gestiona las predeterminadas.
 
 Esto permite actualizar/corregir/retirar fuentes **sin publicar una nueva
-versión del APK**: los cambios en el hub (KV/admin) aparecen al reiniciar la
-instancia del worker o al redeploy; los scripts se compilan en el arranque del
-worker, no durante las peticiones.
+versión del APK**. Tras cambiar scripts en KV/admin, ejecuta
+`node scripts/deploy-current-providers.mjs` en `provider-hub/`: empaqueta los
+scripts y despliega solo el Worker. Cloudflare no permite leer KV ni compilar
+JavaScript dinámico dentro de peticiones, por eso el bundle se compila al
+arrancar el Worker.
 
 ## Observabilidad
 
 - `GET /health` — estado del hub (version + warmup).
 - Cabeceras de respuesta en `/stream/...`:
   - `x-aetherio-hub: stale=<ids>` — el script sigue ejecutando código viejo
-    hasta el reinicio de instancia.
+    hasta el redeploy del Worker.
   - `x-aetherio-hub: no-compiled-providers` — ningún proveedor ejecutable en
     esta instancia (se compilan solo al arranque).
 

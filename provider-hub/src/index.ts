@@ -2,13 +2,16 @@ import { buildManifest } from "./manifest.ts";
 import { mergeProviderStreams } from "./merge.ts";
 import {
   DEFAULT_PROVIDERS,
+  clearProviderScript,
   deleteProvider,
   isValidProviderId,
   loadRegistry,
   loadScript,
+  syncIndex,
   upsertProvider,
+  type IndexSyncEntry,
 } from "./registry.ts";
-import { builtinScriptSources, PROVIDER_DEPS_SOURCE } from "./builtinScripts.ts";
+import { builtinScriptSources, GENERATED_PROVIDER_SCRIPTS, PROVIDER_DEPS_SOURCE } from "./builtinScripts.ts";
 import { jsonError, hubJson } from "./responses.ts";
 import {
   compiledProviderInfo,
@@ -19,8 +22,10 @@ import {
 import { resolveTmdbTitle } from "./tmdb.ts";
 import type { Env, MediaStream, ProviderRecord } from "./types.ts";
 
-const HUB_VERSION = "1.1.0";
+const HUB_VERSION = "1.3.1";
 const MAX_PROVIDERS_PER_REQUEST = 6;
+/** Límite de compilación en el arranque: cabezas del registro (global y por tipo). */
+const WARMUP_HEAD_PROVIDERS = 10;
 const MAX_STREAMS_TOTAL = 200;
 const STREAM_CACHE_TTL_MS = 90_000;
 
@@ -33,11 +38,8 @@ function pruneStreamCache() {
   if (streamCache.size > 800) streamCache.clear();
 }
 
-interface ProviderRecordWithScriptUrl extends ProviderRecord {
-  scriptUrl?: string;
-}
-
 interface WarmupState {
+  phase: "bundle";
   summary: Awaited<ReturnType<typeof warmupProviders>>;
   /** updatedAt que tenía cada proveedor cuando se compiló (para detectar obsolescencia). */
   stamps: Map<string, number>;
@@ -50,83 +52,71 @@ let warmupState: WarmupState | null = null;
  * worker (sin I/O). Funciona en producción y en `wrangler dev`, ambos con
  * codegen permitido solo durante la evaluación del módulo.
  */
-warmupProviders(buildBuiltinWarmupEntries()).then(summary => {
+const builtinWarmupEntries = buildBuiltinWarmupEntries();
+try {
+  const summary = await warmupProviders(builtinWarmupEntries);
   const stamps = new Map<string, number>();
-  for (const entry of buildBuiltinWarmupEntries()) stamps.set(entry.id, entry.updatedAt);
-  warmupState = { summary, stamps };
-  logWarmup("[HUB] warmup embebido:", summary);
-}).catch(error => {
+  for (const entry of builtinWarmupEntries) stamps.set(entry.id, entry.updatedAt);
+  warmupState = { phase: "bundle", summary, stamps };
+  logWarmup("[HUB] warmup bundle:", summary);
+} catch (error) {
   console.error("[HUB] warmup embebido excepcional", error);
-});
-
-function buildBuiltinWarmupEntries(): WarmupEntry[] {
-  return DEFAULT_PROVIDERS.map(provider => {
-    const source = builtinScriptSources.get(provider.id) ?? null;
-    return {
-      id: provider.id,
-      // 0 = compilado desde el paquete embebido; no representa una versión KV.
-      updatedAt: 0,
-      source,
-      depsSource: source ? PROVIDER_DEPS_SOURCE : "",
-    };
-  });
 }
 
-/**
- * Fase KV del arranque (solo disponible en producción): lee el registro y los
- * scripts desde KV y los compila. En `wrangler dev` el runtime local prohíbe
- * I/O asíncrono en el scope global, así que aquí mantiene la fase embebida.
- */
-async function runtimeWarmupKv(): Promise<void> {
-  try {
-    const envModule = (await import("cloudflare:workers")) as unknown as { env?: unknown };
-    const env = envModule.env as Env | undefined;
-    if (!env) throw new Error("env indisponible en el arranque");
-    const state = await buildWarmupState(env);
-    warmupState = state;
-    logWarmup("[HUB] warmup KV:", state.summary);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/Disallowed operation/i.test(message)) {
-      console.warn("[HUB] warmup KV omitido (I/O en scope global, esperado en wrangler dev):", message);
-    } else {
-      console.error("[HUB] warmup KV excepcional", error);
-    }
+function buildBuiltinWarmupEntries(): WarmupEntry[] {
+  const records = new Map<string, ProviderRecord>();
+  for (const provider of DEFAULT_PROVIDERS) {
+    records.set(provider.id, { ...provider, origin: "default", updatedAt: 0 });
   }
+  for (const provider of GENERATED_PROVIDER_SCRIPTS) {
+    records.set(provider.id, {
+      id: provider.id,
+      name: provider.name,
+      description: provider.description,
+      logo: provider.logo,
+      enabled: provider.enabled,
+      supportedTypes: provider.supportedTypes,
+      contentLanguage: provider.contentLanguage,
+      mobileHeaders: "drop",
+      origin: "kv",
+      updatedAt: provider.updatedAt,
+    });
+  }
+
+  let depsSourceAssigned = false;
+  return buildWarmupSelection([...records.values()]).map(provider => {
+    const generated = GENERATED_PROVIDER_SCRIPTS.find(entry => entry.id === provider.id);
+    const source = generated?.source ?? builtinScriptSources.get(provider.id) ?? null;
+    const depsSource = source && !depsSourceAssigned ? PROVIDER_DEPS_SOURCE : "";
+    if (source && !depsSourceAssigned) depsSourceAssigned = true;
+    return {
+      id: provider.id,
+      updatedAt: generated?.updatedAt ?? provider.updatedAt,
+      source,
+      depsSource,
+    };
+  });
 }
 
 function logWarmup(prefix: string, summary: { compiled: string[]; failed: Array<{ id: string; error: string }> }) {
   console.log(`${prefix} compilados=${summary.compiled.join(",") || "ninguno"}; fallidos=${summary.failed.map(entry => `${entry.id}:${entry.error.slice(0, 60)}`).join(",") || "ninguno"}`);
 }
 
-void runtimeWarmupKv();
-
-async function buildWarmupState(env: Env): Promise<WarmupState> {
-  const providers = await loadRegistry(env);
-  const entries: WarmupEntry[] = [];
-  let depsSourceAssigned = false;
-
-  for (const provider of providers.slice(0, MAX_PROVIDERS_PER_REQUEST)) {
-    let source: string | null = null;
-    try {
-      const script = await loadScript(env, provider, (provider as ProviderRecordWithScriptUrl).scriptUrl);
-      source = script?.source ?? null;
-    } catch (error) {
-      console.error(`[HUB] fuente de ${provider.id} falló en warmup`, error);
-    }
-    entries.push({
-      id: provider.id,
-      updatedAt: provider.updatedAt,
-      source,
-      depsSource: depsSourceAssigned ? "" : (source ? PROVIDER_DEPS_SOURCE : ""),
-    });
-    if (source && !depsSourceAssigned) depsSourceAssigned = true;
+/**
+ * Conjunto de proveedores a compilar en el arranque: los primeros del registro
+ * (prioridad global) más los primeros habilitados por tipo — el fan-out de
+ * `/stream` toma los primeros N por tipo, y solo ejecuta módulos ya compilados.
+ */
+function buildWarmupSelection(providers: ProviderRecord[]): ProviderRecord[] {
+  const head = (limit: number, type?: "movie" | "tv") =>
+    providers
+      .filter(provider => provider.enabled && (!type || provider.supportedTypes.includes(type)))
+      .slice(0, limit);
+  const selected = new Set<string>();
+  for (const chunk of [head(WARMUP_HEAD_PROVIDERS), head(MAX_PROVIDERS_PER_REQUEST, "movie"), head(MAX_PROVIDERS_PER_REQUEST, "tv")]) {
+    for (const provider of chunk) selected.add(provider.id);
   }
-
-  const summary = await warmupProviders(entries);
-  const stamps = new Map<string, number>();
-  for (const entry of entries) stamps.set(entry.id, entry.updatedAt);
-  return { summary, stamps };
+  return providers.filter(provider => selected.has(provider.id));
 }
 
 export default {
@@ -137,13 +127,13 @@ export default {
         return hubJson(200, {
           ok: true,
           version: HUB_VERSION,
-          warmup: warmupState ? { ok: warmupState.summary.depsOk, compiled: warmupState.summary.compiled, failed: warmupState.summary.failed } : { pending: true },
+          warmup: warmupState ? { phase: warmupState.phase, ok: warmupState.summary.depsOk, compiled: warmupState.summary.compiled, failed: warmupState.summary.failed } : { pending: true },
         });
       }
       if (url.pathname === "/manifest.json") return await handleManifest(env);
       if (url.pathname.startsWith("/scripts/")) return await handleScript(env, url);
       if (url.pathname.startsWith("/stream/")) return await handleStreams(env, url, ctx);
-      if (url.pathname.startsWith("/admin/providers")) return await handleAdmin(request, env, url);
+      if (url.pathname.startsWith("/admin/providers") || url.pathname === "/admin/index") return await handleAdmin(request, env, url);
       return jsonError(404, "Ruta no encontrada");
     } catch (error) {
       console.error("[HUB] Error no controlado", error);
@@ -281,6 +271,7 @@ async function handleManifest(env: Env): Promise<Response> {
       id: provider.id,
       name: provider.name,
       description: provider.description,
+      logo: provider.logo ?? GENERATED_PROVIDER_SCRIPTS.find(entry => entry.id === provider.id)?.logo,
       supportedTypes: provider.supportedTypes,
       contentLanguage: provider.contentLanguage,
     }));
@@ -297,7 +288,7 @@ async function handleScript(env: Env, url: URL): Promise<Response> {
   const provider = providers.find(candidate => candidate.id === id);
   // Aun si el registro no lo conoce (fallback), el script de fábrica es servible.
   const source = provider
-    ? (await loadScript(env, provider, (provider as ProviderRecordWithScriptUrl).scriptUrl))?.source ?? null
+    ? (await loadScript(env, provider, provider.scriptUrl))?.source ?? null
     : builtinScriptSources.get(id) ?? null;
   if (!source) return jsonError(404, "Script no disponible");
   return new Response(source, {
@@ -320,16 +311,55 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
   const id = url.pathname.split("/").filter(Boolean)[2];
 
+  if (request.method === "PUT" && url.pathname === "/admin/index") {
+    // Sincronización completa del índice en una escritura: orden exacto,
+    // altas de metadata y limpiezas de los ids que ya no están en la lista.
+    const bodyRaw = await request.text();
+    if (bodyRaw.length > 600_000) return jsonError(413, "Cuerpo demasiado grande");
+    let body: unknown;
+    try { body = JSON.parse(bodyRaw); } catch { return jsonError(400, "JSON inválido"); }
+    const rawEntries = (body as { providers?: unknown })?.providers;
+    if (!Array.isArray(rawEntries)) return jsonError(400, "Se espera { providers: [...] }");
+    if (rawEntries.length > 200) return jsonError(400, "Máximo 200 proveedores");
+    const entries: IndexSyncEntry[] = rawEntries
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(entry => ({
+        id: typeof entry.id === "string" ? entry.id : "",
+        name: typeof entry.name === "string" ? entry.name : undefined,
+        description: typeof entry.description === "string" ? entry.description : undefined,
+        logo: typeof entry.logo === "string" ? entry.logo : undefined,
+        enabled: typeof entry.enabled === "boolean" ? entry.enabled : true,
+        supportedTypes: Array.isArray(entry.supportedTypes)
+          ? entry.supportedTypes.filter((value): value is string => typeof value === "string")
+          : undefined,
+        contentLanguage: Array.isArray(entry.contentLanguage)
+          ? entry.contentLanguage.filter((value): value is string => typeof value === "string")
+          : undefined,
+        mobileHeaders: entry.mobileHeaders === "keep" ? "keep" as const : "drop" as const,
+        scriptUrl: typeof entry.scriptUrl === "string" ? entry.scriptUrl : undefined,
+        updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+      }));
+    const result = await syncIndex(env, entries);
+    return hubJson(200, {
+      ok: true,
+      count: result.records.length,
+      removed: result.removed,
+      order: result.records.map(record => record.id),
+    });
+  }
+
   if (request.method === "GET" && !id) {
     const providers = await loadRegistry(env);
     return hubJson(200, providers.map(provider => ({
       id: provider.id,
       name: provider.name,
       description: provider.description ?? "",
+      logo: provider.logo ?? GENERATED_PROVIDER_SCRIPTS.find(entry => entry.id === provider.id)?.logo,
       enabled: provider.enabled,
       supportedTypes: provider.supportedTypes,
       contentLanguage: provider.contentLanguage ?? [],
       mobileHeaders: provider.mobileHeaders,
+      scriptUrl: provider.scriptUrl,
       origin: provider.origin,
       updatedAt: provider.updatedAt,
     })));
@@ -349,6 +379,9 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
       ? body.name.trim().slice(0, 120)
       : existing?.name ?? id;
     const description = typeof body.description === "string" ? body.description.slice(0, 300) : existing?.description;
+    const logo = typeof body.logo === "string" && /^https?:\/\//i.test(body.logo.trim())
+      ? body.logo.trim().slice(0, 2048)
+      : existing?.logo ?? GENERATED_PROVIDER_SCRIPTS.find(entry => entry.id === id)?.logo;
     const supportedTypesRaw = Array.isArray(body.supportedTypes) ? body.supportedTypes : existing?.supportedTypes ?? ["movie", "tv"];
     const supportedTypes = supportedTypesRaw.filter((value): value is "movie" | "tv" => value === "movie" || value === "tv");
     if (!supportedTypes.length) return jsonError(400, "supportedTypes debe incluir movie y/o tv.");
@@ -360,25 +393,35 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
       : existing?.mobileHeaders ?? "drop";
     const scriptUrl = typeof body.scriptUrl === "string" && /^https?:\/\//i.test(body.scriptUrl)
       ? body.scriptUrl
-      : (existing as ProviderRecordWithScriptUrl | undefined)?.scriptUrl;
+      : existing?.scriptUrl;
 
     const record: ProviderRecord = {
       id,
       name,
       description,
+      logo,
       enabled: typeof body.enabled === "boolean" ? body.enabled : existing?.enabled ?? true,
       supportedTypes,
       contentLanguage,
+      scriptUrl,
       mobileHeaders,
       origin: "kv",
       updatedAt: Date.now(),
     };
     const script = typeof body.script === "string" ? body.script : undefined;
-    await upsertProvider(env, { ...record, scriptUrl }, script);
+    const scriptUrlChanged = script !== undefined
+      ? false
+      : scriptUrl !== undefined && scriptUrl !== existing?.scriptUrl;
+    if (scriptUrlChanged && existing) {
+      // Actualización por scriptUrl: descarta el script anterior para que se
+      // vuelva a descargar desde la nueva URL (warmup o primera petición).
+      await clearProviderScript(env, id);
+    }
+    await upsertProvider(env, record, script);
     return hubJson(200, {
       ok: true,
       id,
-      note: "El script se compila al reiniciar la instancia del worker (inactividad aproximada: minutos) o en el próximo despliegue.",
+      note: "Guardado en KV. PC consume el script desde el hub; para activar cambios en /stream móvil, ejecuta `node scripts/deploy-current-providers.mjs` desde provider-hub (solo despliega el Worker, no Aetherio).",
     });
   }
 

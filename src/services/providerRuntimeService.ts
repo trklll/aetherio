@@ -12,34 +12,13 @@ interface ProviderManifestSource {
 }
 
 const CUSTOM_PROVIDER_REPOSITORIES_KEY = "aetherio-custom-provider-repositories";
-const EXTERNAL_PROVIDER_PROJECT_NAME = ["Nu", "vio"].join("");
-const EXTERNAL_PROVIDER_PROJECT_SLUG = EXTERNAL_PROVIDER_PROJECT_NAME.toLowerCase();
 const PROVIDER_MANIFEST_SOURCES: readonly ProviderManifestSource[] = [
   {
-    key: "yoruix",
-    fallbackName: "Yoru",
-    url: `https://raw.githubusercontent.com/yoruix/${EXTERNAL_PROVIDER_PROJECT_SLUG}-providers/refs/heads/main/manifest.json`,
-  },
-  {
-    key: "adrianjael",
-    fallbackName: "Adrian",
-    url: "https://raw.githubusercontent.com/adrianjael/pluggin-latino/refs/heads/main/manifest.json",
-  },
-  {
-    key: "kennethjys",
-    fallbackName: "Kenneth",
-    url: `https://raw.githubusercontent.com/KennethJYS/${EXTERNAL_PROVIDER_PROJECT_NAME}-Providers-Latino/refs/heads/main/manifest.json`,
-  },
-  {
-    key: "eclipsia",
-    fallbackName: "Eclipsia",
-    url: "https://eclipsia.dpdns.org/rc244rsv/manifest.json",
-  },
-  {
-    key: "range7",
-    fallbackName: "Range7",
-    url: "https://raw.githubusercontent.com/Range7/Nuvio-Plugin/refs/heads/main/manifest.json",
-    scraperIds: ["2peckle"],
+    key: "aetherio-hub",
+    fallbackName: "Aetherio Hub",
+    // Única fuente default. Se administra centralmente en Provider Hub; no
+    // añadir repos de proveedores en esta app.
+    url: "https://aetherio-provider-hub.xoolinnbeats.workers.dev/manifest.json",
   },
 ] as const;
 const PROVIDER_MANIFEST_URLS = PROVIDER_MANIFEST_SOURCES.map(source => source.url);
@@ -103,7 +82,10 @@ export function isProviderRetired(providerKey: string) {
 
 export function isProviderManifestScraperAllowed(sourceKey: string, scraperId: string) {
   const source = PROVIDER_MANIFEST_SOURCES.find(candidate => candidate.key === sourceKey);
-  return !source?.scraperIds || source.scraperIds.includes(scraperId);
+  if (source) return !source.scraperIds || source.scraperIds.includes(scraperId);
+  // Las fuentes personalizadas usan claves custom-*; no permitir que una clave
+  // default antigua (yoruix/range7/etc.) vuelva a activar un repo retirado.
+  return sourceKey.startsWith("custom-");
 }
 const PROVIDER_CONCURRENCY = 14;
 const PROVIDER_TIMEOUT_MS = 15_000;
@@ -134,6 +116,7 @@ interface ProviderHttpResponse {
 interface ProviderManifest {
   name: string;
   version: string;
+  logo?: string;
   scrapers: ProviderManifestEntry[];
 }
 
@@ -231,9 +214,6 @@ type WorkerMessage =
   | { type: "error"; error: string };
 
 const scriptCache = new Map<string, Promise<string>>();
-const BUILTIN_PROVIDER_SCRIPT_PATHS: Record<string, string> = {
-  "yoruix:4khdhub": "/aetherio-4khdhub.js",
-};
 const manifestCache = new Map<string, Promise<ProviderManifest>>();
 const resultCache = new Map<string, { streams: MediaStream[]; updatedAt: number; ttlMs: number }>();
 type ProviderExecutionStatus = "success" | "empty" | "error";
@@ -258,8 +238,9 @@ export function providerRuntimeDepsUrl(locationHref: string) {
   return new URL("/provider-runtime-deps.js", locationHref).toString();
 }
 
-export function getBuiltinProviderScriptPath(providerKey: string) {
-  return BUILTIN_PROVIDER_SCRIPT_PATHS[providerKey] ?? null;
+export function getBuiltinProviderScriptPath(providerKey: string): string | null {
+  void providerKey;
+  return null;
 }
 
 function customRepositoryKey(url: string) {
@@ -513,7 +494,7 @@ export async function getProviderRuntimeRepositories(): Promise<ProviderRuntimeR
           id: scraper.id,
           name: scraper.name,
           description: scraper.description,
-          logo: scraper.logo,
+          logo: resolveProviderLogo(scraper.logo ?? manifest.logo, source.url),
           supportedTypes: scraper.supportedTypes ?? ["movie", "tv"],
           contentLanguage: scraper.contentLanguage ?? [],
           enabledByManifest: scraper.enabled !== false,
@@ -618,8 +599,18 @@ function loadManifest(url: string, refresh = false): Promise<ProviderManifest> {
   return pending;
 }
 
+function resolveProviderLogo(value: string | undefined, manifestUrl: string): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const logoUrl = new URL(value.trim(), manifestUrl);
+    return logoUrl.protocol === "http:" || logoUrl.protocol === "https:" ? logoUrl.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function loadScript(url: string, providerKey?: string): Promise<string> {
-  const builtinPath = providerKey ? BUILTIN_PROVIDER_SCRIPT_PATHS[providerKey] : undefined;
+  const builtinPath = providerKey ? getBuiltinProviderScriptPath(providerKey) ?? undefined : undefined;
   const cacheKey = builtinPath ?? url;
   const cached = scriptCache.get(cacheKey);
   if (cached) return cached;

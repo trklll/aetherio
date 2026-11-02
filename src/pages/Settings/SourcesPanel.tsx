@@ -323,6 +323,7 @@ export default function SourcesPanel() {
               title={addon.name}
               description={`${addon.scope === "profile" ? "Personal · " : addon.bundled ? "Global · Integrado · " : "Global · "}${(addon.manifest?.types ?? []).map((type: string) => type === "series" ? "Series" : type === "movie" ? "Películas" : type).join(" · ")} · v${addon.version}`}
               checked={addon.enabled}
+              logo={addon.logo ?? addon.manifest?.logo ?? undefined}
               onChange={checked => checked ? enableAddon(addon.id) : disableAddon(addon.id)}
               action={(
                 <a
