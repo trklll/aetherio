@@ -1,0 +1,22 @@
+# Aetherio Provider Hub — Cloudflare Workers
+# Despliegue en el plan gratuito; revisa los límites en README.md.
+
+name = "aetherio-provider-hub"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+# KV guarda la lista de proveedores y sus scripts (Sección "Gestión de fuentes"
+# del README). Crea el namespace con: npx wrangler kv namespace create PROVIDERS
+# y pega el id aquí.
+[[kv_namespaces]]
+binding = "PROVIDERS"
+id = "25d80e365fae4fbab09124cf0ec19bc5"
+
+# Los scripts por defecto y el bundle de dependencias viajan dentro del worker
+# como text modules (src/assets/*.txt); se compilan durante el arranque.
+
+# Secrets (configúralos con `npx wrangler secret put`):
+#   ADMIN_TOKEN   — token para gestionar proveedores vía /admin/*.
+#   TMDB_BEARER   — opcional: token v4 de TMDB para resolver títulos.
+#   TMDB_KEY      — opcional: clave v3 de TMDB (alternativa a TMDB_BEARER).
