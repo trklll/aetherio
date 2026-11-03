@@ -3,7 +3,6 @@ mod embedded_subtitles;
 mod player_glass;
 mod poster_cache;
 mod poster_server;
-mod nuvio_server;
 mod tmdb_text_cache;
 pub mod p2p;
 mod scraper;
@@ -6303,9 +6302,6 @@ pub fn run() {
             poster_server::start_posters_server,
             poster_server::stop_posters_server,
             poster_server::posters_server_status,
-            nuvio_server::start_nuvio_sports_server,
-            nuvio_server::stop_nuvio_sports_server,
-            nuvio_server::nuvio_sports_server_status,
             poster_cache::poster_cache_url,
             tmdb_text_cache::tmdb_text_cache_get,
             tmdb_text_cache::tmdb_text_cache_set_many
@@ -6328,7 +6324,6 @@ pub fn run() {
             // 3000 y ~200 MB de RAM sin que nadie lo pida.
             if let tauri::RunEvent::Exit = event {
                 poster_server::stop();
-                nuvio_server::stop();
             }
         });
 }

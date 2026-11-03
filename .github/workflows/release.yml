@@ -33,6 +33,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify public release scope
+        run: npx vitest run scripts/release-scope.test.ts
+
+      - name: Install browser for release smoke test
+        run: npx playwright install chromium
+
+      - name: Verify app ships without Sports
+        run: npx playwright test e2e/release-no-sports.spec.ts --workers=1
+
       - name: Install MPV runtime
         shell: pwsh
         run: ./scripts/install-mpv.ps1

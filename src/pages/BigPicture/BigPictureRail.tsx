@@ -4,7 +4,6 @@ import { Users } from "lucide-react";
 import LibraryIcon from "../../components/ui/LibraryIcon.tsx";
 import SearchThinIcon from "../../components/ui/SearchThinIcon.tsx";
 import HomeBoldIcon from "../../components/ui/HomeBoldIcon.tsx";
-import SportsIcon from "../../components/ui/SportsIcon.tsx";
 import { getStreamingPlatformPath, STREAMING_PLATFORMS } from "../../services/streamingPlatforms";
 import {
   getActiveProfile,
@@ -50,7 +49,6 @@ const PRIMARY_RAIL_ITEMS: readonly RailItem[] = [
   { key: "search", route: "/big-picture/search", label: "Buscar", Icon: SearchThinIcon },
   { key: "home", route: "/big-picture", label: "Inicio", Icon: HomeBoldIcon },
   { key: "library", route: "/big-picture/library", label: "Biblioteca", Icon: LibraryIcon },
-  { key: "sports", route: "/big-picture/sports", label: "Sports", Icon: SportsIcon },
   { key: "party", route: "/big-picture/party", label: "Party", Icon: Users },
 ];
 const PLATFORM_RAIL_ITEMS: readonly RailItem[] = STREAMING_PLATFORMS.map(platform => ({

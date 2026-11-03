@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import LoadingState from "../../components/ui/LoadingState";
 import { useHomePreferences } from "../../config/homePreferences.ts";
 import { useHomeCatalogs } from "../../hooks/useCatalogs.ts";
@@ -43,7 +43,6 @@ const CatalogPage = lazy(() => import("../Catalog/index.tsx"));
 const StreamingPlatformPage = lazy(() => import("../StreamingPlatform/index.tsx"));
 const BigPictureSettings = lazy(() => import("./BigPictureSettings.tsx"));
 const BigPictureAddons = lazy(() => import("./BigPictureAddons.tsx"));
-const BigPictureSports = lazy(() => import("./BigPictureSportsHome.tsx"));
 
 // Episodie es sección del Detail (un solo fondo): las rutas /big-picture/episode
 // y /big-picture/streams redirigen al Detail con la sección abierta.
@@ -418,9 +417,7 @@ export default function BigPicturePage() {
         ) : isParty ? (
           <BigPictureParty />
         ) : isSports ? (
-          <Suspense fallback={<div style={{ minHeight: "100vh", background: "#000" }} />}>
-            <BigPictureSports />
-          </Suspense>
+          <Navigate to="/big-picture" replace />
         ) : isGenre ? (
           <BigPictureGenre />
         ) : isCatalog ? (

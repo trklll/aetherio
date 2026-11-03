@@ -4,9 +4,6 @@ import { useScrapedStreams } from "../../hooks/useScrapedStreams.ts";
 import type { MediaStream, StreamQuery } from "../../types/stream";
 import { isPlayableMediaStream } from "../../utils/playableMedia.ts";
 import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking.ts";
-import { readCachedLiveSnapshot } from "../../services/liveSportsService.ts";
-import { attachIptvSources, iptvChannelEvent } from "../../services/iptvSports.ts";
-import { liveEventToMediaStreams } from "../../types/liveSports.ts";
 
 interface SourceResolverProps {
   query: StreamQuery;
@@ -36,10 +33,9 @@ function LiveSourcesResolver({ query, currentStream, onResolved }: SourceResolve
   const resolve = useRef(onResolved);
   resolve.current = onResolved;
   useEffect(() => {
-    const snapshot = readCachedLiveSnapshot();
-    const event = snapshot?.events.find(event => event.id === query.id)
-      ?? snapshot?.channels.map(iptvChannelEvent).find(channel => channel.id === query.id);
-    const sources = event ? liveEventToMediaStreams(attachIptvSources([event], snapshot?.channels ?? [])[0]) : [];
+    // Generic live add-ons can retain their selected stream, but public builds
+    // must not import the unfinished Sports/IPTV registry into the player.
+    const sources: MediaStream[] = [];
     const expiry = currentStream?.behaviorHints?.liveSourceExpiresAt;
     if (currentStream && !(typeof expiry === "string" && Date.parse(expiry) <= Date.now()) && !sources.some(source => source.id === currentStream.id)) sources.push(currentStream);
     resolve.current(sources);

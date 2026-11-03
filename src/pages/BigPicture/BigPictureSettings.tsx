@@ -50,13 +50,6 @@ import {
 import { useHomeCatalogs } from "../../hooks/useCatalogs.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
 import {
-  ensureLocalNuvioSportsServer,
-  readNuvioSportsMode,
-  writeNuvioSportsMode,
-  type NuvioSportsMode,
-} from "../../services/nuvioSportsRuntime.ts";
-import { probeStremioSportsProvider } from "../../services/stremioSportsProviders.ts";
-import {
   AETHERIO_AUTH_CHANGED_EVENT,
   connectAniListAccount,
   getStoredAccount,
@@ -433,8 +426,6 @@ function SourcesSection({ onNavigate, onNotice }: { onNavigate: (path: string) =
   const addons = useAddonStore(state => state.addons);
   const mdbList = useMdbListSettings();
   const [keys, setKeys] = useState<ApiKeys>(() => getApiKeys());
-  const [nuvioMode, setNuvioMode] = useState<NuvioSportsMode>(() => readNuvioSportsMode());
-  const [checkingNuvio, setCheckingNuvio] = useState(false);
   const [editing, setEditing] = useState<{ title: string; value: string; save: (value: string) => void } | null>(null);
   useEffect(() => {
     if (!editing) return;
@@ -460,47 +451,12 @@ function SourcesSection({ onNavigate, onNotice }: { onNavigate: (path: string) =
     onNotice();
   }
 
-  async function checkNuvio() {
-    setCheckingNuvio(true);
-    try {
-      await ensureLocalNuvioSportsServer();
-      const result = await probeStremioSportsProvider("nuvio");
-      onNotice(result.ok
-        ? `Sports${result.version ? ` ${result.version}` : ""} responde correctamente.`
-        : result.error ?? "Sports no respondió.");
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : "No se pudo comprobar Sports.");
-    } finally {
-      setCheckingNuvio(false);
-    }
-  }
-
   return (
     <SettingsPanel title="Fuentes" description="Los servicios conectados a Aetherio aparecen aquí y en sus pantallas dedicadas.">
       <SettingsGroup title="Estado">
         <SettingsInfoRow title="Catálogos instalados" description={`${addons.length} complementos disponibles para buscar y reproducir.`} />
         <SettingsInfoRow title="TMDB" description="Se usa el proxy de Aetherio cuando no tienes una clave propia." />
         <SettingsInfoRow title="AniList" description="La cuenta de anime se gestiona desde Cuenta en la app normal." />
-      </SettingsGroup>
-      <SettingsGroup title="Sports">
-        <ChoiceRow
-          title="Instancia deportiva"
-          description="Sports se ejecuta dentro de Aetherio; no tienes que abrir otra app. También puedes elegir la instancia remota."
-          value={nuvioMode}
-          options={[{ value: "local", label: "Local" }, { value: "remote", label: "Remota" }]}
-          onChange={value => {
-            const mode = value as NuvioSportsMode;
-            writeNuvioSportsMode(mode);
-            setNuvioMode(mode);
-            onNotice("Preferencia de Sports guardada.");
-          }}
-        />
-        <SettingsHint>La instancia local escucha solo en este equipo. El addon todavía puede contactar proveedores o Workers de terceros para descubrir y resolver streams.</SettingsHint>
-        <SettingsActionRow
-          title={checkingNuvio ? "Comprobando Sports…" : "Comprobar conexión"}
-          description={nuvioMode === "local" ? "Inicia la instancia local si aún no está activa." : "Verifica la instancia remota configurada."}
-          onClick={() => void checkNuvio()}
-        />
       </SettingsGroup>
       <SettingsGroup title="Ratings MDBList">
         <ToggleRow title="Activar MDBList Ratings" description="Obtiene puntuaciones externas para la pantalla de detalle." value={mdbList.enabled} onChange={value => updateMdb({ enabled: value })} />
