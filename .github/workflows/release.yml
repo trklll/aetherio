@@ -34,7 +34,7 @@ jobs:
         run: npm ci
 
       - name: Verify public release scope
-        run: npx vitest run scripts/release-scope.test.ts
+        run: npx vitest run scripts/release-scope.test.ts scripts/release-source-graph.test.ts
 
       - name: Install browser for release smoke test
         run: npx playwright install chromium
