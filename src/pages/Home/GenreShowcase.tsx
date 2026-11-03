@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys";
+import { fetchMovieSeriesGenrePage, MOVIE_SERIES_GENRES } from "../../services/movieSeriesGenres";
 import { tweenTo, gsap } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 import { GENRE_SHOWCASE_MOVE_EVENT, useBigPictureActive } from "../../navigation/spatialNav.ts";
@@ -164,7 +165,9 @@ async function fetchGenreData(
   return { titles, posters, backdrop };
 }
 
-function GenreShowcase() {
+type GenreShowcaseMode = "anime" | "movie-series";
+
+function GenreShowcase({ mode = "anime" }: { mode?: GenreShowcaseMode }) {
   const navigate = useNavigate();
   const [activeIndex, setActiveIndex] = useState(0);
   const [cardHovered, setCardHovered] = useState(false);
@@ -177,20 +180,35 @@ function GenreShowcase() {
   const labelTextRef = useRef(null);
   const bigPicture = useBigPictureActive();
 
-  const cachedGenreMap = readPageDataCache<Record<string, GenreData>>("genre-showcase", "v4");
+  const genreKeys = mode === "anime" ? GENRES : MOVIE_SERIES_GENRES.map(genre => genre.key);
+  const cacheNamespace = mode === "anime" ? "genre-showcase" : "genre-showcase-movie-series";
+  const cacheVersion = mode === "anime" ? "v4" : "v1";
+  const cachedGenreMap = readPageDataCache<Record<string, GenreData>>(cacheNamespace, cacheVersion);
   const { data: genreMap = cachedGenreMap ?? {} } = useQuery({
-    queryKey: ["genre-showcase", "v4"],
+    queryKey: ["genre-showcase", mode, cacheVersion],
     queryFn: async () => {
       const map: Record<string, GenreData> = {};
-      const usedIds = new Set<number>();
-      const usedPosters = new Set<string>();
-      const usedBackdrops = new Set<string>();
-      for (const genre of GENRES) {
-        const data = await fetchGenreData(genre, usedIds, usedPosters, usedBackdrops);
-        map[genre] = data;
-        await new Promise(r => setTimeout(r, 600));
+      if (mode === "anime") {
+        const usedIds = new Set<number>();
+        const usedPosters = new Set<string>();
+        const usedBackdrops = new Set<string>();
+        for (const genre of GENRES) {
+          map[genre] = await fetchGenreData(genre, usedIds, usedPosters, usedBackdrops);
+          await new Promise(resolve => setTimeout(resolve, 600));
+        }
+      } else {
+        for (const genre of MOVIE_SERIES_GENRES) {
+          const items = await fetchMovieSeriesGenrePage(genre.key);
+          const withPosters = items.filter(item => item.poster).slice(0, POSTER_COUNT);
+          map[genre.key] = {
+            titles: withPosters.map(item => item.name),
+            posters: withPosters.map(item => item.poster ?? null),
+            backdrop: items.find(item => item.background)?.background ?? null,
+          };
+          await new Promise(resolve => setTimeout(resolve, 180));
+        }
       }
-      writePageDataCache("genre-showcase", "v4", map);
+      writePageDataCache(cacheNamespace, cacheVersion, map);
       return map;
     },
     staleTime: 1000 * 60 * 60 * 24,
@@ -198,12 +216,15 @@ function GenreShowcase() {
     initialData: cachedGenreMap ?? undefined,
   });
 
-  const currentGenre = GENRES[activeIndex];
+  const currentGenre = genreKeys[activeIndex];
+  const currentGenreLabel = mode === "anime"
+    ? GENRE_LABELS[currentGenre] ?? currentGenre
+    : MOVIE_SERIES_GENRES.find(genre => genre.key === currentGenre)?.label ?? currentGenre;
   const currentData = genreMap[currentGenre];
 
   useEffect(() => {
     timerRef.current = setInterval(() => {
-      const next = (activeIndex + 1) % GENRES.length;
+      const next = (activeIndex + 1) % genreKeys.length;
        posterRefs.current.forEach(el => { if (el) tweenTo(el, { opacity: 0, y: 8 }, 0.25); });
        if (labelRef.current) tweenTo(labelRef.current, { opacity: 0, x: -12 }, 0.25);
        setTimeout(() => {
@@ -218,21 +239,22 @@ setTimeout(() => {
        }, 300);
      }, 6000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [activeIndex]);
+  }, [activeIndex, genreKeys.length]);
 
   const handleClick = useCallback(() => {
     if (cardRef.current) tweenTo(cardRef.current, { scale: 0.985 }, 0.12);
     // En Big Picture la lista vive en /big-picture/genre (page 10-foot):
     // /genre saldría del modo inmersivo (App.tsx solo captura /big-picture).
+    const genreQuery = `genre=${encodeURIComponent(currentGenre)}${mode === "movie-series" ? "&media=movie-series" : ""}`;
     if (bigPicture) {
-      navigate(`/big-picture/genre?genre=${encodeURIComponent(currentGenre)}`);
+      navigate(`/big-picture/genre?${genreQuery}`);
       return;
     }
-    navigate(`/genre?genre=${encodeURIComponent(currentGenre)}`);
-  }, [bigPicture, currentGenre, navigate]);
+    navigate(`/genre?${genreQuery}`);
+  }, [bigPicture, currentGenre, mode, navigate]);
 
   const handleArrow = useCallback((direction: number) => {
-    const next = (activeIndex + direction + GENRES.length) % GENRES.length;
+    const next = (activeIndex + direction + genreKeys.length) % genreKeys.length;
     if (next === activeIndex) return;
     posterRefs.current.forEach(el => { if (el) tweenTo(el, { opacity: 0, y: 8 }, 0.25); });
     if (labelRef.current) tweenTo(labelRef.current, { opacity: 0, x: -12 }, 0.25);
@@ -247,11 +269,12 @@ setTimeout(() => {
       }, 50);
     }, 300);
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-  }, [activeIndex]);
+  }, [activeIndex, genreKeys.length]);
 
   useEffect(() => {
     if (!bigPicture) return;
     const onMove = (event: Event) => {
+      if (document.activeElement !== cardRef.current) return;
       const direction = (event as CustomEvent<{ direction?: "left" | "right" }>).detail?.direction;
       if (direction) handleArrow(direction === "right" ? 1 : -1);
     };
@@ -321,9 +344,11 @@ setTimeout(() => {
   const hasPosters = currentData.posters.some(p => p);
 
   return (
-    <section data-row-key="genre-showcase" data-row-count={1} data-row-hovered={cardHovered ? "true" : undefined} style={{ paddingLeft: 48, paddingRight: 48, paddingTop: 8, paddingBottom: 28 }}>
+    <section data-row-key={mode === "anime" ? "genre-showcase" : "genre-showcase-movie-series"} data-row-count={1} data-row-hovered={cardHovered ? "true" : undefined} style={{ paddingLeft: 48, paddingRight: 48, paddingTop: 8, paddingBottom: 28 }}>
       <div data-row-header style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14 }}>
-        <span className="home-row-title" style={{ fontSize: 20, fontWeight: 700 }}>Explorar géneros - Anime</span>
+        <span className="home-row-title" style={{ fontSize: 20, fontWeight: 700 }}>
+          {mode === "anime" ? "Explorar géneros - Anime" : "Explorar géneros - Series y películas"}
+        </span>
       </div>
       <div
         ref={cardRef}
@@ -333,7 +358,7 @@ setTimeout(() => {
         data-item-index={0}
         onMouseEnter={() => setCardHovered(true)}
         onMouseLeave={() => setCardHovered(false)}
-        aria-label={bigPicture ? `Explorar género ${GENRE_LABELS[currentGenre] ?? currentGenre}` : undefined}
+        aria-label={bigPicture ? `Explorar género ${currentGenreLabel}` : undefined}
         role={bigPicture ? "button" : undefined}
         tabIndex={bigPicture ? 0 : undefined}
         onKeyDown={bigPicture ? event => {
@@ -409,7 +434,7 @@ setTimeout(() => {
           }}
         >
           <div style={{ fontSize: 104, fontWeight: 800, color: "#fff", lineHeight: 0.95, letterSpacing: -3 }}>
-            {GENRE_LABELS[currentGenre] ?? currentGenre}
+            {currentGenreLabel}
           </div>
           <div
             style={{
@@ -489,7 +514,7 @@ setTimeout(() => {
               <ChevronLeft size={18} />
             </button>
             <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 500, minWidth: 28, textAlign: "center" }}>
-              {activeIndex + 1}/{GENRES.length}
+              {activeIndex + 1}/{genreKeys.length}
             </span>
             <button
               onClick={e => { e.stopPropagation(); handleArrow(1); }}

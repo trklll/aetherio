@@ -13,6 +13,7 @@ export interface HomePreferences {
   catalogOrder: string[];
   hiddenCatalogKeys: string[];
   allowTmdbArtworkFallback: boolean;
+  playStreamingPlatformIntros: boolean;
 }
 
 export const HOME_PREFERENCES_STORAGE_KEY = "aetherio-home-preferences";
@@ -28,6 +29,7 @@ export const DEFAULT_HOME_PREFERENCES: HomePreferences = {
   catalogOrder: [],
   hiddenCatalogKeys: [],
   allowTmdbArtworkFallback: false,
+  playStreamingPlatformIntros: true,
 };
 
 export function catalogPreferenceKey(row: Pick<CatalogRowData, "addonId" | "type" | "catalogId" | "extraParams">) {
@@ -274,7 +276,35 @@ export function applyHomeCatalogPreferences(rows: CatalogRowData[], preferences:
       - contentOrientationPriority(b.type, preferences.contentOrientation, preferences.bothPreference);
   });
 
-  return explicitOrder.size > 0 ? prioritized : interleaveMovieSeriesRows(prioritized);
+  const withDefaultCinematicPlacement = placeUnorderedCinematicRows(prioritized, explicitOrder);
+  return explicitOrder.size > 0
+    ? withDefaultCinematicPlacement
+    : interleaveMovieSeriesRows(withDefaultCinematicPlacement);
+}
+
+function placeUnorderedCinematicRows(rows: CatalogRowData[], explicitOrder: Set<string>) {
+  const placements = [
+    { catalogId: "jikan.best_anime_90s", afterCatalogId: "jikan.upcoming" },
+    { catalogId: "jikan.best_anime_2000s", afterCatalogId: "jikan.most_popular" },
+    { catalogId: "jikan.best_anime_2010s", afterCatalogId: "mal.top_rated_anime" },
+  ];
+
+  let result = rows;
+  for (const { catalogId, afterCatalogId } of placements) {
+    const rowIndex = result.findIndex(row => row.presentation === "cinematic" && row.catalogId === catalogId);
+    if (rowIndex < 0 || explicitOrder.has(catalogPreferenceKey(result[rowIndex]))) continue;
+
+    const withoutRow = [...result];
+    const [cinematicRow] = withoutRow.splice(rowIndex, 1);
+    const anchorIndex = withoutRow.findIndex(
+      row => row.type.toLowerCase() === "anime" && row.catalogId === afterCatalogId,
+    );
+    if (anchorIndex < 0) continue;
+
+    withoutRow.splice(anchorIndex + 1, 0, cinematicRow);
+    result = withoutRow;
+  }
+  return result;
 }
 
 function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePreferences {
@@ -288,7 +318,7 @@ function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePr
   return {
     contentOrientation: normalizeContentOrientation(preferences.contentOrientation),
     bothPreference: normalizeBothPreference(preferences.bothPreference),
-    posterLayout: preferences.posterLayout === "horizontal" ? "horizontal" : "vertical",
+    posterLayout: "vertical",
     catalogOrder,
     hiddenCatalogKeys,
     allowTmdbArtworkFallback: typeof preferences.allowTmdbArtworkFallback === "boolean"
@@ -296,6 +326,9 @@ function normalizeHomePreferences(preferences: Partial<HomePreferences>): HomePr
       : typeof (preferences as { allowImdbHeroArtwork?: unknown }).allowImdbHeroArtwork === "boolean"
         ? Boolean((preferences as { allowImdbHeroArtwork?: unknown }).allowImdbHeroArtwork)
         : DEFAULT_HOME_PREFERENCES.allowTmdbArtworkFallback,
+    playStreamingPlatformIntros: typeof preferences.playStreamingPlatformIntros === "boolean"
+      ? preferences.playStreamingPlatformIntros
+      : DEFAULT_HOME_PREFERENCES.playStreamingPlatformIntros,
   };
 }
 

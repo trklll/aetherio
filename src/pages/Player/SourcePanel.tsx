@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Loader2, Radio, Users } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Radio, Users } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import type { MediaStream } from "../../types/stream";
 import { getSourceLogo } from "../../utils/sourceLogos";
 import { getReportedSeeders } from "../../utils/torrentHealth";
@@ -13,6 +14,7 @@ interface SourcePanelProps {
   streams: MediaStream[];
   /** Resolviendo alternativas bajo demanda (no venia ninguna instantanea). */
   loading?: boolean;
+  bigPicture?: boolean;
   currentStreamId: string;
   onClose: () => void;
   onSelect: (stream: MediaStream) => void;
@@ -22,6 +24,7 @@ export default function SourcePanel({
   visible,
   streams,
   loading = false,
+  bigPicture = false,
   currentStreamId,
   onClose,
   onSelect,
@@ -29,20 +32,32 @@ export default function SourcePanel({
   const providerRowRef = useRef<HTMLDivElement>(null);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
   const addonsById = useAddonStore(state => state.addons);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!visible) return;
+    setNow(Date.now());
+    if (!streams.some(stream => stream.behaviorHints?.liveSourceExpiresAt)) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [visible, streams]);
+  const available = useMemo(() => streams.filter(stream => {
+    const expires = stream.behaviorHints?.liveSourceExpiresAt;
+    return typeof expires !== "string" || Date.parse(expires) > now;
+  }), [streams, now]);
   const providers = useMemo(() => buildSourceChips({
     expectedSourceNames: [],
-    streams,
+    streams: available,
     bundledById: new Map(addonsById.map(addon => [addon.id, Boolean(addon.bundled)])),
     isAnime: false,
     extractSourceName: stream => streamProviderName(stream),
     priorityOf: sourceFilterPriority,
   }).map(chip => ({ key: normalizeSourceKey(chip.name), name: chip.name, count: chip.count })),
-  [streams, addonsById]);
+  [available, addonsById]);
   const filteredStreams = useMemo(
     () => providerFilter
-      ? streams.filter(stream => normalizeProviderName(streamProviderName(stream)) === providerFilter)
-      : streams,
-    [providerFilter, streams],
+      ? available.filter(stream => normalizeProviderName(streamProviderName(stream)) === providerFilter)
+      : available,
+    [providerFilter, available],
   );
 
   useEffect(() => {
@@ -51,17 +66,29 @@ export default function SourcePanel({
     }
   }, [providerFilter, providers]);
 
+  useEffect(() => {
+    if (!visible) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      const target = trigger?.isConnected ? trigger : document.querySelector<HTMLElement>("[data-player-source-toggle]");
+      target?.focus({ preventScroll: true });
+    };
+  }, [visible]);
+
   const scrollProviders = (direction: -1 | 1) => {
     providerRowRef.current?.scrollBy({ left: direction * 220, behavior: "smooth" });
   };
 
   return (
     <PlayerSidePanel
+      id="player-sources-panel"
+      surfaceStyle={{ background: "rgba(20,21,24,0.92)" }}
       visible={visible}
+      bigPicture={bigPicture}
       title="Fuentes"
       subtitle={loading
         ? "Buscando fuentes…"
-        : `${streams.length} ${streams.length === 1 ? "opción disponible" : "opciones disponibles"}`}
+        : `${available.length} ${available.length === 1 ? "opción disponible" : "opciones disponibles"}`}
       icon={<Radio size={18} />}
       onClose={onClose}
     >
@@ -80,7 +107,7 @@ export default function SourcePanel({
               <ProviderFilterButton
                 active={!providerFilter}
                 label="Todas"
-                count={streams.length}
+                count={available.length}
                 onClick={() => setProviderFilter(null)}
               />
               {providers.map(provider => (
@@ -118,6 +145,7 @@ export default function SourcePanel({
             return (
               <button
                 key={stream.id}
+                data-source-id={stream.id}
                 type="button"
                 onClick={() => onSelect(stream)}
                 aria-current={active ? "true" : undefined}
@@ -135,6 +163,7 @@ export default function SourcePanel({
                   <span className="mt-0.5 block truncate text-xs font-medium text-white/54">{title}</span>
                   <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-white/46">
                     <span className="rounded-full bg-white/[0.07] px-2 py-0.5 uppercase">{kind}</span>
+                    {stream.behaviorHints?.sourceType === "iptv" ? <span>IPTV{stream.behaviorHints.liveSourceExpiresAt ? " · Programación coincide" : " · Canal"}</span> : null}
                     {quality ? <span>{quality}</span> : null}
                     {language ? <span>{language}</span> : null}
                     {kind === "p2p" ? (
@@ -165,7 +194,7 @@ export default function SourcePanel({
             <div className="flex h-full min-h-48 flex-col items-center justify-center text-center text-white/45">
               {loading ? (
                 <>
-                  <Loader2 size={24} className="mb-3 animate-spin" />
+                  <AppleSpinner size={24} className="mb-3" />
                   <p className="text-sm font-medium">Buscando fuentes alternativas…</p>
                 </>
               ) : (
@@ -220,7 +249,7 @@ function sanitizeDisplayText(value: string) {
 }
 
 function streamProviderName(stream: MediaStream) {
-  const raw = stream.addonName || readBehaviorText(stream, "providerName") || stream.name || "Fuente";
+  const raw = stream.sourceName || stream.addonName || readBehaviorText(stream, "providerName") || stream.name || "Fuente";
   return sanitizeDisplayText(raw) || "Fuente";
 }
 

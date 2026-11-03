@@ -1,0 +1,19 @@
+==== V1 center & globals
+{'ref_fmt': 'PNG', 'ref_mode': 'RGB', 'ren_fmt': 'PNG', 'ren_mode': 'RGB'}
+global mean|d|=0.365 p95=0.33 p99=5.33 max=68.0
+ink px (D>12): ref=78765 ren=80008 ratio=1.0158
+mean|d| ink-union=1.80  pure-bg=0.012 (max 12.0)
+ref ink bbox x[53..586] y[53..586] span=(534.0,534.0) center=(319.5,319.5) [spec: centro(320,320) span 533.6]
+  ref ink split @320: L=39279 R=39486 (d=-207)  T=39331 B=39434 (d=-103)
+ren ink bbox x[0..639] y[0..639] span=(640.0,640.0) center=(319.5,319.5) [spec: centro(320,320) span 533.6]
+  ren ink split @320: L=40039 R=39969 (d=+70)  T=39657 B=40351 (d=-694)
+ref plate corners(24px) medians: [(np.float64(126.0), np.float64(33.0), np.float64(35.0)), (np.float64(126.0), np.float64(33.0), np.float64(35.0)), (np.float64(126.0), np.float64(33.0), np.float64(35.0)), (np.float64(126.0), np.float64(33.0), np.float64(35.0))]
+ref tl 0..10 median: (np.float64(126.0), np.float64(33.0), np.float64(35.0))
+ren plate corners(24px) medians: [(np.float64(126.0), np.float64(33.0), np.float64(35.0)), (np.float64(126.0), np.float64(33.0), np.float64(35.0)), (np.float64(126.0), np.float64(33.0), np.float64(35.0)), (np.float64(126.0), np.float64(33.0), np.float64(35.0))]
+ren tl 0..10 median: (np.float64(126.0), np.float64(33.0), np.float64(35.0))
+page-bg-look px (11,11,12 +-6): ref=0 ren=101
+  ren page-bg bbox x[0..639] y[0..639]
+   px(0,0)=rgb(11, 11, 12)
+   px(1,0)=rgb(11, 11, 12)
+   px(2,0)=rgb(11, 11, 12)
+   px(3,0)=rgb(11, 11, 12)

@@ -12,6 +12,7 @@ import type { MediaStream } from "../../types/stream";
 import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
 import { TRAILER_PROBE_MIN_WIDTH, youtubeTrailerThumbnail } from "../../services/trailerProbe";
 import { usePlayableTrailers } from "../../hooks/usePlayableTrailers";
+import RelatedPosterCard from "./RelatedPosterCard";
 
 const IMG = "https://image.tmdb.org/t/p";
 
@@ -180,11 +181,12 @@ export default function DetailSectionPage() {
         ) : null}
 
         {sectionKind === "related" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(197px, 197px))", gap: "22px 24px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(217px, 217px))", gap: "22px 24px" }}>
             {related.map(item => (
-              <RelatedGridCard
+              <RelatedPosterCard
                 key={`${item.type}-${item.id}`}
-                item={item}
+                name={item.name}
+                poster={item.poster}
                 onOpen={() => {
                   writeDetailMediaMeta({
                     id: `tmdb:${item.id}`,
@@ -293,14 +295,6 @@ function PersonGridCard({ person, disabled }: { person: PersonItem; disabled?: b
       )}
       <p style={{ fontSize: 14.4, fontWeight: 800, color: "#fff", lineHeight: 1.2 }}>{person.name}</p>
       <p style={{ marginTop: 4, fontSize: 14.4, color: "rgba(255,255,255,0.68)", lineHeight: 1.2 }}>{person.role}</p>
-    </button>
-  );
-}
-
-function RelatedGridCard({ item, onOpen }: { item: RelatedItem; onOpen: () => void }) {
-  return (
-    <button type="button" className="media-card-frame" onClick={onOpen} style={{ position: "relative", width: 197, height: 296, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(225,230,238,0.12)", background: "#1c1c1e", padding: 0, cursor: "pointer" }}>
-      {item.poster ? <img src={item.poster} alt={item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
     </button>
   );
 }

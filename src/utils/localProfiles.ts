@@ -1,4 +1,10 @@
+import {
+  getExperienceStorageKeys,
+  writeExperienceBatchToProfile,
+} from "../domain/experienceStorage";
+
 export const LOCAL_PROFILES_CHANGED_EVENT = "aetherio-local-profiles-changed";
+export const EXPERIENCE_SCOPE_CHANGED_EVENT = "aetherio-experience-scope-changed";
 
 const PROFILES_STORAGE_KEY = "aetherio-local-profiles-v1";
 const ACTIVE_PROFILE_ID_KEY = "aetherio-active-profile-id";
@@ -6,6 +12,7 @@ const PROFILE_SPACE_PREFIX = "aetherio-profile-space-v2";
 const PROFILE_SPACE_MIGRATION_KEY = `${PROFILE_SPACE_PREFIX}:legacy-owner`;
 const ACCOUNT_USER_KEY = "aetherio-account-user-v1";
 const LOCAL_MODE_KEY = "aetherio-local-mode-v1";
+const ACCOUNT_CONTEXT_CHANGED_EVENT = "aetherio-auth-changed";
 
 const SCOPED_STORAGE_KEYS = [
   "aetherio-api-keys",
@@ -33,6 +40,19 @@ export interface LocalProfileInput {
   pin?: string;
   avatarDataUrl?: string;
 }
+
+export interface ExperienceStorageScope {
+  /** Stable account namespace or "local"; never contains an auth token. */
+  accountScope: string;
+  profileId: string | null;
+  generation: number;
+}
+
+type ExperienceScopeListener = (scope: ExperienceStorageScope) => void;
+let experienceScopeGeneration = 0;
+let experienceScopeSignature: string | null = null;
+let scopeListenerWindow: Window | null = null;
+const experienceScopeListeners = new Set<ExperienceScopeListener>();
 
 export function getLocalProfiles(): LocalProfile[] {
   try {
@@ -62,7 +82,49 @@ export function hasActiveLocalProfile() {
 
 export function getScopedStorageKey(baseKey: string) {
   const activeId = getActiveProfileId();
-  return activeId ? `aetherio-profile:${activeId}:${baseKey}` : baseKey;
+  return getScopedStorageKeyForScope(baseKey, {
+    profileId: activeId,
+    accountScope: currentProfileScope(),
+  });
+}
+
+/** Captures the account/profile context for work that may finish asynchronously. */
+export function captureExperienceScope(): ExperienceStorageScope {
+  ensureExperienceScopeListeners();
+  const current = readExperienceScopeIdentity();
+  const signature = scopeSignature(current.accountScope, current.profileId);
+  if (experienceScopeSignature === null) experienceScopeSignature = signature;
+  else if (experienceScopeSignature !== signature) {
+    experienceScopeGeneration += 1;
+    experienceScopeSignature = signature;
+    notifyExperienceScopeListeners(current);
+  }
+  return { ...current, generation: experienceScopeGeneration };
+}
+
+/** Keeps existing profile keys; scopes registered data keys for signed-in accounts with no profile selected. */
+export function getScopedStorageKeyForScope(
+  baseKey: string,
+  scope: Pick<ExperienceStorageScope, "accountScope" | "profileId">,
+) {
+  if (scope.profileId) return `aetherio-profile:${scope.profileId}:${baseKey}`;
+  if (scope.accountScope.startsWith("account:") && getExperienceStorageKeys().includes(baseKey)) {
+    return `aetherio-experience:${encodeURIComponent(scope.accountScope)}:${baseKey}`;
+  }
+  return baseKey;
+}
+
+export function isExperienceScopeCurrent(scope: ExperienceStorageScope): boolean {
+  const current = captureExperienceScope();
+  return current.accountScope === scope.accountScope
+    && current.profileId === scope.profileId
+    && current.generation === scope.generation;
+}
+
+export function subscribeExperienceScope(listener: ExperienceScopeListener): () => void {
+  ensureExperienceScopeListeners();
+  experienceScopeListeners.add(listener);
+  return () => experienceScopeListeners.delete(listener);
 }
 
 export async function createLocalProfile(input: LocalProfileInput, options?: { makeActive?: boolean; adoptCurrentData?: boolean }) {
@@ -127,7 +189,7 @@ export function setActiveProfile(id: string) {
 }
 
 function clearScopedData(profileId: string) {
-  for (const key of SCOPED_STORAGE_KEYS) {
+  for (const key of profileDataKeys()) {
     localStorage.removeItem(`aetherio-profile:${profileId}:${key}`);
   }
 }
@@ -141,6 +203,7 @@ export function deleteLocalProfile(id: string) {
   const activeId = getActiveProfileId();
   if (activeId === id) {
     localStorage.removeItem(profileStorageKeys().active);
+    dispatchProfilesChanged();
   }
   return true;
 }
@@ -227,11 +290,76 @@ function dispatchProfilesChanged() {
 }
 
 function copyCurrentLocalDataToProfile(profileId: string) {
+  const sourceScope = captureExperienceScope();
+  const registeredKeys = new Set(getExperienceStorageKeys());
   for (const key of SCOPED_STORAGE_KEYS) {
-    const value = localStorage.getItem(key);
+    if (registeredKeys.has(key)) continue;
+    const sourceKey = getScopedStorageKeyForScope(key, { accountScope: sourceScope.accountScope, profileId: null });
+    const value = localStorage.getItem(sourceKey);
     if (value !== null) {
       localStorage.setItem(`aetherio-profile:${profileId}:${key}`, value);
     }
+  }
+
+  const registeredData = [];
+  for (const key of registeredKeys) {
+    const sourceKey = getScopedStorageKeyForScope(key, { accountScope: sourceScope.accountScope, profileId: null });
+    const value = localStorage.getItem(sourceKey);
+    if (value !== null) registeredData.push({ key, value });
+  }
+  if (registeredData.length) writeExperienceBatchToProfile(sourceScope, profileId, registeredData);
+}
+
+function profileDataKeys() {
+  return Array.from(new Set([...SCOPED_STORAGE_KEYS, ...getExperienceStorageKeys()]));
+}
+
+function readExperienceScopeIdentity(): Omit<ExperienceStorageScope, "generation"> {
+  const accountScope = currentProfileScope();
+  const profileId = getActiveProfileId()?.trim() || null;
+  return { accountScope, profileId };
+}
+
+function scopeSignature(accountScope: string, profileId: string | null) {
+  return JSON.stringify([accountScope, profileId]);
+}
+
+function ensureExperienceScopeListeners() {
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function" || scopeListenerWindow === window) return;
+  scopeListenerWindow = window;
+  window.addEventListener(LOCAL_PROFILES_CHANGED_EVENT, handleExperienceScopeChange);
+  window.addEventListener(ACCOUNT_CONTEXT_CHANGED_EVENT, handleExperienceScopeChange);
+  window.addEventListener("storage", handleExperienceStorageChange);
+}
+
+function handleExperienceScopeChange() {
+  const current = readExperienceScopeIdentity();
+  experienceScopeSignature = scopeSignature(current.accountScope, current.profileId);
+  experienceScopeGeneration += 1;
+  notifyExperienceScopeListeners(current);
+}
+
+function handleExperienceStorageChange(event: Event) {
+  const key = (event as StorageEvent).key;
+  if (key === undefined) return;
+  if (key !== null
+    && key !== ACCOUNT_USER_KEY
+    && key !== LOCAL_MODE_KEY
+    && key !== PROFILES_STORAGE_KEY
+    && key !== ACTIVE_PROFILE_ID_KEY
+    && !key.startsWith(`${PROFILE_SPACE_PREFIX}:`)) return;
+  handleExperienceScopeChange();
+}
+
+function notifyExperienceScopeListeners(current: Omit<ExperienceStorageScope, "generation">) {
+  const scope = { ...current, generation: experienceScopeGeneration };
+  for (const listener of experienceScopeListeners) {
+    try { listener(scope); } catch { /* One subscriber cannot block scope invalidation for others. */ }
+  }
+  try {
+    window.dispatchEvent(new CustomEvent(EXPERIENCE_SCOPE_CHANGED_EVENT, { detail: scope }));
+  } catch {
+    // Scope invalidation remains effective even when a host has no DOM event implementation.
   }
 }
 

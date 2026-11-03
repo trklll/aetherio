@@ -15,6 +15,30 @@ export interface OutroSegment {
   end: number;
 }
 
+/** Missing/invalid dates are not enough evidence to autoplay an episode. */
+export function isEpisodeReleased(airDate?: string, now = new Date()): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(airDate ?? "");
+  if (!match) return false;
+
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const releaseDate = new Date(year, month - 1, day);
+  if (
+    releaseDate.getFullYear() !== year
+    || releaseDate.getMonth() !== month - 1
+    || releaseDate.getDate() !== day
+  ) return false;
+
+  const localDateKey = (date: Date) => [
+    date.getFullYear().toString().padStart(4, "0"),
+    (date.getMonth() + 1).toString().padStart(2, "0"),
+    date.getDate().toString().padStart(2, "0"),
+  ].join("-");
+  return match[0] <= localDateKey(now);
+}
+
 // Clamps (PlayerNextEpisodeRules + PlayerSettings).
 export const MIN_NEXT_EPISODE_THRESHOLD_PERCENT = 97;
 export const MAX_NEXT_EPISODE_THRESHOLD_PERCENT = 100;

@@ -46,7 +46,7 @@ export interface PlaybackCapabilities {
 export interface MpvVideoEnhancementResult {
   profile: string;
   kind: string;
-  verified: boolean;
+  configurationApplied: boolean;
   requestedShaders: string[];
   activeShaders: string;
   requestedVideoFilter: string;

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { Compass, Film, RefreshCw, Tv } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import PageContainer from "../../components/layout/PageContainer";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import { applyHomeCatalogPreferences, useHomePreferences } from "../../config/homePreferences";
@@ -167,7 +168,7 @@ function AniListSyncBanner({
           disabled={syncing}
           className="gsap-transition inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-xs font-black text-black disabled:opacity-55"
         >
-          <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
+          {syncing ? <AppleSpinner size={15} color="#111" /> : <RefreshCw size={15} />}
           {syncing ? "Sincronizando…" : "Sincronizar ahora"}
         </button>
       </div>

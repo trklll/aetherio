@@ -1,0 +1,62 @@
+.sports-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+  margin: auto;
+  padding: clamp(20px, 3vw, 32px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 24px;
+  color: #fff;
+  background: #202124;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+}
+.sports-dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
+.sports-dialog__header, .sports-iptv-list__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sports-dialog__header { margin-bottom: 20px; }
+.sports-dialog h2 { font-size: 26px; font-weight: 750; letter-spacing: -0.02em; }
+.sports-dialog h3 { margin: 0 0 16px; font-size: 20px; font-weight: 700; }
+.sports-dialog__intro { margin-bottom: 8px; font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
+.sports-dialog__hint, .sports-iptv-status { color: rgba(255, 255, 255, 0.76); font-size: 14px; line-height: 1.6; }
+.sports-iptv-status { margin-top: 16px; font-variant-numeric: tabular-nums; }
+.sports-dialog__close { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 50%; color: #fff; background: rgba(255, 255, 255, 0.08); }
+.sports-dialog__close:hover, .sports-dialog__button:hover { background: rgba(255, 255, 255, 0.18); }
+.sports-dialog :is(button, input, textarea, summary):focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.sports-dialog__button { min-height: 44px; padding: 10px 18px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #fff; font-size: 14px; font-weight: 650; }
+.sports-dialog__button--primary { background: #fff; color: #202124; }
+.sports-dialog__button--primary:hover { background: #e5e5e7; }
+.sports-dialog__button:disabled { opacity: 0.5; cursor: progress; }
+.sports-iptv-lists { margin-top: 12px; list-style: none; }
+.sports-iptv-list { padding-block: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.sports-iptv-list__toggle { display: flex; align-items: center; gap: 12px; min-height: 44px; min-width: 0; cursor: pointer; }
+.sports-iptv-list__toggle span { min-width: 0; }
+.sports-iptv-list__toggle input { width: 20px; height: 20px; flex-shrink: 0; accent-color: #fff; }
+.sports-iptv-list strong, .sports-iptv-list small { display: block; overflow-wrap: anywhere; }
+.sports-iptv-list small { margin-top: 4px; color: rgba(255, 255, 255, 0.72); font-size: 13px; }
+.sports-iptv-form { margin-top: 28px; }
+.sports-iptv-form label, .sports-iptv-list form label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-size: 14px; font-weight: 600; }
+.sports-dialog :is(input:not([type="checkbox"]), textarea) { width: 100%; min-width: 0; min-height: 44px; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 10px; padding: 11px 12px; background: rgba(0, 0, 0, 0.2); color: #fff; font: inherit; font-size: 14px; caret-color: #fff; }
+.sports-dialog textarea { resize: vertical; }
+.sports-dialog input::placeholder, .sports-dialog textarea::placeholder { color: rgba(255, 255, 255, 0.62); }
+.sports-dialog input[type="file"]::file-selector-button { margin-right: 12px; border: 0; border-radius: 6px; padding: 8px 10px; background: rgba(255, 255, 255, 0.14); color: #fff; }
+.sports-dialog summary { display: list-item; min-height: 44px; padding-block: 12px; cursor: pointer; font-size: 14px; font-weight: 600; }
+.sports-dialog details { margin-bottom: 12px; }
+.sports-dialog__error { margin-bottom: 16px; color: #ffb5af; font-size: 14px; line-height: 1.5; }
+.sports-iptv-form > .sports-dialog__hint { margin: 4px 0 20px; }
+.sports-source-options { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
+.sports-source-option { display: flex; align-items: center; gap: 14px; min-height: 68px; padding: 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 14px; text-align: left; background: rgba(255, 255, 255, 0.06); }
+.sports-source-option:hover { background: rgba(255, 255, 255, 0.13); }
+.sports-source-option > svg { flex-shrink: 0; }
+.sports-source-option strong, .sports-source-option small { display: block; overflow-wrap: anywhere; }
+.sports-source-option small { margin-top: 4px; color: rgba(255, 255, 255, 0.72); font-size: 13px; }
+.sports-source-option__match { margin-left: auto; font-size: 12px; color: rgba(255, 255, 255, 0.76); }
+.sports-card-sources { position: absolute; top: 10px; right: 10px; z-index: 6; display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 8px 14px; border: 1px solid rgba(255, 255, 255, 0.24); border-radius: 999px; color: #fff; background: rgba(20, 21, 24, 0.92); font-size: 13px; font-weight: 650; }
+.sports-card-sources:hover { background: #3c3d40; }
+.sports-card-sources:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+@media (max-width: 600px) {
+  .sports-card-sources { left: 10px; right: auto; }
+  .sports-source-option { flex-wrap: wrap; }
+  .sports-source-option__match { margin-left: 34px; }
+}

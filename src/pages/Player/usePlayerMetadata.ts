@@ -10,25 +10,37 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
   const [episodeOptions, setEpisodeOptions] = useState<EpisodeOption[]>([]);
   const [seriesLogoUrl, setSeriesLogoUrl] = useState<string | null>(null);
   const [nextSeasonEpisode, setNextSeasonEpisode] = useState<EpisodeOption | null>(null);
+  const [episodeMetadataReady, setEpisodeMetadataReady] = useState(false);
 
   useEffect(() => {
     if (!query?.season || !query.episode || query.type === "movie") {
       setEpisodeOptions([]);
       setSeriesLogoUrl(null);
       setNextSeasonEpisode(null);
+      setEpisodeMetadataReady(true);
       return;
     }
     let cancelled = false;
+    setEpisodeOptions([]);
+    setSeriesLogoUrl(null);
+    setNextSeasonEpisode(null);
+    setEpisodeMetadataReady(false);
 
     const loadEpisodes = async () => {
       try {
         const tmdbId = await resolveTmdbId(query.type, query.id);
-        if (!tmdbId) return;
+        if (!tmdbId) {
+          if (!cancelled) setEpisodeMetadataReady(true);
+          return;
+        }
         const [seasonJson, detailsJson] = await Promise.all([
           tmdbFetch<any>(`/tv/${tmdbId}/season/${query.season}`, { params: { language: "es-ES" } }),
           tmdbFetch<any>(`/tv/${tmdbId}`, { params: { language: "es-ES", append_to_response: "images", include_image_language: "es,null,en" } }),
         ]);
-        if (!seasonJson) return;
+        if (!seasonJson) {
+          if (!cancelled) setEpisodeMetadataReady(true);
+          return;
+        }
         if (cancelled) return;
 
         const logos = detailsJson?.images?.logos ?? [];
@@ -79,12 +91,16 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
             }
           }
         }
-        if (!cancelled) setNextSeasonEpisode(resolved);
+        if (!cancelled) {
+          setNextSeasonEpisode(resolved);
+          setEpisodeMetadataReady(true);
+        }
       } catch {
         if (!cancelled) {
           setEpisodeOptions([]);
           setSeriesLogoUrl(null);
           setNextSeasonEpisode(null);
+          setEpisodeMetadataReady(true);
         }
       }
     };
@@ -95,7 +111,7 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
     };
   }, [query]);
 
-  return { episodeOptions, seriesLogoUrl, nextSeasonEpisode };
+  return { episodeOptions, seriesLogoUrl, nextSeasonEpisode, episodeMetadataReady };
 }
 
 export function usePlayerLogos(query: StreamQuery | null, stream: MediaStream | null) {

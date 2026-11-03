@@ -5,11 +5,19 @@ import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.t
 import { isPlayableMediaStream } from "../utils/playableMedia.ts";
 import { sortStreamsForPlayback } from "../utils/streamPlaybackRanking.ts";
 import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetadata.ts";
+import { matchesAddonStreamFilter } from "../utils/addonStreamFilter.ts";
+import type { InstalledAddon } from "../store/addonStore.ts";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
 const STREAM_CACHE = new Map<string, { streams: MediaStream[]; updatedAt: number }>();
 const IMDB_ID_CACHE = new Map<string, Promise<string | null>>();
+
+function addonStreamFingerprint(addons: InstalledAddon[]) {
+  return JSON.stringify(addons.filter(addonHasStreams).map(addon => [
+    addon.id, addon.url, addon.name, addon.streamNameFilter,
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+}
 
 export interface UseStreamsResult {
   streams: MediaStream[];
@@ -286,25 +294,22 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
 }
 
 export function useStreams(query: StreamQuery | null): UseStreamsResult {
-  const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+  const installedAddons = useAddonStore(s => s.addons);
+  const enabledAddons = useMemo(() => installedAddons.filter(addon => addon.enabled), [installedAddons]);
   const streamId = useMemo(() => (query ? buildStreamId(query) : ""), [query]);
   const initialCachedStreams = useMemo(() => {
     if (!query || !streamId) return [] as MediaStream[];
-    const addonsFingerprint = getEnabledAddons()
-      .filter(addonHasStreams)
-      .map(addon => addon.id || addon.url)
-      .sort()
-      .join("|");
+    const addonsFingerprint = addonStreamFingerprint(enabledAddons);
     const cached = STREAM_CACHE.get(`${query.type}:${streamId}:${addonsFingerprint}`);
     if (!cached || Date.now() - cached.updatedAt >= STREAM_CACHE_TTL_MS) return [];
     return cached.streams.filter(isPlayableMediaStream);
-  }, [getEnabledAddons, query, streamId]);
+  }, [enabledAddons, query, streamId]);
   const [streams, setStreams] = useState<MediaStream[]>(() => initialCachedStreams);
   const [loading, setLoading] = useState(() => false);
   const [error,   setError]   = useState<string | null>(null);
   const [tick,    setTick]    = useState(0);
   const sourceNames = useMemo(
-    () => getEnabledAddons()
+    () => enabledAddons
       .filter(addon => addonHasStreams(addon) && (!query || streamRequestTypes(addon, query.type).length > 0))
       // Un add-on que codifica el proveedor en cada stream no debe abrir un
       // chip con su propio nombre: cada stream se contabiliza en su proveedor
@@ -313,7 +318,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
       .filter(addon => !addon.streamSourceFromPayload)
       .map(addon => addon.name)
       .filter(Boolean),
-    [getEnabledAddons, query?.type, tick],
+    [enabledAddons, query?.type, tick],
   );
 
   // Ref para acumular resultados sin stale-closure
@@ -327,11 +332,8 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     }
 
     let cancelled = false;
-    const addons = getEnabledAddons().filter(addonHasStreams);
-    const addonsFingerprint = addons
-      .map(addon => addon.id || addon.url)
-      .sort()
-      .join("|");
+    const addons = enabledAddons.filter(addonHasStreams);
+    const addonsFingerprint = addonStreamFingerprint(addons);
     const cacheKey = `${query.type}:${streamId}:${addonsFingerprint}`;
     const cached = STREAM_CACHE.get(cacheKey);
     const cachedStreams = cached?.streams.filter(isPlayableMediaStream);
@@ -356,6 +358,9 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     // ── Non-blocking: lanzar todos en paralelo, actualizar UI al ir llegando ──
     let pending = addons.length;
     let pendingRequests = 0;
+    // Logical sources can share a real upstream. Fetch each request once and
+    // partition its payload locally, including when only one source is enabled.
+    const sharedPayloads = new Map<string, ReturnType<typeof fetchStreamPayload>>();
 
     function onAddonDone() {
       if (cancelled) return;
@@ -389,7 +394,13 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
           .then(requestStreamId => {
             const url = `${base}/stream/${type}/${encodeURIComponent(requestStreamId)}.json`;
             if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] request", { addonId: addon.id, addonName: addon.name, type, streamId: requestStreamId, url, timeoutMs });
-            return fetchStreamPayload(url, attempts, timeoutMs);
+            const payloadKey = JSON.stringify([url, attempts, timeoutMs]);
+            let payload = sharedPayloads.get(payloadKey);
+            if (!payload) {
+              payload = fetchStreamPayload(url, attempts, timeoutMs);
+              sharedPayloads.set(payloadKey, payload);
+            }
+            return payload;
           })
           .then(({ json, status }) => {
             if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] response", { addonId: addon.id, type, status, ok: true });
@@ -402,7 +413,11 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
                   ? json.addonStreams
                   : [];
             const fresh = rawStreams
-              .map((s: any, i: number) => normalizeStream(s, addon.id, addon.name, i))
+              .filter((s: any) => s && typeof s === "object" && matchesAddonStreamFilter(s, addon.streamNameFilter))
+              .map((s: any, i: number) => {
+                const stream = normalizeStream(s, addon.id, addon.name, i);
+                return stream && addon.streamNameFilter ? { ...stream, sourceName: addon.name } : stream;
+              })
               .filter(Boolean) as MediaStream[];
             if (DEBUG_STREAMS) {
               console.info("[AETHERIO:STREAMS] payload", {
@@ -437,7 +452,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     }
 
     return () => { cancelled = true; };
-  }, [getEnabledAddons, query, streamId, tick]);
+  }, [enabledAddons, query, streamId, tick]);
 
   return {
     streams,
@@ -447,11 +462,7 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
     streamId,
     reload: () => {
       if (query && streamId) {
-        const addonsFingerprint = getEnabledAddons()
-          .filter(addonHasStreams)
-          .map(addon => addon.id || addon.url)
-          .sort()
-          .join("|");
+        const addonsFingerprint = addonStreamFingerprint(enabledAddons);
         const cacheKey = `${query.type}:${streamId}:${addonsFingerprint}`;
         STREAM_CACHE.delete(cacheKey);
       }

@@ -9,16 +9,12 @@ import { useHomeCatalogs } from "../../hooks/useCatalogs";
 import { useAddonStore } from "../../store/addonStore";
 import { getHomeScroll, saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
-import { tmdbFetch } from "../../config/apiKeys";
-import { fetchTmdbArtwork } from "../../services/tmdbArtworkService";
 import CatalogRow from "./CatalogRow";
+import CinematicRow from "./CinematicRow";
 import ContinueWatchingRow from "./ContinueWatchingRow";
+import StreamingPlatformsRow from "./StreamingPlatformsRow";
 import GenreShowcase from "./GenreShowcase";
 import HeroSection from "./HeroSection";
-import StreamingProviderRowsGroup, {
-  STREAMING_PROVIDERS,
-  type StreamingProviderTheme,
-} from "./StreamingProviderRowsGroup";
 import { gsap, prefersReducedMotion } from "../../utils/motion";
 import { hasEntrancePlayed, isFreshHomeEntrance, markEntrancePlayed } from "../../utils/homeEntrance";
 import { separateTopRows } from "../../utils/topRows";
@@ -154,6 +150,28 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
   }, [homeInfoVisible, onContentVisibleChange]);
 
   useLayoutEffect(() => {
+    if (!isBigPicture) return;
+    const saved = getHomeScroll();
+    const focus = saved?.focus;
+    if (!saved || focus?.rowKey !== "streaming-platforms") return;
+
+    const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    const row = document.querySelector<HTMLElement>('[data-row-key="streaming-platforms"]');
+    const card = row?.querySelector<HTMLElement>(`[data-platform-id="${focus.platformId}"]`);
+    const scroller = row?.querySelector<HTMLElement>("[data-row-scroller]");
+    if (!shell || !card) return;
+
+    // Restore before the first frame or gamepad action. The platform page may
+    // have reset the outer shell, so both axes and the exact source card matter.
+    shell.scrollTo({ top: saved.vertical, behavior: "instant" as ScrollBehavior });
+    const horizontal = saved.rows[focus.rowKey];
+    if (scroller && Number.isFinite(horizontal)) scroller.scrollLeft = horizontal!;
+    card.focus({ preventScroll: true });
+    restoredVerticalRef.current = true;
+    saveHomeScroll({ focus: null });
+  }, [isBigPicture, location.pathname]);
+
+  useLayoutEffect(() => {
     if (loading || restoredVerticalRef.current) return;
     const saved = getHomeScroll();
     if (saved && saved.vertical > 0) {
@@ -203,68 +221,65 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
     [typeFilter, visibleRows],
   );
 
-  const { otherRows, baseRows, animeRows } = useMemo(() => {
-    const base = filteredRows.filter(row => row.type !== "anime");
-    const anime = filteredRows.filter(row => row.type === "anime");
-    return { otherRows: filteredRows, baseRows: base, animeRows: anime };
-  }, [filteredRows]);
-
-  const streamingProviderGroups = useMemo(
-    () => buildStreamingProviderGroups(baseRows),
-    [baseRows],
-  );
+  const { baseRows, animeRows } = useMemo(() => ({
+    baseRows: filteredRows.filter(row => row.type !== "anime"),
+    animeRows: filteredRows.filter(row => row.type === "anime"),
+  }), [filteredRows]);
 
   // En modo "both" la sub-preferencia decide qué catálogos salen primero;
   // en "anime" siempre va el anime primero y en "movies-series" al revés.
   const animeFirst = isAnimeFirst(homePreferences);
 
-  useEffect(() => {
-    if (!otherRows.length) return;
-    const streamingItems: MediaItem[] = [];
-    for (const group of buildStreamingProviderGroups(otherRows)) {
-      for (const item of group.seriesRow.items) {
-        if (!item.logo) streamingItems.push(item);
-      }
-      for (const item of group.moviesRow.items) {
-        if (!item.logo) streamingItems.push(item);
-      }
+  const renderCatalogRow = (row: CatalogRowData, key: string) => {
+    const rowKey = makeRowKey(row.addonId, row.catalogId, row.type);
+    const saved = getHomeScroll();
+    const restoreScrollLeft = saved?.rows?.[rowKey];
+    if (row.presentation === "cinematic") {
+      return <CinematicRow key={key} row={row} restoreScrollLeft={restoreScrollLeft} onOpenPreview={openPreview} />;
     }
-    if (!streamingItems.length) return;
-    let cancelled = false;
-    async function enrich() {
-      for (const item of streamingItems) {
-        if (cancelled || item.logo) continue;
-        try {
-          const idPart = item.id.split(":")[0];
-          let tmdbId: number | null = null;
-          let tmdbType: "movie" | "tv" | null = null;
-          if (item.type === "movie" || item.type === "series" || item.type === "tv") {
-            tmdbType = item.type === "series" ? "tv" : item.type as "movie" | "tv";
-          }
-          if (idPart.startsWith("tmdb:")) {
-            tmdbId = parseInt(idPart.slice(5), 10);
-          } else if (idPart.startsWith("tt")) {
-            const fd = await tmdbFetch<{ movie_results?: { id: number }[]; tv_results?: { id: number }[] }>(
-              `/find/${encodeURIComponent(idPart)}`,
-              { params: { external_source: "imdb_id", language: "es-ES" } },
-            );
-            if (fd?.movie_results?.length) { tmdbId = fd.movie_results[0].id; tmdbType = "movie"; }
-            else if (fd?.tv_results?.length) { tmdbId = fd.tv_results[0].id; tmdbType = "tv"; }
-          }
-          if (!tmdbId || !tmdbType) continue;
-          // Mismo resolver que usan el resto de pantallas: la cache por id hace
-          // que este bucle no repita el trabajo que ya hizo el enriquecimiento
-          // de las filas ni el detalle, y viceversa.
-          const artwork = await fetchTmdbArtwork(tmdbType, tmdbId);
-          if (artwork?.logoPath) {
-            item.logo = `https://image.tmdb.org/t/p/original${artwork.logoPath}`;
-          }
-        } catch {}
-      }
-    }
-    void enrich();
-    return () => { cancelled = true; };
-  }, [otherRows]);
+    return <CatalogRow key={key} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={restoreScrollLeft} onOpenPreview={openPreview} />;
+  };
+
+  const movieSeriesGenreAnchorIndex = useMemo(() => {
+    const popularMoviesIndex = baseRows.findIndex(row => {
+      if (row.type !== "movie") return false;
+      const identity = `${row.catalogId} ${row.name}`
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+      return identity.includes("tmdb.top_movie")
+        || (identity.includes("popular") && /peliculas?|movies?/.test(identity));
+    });
+    const lastMovieOrSeriesIndex = baseRows.reduce((last, row, index) => (
+      row.type === "movie" || row.type === "series" || row.type === "tv" ? index : last
+    ), -1);
+    return popularMoviesIndex >= 0
+      ? popularMoviesIndex
+      : lastMovieOrSeriesIndex >= 0 ? lastMovieOrSeriesIndex : baseRows.length - 1;
+  }, [baseRows]);
+
+  const showMovieSeriesGenreShowcase = !typeFilter
+    && homePreferences.contentOrientation !== "anime"
+    && baseRows.some(row => row.type === "movie" || row.type === "series" || row.type === "tv");
+
+  const renderBaseRows = () => {
+    const rendered: ReactNode[] = [];
+    let showcaseAdded = false;
+    const appendGenreShowcase = () => {
+      if (!showMovieSeriesGenreShowcase || showcaseAdded) return;
+      rendered.push(<GenreShowcase key="genre-showcase-movie-series" mode="movie-series" />);
+      showcaseAdded = true;
+    };
+
+    baseRows.forEach((row, index) => {
+      rendered.push(renderCatalogRow(row, `${row.addonId}-${row.catalogId}-${index}`));
+
+      if (index === movieSeriesGenreAnchorIndex) appendGenreShowcase();
+    });
+
+    appendGenreShowcase();
+    return rendered;
+  };
 
   return (
       <div ref={pageRef} className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
@@ -280,70 +295,27 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
           }}
         >
         {!typeFilter && <ContinueWatchingRow />}
+        {!typeFilter && <StreamingPlatformsRow />}
         {animeFirst ? (
           <>
             {animeRows.slice(0, 2).map((row, i) => {
-                const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
-                const saved = getHomeScroll();
-                return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} onOpenPreview={openPreview} />;
+                return renderCatalogRow(row, `${row.addonId}-${row.catalogId}-${i}`);
               })}
             {!typeFilter && homePreferences.contentOrientation !== "movies-series" && <GenreShowcase />}
             {animeRows.slice(2).map((row, i) => {
-                const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
-                const saved = getHomeScroll();
-                return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i + 2}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} onOpenPreview={openPreview} />;
+                return renderCatalogRow(row, `${row.addonId}-${row.catalogId}-${i + 2}`);
               })}
-            {baseRows.map((row, i) => {
-                const providerGroup = streamingProviderGroups.find(group => group.anchorIndex === i);
-                if (providerGroup) {
-                  return (
-                    <StreamingProviderRowsGroup
-                      key={`${providerGroup.provider.id}-series-movies`}
-                      provider={providerGroup.provider}
-                      seriesRow={providerGroup.seriesRow}
-                      moviesRow={providerGroup.moviesRow}
-                      posterLayout={homePreferences.posterLayout}
-                      onOpenPreview={openPreview}
-                    />
-                  );
-                }
-                if (streamingProviderGroups.some(group => group.hiddenIndex === i)) return null;
-                const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
-                const saved = getHomeScroll();
-                return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} onOpenPreview={openPreview} />;
-              })}
+            {renderBaseRows()}
           </>
         ) : (
           <>
-            {baseRows.map((row, i) => {
-                const providerGroup = streamingProviderGroups.find(group => group.anchorIndex === i);
-                if (providerGroup) {
-                  return (
-                    <StreamingProviderRowsGroup
-                      key={`${providerGroup.provider.id}-series-movies`}
-                      provider={providerGroup.provider}
-                      seriesRow={providerGroup.seriesRow}
-                      moviesRow={providerGroup.moviesRow}
-                      posterLayout={homePreferences.posterLayout}
-                      onOpenPreview={openPreview}
-                    />
-                  );
-                }
-                if (streamingProviderGroups.some(group => group.hiddenIndex === i)) return null;
-                const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
-                const saved = getHomeScroll();
-                return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} onOpenPreview={openPreview} />;
-              })}
+            {renderBaseRows()}
             {animeRows.slice(0, 2).map((row, i) => {
-                const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
-                const saved = getHomeScroll();
-                return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} onOpenPreview={openPreview} />;
+                return renderCatalogRow(row, `${row.addonId}-${row.catalogId}-${i}`);
               })}
             {!typeFilter && homePreferences.contentOrientation !== "movies-series" && <GenreShowcase />}
             {animeRows.slice(2).map((row, i) => {
-                const rKey = makeRowKey(row.addonId, row.catalogId, row.type);
-                const saved = getHomeScroll();
-                return <CatalogRow key={`${row.addonId}-${row.catalogId}-${i + 2}`} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={saved?.rows?.[rKey]} onOpenPreview={openPreview} />;
+                return renderCatalogRow(row, `${row.addonId}-${row.catalogId}-${i + 2}`);
               })}
           </>
         )}
@@ -364,44 +336,6 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
   );
 }
 
-interface StreamingProviderGroup {
-  provider: StreamingProviderTheme;
-  seriesRow: CatalogRowData;
-  moviesRow: CatalogRowData;
-  anchorIndex: number;
-  hiddenIndex: number;
-}
-
-function buildStreamingProviderGroups(rows: CatalogRowData[]): StreamingProviderGroup[] {
-  const indexedRows = rows.map((row, index) => ({ row, index }));
-  return STREAMING_PROVIDERS.flatMap(provider => {
-    const providerRows = indexedRows.filter(({ row }) => matchesStreamingProvider(row, provider));
-    const series = providerRows.find(({ row }) => row.type === "series" || row.type === "tv");
-    const movies = providerRows.find(({ row }) => row.type === "movie");
-    if (!series || !movies) return [];
-    return [{
-      provider,
-      seriesRow: series.row,
-      moviesRow: movies.row,
-      anchorIndex: Math.min(series.index, movies.index),
-      hiddenIndex: Math.max(series.index, movies.index),
-    }];
-  });
-}
-
-function matchesStreamingProvider(row: CatalogRowData, provider: StreamingProviderTheme) {
-  const identity = normalizeProviderIdentity(`${row.catalogId} ${row.name}`);
-  return provider.matchers.some(matcher => identity.includes(normalizeProviderIdentity(matcher)));
-}
-
-function normalizeProviderIdentity(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9+]+/g, " ")
-    .trim();
-}
 
 function HomeHero({ items, contentVisible, animateEntrance }: { items: MediaItem[]; contentVisible: boolean; animateEntrance?: boolean }) {
   const [heroIndex, setHeroIndex] = useState(0);

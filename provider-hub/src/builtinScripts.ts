@@ -7,10 +7,15 @@
  */
 import providerDepsSource from "./assets/provider-deps.js.txt";
 import fourkhdhubSource from "./assets/4khdhub.js.txt";
-import { GENERATED_PROVIDER_SCRIPTS } from "./generatedProviderScripts.ts";
+import { GENERATED_PROVIDER_SCRIPTS as KV_PROVIDER_SCRIPTS } from "./generatedProviderScripts.ts";
+import { SEANIME_PROVIDER_SCRIPTS } from "./seanime/generatedCatalog.ts";
 
 export const PROVIDER_DEPS_SOURCE = providerDepsSource;
-export { GENERATED_PROVIDER_SCRIPTS };
+// Bundling is not registration: KV remains the sole authority over availability.
+export const GENERATED_PROVIDER_SCRIPTS = [
+  ...KV_PROVIDER_SCRIPTS.map(provider => ({ ...SEANIME_PROVIDER_SCRIPTS.find(entry => entry.id === provider.id), ...provider })),
+  ...SEANIME_PROVIDER_SCRIPTS.filter(provider => !KV_PROVIDER_SCRIPTS.some(entry => entry.id === provider.id)),
+];
 
 export const builtinScriptSources: ReadonlyMap<string, string> = new Map<string, string>([
   ["4khdhub", fourkhdhubSource],

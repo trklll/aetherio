@@ -3,6 +3,7 @@ import {
   VIDEO_ENHANCEMENT_DISABLED,
   VIDEO_ENHANCEMENT_OPTIONS,
   readVideoEnhancementProfile,
+  normalizeVideoEnhancementProfile,
   saveVideoEnhancementProfile,
 } from "./videoEnhancements";
 
@@ -40,5 +41,28 @@ describe("video enhancement profiles", () => {
       expect(saveVideoEnhancementProfile(option.value)).toBe(option.value);
       expect(readVideoEnhancementProfile()).toBe(option.value);
     }
+  });
+
+  it("does not expose duplicate fast/HQ entries for single Anime4K CNN shaders", () => {
+    const standalone = VIDEO_ENHANCEMENT_OPTIONS.filter(option =>
+      /cnn-2x|denoise-cnn-2x/.test(option.value),
+    );
+    expect(standalone.map(option => option.value)).toEqual([
+      "fast:cnn-2x-medium",
+      "fast:cnn-2x-very-large",
+      "fast:denoise-cnn-2x-very-large",
+      "fast:cnn-2x-ultra-large",
+    ]);
+    expect(standalone.every(option => !/Rápido|Alta calidad/.test(option.label))).toBe(true);
+  });
+
+  it("migrates legacy standalone HQ aliases to their single canonical profile", () => {
+    expect(normalizeVideoEnhancementProfile("hq:cnn-2x-medium")).toBe("fast:cnn-2x-medium");
+    expect(normalizeVideoEnhancementProfile("hq:cnn-2x-very-large")).toBe("fast:cnn-2x-very-large");
+    expect(normalizeVideoEnhancementProfile("hq:denoise-cnn-2x-very-large")).toBe("fast:denoise-cnn-2x-very-large");
+    expect(normalizeVideoEnhancementProfile("hq:cnn-2x-ultra-large")).toBe("fast:cnn-2x-ultra-large");
+    installStorage();
+    localStorage.setItem("aetherio-player-video-enhancement", "hq:cnn-2x-medium");
+    expect(readVideoEnhancementProfile()).toBe("fast:cnn-2x-medium");
   });
 });

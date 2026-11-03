@@ -5,8 +5,10 @@ import { ChevronLeft } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { buildDetailPath } from "../../utils/bigPictureDetail";
 import { gsap } from "../../utils/motion";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
+import { fetchAllMovieSeriesGenreItems, getMovieSeriesGenre } from "../../services/movieSeriesGenres";
 import type { MediaItem } from "../../types/ui";
 
 const GENRE_LABELS: Record<string, string> = {
@@ -103,16 +105,20 @@ export default function GenreListingPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const genre = params.get("genre") ?? "";
+  const movieSeries = params.get("media") === "movie-series";
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollShellRef = useRef<HTMLElement | null>(null);
   const restoredScrollRef = useRef(false);
 
-  const cachedItems = genre ? readPageDataCache<MediaItem[]>("genre", genre) : null;
+  const cacheNamespace = movieSeries ? "genre-movie-series" : "genre";
+  const cachedItems = genre ? readPageDataCache<MediaItem[]>(cacheNamespace, genre) : null;
   const { data: items = cachedItems ?? [], isLoading } = useQuery({
-    queryKey: ["genre-listing", genre],
+    queryKey: ["genre-listing", movieSeries ? "movie-series" : "anime", genre],
     queryFn: async () => {
-      const fetched = await fetchAllGenrePages(genre);
-      writePageDataCache("genre", genre, fetched);
+      const fetched = movieSeries
+        ? await fetchAllMovieSeriesGenreItems(genre)
+        : await fetchAllGenrePages(genre);
+      writePageDataCache(cacheNamespace, genre, fetched);
       return fetched;
     },
     enabled: !!genre,
@@ -166,7 +172,9 @@ export default function GenreListingPage() {
     };
   }, [isLoading, items]);
 
-  const displayTitle = GENRE_LABELS[genre] ?? genre;
+  const displayTitle = movieSeries
+    ? getMovieSeriesGenre(genre)?.label ?? genre
+    : GENRE_LABELS[genre] ?? genre;
 
   return (
     <PageContainer>
@@ -184,7 +192,7 @@ export default function GenreListingPage() {
           <div style={{ textAlign: "center", flex: 1 }}>
             <h1 style={{ fontSize: 32, fontWeight: 900, color: "#fff", lineHeight: 1.1 }}>{displayTitle}</h1>
             <p style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.46)" }}>
-              {isLoading ? "Cargando..." : `${items.length} animes`}
+              {isLoading ? "Cargando..." : movieSeries ? `${items.length} títulos` : `${items.length} animes`}
             </p>
           </div>
           <div style={{ width: 40, flexShrink: 0 }} />
@@ -192,7 +200,7 @@ export default function GenreListingPage() {
 
         {!isLoading && items.length === 0 ? (
           <div style={{ textAlign: "center", padding: "60px 20px", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
-            No se encontraron animes para este género.
+            {movieSeries ? "No se encontraron películas ni series para este género." : "No se encontraron animes para este género."}
           </div>
         ) : null}
 
@@ -206,7 +214,7 @@ export default function GenreListingPage() {
           }}
         >
           {items.map((item, index) => (
-            <GridCard key={`${item.id}-${index}`} item={item} />
+            <GridCard key={`${item.id}-${index}`} item={item} movieSeries={movieSeries} />
           ))}
         </div>
       </div>
@@ -214,7 +222,7 @@ export default function GenreListingPage() {
   );
 }
 
-function GridCard({ item }: { item: MediaItem }) {
+function GridCard({ item, movieSeries }: { item: MediaItem; movieSeries: boolean }) {
   const navigate = useNavigate();
   const image = item.poster ?? item.background ?? "";
   const [resolving, setResolving] = useState(false);
@@ -222,16 +230,19 @@ function GridCard({ item }: { item: MediaItem }) {
   const openDetail = async () => {
     if (resolving) return;
     setResolving(true);
-    const tmdbId = await resolveTmdbId(item.name);
+    const tmdbId = movieSeries ? item.id : await resolveTmdbId(item.name);
     const detailId = tmdbId ?? item.id;
+    const detailType = movieSeries ? item.type : "anime";
     writeDetailMediaMeta({
       id: detailId,
-      type: "anime",
+      type: detailType,
       name: item.name,
+      poster: item.poster,
+      background: item.background,
       description: item.description,
       year: item.year,
     });
-    navigate(`/detail/anime/${encodeURIComponent(detailId)}`);
+    navigate(buildDetailPath(detailType, detailId));
   };
 
   return (

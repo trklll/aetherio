@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { Home, Search, Puzzle, Settings } from "lucide-react";
+import { Home, Search, Settings } from "lucide-react";
 import { useUIStore } from "../../store/uiStore";
 import LibraryIcon from "../ui/LibraryIcon";
 import clsx from "clsx";
@@ -8,7 +8,6 @@ const NAV = [
   { to: "/search",   icon: Search,      label: "Buscar" },
   { to: "/home",     icon: Home,        label: "Inicio" },
   { to: "/library",  icon: LibraryIcon, label: "Biblioteca" },
-  { to: "/addons",   icon: Puzzle,      label: "Add-ons" },
   { to: "/settings", icon: Settings,    label: "Ajustes" },
 ];
 

@@ -1,6 +1,7 @@
 import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import aetherioLogo from "../../assets/aetheriologo.png";
 import { isTauriRuntime, markNativeStartupReady } from "../../runtime/platform";
 import { gsap, prefersReducedMotion } from "../../utils/motion";
@@ -108,7 +109,6 @@ function BrowserStartupExperience({ children, ready, status, onComplete }: Start
         .fromTo(".startup-panel", { autoAlpha: 0, scale: 0.965, y: 10 }, { autoAlpha: 1, scale: 1, y: 0, duration: 0.62 })
         .fromTo(".startup-logo", { autoAlpha: 0, scale: 0.88 }, { autoAlpha: 1, scale: 1, duration: 0.48 }, "-=0.3")
         .fromTo(".startup-copy > *", { autoAlpha: 0, y: 7 }, { autoAlpha: 1, y: 0, duration: 0.35, stagger: 0.06 }, "-=0.22");
-      gsap.to(".startup-spinner", { rotate: 360, duration: 1.05, repeat: -1, ease: "none" });
       gsap.to(".startup-logo", { scale: 1.025, duration: 1.8, repeat: -1, yoyo: true, ease: "sine.inOut" });
     }, root);
     return () => context.revert();
@@ -166,7 +166,7 @@ function BrowserStartupExperience({ children, ready, status, onComplete }: Start
               <img className="startup-logo" src={aetherioLogo} alt="" />
             </div>
             <div className="startup-loader" aria-hidden="true">
-              <span className="startup-spinner" />
+              <AppleSpinner size={28} />
             </div>
           </section>
         </div>

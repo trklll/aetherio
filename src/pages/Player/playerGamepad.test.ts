@@ -15,9 +15,23 @@ const DIRECT: PlayerGamepadContext = {
   skipAvailable: false,
   controlsMode: false,
   zone: "timeline",
+  previewActive: false,
 };
 
 describe("resolvePlayerGamepadAction (mando en Big Picture player)", () => {
+  it("post-play: A activa el control enfocado, B cancela y las flechas no hacen seek", () => {
+    const prompt = { ...DIRECT, postPlayFocused: true, postPlayAvailable: true };
+    expect(resolvePlayerGamepadAction("confirm", prompt)).toEqual({ type: "activate-post-play" });
+    expect(resolvePlayerGamepadAction("back", prompt)).toEqual({ type: "dismiss-post-play" });
+    expect(resolvePlayerGamepadAction("dpad-right", prompt)).toEqual({ type: "focus-post-play", target: "cancel" });
+    expect(resolvePlayerGamepadAction("dpad-left", prompt)).toEqual({ type: "focus-post-play", target: "play" });
+    expect(resolvePlayerGamepadAction("open-controls", prompt)).toEqual({ type: "open-controls" });
+  });
+  it("post-play no captura A de los controles y respeta bloqueos y overlays", () => {
+    expect(resolvePlayerGamepadAction("confirm", { ...DIRECT, controlsMode: true, zone: "buttons", postPlayAvailable: true })).toBeNull();
+    expect(resolvePlayerGamepadAction("confirm", { ...DIRECT, postPlayFocused: true, transportLocked: true })).toBeNull();
+    expect(resolvePlayerGamepadAction("confirm", { ...DIRECT, postPlayFocused: true, directMode: false })).toBeNull();
+  });
   it("traduce las flechas de teclado a las mismas acciones que el mando", () => {
     expect(playerGamepadActionForKeyboardKey("ArrowLeft")).toBe("dpad-left");
     expect(playerGamepadActionForKeyboardKey("ArrowRight")).toBe("dpad-right");
@@ -83,15 +97,27 @@ describe("resolvePlayerGamepadAction (mando en Big Picture player)", () => {
     expect(resolvePlayerGamepadAction("back", bar)).toEqual({ type: "exit-controls" });
   });
 
-  it("en el timeline: seek, A alterna, arriba enfoca controles y abajo abre episodios", () => {
+  it("en el timeline: izquierda/derecha exploran sin seek hasta confirmar", () => {
     const timeline: PlayerGamepadContext = { ...DIRECT, controlsMode: true, zone: "timeline" };
-    expect(resolvePlayerGamepadAction("dpad-left", timeline)).toEqual({ type: "seek", offset: -10 });
-    expect(resolvePlayerGamepadAction("dpad-right", timeline)).toEqual({ type: "seek", offset: 10 });
+    expect(resolvePlayerGamepadAction("dpad-left", timeline)).toEqual({ type: "preview-seek", offset: -10 });
+    expect(resolvePlayerGamepadAction("dpad-right", timeline)).toEqual({ type: "preview-seek", offset: 10 });
     expect(resolvePlayerGamepadAction("confirm", timeline)).toEqual({ type: "toggle" });
     expect(resolvePlayerGamepadAction("open-controls", timeline)).toEqual({ type: "open-episodes" });
     expect(resolvePlayerGamepadAction("dpad-up", timeline)).toEqual({ type: "zone-buttons" });
     expect(resolvePlayerGamepadAction("dpad-down", timeline)).toEqual({ type: "open-episodes" });
     expect(resolvePlayerGamepadAction("back", timeline)).toEqual({ type: "exit-controls" });
+  });
+
+  it("A confirma y B cancela una exploración pendiente", () => {
+    const preview: PlayerGamepadContext = {
+      ...DIRECT,
+      controlsMode: true,
+      zone: "timeline",
+      previewActive: true,
+    };
+    expect(resolvePlayerGamepadAction("confirm", preview)).toEqual({ type: "confirm-preview" });
+    expect(resolvePlayerGamepadAction("back", preview)).toEqual({ type: "cancel-preview" });
+    expect(resolvePlayerGamepadAction("back", { ...DIRECT, previewActive: true })).toEqual({ type: "cancel-preview" });
   });
 
   it("en la fila de episodios navega horizontalmente y arriba/B la cierra", () => {

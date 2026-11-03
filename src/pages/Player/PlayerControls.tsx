@@ -32,9 +32,6 @@ import { formatAirDate, formatRuntime } from "../../utils/mediaLabels";
 import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
 import { followHorizontalFocus } from "../../navigation/spatialNav.ts";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
- import { useSeekrApiKey } from "../../config/useSeekrApiKey";
-import type { SeekrContent } from "./seekPreview/seekr";
-import { useSeekrPreview } from "./seekPreview/useSeekrPreview";
 import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
 import SubtitleSyncDialog from "./SubtitleSyncDialog";
 import type { SubtitleSyncCue } from "./subtitleSync/parser";
@@ -81,7 +78,12 @@ interface PlayerControlsProps {
   /** Badges monocromos de formato, bajo la plataforma. */
   videoFormatBadges?: StreamFormatBadge[];
   title: string;
-  seekrContent: SeekrContent | null;
+  /** Segundos ya demultiplexados por delante del playhead. */
+  bufferedAheadSeconds?: number;
+  timelinePreviewTime: number | null;
+  onTimelinePreviewChange: (time: number | null) => void;
+  onConfirmTimelinePreview: () => void;
+  onCancelTimelinePreview: () => void;
   currentTime: number;
   duration: number;
   playing: boolean;
@@ -121,6 +123,8 @@ interface PlayerControlsProps {
   liveAtEdge?: boolean;
   liveDvrProgress?: number;
   onGoLive?: () => void;
+  /** Sports events keep the timeline pinned to live and omit track/speed menus. */
+  sportsLiveMode?: boolean;
   /** Variante Big Picture (/big-picture/player): layout sin guía de mando. */
   bigPicture?: boolean;
   /** La ruta TV conserva la barra anterior; la barra nueva se reserva a PC. */
@@ -144,7 +148,6 @@ interface PlayerControlsProps {
   canChangeSource: boolean;
   onControlsEnter: () => void;
   onControlsLeave: () => void;
-  onSeek: (value: number) => void;
   onJump: (offset: number) => void;
   onTogglePlay: () => void;
   onVolumeChange: (value: number) => void;
@@ -190,7 +193,11 @@ export default function PlayerControls({
   streamingServiceBadge = null,
   videoFormatBadges = [],
   title,
-  seekrContent,
+  bufferedAheadSeconds = 0,
+  timelinePreviewTime,
+  onTimelinePreviewChange,
+  onConfirmTimelinePreview,
+  onCancelTimelinePreview,
   currentTime,
   duration,
   playing,
@@ -225,6 +232,7 @@ export default function PlayerControls({
   liveAtEdge = true,
   liveDvrProgress = 1,
   onGoLive,
+  sportsLiveMode = false,
   bigPicture,
   legacyTv = false,
   openMenu,
@@ -244,7 +252,6 @@ export default function PlayerControls({
   canChangeSource,
   onControlsEnter,
   onControlsLeave,
-  onSeek,
   onJump,
   onTogglePlay,
   onVolumeChange,
@@ -544,101 +551,8 @@ useEffect(() => {
 
   // Lobby Party: el transporte lo gobierna el anfitrión; volumen y Party siguen vivos.
   const transportLocked = controlsLocked || lobbyMode;
-  const { apiKey: seekrApiKey } = useSeekrApiKey();
-  // Seekr es solo del reproductor normal. En Big Picture la card no cabe sobre
-  // la barra (se salia del borde izquierdo y salia vacia) y el hover del
-  // timeline no necesita previews: `enabled: false` ademas evita pedir pista ni
-  // hojas de sprites a la API.
-  const seekrPreview = useSeekrPreview({
-    apiKey: seekrApiKey,
-    content: seekrContent,
-    durationMs: Math.max(0, duration * 1_000),
-    enabled: !bigPicture && !transportLocked && duration > 0,
-  });
-  const [seekPreviewTime, setSeekPreviewTime] = useState<number | null>(null);
-  // Intencion (la pide el raton/teclado) y nodo montado van separados: el nodo
-  // sobrevive al apagado para que el fade de salida pueda animarse antes de
-  // desmontar.
-  const [seekPreviewVisible, setSeekPreviewVisible] = useState(false);
-  const [seekPreviewMounted, setSeekPreviewMounted] = useState(false);
-  // Passar el raton por encima NO mueve la barra: el preview de hover solo
-  // informa (miniatura). El pulgar, el relleno y el reloj siguen la posicion
-  // real salvo mientras el puntero esta presionando el timeline de verdad.
-  const [timelineScrubbing, setTimelineScrubbing] = useState(false);
-  // El popup se dibuja FUERA de la barra: el contenedor de controles tiene
-  // overflow-hidden, asi que dentro se recortaba siempre. Se ancla en coordenadas
-  // de ventana y se monta con un portal.
-  const [seekPreviewAnchor, setSeekPreviewAnchor] = useState<{ left: number; bottom: number } | null>(null);
-  const seekPreviewTimerRef = useRef<number | null>(null);
   const seekDraggingRef = useRef(false);
-  // El raton esta encima del timeline. La card solo existe en ese estado (o
-  // enfocada por teclado): pasar por la barra la enciende, salir de ella la apaga
-  // al instante. El flag tambien frena al timer para que no se apague con el
-  // raton quieto encima.
-  const seekHoverRef = useRef(false);
-  const seekPreviewRef = useRef<HTMLDivElement | null>(null);
-  // Un input range puede quedarse en estado de arrastre si se pierde el
-  // puntero (cambio de app, ventana sin foco): seguiria emitiendo cambios al
-  // solo pasar por encima. Marcar el origen del gesto (puntero o teclado) es lo
-  // que deja el seek solo en manos del usuario.
   const keyboardScrubRef = useRef(false);
-  // El tactil no tiene "quedarse encima": al soltar, la card se retira.
-  const scrubIsTouchRef = useRef(false);
-  const timelineTrackRef = useRef<HTMLDivElement | null>(null);
-
-  const unmountSeekPreview = () => {
-    setSeekPreviewMounted(false);
-    setSeekPreviewTime(null);
-    setSeekPreviewAnchor(null);
-  };
-
-  const clearSeekPreviewTimer = () => {
-    if (seekPreviewTimerRef.current !== null) {
-      window.clearTimeout(seekPreviewTimerRef.current);
-      seekPreviewTimerRef.current = null;
-    }
-  };
-
-  const hideSeekPreview = () => {
-    clearSeekPreviewTimer();
-    // No se desmonta aqui: el fade de salida corre sobre el nodo vivo y lo
-    // retira al terminar (onComplete del tween).
-    setSeekPreviewVisible(false);
-  };
-
-  // Red de seguridad para el caso de foco (mando/teclado), que no tiene raton
-  // que avise de que se fue. Con el puntero encima no hace nada: el siguiente
-  // movimiento vuelve a armarlo.
-  const hideSeekPreviewSoon = () => {
-    clearSeekPreviewTimer();
-    seekPreviewTimerRef.current = window.setTimeout(() => {
-      seekPreviewTimerRef.current = null;
-      if (!seekDraggingRef.current && !seekHoverRef.current) hideSeekPreview();
-    }, 1_500);
-  };
-
-  const showSeekPreview = (time: number) => {
-    const next = Math.max(0, Math.min(duration || time, time));
-    setSeekPreviewTime(next);
-    setSeekPreviewMounted(true);
-    setSeekPreviewVisible(seekrPreview.available);
-    const rect = timelineTrackRef.current?.getBoundingClientRect();
-    if (rect && rect.width > 0) {
-      const ratio = duration > 0 ? Math.max(0, Math.min(1, next / duration)) : 0;
-      // Se ancla al borde SUPERIOR de la barra entera, no al timeline: con el
-      // titulo y los botones alrededor, medir desde el timeline dejaba la card
-      // encima de la propia barra de reproduccion. Mismo calculo en normal y
-      // en Big Picture porque las dos comparten este bloque.
-      const barTop = controlsGlassRef.current?.getBoundingClientRect().top ?? rect.top;
-      setSeekPreviewAnchor({
-        left: rect.left + rect.width * ratio,
-        // +14: banda limpia entre la card y la barra de reproduccion.
-        bottom: window.innerHeight - barTop + 14,
-      });
-    }
-    void seekrPreview.loadFrames(next);
-    hideSeekPreviewSoon();
-  };
 
   const previewTimeFromPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -648,24 +562,19 @@ useEffect(() => {
 
   const startTimelineScrub = (event: ReactPointerEvent<HTMLInputElement>) => {
     seekDraggingRef.current = true;
-    setTimelineScrubbing(true);
-    // Solo el raton (o lapiz) puede quedarse "encima"; el tactil se retira al
-    // soltar, asi que no puede dejar la card encendida.
-    scrubIsTouchRef.current = event.pointerType === "touch";
-    seekHoverRef.current = !scrubIsTouchRef.current;
-    showSeekPreview(previewTimeFromPointer(event));
+    onTimelinePreviewChange(previewTimeFromPointer(event));
   };
 
   const endTimelineScrub = () => {
+    if (!seekDraggingRef.current) return;
     seekDraggingRef.current = false;
-    setTimelineScrubbing(false);
-    if (scrubIsTouchRef.current) {
-      seekHoverRef.current = false;
-      hideSeekPreview();
-      return;
-    }
-    // Con el puntero encima la card espera a que se vaya (onPointerLeave).
-    clearSeekPreviewTimer();
+    onConfirmTimelinePreview();
+  };
+
+  const cancelTimelineScrub = () => {
+    seekDraggingRef.current = false;
+    keyboardScrubRef.current = false;
+    onCancelTimelinePreview();
   };
 
   const timelineDisabled = (!bigPicture && !duration) || transportLocked;
@@ -675,34 +584,8 @@ useEffect(() => {
     // Un timeline que se bloquea a mitad de arrastre ya no recibe el pointerup:
     // sin esta salida la barra se quedaria pegada a la posicion del puntero.
     seekDraggingRef.current = false;
-    setTimelineScrubbing(false);
-  }, [timelineDisabled]);
-
-  useEffect(() => () => {
-    if (seekPreviewTimerRef.current !== null) window.clearTimeout(seekPreviewTimerRef.current);
-  }, []);
-
-  // Entrada y salida de la card en fade. El nodo se desmonta al terminar el
-  // apagado; mientras tanto sigue montado (y por eso `pointer-events-none`).
-  useEffect(() => {
-    const el = seekPreviewRef.current;
-    if (!el || !seekPreviewMounted) return;
-    gsap.killTweensOf(el);
-    if (prefersReducedMotion()) {
-      gsap.set(el, { opacity: seekPreviewVisible ? 1 : 0 });
-      if (!seekPreviewVisible) unmountSeekPreview();
-      return;
-    }
-    gsap.fromTo(el, { opacity: seekPreviewVisible ? 0 : 1 }, {
-      opacity: seekPreviewVisible ? 1 : 0,
-      duration: seekPreviewVisible ? 0.16 : 0.12,
-      ease: "power2.out",
-      overwrite: "auto",
-      onComplete: () => {
-        if (!seekPreviewVisible) unmountSeekPreview();
-      },
-    });
-  }, [seekPreviewMounted, seekPreviewVisible]);
+    onCancelTimelinePreview();
+  }, [timelineDisabled, onCancelTimelinePreview]);
 
   const subtitleBlurRefreshKey = useMemo(
     () => `${selectedSubtitleValue}|${subtitlesLoading ? "loading" : "ready"}|${subtitleOptions.map(option => option.value).join("\u0000")}`,
@@ -817,10 +700,9 @@ useEffect(() => {
     };
   }, [active, subtitleVerticalPercent]);
 
-  // Blur con alpha animado solo para la barra principal: el shader mezcla
-  // original↔blur según aetherio_blur_alpha, por eso el blur desvanece
-  // exactamente junto a la opacidad de la barra y no se queda flotando.
-  // Paneles laterales/menús mantienen blur binario (menos notorio al ser pequeños).
+  // El shader aplica blur animado a la barra normal y, en Big Picture, a cada
+  // superficie de control. Así acompaña el fade de los botones sin difuminar
+  // el video completo.
   useEffect(() => {
     let disposed = false;
     let animationFrame = 0;
@@ -883,7 +765,20 @@ useEffect(() => {
       const scale = window.devicePixelRatio || 1;
       const r = (v: number) => Math.round(v * scale);
       const player = controlsRef.current?.parentElement;
-      const controlSurfaces = bigPicture && !legacyTv && player
+      const noticeSurfaces = Array.from(document.querySelectorAll<HTMLElement>("[data-player-glass-notice]"))
+        .map(element => {
+          const box = element.getBoundingClientRect();
+          const left = Math.max(0, box.left);
+          const top = Math.max(0, box.top);
+          const right = Math.min(window.innerWidth, box.right);
+          const bottom = Math.min(window.innerHeight, box.bottom);
+          return {
+            left: r(left), top: r(top), right: r(right), bottom: r(bottom),
+            cornerRadius: r(Math.min(parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0, box.width / 2, box.height / 2)),
+          };
+        })
+        .filter(box => box.right > box.left && box.bottom > box.top);
+      const playerControlSurfaces = bigPicture && player
         ? Array.from(player.querySelectorAll<HTMLElement>("[data-player-control-glass], [data-player-skip]"))
           .filter(element => !element.parentElement?.closest("[data-player-control-glass]"))
           .map(element => {
@@ -899,6 +794,9 @@ useEffect(() => {
           })
           .filter(box => box.right > box.left && box.bottom > box.top)
         : [];
+      // El shader nativo admite hasta 16 máscaras; se priorizan los avisos y
+      // luego las superficies de control de Big Picture.
+      const controlSurfaces = [...noticeSurfaces, ...playerControlSurfaces].slice(0, 16);
       return {
         left: r(Math.max(0, rect.left)),
         top: r(Math.max(0, rect.top)),
@@ -944,7 +842,10 @@ useEffect(() => {
       }
       const alpha = {
         blurAlpha: bigPicture ? 0 : barAlphaRef.current.v,
-        controlAlpha: bigPicture && !legacyTv ? barAlphaRef.current.v : 0,
+        controlAlpha: Math.max(
+          bigPicture ? barAlphaRef.current.v : 0,
+          document.querySelector("[data-player-glass-notice]") ? 1 : 0,
+        ),
         episodeBlurAlpha: episodeAlphaRef.current.v,
         subtitleBlurAlpha: subtitleAlphaRef.current.v,
       };
@@ -957,6 +858,7 @@ useEffect(() => {
         alpha.controlAlpha > 0.01 ||
         alpha.episodeBlurAlpha > 0.01 ||
         alpha.subtitleBlurAlpha > 0.01 ||
+        !!document.querySelector("[data-player-glass-notice]") ||
         (!legacyTv && active) ||
         !!activeSidePanel ||
         !!openMenu ||
@@ -980,7 +882,7 @@ useEffect(() => {
       }, 16);
     };
 
-    const targetBar = legacyTv ? 0 : (active && !controlsLocked ? 1 : 0);
+    const targetBar = active && !controlsLocked ? 1 : 0;
     const targetEpisode = activeSidePanel || episodesRowOpen ? 1 : 0;
     const targetSubtitle = openMenu || subtitleSyncOpen ? 1 : 0;
 
@@ -1030,9 +932,27 @@ useEffect(() => {
     if (floatingEl) observer.observe(floatingEl);
     const syncEl = document.querySelector<HTMLElement>("[data-player-sync-dialog-glass]");
     if (syncEl) observer.observe(syncEl);
+    const observedNoticeSurfaces = new Set<HTMLElement>();
+    const observeNoticeSurfaces = () => {
+      const current = new Set(document.querySelectorAll<HTMLElement>("[data-player-glass-notice]"));
+      for (const surface of current) {
+        if (observedNoticeSurfaces.has(surface)) continue;
+        observedNoticeSurfaces.add(surface);
+        observer.observe(surface);
+      }
+      for (const surface of observedNoticeSurfaces) {
+        if (current.has(surface)) continue;
+        observedNoticeSurfaces.delete(surface);
+        observer.unobserve(surface);
+      }
+    };
+    observeNoticeSurfaces();
     observer.observe(document.documentElement);
 
-    const mutationObserver = new MutationObserver(syncBlurGeometry);
+    const mutationObserver = new MutationObserver(() => {
+      observeNoticeSurfaces();
+      syncBlurGeometry();
+    });
     mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
 
     window.addEventListener("resize", syncBlurGeometry);
@@ -1099,9 +1019,21 @@ useEffect(() => {
     "--player-control-shadow": controlSurface.boxShadow,
     "--player-control-filter": nativeSurfaceVisible ? "none" : controlSurface.backdropFilter,
   } as CSSProperties;
-  // Hover informa, no conduce: solo un arrastre real mueve la barra visible.
-  const timelineDisplayTime = timelineScrubbing && seekPreviewTime !== null ? seekPreviewTime : currentTime;
-
+  // La posición provisional mueve la barra, pero solo cambia la reproducción al
+  // confirmar el gesto (pointerup, Enter o A).
+  const timelineDisplayTime = timelinePreviewTime ?? currentTime;
+  const timelineProgressPercent = duration > 0
+    ? Math.min(100, (timelineDisplayTime / duration) * 100)
+    : 0;
+  const bufferedSeconds = Number.isFinite(bufferedAheadSeconds)
+    ? Math.max(0, bufferedAheadSeconds)
+    : 0;
+  const timelineBufferedPercent = duration > 0
+    ? Math.max(
+        timelineProgressPercent,
+        Math.min(100, ((currentTime + bufferedSeconds) / duration) * 100),
+      )
+    : 0;
   return (
     <div
       ref={controlsRef}
@@ -1171,7 +1103,8 @@ useEffect(() => {
                 fila y el boton sobraba. El aviso de sala sigue en `partyPill`,
                 junto al titulo. */}
             <div className="bp-bar-actions flex shrink-0 flex-wrap items-center justify-end gap-[clamp(6px,0.55vw,12px)] pb-[0.35em]">
-              <SubtitleMenu
+              {canChangeSource && !legacyTv && <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} bigPicture onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} />}
+              {!sportsLiveMode ? <SubtitleMenu
                 label={subtitlesLoading ? "Cargando subtítulos" : "Subtítulos"}
                 selectedSubtitleValue={selectedSubtitleValue}
                 subtitleOptions={[{ value: "", label: subtitlesLoading ? "Cargando subtítulos..." : "Apagado" }, ...subtitleOptions]}
@@ -1202,8 +1135,8 @@ useEffect(() => {
                 onApplySubtitleSyncCue={onApplySubtitleSyncCue}
                 onUseManualSubtitleSync={onUseManualSubtitleSync}
                 onPickSubtitleTrack={onPickSubtitleTrack}
-              />
-<IconMenu
+              /> : null}
+              {!sportsLiveMode ? <IconMenu
                 id="audio"
                 label="Audio"
                 icon={<AudioLines size={22} />}
@@ -1219,8 +1152,8 @@ useEffect(() => {
                 apple
                 header="Audio"
                 headerBadge={audioTechLogo}
-              />
-              <IconMenu
+              /> : null}
+              {!sportsLiveMode ? <IconMenu
                 id="speed"
                 label="Velocidad"
                 icon={<TimerReset size={22} />}
@@ -1233,7 +1166,7 @@ useEffect(() => {
                 onClose={() => setOpenMenu(null)}
                 apple
                 header="Velocidad"
-              />
+              /> : null}
               <VideoEnhancementMenu
                 label="Mejoras de video"
                 icon={<Sparkles size={22} />}
@@ -1265,7 +1198,7 @@ useEffect(() => {
             <span><span className="font-bold text-white/80">A</span> Reproducir</span>
             <span><span className="font-bold text-white/80">←→</span> ±10 s</span>
             <span><span className="font-bold text-white/80">↑↓</span> Volumen</span>
-            <span><span className="font-bold text-white/80">X</span> Subtítulos</span>
+            {!sportsLiveMode ? <span><span className="font-bold text-white/80">X</span> Subtítulos</span> : null}
             <span><span className="font-bold text-white/80">Y</span> Episodios</span>
             <span><span className="font-bold text-white/80">LB/RB</span> Episodio</span>
             <span><span className="font-bold text-white/80">B</span> Volver</span>
@@ -1279,36 +1212,14 @@ useEffect(() => {
             dvrProgress={liveDvrProgress}
             disabled={transportLocked}
             onGoLive={onGoLive}
+            sportsLiveMode={sportsLiveMode}
           />
         ) : (
         <div className={bigPicture ? "mb-2 flex items-center" : "mb-3.5 flex items-center gap-3"}>
           {bigPicture ? null : (
           <span className="w-12 text-right text-xs text-white/84">{formatTime(timelineDisplayTime)}</span>
           )}
-          <div ref={timelineTrackRef} className="relative min-w-0 flex-1">
-            {seekPreviewMounted && seekrPreview.available && seekPreviewAnchor
-              ? createPortal(
-                <div
-                  ref={seekPreviewRef}
-                  data-seekr-preview
-                  data-player-interactive
-                  className="pointer-events-none fixed z-[70] -translate-x-1/2 will-change-opacity"
-                  style={{ left: `${seekPreviewAnchor.left}px`, bottom: `${seekPreviewAnchor.bottom}px` }}
-                  onPointerDown={event => event.stopPropagation()}
-                  onMouseMove={event => event.stopPropagation()}
-                >
-                {/* Card unica 16:9, sin texto ni iconos: solo la imagen. */}
-                <div className="relative aspect-video w-[292px] max-w-[60vw] shrink-0 overflow-hidden rounded-lg border border-white/15 bg-black shadow-[0_14px_36px_rgba(0,0,0,0.5)]">
-                  {seekrPreview.frames.center ? (
-                    <img src={seekrPreview.frames.center.dataUrl} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="h-full w-full animate-pulse bg-white/5" />
-                  )}
-                </div>
-                </div>,
-                document.body,
-              )
-              : null}
+          <div className="relative min-w-0 flex-1">
             <input
               data-player-timeline
               type="range"
@@ -1317,41 +1228,50 @@ useEffect(() => {
               step={1}
               value={Math.min(timelineDisplayTime, duration || timelineDisplayTime)}
               onChange={event => {
-                // Solo manda un gesto real: pulsacion en el timeline o teclado.
-                // Un cambio sin ninguno de los dos es del slider, no del usuario.
+                // El range solo actualiza el destino provisional. No se llama a
+                // `onSeek` hasta el pointerup o la confirmación explícita.
                 if (!seekDraggingRef.current && !keyboardScrubRef.current) return;
                 const next = Number(event.target.value);
-                showSeekPreview(next);
-                onSeek(next);
+                onTimelinePreviewChange(next);
               }}
-              onKeyDown={() => { keyboardScrubRef.current = true; }}
+              onKeyDown={event => {
+                if (event.key === "Enter") {
+                  if (timelinePreviewTime !== null) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    keyboardScrubRef.current = false;
+                    onConfirmTimelinePreview();
+                  }
+                  return;
+                }
+                if (event.key === "Escape" && timelinePreviewTime !== null) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelTimelineScrub();
+                  return;
+                }
+                if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+                  keyboardScrubRef.current = true;
+                  // Keep the native range's adjustment but don't let the global
+                  // shortcut turn the same arrow into an immediate MPV seek.
+                  event.stopPropagation();
+                }
+              }}
               onKeyUp={() => { keyboardScrubRef.current = false; }}
               onPointerDown={startTimelineScrub}
-              onPointerMove={event => {
-                // Raton encima de la barra: la card vive mientras siga aqui.
-                seekHoverRef.current = true;
-                if (!transportLocked) showSeekPreview(previewTimeFromPointer(event));
-              }}
               onPointerUp={endTimelineScrub}
-              onPointerCancel={endTimelineScrub}
-              onPointerLeave={() => {
-                seekHoverRef.current = false;
-                // Fuera de la barra no hay preview, y no 1,5 s despues: se va ya.
-                if (!seekDraggingRef.current) hideSeekPreview();
-              }}
-              onFocus={() => showSeekPreview(currentTime)}
+              onPointerCancel={cancelTimelineScrub}
               onBlur={() => {
-                // Red de seguridad: si el puntero se perdio (fuera de la ventana,
-                // otra app encima) la barra no puede quedarse pegada al raton.
+                // Si se pierde el foco durante el gesto, no dejar un seek parcial.
                 keyboardScrubRef.current = false;
-                if (seekDraggingRef.current) endTimelineScrub();
-                else hideSeekPreviewSoon();
+                if (seekDraggingRef.current) cancelTimelineScrub();
               }}
               disabled={timelineDisabled}
               style={{
                 pointerEvents: transportLocked ? "none" : "auto",
                 opacity: transportLocked ? 0.42 : 1,
-                "--player-progress": `${duration > 0 ? Math.min(100, (timelineDisplayTime / duration) * 100) : 0}%`,
+                "--player-progress": `${timelineProgressPercent}%`,
+                "--player-buffered": `${timelineBufferedPercent}%`,
               } as CSSProperties}
               className="player-timeline w-full disabled:opacity-35"
             />
@@ -1414,7 +1334,8 @@ useEffect(() => {
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5">
-            <IconMenu
+            {canChangeSource && !legacyTv && <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} />}
+            {!sportsLiveMode ? <IconMenu
               id="audio"
               label="Audio"
               icon={<AudioLines size={17} />}
@@ -1425,8 +1346,8 @@ useEffect(() => {
               disabled={transportLocked}
               onToggle={() => setOpenMenu(value => value === "audio" ? null : "audio")}
               onClose={() => setOpenMenu(null)}
-            />
-            <SubtitleMenu
+            /> : null}
+            {!sportsLiveMode ? <SubtitleMenu
               label={subtitlesLoading ? "Cargando subtítulos" : "Subtítulos"}
               selectedSubtitleValue={selectedSubtitleValue}
               subtitleOptions={[{ value: "", label: subtitlesLoading ? "Cargando subtítulos..." : "Apagado" }, ...subtitleOptions]}
@@ -1457,8 +1378,8 @@ useEffect(() => {
                 onApplySubtitleSyncCue={onApplySubtitleSyncCue}
                 onUseManualSubtitleSync={onUseManualSubtitleSync}
                 onPickSubtitleTrack={onPickSubtitleTrack}
-             />
-            <IconMenu
+              /> : null}
+            {!sportsLiveMode ? <IconMenu
               id="speed"
               label="Velocidad"
               icon={<TimerReset size={17} />}
@@ -1469,7 +1390,7 @@ useEffect(() => {
               disabled={transportLocked}
               onToggle={() => setOpenMenu(value => value === "speed" ? null : "speed")}
               onClose={() => setOpenMenu(null)}
-            />
+            /> : null}
             <VideoEnhancementMenu
               label="Mejoras de video"
               icon={<Sparkles size={17} />}
@@ -1486,21 +1407,25 @@ useEffect(() => {
         </div>
         )}
 
-        {bigPicture ? (
+        {bigPicture && !liveMode ? (
           // Referencia: el transcurrido va BAJO el pulgar y a la derecha lo que
           // queda, no el total. El porcentaje se acota para que la etiqueta no
           // se salga por los extremos.
           <div className="relative mt-[clamp(10px,1.6vh,18px)] h-[1.5em] text-[clamp(13px,1.05vw,19px)] font-medium text-white/62">
             <span
-              className="absolute top-0 tabular-nums"
+              data-timeline-current-time
+              className="absolute top-0 whitespace-nowrap tabular-nums"
               style={{
-                left: `${Math.max(4, Math.min(96, duration > 0 ? (timelineDisplayTime / duration) * 100 : 0))}%`,
+                // Reserve enough room for the remaining-time label. Near the
+                // end, pin the elapsed label left of it instead of letting the
+                // two timestamps collide under the playhead.
+                left: `max(3ch, min(${Math.max(0, Math.min(100, duration > 0 ? (timelineDisplayTime / duration) * 100 : 0))}%, calc(100% - 12ch)))`,
                 transform: "translateX(-50%)",
               }}
             >
               {formatTime(timelineDisplayTime)}
             </span>
-            <span className="absolute right-0 top-0 tabular-nums">
+            <span data-timeline-remaining-time className="absolute right-0 top-0 whitespace-nowrap tabular-nums">
               -{formatTime(Math.max(0, duration - timelineDisplayTime))}
             </span>
           </div>
@@ -1577,15 +1502,6 @@ useEffect(() => {
               >
                 <Crop size={18} />
               </IconButton>
-              {canChangeSource ? (
-                <IconButton
-                  label={activeSidePanel === "sources" ? "Cerrar fuentes" : "Fuentes"}
-                  disabled={transportLocked}
-                  onClick={() => runControlAction(onToggleSourcePanel)}
-                >
-                  <Radio size={18} />
-                </IconButton>
-              ) : null}
               {showPanelToggle ? (
                 <button
                   type="button"
@@ -1741,20 +1657,28 @@ function LiveTimelineRow({
   dvrProgress,
   disabled,
   onGoLive,
+  sportsLiveMode,
 }: {
   latencySeconds: number;
   atEdge: boolean;
   dvrProgress: number;
   disabled: boolean;
   onGoLive?: () => void;
+  sportsLiveMode: boolean;
 }) {
   const behind = Math.max(0, latencySeconds);
   return (
     <div className="mb-3.5 flex items-center gap-3" data-player-live-timeline>
-      <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/18">
+      <div
+        className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/18"
+        data-player-live-progress={sportsLiveMode ? "pinned" : undefined}
+        role={sportsLiveMode ? "img" : undefined}
+        aria-label={sportsLiveMode ? "Transmisión en directo" : undefined}
+      >
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-white/45 transition-[width] duration-200"
-          style={{ width: `${Math.round(dvrProgress * 100)}%` }}
+          data-player-live-progress-fill={sportsLiveMode ? "pinned" : undefined}
+          style={{ width: `${sportsLiveMode ? 100 : Math.round(dvrProgress * 100)}%`, transition: sportsLiveMode ? "none" : undefined }}
         />
         <div
           data-player-live-edge
@@ -1762,7 +1686,7 @@ function LiveTimelineRow({
         />
       </div>
 
-      {atEdge ? (
+      {sportsLiveMode || atEdge ? (
         <span className="flex w-[86px] shrink-0 items-center justify-end gap-1.5 text-[11px] font-semibold text-white/70">
           <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
           En directo
@@ -2586,6 +2510,14 @@ if (bigPicture) {
         : null}
     </div>
   );
+}
+
+function SourcesButton({ active, disabled, bigPicture = false, onClick }: { active: boolean; disabled: boolean; bigPicture?: boolean; onClick: () => void }) {
+  return <button type="button" data-player-control-glass data-player-source-toggle aria-label="Fuentes" aria-expanded={active} aria-controls="player-sources-panel"
+    disabled={disabled} onClick={onClick} title="Fuentes"
+    className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full border px-4 font-semibold gsap-transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-35 ${bigPicture ? "h-[clamp(44px,3.1vw,60px)] text-[clamp(13px,0.95vw,17px)]" : "text-sm"} ${active ? "border-white/30 bg-white text-black" : "border-white/15 bg-white/10 text-white hover:bg-white/20"}`}>
+    <Radio size={bigPicture ? 22 : 18} aria-hidden="true" /><span>Fuentes</span>
+  </button>;
 }
 
 function IconButton({

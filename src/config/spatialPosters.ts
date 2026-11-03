@@ -363,9 +363,26 @@ export function spatialPosterSignature(settings?: SpatialPosterSettings): string
 }
 
 export interface SpatialPosterOverrides {
-  /** En filas top el número grande ya indica el puesto: oculta badges de ranking. */
+  /** Ajustes por póster; permiten conservar una composición de fila sin cambiar preferencias globales. */
+  globalBadges?: boolean;
+  badgeGenre?: boolean;
+  badgeYear?: boolean;
+  badgeRating?: boolean;
   rankingBadges?: boolean;
+  qualityBadges?: boolean;
+  networkLogo?: boolean;
 }
+
+/** El género/año lo pinta SpatialPosters; Aetherio conserva solo el ranking grande. */
+export const TOP_SPATIAL_POSTER_OVERRIDES: SpatialPosterOverrides = {
+  globalBadges: true,
+  rankingBadges: false,
+  badgeGenre: true,
+  badgeYear: true,
+  badgeRating: false,
+  qualityBadges: false,
+  networkLogo: false,
+};
 
 /** Extrae el ID TMDB de un id Stremio/TMDB (`tmdb:123`, `tt123`, numérico). */
 export function extractTmdbId(id?: string | null): number | null {
@@ -390,6 +407,15 @@ export function isSpatialPosterUrl(url?: string | null): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Las imágenes SpatialPosters TOP ya contienen su badge de género/año.
+ * Muestra el overlay de Aetherio solo para el póster fallback/manual, y nunca
+ * mientras se verifica una imagen para evitar el parpadeo o el duplicado.
+ */
+export function shouldShowTopMetaFallback(url?: string | null, pending = false): boolean {
+  return !pending && !isSpatialPosterUrl(url);
 }
 
 /**
@@ -421,14 +447,32 @@ export function buildSpatialPosterUrl(
   if (s.region) params.set("region", s.region);
   params.set("lang", s.lang);
 
+  const globalBadges = overrides?.globalBadges ?? s.globalBadges;
   const rankingBadges = overrides?.rankingBadges ?? s.rankingBadges;
-  if (!s.globalBadges) params.set("badges", "0");
-  if (!rankingBadges) params.set("ranking", "0");
-  if (!s.badgeGenre) params.set("bg", "0");
-  if (!s.badgeYear) params.set("by", "0");
-  if (!s.badgeRating) params.set("br", "0");
-  if (s.qualityBadges && s.manualQuality) params.set("mq", s.manualQuality);
-  if (!s.networkLogo) params.set("netLogo", "0");
+  const badgeGenre = overrides?.badgeGenre ?? s.badgeGenre;
+  const badgeYear = overrides?.badgeYear ?? s.badgeYear;
+  const badgeRating = overrides?.badgeRating ?? s.badgeRating;
+  const qualityBadges = overrides?.qualityBadges ?? s.qualityBadges;
+  const networkLogo = overrides?.networkLogo ?? s.networkLogo;
+  const setBooleanParam = (key: string, value: boolean, explicit: boolean) => {
+    if (explicit) params.set(key, value ? "1" : "0");
+    else if (!value) params.set(key, "0");
+  };
+  // Un override por tarjeta debe ganar también contra un mapping del servidor:
+  // emitir 1 y 0 explícitos evita que un TOP herede una composición guardada.
+  setBooleanParam("badges", globalBadges, overrides?.globalBadges !== undefined);
+  setBooleanParam("ranking", rankingBadges, overrides?.rankingBadges !== undefined);
+  setBooleanParam("bg", badgeGenre, overrides?.badgeGenre !== undefined);
+  setBooleanParam("by", badgeYear, overrides?.badgeYear !== undefined);
+  setBooleanParam("br", badgeRating, overrides?.badgeRating !== undefined);
+  if (overrides?.qualityBadges === false) {
+    // Empty values explicitly clear quality badges saved in a SpatialPosters mapping.
+    params.set("mq", "");
+    params.set("mf", "");
+  } else if (qualityBadges && s.manualQuality) {
+    params.set("mq", s.manualQuality);
+  }
+  setBooleanParam("netLogo", networkLogo, overrides?.networkLogo !== undefined);
   // El upstream trata 0 como "auto" (`Number(q) || null`), así que solo se
   // emiten cuando difieren del valor por defecto.
   if (s.logoScale !== 100) params.set("scale", String(s.logoScale));

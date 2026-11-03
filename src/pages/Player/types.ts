@@ -15,6 +15,10 @@ export interface MpvTrack {
   type?: string;
   title?: string;
   lang?: string;
+  forced?: boolean;
+  sdh?: boolean;
+  hearingImpaired?: boolean;
+  default?: boolean;
   selected?: boolean;
   /** Video track native width (from demux-w) */
   demuxW?: number;
@@ -33,6 +37,7 @@ export interface MpvStatusSnapshot {
   pausedForCache?: boolean | null;
   cacheBufferingState?: number | null;
   cacheSpeedBytesPerSecond?: number | null;
+  fileSizeBytes?: number | null;
   demuxerCacheIdle?: boolean | null;
   chapter?: number | null;
   chapterList?: { title?: string; time?: number }[] | null;
@@ -46,6 +51,7 @@ export interface MpvStatusSnapshot {
    * directo es la distancia al borde: `timePos + demuxerCacheDuration` ~= vivo.
    */
   demuxerCacheDuration?: number | null;
+  playbackFailure?: Pick<MpvEventPayload, "endReason" | "errorCode" | "httpStatus"> | null;
 }
 
 export interface MpvEventPayload {
@@ -53,6 +59,10 @@ export interface MpvEventPayload {
   property?: unknown;
   target?: string;
   snapshot?: MpvStatusSnapshot;
+  endReason?: string;
+  errorCode?: number;
+  httpStatus?: number;
+  generation?: number;
 }
 
 export interface EpisodeOption {

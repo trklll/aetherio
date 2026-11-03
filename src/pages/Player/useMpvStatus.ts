@@ -1,14 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { getNativePlaybackStatus, listenPlatformEvent } from "../../runtime/platform";
-import type { ChapterOption, MpvStatusSnapshot, MpvTrack } from "./types";
-
-interface MpvEventPayload {
-  event?: string;
-  property?: unknown;
-  target?: string;
-  snapshot?: MpvStatusSnapshot;
-}
+import type { ChapterOption, MpvEventPayload, MpvStatusSnapshot, MpvTrack } from "./types";
+import { failureFromMpvEvent, type PlaybackFailure } from "./liveRecovery.ts";
 
 interface UseMpvStatusArgs {
   lastMpvFileLoadedRef: { current: boolean };
@@ -35,6 +29,8 @@ interface UseMpvStatusArgs {
   onPlaybackRestart?: () => void;
   onThroughputStatus?: (status: MpvStatusSnapshot) => void;
   isP2pStream?: boolean;
+  isLiveStream?: boolean;
+  onPlaybackFailure?: (failure: PlaybackFailure | null) => void;
   enabled?: boolean;
 }
 
@@ -63,13 +59,30 @@ export function useMpvStatus({
   onPlaybackRestart,
   onThroughputStatus,
   isP2pStream = false,
+  isLiveStream = false,
+  onPlaybackFailure,
   enabled = true,
 }: UseMpvStatusArgs) {
+  const failureSink = useRef(onPlaybackFailure);
+  failureSink.current = onPlaybackFailure;
   useEffect(() => {
     let cancelled = false;
+    let lastFailureKey = "";
+
+    function reportFailure(event: MpvEventPayload) {
+      const failure = failureFromMpvEvent(event, isLiveStream);
+      if (!failure) return;
+      const key = JSON.stringify(failure);
+      if (key === lastFailureKey) return;
+      lastFailureKey = key;
+      setMpvStatus?.(isP2pStream ? "El torrent no entrego datos reproducibles. Puede no tener peers disponibles." : failure.message);
+      failureSink.current?.(failure);
+    }
 
     function applyStatus(status: MpvStatusSnapshot) {
       if (cancelled) return;
+      if (status.playbackFailure) reportFailure({ event: "end-file", ...status.playbackFailure });
+      else if (status.playbackFailure === null) lastFailureKey = "";
       onThroughputStatus?.(status);
 
       const nextTime = Number(status.timePos ?? 0);
@@ -202,13 +215,14 @@ export function useMpvStatus({
     };
 
     const unlistenPromise = listenPlatformEvent<MpvEventPayload>("mpv-event", event => {
+      if (cancelled) return;
       if (event.payload.event) debugLog("mpv event", { event: event.payload.event, property: event.payload.property });
-      if (event.payload.event === "playback-restart") onPlaybackRestart?.();
-      if (event.payload.event === "end-file" && !lastMpvFileLoadedRef.current) {
-        setMpvStatus?.(isP2pStream
-          ? "El torrent no entrego datos reproducibles. Puede no tener peers disponibles."
-          : "MPV no pudo cargar esta fuente. Puede estar expirada o bloqueada por el servidor.");
+      if (event.payload.event === "start-file" || event.payload.event === "file-loaded" || event.payload.event === "playback-restart") {
+        lastFailureKey = "";
+        failureSink.current?.(null);
       }
+      if (event.payload.event === "playback-restart") onPlaybackRestart?.();
+      if (event.payload.event === "end-file") reportFailure(event.payload);
       if (event.payload.snapshot) applyStatus(event.payload.snapshot);
     });
 
@@ -223,5 +237,5 @@ export function useMpvStatus({
       void unlistenPromise.then(unlisten => unlisten());
       resetMpvState();
     };
-  }, [enabled, isP2pStream, onThroughputStatus]);
+  }, [enabled, isP2pStream, isLiveStream, onThroughputStatus]);
 }

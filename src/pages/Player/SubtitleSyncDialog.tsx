@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Captions, Loader2, TimerReset } from "lucide-react";
+import { Captions, TimerReset } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import { getContextGlassStyle } from "../../components/ui/glassSurface";
 import { tweenTo } from "../../utils/motion";
 import {
@@ -204,7 +205,7 @@ export default function SubtitleSyncDialog({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-5">
           {loading ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10">
-              <Loader2 size={22} className="gsap-spin text-white/64" />
+              <AppleSpinner size={22} color="rgba(255,255,255,0.64)" />
               <p className="text-sm font-medium text-white/64">Analizando subtítulos y referencias locales…</p>
             </div>
           ) : error ? (

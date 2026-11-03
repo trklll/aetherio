@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "fixedNow": "2026-11-01T12:00:00.000Z",
+  "profiles": [
+    { "id": "experience-profile-a", "name": "Perfil de prueba A", "createdAt": 1761998400000, "updatedAt": 1761998400000 },
+    { "id": "experience-profile-b", "name": "Perfil de prueba B", "createdAt": 1761998401000, "updatedAt": 1761998401000 }
+  ],
+  "activeProfileId": "experience-profile-a",
+  "media": {
+    "movie": {
+      "id": "tmdb:990001",
+      "type": "movie",
+      "name": "La última estación",
+      "year": 2024,
+      "genres": ["Drama", "Misterio"],
+      "genreIds": [18, 9648],
+      "poster": "https://image.tmdb.org/t/p/w500/experience-movie-poster.svg",
+      "background": "https://image.tmdb.org/t/p/original/experience-movie-backdrop.svg"
+    },
+    "series": {
+      "id": "tmdb:990002",
+      "type": "series",
+      "name": "Horizonte quieto",
+      "year": 2023,
+      "genres": ["Drama", "Ciencia ficción y fantasía"],
+      "genreIds": [18, 10765],
+      "poster": "https://image.tmdb.org/t/p/w500/experience-series-poster.svg",
+      "background": "https://image.tmdb.org/t/p/original/experience-series-backdrop.svg"
+    },
+    "anime": [
+      { "id": "mal:1001", "namespace": "mal", "title": "Luz de invierno", "format": "TV" },
+      { "id": "anilist:1001", "namespace": "anilist", "title": "Luz de invierno: edición alternativa", "format": "TV" },
+      { "id": "mal:1002", "namespace": "mal", "title": "Luz de invierno: OVA", "format": "OVA" }
+    ]
+  },
+  "continueWatching": [
+    {
+      "key": "series:tmdb:990002:1:3",
+      "mediaKey": "series:tmdb:990002",
+      "type": "series",
+      "id": "tmdb:990002",
+      "name": "Horizonte quieto",
+      "season": 1,
+      "episode": 3,
+      "episodeName": "La señal",
+      "currentTime": 1280,
+      "duration": 2700,
+      "updatedAt": 1761990000000,
+      "completed": false,
+      "selectedAudio": "1",
+      "selectedAudioLanguage": "spa",
+      "selectedSubtitle": "2",
+      "selectedSubtitleLanguage": "eng"
+    },
+    {
+      "key": "series:tmdb:990002:1:4",
+      "mediaKey": "series:tmdb:990002",
+      "type": "series",
+      "id": "tmdb:990002",
+      "name": "Horizonte quieto",
+      "season": 1,
+      "episode": 4,
+      "episodeName": "La frecuencia",
+      "currentTime": 0,
+      "duration": 2700,
+      "updatedAt": 1761997200000,
+      "completed": false,
+      "entryKind": "new"
+    }
+  ],
+  "watchedHistory": [
+    {
+      "key": "anime:mal:1001:0:0",
+      "mediaKey": "anime:mal:1001",
+      "type": "anime",
+      "id": "mal:1001",
+      "name": "Luz de invierno",
+      "season": 0,
+      "episode": 0,
+      "currentTime": 1,
+      "duration": 1,
+      "updatedAt": 1761900000000,
+      "completed": true
+    },
+    {
+      "key": "anime:mal:1001:1:2",
+      "mediaKey": "anime:mal:1001",
+      "type": "anime",
+      "id": "mal:1001",
+      "name": "Luz de invierno",
+      "season": 1,
+      "episode": 2,
+      "episodeName": "Una visita",
+      "currentTime": 1400,
+      "duration": 1400,
+      "updatedAt": 1761980000000,
+      "completed": true
+    }
+  ],
+  "sources": [
+    { "id": "fast", "provider": "Fixture rápido", "state": "success", "latencyMs": 0 },
+    { "id": "slow", "provider": "Fixture lento", "state": "success", "latencyMs": 1800 },
+    { "id": "empty", "provider": "Fixture sin resultados", "state": "empty", "latencyMs": 100 },
+    { "id": "failed", "provider": "Fixture con error", "state": "error", "latencyMs": 100, "errorCode": "FIXTURE_UNAVAILABLE" }
+  ],
+  "audioTracks": [
+    { "id": "track-es", "language": "spa", "label": "Español", "state": "verified-track" },
+    { "id": "track-en", "language": "eng", "label": "English", "state": "verified-track" },
+    { "id": "track-unknown", "language": null, "label": "Pista 3", "state": "unknown" }
+  ],
+  "storageFailure": { "key": "aetherio-experience-fixture-quota-test", "errorName": "QuotaExceededError" },
+  "sync": {
+    "local": { "phase": "idle", "pendingCount": 0, "lastAttemptAt": 1761998400000, "lastSuccessAt": 1761998400000 },
+    "anilist": { "phase": "not-connected", "pendingCount": 0, "lastAttemptAt": null, "lastSuccessAt": null },
+    "trakt": { "phase": "offline", "pendingCount": 1, "lastAttemptAt": 1761998300000, "lastSuccessAt": null }
+  },
+  "party": {
+    "members": [
+      { "id": "party-host-fixture", "name": "Anfitrión de prueba", "role": "host" },
+      { "id": "party-guest-fixture", "name": "Invitado de prueba", "role": "guest" }
+    ]
+  },
+  "tmdb": {
+    "movieDetail": {
+      "id": 990001,
+      "title": "La última estación",
+      "original_title": "The Last Station",
+      "overview": "Una restauradora vuelve a una estación cerrada para resolver una ausencia familiar.",
+      "poster_path": "/experience-movie-poster.svg",
+      "backdrop_path": "/experience-movie-backdrop.svg",
+      "release_date": "2024-05-18",
+      "vote_average": 7.4,
+      "runtime": 108,
+      "genres": [{ "id": 18, "name": "Drama" }, { "id": 9648, "name": "Misterio" }],
+      "credits": { "cast": [], "crew": [] },
+      "videos": { "results": [] },
+      "images": { "logos": [] },
+      "similar": { "results": [] },
+      "recommendations": { "results": [] }
+    },
+    "seriesDetail": {
+      "id": 990002,
+      "name": "Horizonte quieto",
+      "original_name": "Quiet Horizon",
+      "overview": "En una estación de investigación, una señal altera la rutina de la tripulación.",
+      "poster_path": "/experience-series-poster.svg",
+      "backdrop_path": "/experience-series-backdrop.svg",
+      "first_air_date": "2023-09-12",
+      "vote_average": 7.1,
+      "number_of_seasons": 1,
+      "number_of_episodes": 8,
+      "genres": [{ "id": 18, "name": "Drama" }, { "id": 10765, "name": "Ciencia ficción y fantasía" }],
+      "seasons": [],
+      "credits": { "cast": [], "crew": [] },
+      "videos": { "results": [] },
+      "images": { "logos": [] },
+      "similar": { "results": [] },
+      "recommendations": { "results": [] }
+    },
+    "movieResults": [
+      {
+        "id": 990001,
+        "title": "La última estación",
+        "overview": "Una restauradora vuelve a una estación cerrada para resolver una ausencia familiar.",
+        "poster_path": "/experience-movie-poster.svg",
+        "backdrop_path": "/experience-movie-backdrop.svg",
+        "release_date": "2024-05-18",
+        "vote_average": 7.4,
+        "genre_ids": [18, 9648]
+      }
+    ],
+    "seriesResults": [
+      {
+        "id": 990002,
+        "name": "Horizonte quieto",
+        "overview": "En una estación de investigación, una señal altera la rutina de la tripulación.",
+        "poster_path": "/experience-series-poster.svg",
+        "backdrop_path": "/experience-series-backdrop.svg",
+        "first_air_date": "2023-09-12",
+        "vote_average": 7.1,
+        "genre_ids": [18, 10765]
+      }
+    ]
+  }
+}

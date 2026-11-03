@@ -46,21 +46,24 @@ export function buildPlayerPath(search?: string, pathname?: string): string {
 /**
  * Destino de "atrás" desde el reproductor.
  *
- * Un único lugar decide a dónde lleva el gesto: la page de Episodie del mismo
- * medio (el picker de fuentes), nunca la ficha. Antes cada superficie lo
- * resolvía por su cuenta —el shell iba a `/episode`, el Player a la ficha y
- * Big Picture a `navigate(-1)`— y en la pantalla de carga eso acababa en la
- * page detail.
+ * Un único lugar decide a dónde lleva el gesto: las fuentes vuelven al picker,
+ * los trailers a la ficha y los eventos deportivos a Deportes en Big Picture
+ * (o al inicio en modo normal). Antes cada superficie lo resolvía por su cuenta
+ * —el shell iba a `/episode`, el Player a la ficha y Big Picture a
+ * `navigate(-1)`— y en la pantalla de carga los destinos no coincidían.
  *
- * `fromPlayer=1` viaja siempre: Episodie lo lee como `returnedFromPlayer` y
- * desactiva el auto-resolve, así que el picker aparece en vez de volver a
- * lanzar la reproducción automáticamente.
+ * En el retorno al picker, `fromPlayer=1` desactiva el auto-resolve para que no
+ * vuelva a lanzar la reproducción automáticamente.
  */
 export function buildPlayerBackPath(search: string, pathname?: string): string | null {
   const params = new URLSearchParams(search);
   const type = params.get("type");
   const id = params.get("id");
   if (!type || !id) return null;
+  // Sports returns to Big Picture's board or normal-mode home, not a VOD picker.
+  // Other media keeps the shared episode-picker behavior below.
+  if (type === "live" || type === "sports-replay") return isBigPictureLocation(pathname) ? "/big-picture/sports" : "/home";
+  if (params.get("trailer") === "1") return buildDetailPath(type, id, undefined, pathname);
   const next = new URLSearchParams({ type, id });
   for (const key of ["season", "ep", "epTitle", "fromSearch", "q"]) {
     const value = params.get(key);

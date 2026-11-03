@@ -26,6 +26,10 @@ export interface MediaStream {
   id: string;
   addonId: string;
   addonName: string;
+  /** Hub-defined logical source; not an embed host guessed from a title. */
+  sourceName?: string;
+  /** Artwork provided by the remote script manifest, served by its Hub. */
+  sourceLogo?: string;
   name: string;
   title?: string;
   description?: string;

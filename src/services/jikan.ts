@@ -53,6 +53,12 @@ interface JikanAnime {
   year?: number;
   season?: string;
   aired?: { from?: string };
+  trailer?: {
+    images?: {
+      large_image_url?: string | null;
+      maximum_image_url?: string | null;
+    } | null;
+  } | null;
 }
 
 interface JikanListResponse<T> {
@@ -221,6 +227,42 @@ export async function fetchJikanTopFavorites(): Promise<MediaItem[]> {
 export async function fetchJikanMostPopular(): Promise<MediaItem[]> {
   const result = await jikanFetch<JikanListResponse<JikanAnime>>("/top/anime", { filter: "bypopularity", limit: LIMIT });
   return dedupeByMalId((result?.data ?? []).map(jikanToItem));
+}
+
+export async function fetchJikanBestOfNineties(): Promise<MediaItem[]> {
+  return fetchJikanBestOfDecade(1990, 1999);
+}
+
+export async function fetchJikanBestOf2000s(): Promise<MediaItem[]> {
+  return fetchJikanBestOfDecade(2000, 2009);
+}
+
+export async function fetchJikanBestOf2010s(): Promise<MediaItem[]> {
+  return fetchJikanBestOfDecade(2010, 2019);
+}
+
+async function fetchJikanBestOfDecade(startYear: number, endYear: number): Promise<MediaItem[]> {
+  const result = await jikanFetch<JikanListResponse<JikanAnime>>("/anime", {
+    start_date: `${startYear}-01-01`,
+    end_date: `${endYear}-12-31`,
+    order_by: "score",
+    sort: "desc",
+    min_score: "7",
+    sfw: "true",
+    limit: LIMIT,
+  });
+
+  const items = (result?.data ?? []).map(anime => {
+    const item = jikanToItem(anime);
+    const trailerArtwork = anime.trailer?.images?.maximum_image_url
+      || anime.trailer?.images?.large_image_url;
+    return {
+      ...item,
+      background: trailerArtwork || item.background || item.poster,
+    };
+  }).filter(item => item.year != null && item.year >= startYear && item.year <= endYear);
+
+  return dedupeByMalId(items);
 }
 
 async function fetchByGenre(genreId: number): Promise<MediaItem[]> {

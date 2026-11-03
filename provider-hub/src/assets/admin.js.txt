@@ -1,0 +1,533 @@
+(() => {
+  "use strict";
+
+  const $ = selector => document.querySelector(selector);
+  const state = { token: "", providers: [], current: null, editorKind: "script", editorVersion: 0, sourceMode: "inline", toastTimer: 0 };
+  const loginScreen = $("#login-screen");
+  const appShell = $("#app-shell");
+  const editor = $("#editor-panel");
+  const workspace = $("#workspace");
+  const providerForm = $("#provider-form");
+
+  function setMessage(element, message, isError = true) {
+    element.textContent = message || "";
+    element.classList.toggle("message-success", Boolean(message) && !isError);
+  }
+
+  function showToast(message, isError = false) {
+    const toast = $("#toast");
+    toast.textContent = message;
+    toast.classList.toggle("error", isError);
+    toast.classList.add("visible");
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => toast.classList.remove("visible"), 3600);
+  }
+
+  async function api(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    headers.set("accept", "application/json");
+    if (state.token) headers.set("x-admin-token", state.token);
+    if (options.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+    const response = await fetch(path, { ...options, headers, credentials: "same-origin", redirect: "error" });
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+    if (response.status === 401 && state.token) logout("Sesión cerrada: token no válido.");
+    if (!response.ok) {
+      const error = new Error(payload && typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  }
+
+  function logout(message = "") {
+    state.token = "";
+    state.providers = [];
+    state.current = null;
+    appShell.hidden = true;
+    loginScreen.hidden = false;
+    $("#admin-token").value = "";
+    $("#provider-list").replaceChildren();
+    providerForm.reset();
+    $("#provider-script").value = "";
+    $("#addon-fallback").value = "";
+    setMessage($("#login-message"), message);
+    closeEditor();
+  }
+
+  async function enterPanel(token) {
+    state.token = token.trim();
+    const submit = $("#login-submit");
+    submit.disabled = true;
+    submit.textContent = "Verificando…";
+    setMessage($("#login-message"), "");
+    try {
+      await refreshData();
+      loginScreen.hidden = true;
+      appShell.hidden = false;
+      $("#admin-token").value = "";
+    } catch (error) {
+      state.token = "";
+      setMessage($("#login-message"), error.message || "No se pudo validar el token.");
+    } finally {
+      submit.disabled = false;
+      submit.innerHTML = 'Entrar al panel <span aria-hidden="true">→</span>';
+    }
+  }
+
+  async function refreshData() {
+    const token = state.token;
+    const [providers, addons, health] = await Promise.all([
+      api("/admin/providers"),
+      api("/admin/addons"),
+      fetch("/health", { credentials: "same-origin", redirect: "error" }).then(response => response.ok ? response.json() : null).catch(() => null),
+    ]);
+    if (!state.token || state.token !== token) throw new Error("La sesión ha terminado.");
+    if (!Array.isArray(providers) || !Array.isArray(addons)) throw new Error("El directorio del Hub no tiene un formato válido.");
+    state.providers = [
+      ...addons.map(addon => ({ ...addon, kind: "stremio", enabled: addon.enabledByDefault, supportedTypes: addon.manifestFallback?.types || [] })),
+      ...providers.map(provider => ({ ...provider, kind: "script" })),
+    ];
+    renderProviders();
+    renderHealth(health);
+  }
+
+  function renderHealth(health) {
+    const dot = $("#health-dot");
+    const label = $("#health-label");
+    if (!health || health.ok !== true) {
+      dot.className = "status-dot error";
+      label.textContent = "Hub sin respuesta";
+      $("#stat-version").textContent = "—";
+      $("#stat-compiled").textContent = "—";
+      return;
+    }
+    dot.className = "status-dot ok";
+    label.textContent = "Hub operativo";
+    $("#stat-version").textContent = health.version || "—";
+    $("#stat-compiled").textContent = String(health.warmup?.compiled?.length ?? 0);
+  }
+
+  function renderProviders() {
+    const list = $("#provider-list");
+    list.replaceChildren();
+    const query = $("#search-input").value.trim().toLowerCase();
+    const filter = $("#status-filter").value;
+    const kind = $("#kind-filter").value;
+    const visible = state.providers.filter(provider => {
+      const matchesText = !query || `${provider.name} ${provider.id} ${provider.description || ""}`.toLowerCase().includes(query);
+      const matchesState = filter === "all" || (filter === "enabled" ? provider.enabled : !provider.enabled);
+      return matchesText && matchesState && (kind === "all" || provider.kind === kind);
+    });
+    for (const provider of visible) list.append(createProviderRow(provider));
+    $("#empty-state").hidden = visible.length > 0;
+    $("#directory-count").textContent = `${visible.length} de ${state.providers.length} fuentes`;
+    $("#stat-total").textContent = String(state.providers.length);
+    $("#stat-enabled").textContent = String(state.providers.filter(provider => provider.enabled).length);
+  }
+
+  function safeImageUrl(value) {
+    if (typeof value !== "string" || !value.trim()) return "";
+    try {
+      const parsed = new URL(value, location.origin);
+      return !parsed.username && !parsed.password && (parsed.protocol === "https:" || (parsed.origin === location.origin && parsed.protocol === "http:")) ? parsed.href : "";
+    } catch { return ""; }
+  }
+
+  function createProviderRow(provider) {
+    const row = document.createElement("article");
+    row.className = "provider-row";
+    row.classList.toggle("is-selected", state.current?.id === provider.id && state.current?.kind === provider.kind);
+    const isAddon = provider.kind === "stremio";
+
+    const identity = document.createElement("div");
+    identity.className = "provider-identity";
+    const avatar = document.createElement("div");
+    avatar.className = "provider-avatar";
+    const logoUrl = safeImageUrl(provider.logo);
+    avatar.textContent = initials(provider.name);
+    if (logoUrl) {
+      const image = document.createElement("img");
+      image.className = "logo-loading";
+      image.src = logoUrl;
+      image.alt = "";
+      image.loading = "lazy";
+      image.referrerPolicy = "no-referrer";
+      image.onload = () => { image.classList.remove("logo-loading"); avatar.replaceChildren(image); };
+      image.onerror = () => { image.remove(); avatar.textContent = initials(provider.name); };
+      avatar.append(image);
+    } else avatar.textContent = initials(provider.name);
+    const label = document.createElement("div");
+    label.className = "provider-copy";
+    const name = document.createElement("div");
+    name.className = "provider-name";
+    name.textContent = provider.name || provider.id;
+    const id = document.createElement("div");
+    id.className = "provider-id";
+    id.textContent = `${isAddon ? "Stremio" : "Script"} · ${provider.id}`;
+    label.append(name, id);
+    if (provider.origin === "default") {
+      const origin = document.createElement("span");
+      origin.className = "origin-chip";
+      origin.textContent = "BASE";
+      name.append(origin);
+    }
+    identity.append(avatar, label);
+
+    const types = document.createElement("div");
+    types.className = "type-chips";
+    for (const type of Array.isArray(provider.supportedTypes) ? provider.supportedTypes : []) {
+      const chip = document.createElement("span");
+      chip.className = "type-chip";
+      chip.textContent = type === "tv" || type === "series" ? "SERIES" : String(type).toUpperCase();
+      types.append(chip);
+    }
+
+    const status = document.createElement("span");
+    status.className = `enabled-state${provider.enabled ? " is-enabled" : ""}`;
+    const dot = document.createElement("span");
+    dot.className = `status-dot${provider.enabled ? " ok" : ""}`;
+    const statusText = document.createElement("span");
+    statusText.textContent = isAddon ? (provider.enabled ? "Por defecto" : "Manual") : (provider.enabled ? "Activa" : "Pausada");
+    status.title = isAddon ? "Estado inicial para nuevas instalaciones; no cambia la elección personal del usuario." : "Estado del proveedor de scripts";
+    status.append(dot, statusText);
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "row-edit";
+    edit.setAttribute("aria-label", `Editar ${provider.name || provider.id}`);
+    edit.title = "Editar fuente";
+    edit.textContent = "↗";
+    edit.addEventListener("click", () => openEditor(provider));
+    row.append(identity, types, status, edit);
+    return row;
+  }
+
+  function initials(value) {
+    return String(value || "?").trim().split(/\s+/).slice(0, 2).map(part => part[0] || "").join("").toUpperCase() || "?";
+  }
+
+  function setSourceMode(mode) {
+    state.sourceMode = mode === "url" ? "url" : "inline";
+    $("#inline-source-group").hidden = state.sourceMode !== "inline";
+    $("#url-source-group").hidden = state.sourceMode !== "url";
+    document.querySelectorAll("[data-source-mode]").forEach(button => {
+      button.classList.toggle("active", button.dataset.sourceMode === state.sourceMode);
+    });
+  }
+
+  async function openEditor(provider = null, kind = "script") {
+    state.current = provider;
+    state.editorKind = provider?.kind || kind;
+    const isAddon = state.editorKind === "stremio";
+    const editorVersion = ++state.editorVersion;
+    providerForm.reset();
+    $("#test-results").hidden = true;
+    setMessage($("#save-message"), "");
+    $("#provider-id").value = provider?.id || "";
+    $("#provider-id").readOnly = Boolean(provider);
+    $("#provider-name").value = provider?.name || "";
+    $("#provider-description").value = provider?.description || "";
+    $("#provider-logo").value = isAddon ? provider?.logoSource || "" : provider?.logo || "";
+    $("#id-hint").textContent = provider?.upstreamAddonId ? `Fuente de Aetherio · servicio upstream: ${provider.upstreamAddonId}` : isAddon ? "ID exacto del manifest de Stremio (admite puntos y mayúsculas)" : "minúsculas, números y guiones";
+    $("#logo-label").textContent = isAddon ? "Logo · URL HTTPS o recurso del Hub" : "Logo · URL HTTPS";
+    $("#enabled-label").textContent = isAddon ? "Activar por defecto en nuevas instalaciones" : "Fuente activa";
+    $("#addon-fields").hidden = !isAddon;
+    $("#source-editor").hidden = isAddon;
+    document.querySelectorAll("[data-script-field]").forEach(field => { field.hidden = isAddon; });
+    $("#addon-manifest-url").value = isAddon ? provider?.manifestUrl || "" : "";
+    $("#addon-catalog-policy").value = provider?.catalogPolicy || "empty";
+    $("#addon-hidden").checked = provider?.hiddenInUi === true;
+    $("#addon-timeout").value = provider?.streamTimeoutMs || "";
+    $("#addon-attempts").value = provider?.streamAttempts || "";
+    $("#addon-fallback").value = isAddon && provider?.manifestFallback ? JSON.stringify(provider.manifestFallback, null, 2) : "";
+    $("#addon-check-result").textContent = "Comprueba el manifest para importar los datos de un add-on nuevo.";
+    $("#addon-check-result").classList.remove("message-success");
+    $("#addon-integration-note").textContent = provider?.id === "community.sports.fly"
+      ? "Highfly conserva aquí su URL pública. La URL personal se configura solo en Aetherio."
+      : provider?.id === "com.penguplay"
+        ? "PenguPlay conserva /api/penguplay/manifest.json para usar el proxy autenticado de Aetherio."
+        : provider?.streamNameFilter
+          ? `Fuente separada en Aetherio. ${provider.streamNameFilter.mode === "include" ? "Solo incluye" : "Excluye"} resultados cuyo nombre comienza por ${provider.streamNameFilter.prefixes.join(", ")}. Comparte servicio, no resultados ni activación. El logo y los metadatos se gestionan aquí.`
+          : "Este directorio es público: no introduzcas tokens ni URLs personales. NyaaSi está dentro de Torrentio.";
+    $("#type-movie").checked = (provider?.supportedTypes || ["movie", "tv"]).includes("movie");
+    $("#type-tv").checked = (provider?.supportedTypes || ["movie", "tv"]).includes("tv");
+    $("#provider-languages").value = Array.isArray(provider?.contentLanguage) ? provider.contentLanguage.join(", ") : "";
+    $("#provider-headers").value = provider?.mobileHeaders === "keep" ? "keep" : "drop";
+    $("#provider-enabled").checked = provider ? provider.enabled !== false : true;
+    $("#provider-script").value = "";
+    $("#provider-script-url").value = provider?.scriptUrl || "";
+    $("#url-check-result").textContent = provider?.scriptUrl ? "URL configurada. Comprueba que sigue respondiendo." : "El Hub descargará esta URL cuando necesite el script.";
+    $("#editor-kicker").textContent = isAddon ? "ADD-ON DE STREMIO" : provider ? (provider.origin === "default" ? "FUENTE INTEGRADA · OVERRIDE" : "REGISTRO KV") : "NUEVA ENTRADA";
+    $("#editor-title").textContent = provider ? (isAddon ? "Editar add-on" : "Editar fuente") : (isAddon ? "Agregar add-on" : "Agregar fuente");
+    $("#save-provider").textContent = provider ? "Guardar cambios" : isAddon ? "Guardar add-on" : "Guardar fuente";
+    $("#delete-provider").hidden = !provider || provider.origin === "default";
+    $("#test-section").hidden = isAddon || !provider;
+    $("#test-type").value = provider?.supportedTypes?.includes("movie") ? "movie" : "tv";
+    const defaultTest = $("#test-type").value === "movie";
+    $("#test-tmdb-id").value = defaultTest ? "603" : "1396";
+    $("#test-title").value = defaultTest ? "The Matrix" : "Breaking Bad";
+    setSourceMode(provider?.scriptUrl ? "url" : "inline");
+    updateTestFields();
+    updateLogoPreview();
+    editor.hidden = false;
+    workspace.classList.add("editing");
+    renderProviders();
+    if (matchMedia("(max-width: 940px)").matches) editor.scrollIntoView({ block: "start" });
+    $("#provider-name").focus({ preventScroll: true });
+    if (!isAddon && provider && !provider.scriptUrl) {
+      try {
+        const response = await fetch(`/scripts/${encodeURIComponent(provider.id)}.js`, { credentials: "same-origin", redirect: "error", cache: "no-store" });
+        const source = response.ok ? await response.text() : "";
+        if (state.editorVersion === editorVersion) $("#provider-script").value = source;
+      } catch { /* El editor puede quedar vacío si el script no está disponible. */ }
+    }
+  }
+
+  function closeEditor() {
+    editor.hidden = true;
+    workspace.classList.remove("editing");
+    state.current = null;
+    state.editorVersion += 1;
+    renderProviders();
+  }
+
+  function updateLogoPreview() {
+    const image = $("#logo-preview");
+    const placeholder = $("#logo-placeholder");
+    const url = safeImageUrl($("#provider-logo").value);
+    image.hidden = true;
+    placeholder.hidden = false;
+    image.onload = () => { image.hidden = false; placeholder.hidden = true; };
+    image.onerror = () => { image.hidden = true; placeholder.hidden = false; };
+    if (url) {
+      image.src = url;
+      image.referrerPolicy = "no-referrer";
+    } else image.removeAttribute("src");
+  }
+
+  function updateTestFields() {
+    const movie = $("#test-type").value === "movie";
+    $("#test-tmdb-id").value = movie ? "603" : "1396";
+    $("#test-title").value = movie ? "The Matrix" : "Breaking Bad";
+    $("#test-season").disabled = movie;
+    $("#test-episode").disabled = movie;
+  }
+
+  function validateForm() {
+    const id = $("#provider-id").value.trim();
+    const name = $("#provider-name").value.trim();
+    const isAddon = state.editorKind === "stremio";
+    if (isAddon ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id) : !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw new Error(isAddon ? "Usa el ID exacto del manifest (1–128 caracteres)." : "El ID admite minúsculas, números y guiones (1–64 caracteres).");
+    if (!name || name.length > 120) throw new Error("Escribe un nombre visible de hasta 120 caracteres.");
+    const logo = $("#provider-logo").value.trim();
+    if (logo && !safeImageUrl(logo)) throw new Error("El logo debe usar una URL HTTPS válida.");
+    if (isAddon) return id;
+    if (!$("#type-movie").checked && !$("#type-tv").checked) throw new Error("Selecciona al menos un tipo de contenido.");
+    if (state.sourceMode === "url") {
+      validateHttpsUrl($("#provider-script-url").value.trim(), "URL del script");
+    } else if (!$("#provider-script").value.trim() && !state.current) {
+      throw new Error("Añade un script o selecciona una URL de script.");
+    }
+    return id;
+  }
+
+  function validateHttpsUrl(value, label) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password) throw new Error();
+      return url.href;
+    } catch { throw new Error(`${label} debe ser HTTPS y no incluir credenciales.`); }
+  }
+
+  async function saveProvider(event) {
+    event.preventDefault();
+    const button = $("#save-provider");
+    button.disabled = true;
+    setMessage($("#save-message"), "");
+    try {
+      const id = validateForm();
+      if (state.editorKind === "stremio") {
+        let manifestFallback;
+        try { manifestFallback = JSON.parse($("#addon-fallback").value); }
+        catch { throw new Error("Comprueba el manifest o introduce un JSON de respaldo válido."); }
+        const body = {
+          name: $("#provider-name").value.trim(), description: $("#provider-description").value.trim(),
+          logoSource: $("#provider-logo").value.trim(), manifestUrl: $("#addon-manifest-url").value.trim(),
+          enabledByDefault: $("#provider-enabled").checked, catalogPolicy: $("#addon-catalog-policy").value,
+          hiddenInUi: $("#addon-hidden").checked, manifestFallback,
+        };
+        body.streamTimeoutMs = $("#addon-timeout").value ? Number($("#addon-timeout").value) : null;
+        body.streamAttempts = $("#addon-attempts").value ? Number($("#addon-attempts").value) : null;
+        const response = await api(`/admin/addons/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) });
+        await refreshData();
+        closeEditor();
+        showToast(response.note || "Add-on guardado en el Hub.");
+        return;
+      }
+      const body = {
+        name: $("#provider-name").value.trim(),
+        description: $("#provider-description").value.trim(),
+        logo: $("#provider-logo").value.trim(),
+        enabled: $("#provider-enabled").checked,
+        supportedTypes: [$("#type-movie").checked ? "movie" : null, $("#type-tv").checked ? "tv" : null].filter(Boolean),
+        contentLanguage: $("#provider-languages").value.split(",").map(value => value.trim()).filter(Boolean).slice(0, 12),
+        mobileHeaders: $("#provider-headers").value === "keep" ? "keep" : "drop",
+      };
+      if (state.sourceMode === "url") {
+        body.scriptUrl = validateHttpsUrl($("#provider-script-url").value.trim(), "URL del script");
+      } else {
+        const script = $("#provider-script").value;
+        if (new TextEncoder().encode(script).byteLength > 512 * 1024) throw new Error("El script supera el límite de 512 KB.");
+        if (script.trim()) body.script = script;
+        if (state.current?.scriptUrl) body.clearScriptUrl = true;
+      }
+      const response = await api(`/admin/providers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) });
+      await refreshData();
+      closeEditor();
+      showToast(response.note || "Fuente guardada en el Hub.");
+    } catch (error) {
+      setMessage($("#save-message"), error.message || "No se pudo guardar la fuente.");
+    } finally { button.disabled = false; }
+  }
+
+  async function checkAddonManifest() {
+    const button = $("#check-addon-manifest");
+    const result = $("#addon-check-result");
+    const editorVersion = state.editorVersion;
+    const url = $("#addon-manifest-url").value.trim();
+    button.disabled = true;
+    result.textContent = "Comprobando manifest desde el Hub…";
+    result.classList.remove("message-success");
+    try {
+      const response = await api("/admin/validate-addon", { method: "POST", body: JSON.stringify({ manifestUrl: url }) });
+      if (state.editorVersion !== editorVersion || $("#addon-manifest-url").value.trim() !== url) return;
+      const manifest = response.manifest;
+      const id = $("#provider-id").value.trim();
+      const upstreamId = state.current?.upstreamAddonId || id;
+      if (upstreamId && upstreamId !== manifest.id) throw new Error(`Este manifest pertenece a «${manifest.id}», no a «${upstreamId}». No se ha modificado el respaldo.`);
+      if (!id) $("#provider-id").value = manifest.id;
+      if (!$("#provider-name").value.trim()) $("#provider-name").value = manifest.name;
+      if (!$("#provider-description").value.trim()) $("#provider-description").value = String(manifest.description || "").slice(0, 300);
+      if (!$("#provider-logo").value.trim() && typeof manifest.logo === "string") {
+        try { $("#provider-logo").value = validateHttpsUrl(new URL(manifest.logo, url).href, "Logo"); } catch { /* logo opcional */ }
+      }
+      $("#addon-fallback").value = JSON.stringify({ ...manifest, id: id || manifest.id }, null, 2);
+      result.textContent = `Manifest válido · ${manifest.name} · v${manifest.version} · ${manifest.types.join(", ")}. Respaldo actualizado; guarda para aplicarlo.`;
+      result.classList.add("message-success");
+      updateLogoPreview();
+    } catch (error) {
+      if (state.editorVersion === editorVersion) result.textContent = error.message || "No se pudo comprobar el manifest.";
+    } finally { button.disabled = false; }
+  }
+
+  async function checkScriptUrl() {
+    const button = $("#check-script-url");
+    const result = $("#url-check-result");
+    button.disabled = true;
+    result.textContent = "Comprobando desde el Hub…";
+    try {
+      const scriptUrl = validateHttpsUrl($("#provider-script-url").value.trim(), "URL del script");
+      const response = await api("/admin/validate-script", { method: "POST", body: JSON.stringify({ scriptUrl }) });
+      result.textContent = `Accesible · ${response.bytes} bytes · ${response.contentType || "tipo desconocido"}`;
+      result.classList.add("message-success");
+    } catch (error) {
+      result.textContent = error.message || "No se pudo comprobar la URL.";
+      result.classList.remove("message-success");
+    } finally { button.disabled = false; }
+  }
+
+  function renderTestResult(result) {
+    const box = $("#test-results");
+    box.replaceChildren();
+    box.hidden = false;
+    box.className = `test-results ${result.ok ? "success" : "error"}`;
+    const summary = document.createElement("div");
+    summary.textContent = result.message;
+    box.append(summary);
+    for (const stream of result.streams || []) {
+      const row = document.createElement("div");
+      row.className = "test-result-row";
+      row.textContent = [stream.name || stream.title || "Stream", stream.host].filter(Boolean).join(" · ");
+      box.append(row);
+    }
+  }
+
+  async function testProvider() {
+    const button = $("#test-provider");
+    button.disabled = true;
+    $("#test-results").hidden = true;
+    try {
+      const type = $("#test-type").value;
+      const tmdbId = Number($("#test-tmdb-id").value);
+      const title = $("#test-title").value.trim();
+      const season = Number($("#test-season").value);
+      const episode = Number($("#test-episode").value);
+      if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) throw new Error("TMDb ID inválido.");
+      if (!title) throw new Error("Indica el título de prueba.");
+      const result = await api("/admin/test", {
+        method: "POST",
+        body: JSON.stringify({
+          id: state.current.id,
+          type,
+          tmdbId,
+          title,
+          season: type === "tv" ? season : null,
+          episode: type === "tv" ? episode : null,
+        }),
+      });
+      renderTestResult({
+        ok: true,
+        message: `${result.streamCount} resultado(s) · versión compilada ${result.compiledAt || "activa"}`,
+        streams: result.streams,
+      });
+    } catch (error) {
+      renderTestResult({ ok: false, message: error.message || "No se pudo probar la fuente." });
+    } finally { button.disabled = false; }
+  }
+
+  async function deleteProvider() {
+    if (!state.current || !confirm(`¿Eliminar «${state.current.name}» del directorio público del Hub? No se borran instalaciones ni configuraciones personales de Aetherio.`)) return;
+    const button = $("#delete-provider");
+    button.disabled = true;
+    try {
+      const collection = state.editorKind === "stremio" ? "addons" : "providers";
+      const result = await api(`/admin/${collection}/${encodeURIComponent(state.current.id)}`, { method: "DELETE" });
+      await refreshData();
+      closeEditor();
+      showToast(result.removed ? "Fuente eliminada." : "No había un override KV que eliminar.");
+    } catch (error) {
+      setMessage($("#save-message"), error.message || "No se pudo eliminar.");
+    } finally { button.disabled = false; }
+  }
+
+  $("#login-form").addEventListener("submit", event => {
+    event.preventDefault();
+    enterPanel($("#admin-token").value);
+  });
+  $("#logout-button").addEventListener("click", () => logout());
+  $("#refresh-button").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try { await refreshData(); showToast("Directorio actualizado."); }
+    catch (error) { showToast(error.message || "No se pudo actualizar.", true); }
+    finally { button.disabled = false; }
+  });
+  $("#add-provider").addEventListener("click", () => openEditor());
+  $("#add-addon").addEventListener("click", () => openEditor(null, "stremio"));
+  $("#close-editor").addEventListener("click", closeEditor);
+  $("#cancel-edit").addEventListener("click", closeEditor);
+  $("#provider-form").addEventListener("submit", saveProvider);
+  $("#delete-provider").addEventListener("click", deleteProvider);
+  $("#provider-logo").addEventListener("input", updateLogoPreview);
+  $("#search-input").addEventListener("input", renderProviders);
+  $("#status-filter").addEventListener("change", renderProviders);
+  $("#kind-filter").addEventListener("change", renderProviders);
+  $("#test-type").addEventListener("change", updateTestFields);
+  $("#test-provider").addEventListener("click", testProvider);
+  $("#check-script-url").addEventListener("click", checkScriptUrl);
+  $("#check-addon-manifest").addEventListener("click", checkAddonManifest);
+  document.querySelectorAll("[data-source-mode]").forEach(button => button.addEventListener("click", () => setSourceMode(button.dataset.sourceMode)));
+})();

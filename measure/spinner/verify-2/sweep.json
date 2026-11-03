@@ -1,0 +1,182 @@
+{
+ "320x320 animated 16x80ms": {
+  "n": 16,
+  "scrollWidth_min": 360,
+  "scrollWidth_max": 397,
+  "maxScrollLeft_min": 40,
+  "maxScrollLeft_max": 77,
+  "spread_sw": 37,
+  "samples": [
+   {
+    "sw": 397,
+    "sl": 0,
+    "swl": 77,
+    "aabb_right_raw": 397,
+    "scrollX": 0
+   },
+   {
+    "sw": 366,
+    "sl": 0,
+    "swl": 46,
+    "aabb_right_raw": 366,
+    "scrollX": 0
+   },
+   {
+    "sw": 368,
+    "sl": 0,
+    "swl": 48,
+    "aabb_right_raw": 368,
+    "scrollX": 0
+   },
+   {
+    "sw": 397,
+    "sl": 0,
+    "swl": 77,
+    "aabb_right_raw": 397,
+    "scrollX": 0
+   },
+   {
+    "sw": 360,
+    "sl": 0,
+    "swl": 40,
+    "aabb_right_raw": 360,
+    "scrollX": 0
+   },
+   {
+    "sw": 363,
+    "sl": 0,
+    "swl": 43,
+    "aabb_right_raw": 363,
+    "scrollX": 0
+   },
+   {
+    "sw": 397,
+    "sl": 0,
+    "swl": 77,
+    "aabb_right_raw": 397,
+    "scrollX": 0
+   },
+   {
+    "sw": 376,
+    "sl": 0,
+    "swl": 56,
+    "aabb_right_raw": 376,
+    "scrollX": 0
+   }
+  ]
+ },
+ "320x320 frozen 4x250ms": {
+  "n": 4,
+  "scrollWidth_min": 352,
+  "scrollWidth_max": 352,
+  "maxScrollLeft_min": 32,
+  "maxScrollLeft_max": 32,
+  "spread_sw": 0,
+  "samples": [
+   {
+    "sw": 352,
+    "sl": 0,
+    "swl": 32,
+    "aabb_right_raw": 337,
+    "scrollX": 0
+   },
+   {
+    "sw": 352,
+    "sl": 0,
+    "swl": 32,
+    "aabb_right_raw": 337,
+    "scrollX": 0
+   }
+  ]
+ },
+ "800x600 animated 16x80ms": {
+  "n": 16,
+  "scrollWidth_min": 800,
+  "scrollWidth_max": 800,
+  "maxScrollLeft_min": 0,
+  "maxScrollLeft_max": 0,
+  "spread_sw": 0,
+  "samples": [
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 397,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 366,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 378,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 395,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 347,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 389,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 389,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 347,
+    "scrollX": 0
+   }
+  ]
+ },
+ "800x600 frozen 4x250ms": {
+  "n": 4,
+  "scrollWidth_min": 800,
+  "scrollWidth_max": 800,
+  "maxScrollLeft_min": 0,
+  "maxScrollLeft_max": 0,
+  "spread_sw": 0,
+  "samples": [
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 337,
+    "scrollX": 0
+   },
+   {
+    "sw": 800,
+    "sl": 0,
+    "swl": 0,
+    "aabb_right_raw": 337,
+    "scrollX": 0
+   }
+  ]
+ }
+}

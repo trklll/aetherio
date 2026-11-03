@@ -1,6 +1,6 @@
 export function buildManifest(
   hubVersion: string,
-  enabled: Array<{ id: string; name: string; description?: string; logo?: string; supportedTypes: string[]; contentLanguage?: string[] }>,
+  enabled: Array<{ id: string; name: string; description?: string; logo?: string; supportedTypes: string[]; contentLanguage?: string[]; enabled?: boolean }>,
 ) {
   return {
     // Campos que exige el protocolo de fuentes de Aetherio móvil.
@@ -18,7 +18,7 @@ export function buildManifest(
       description: provider.description ?? "",
       ...(provider.logo ? { logo: provider.logo } : {}),
       filename: `/scripts/${provider.id}.js`,
-      enabled: true,
+      enabled: provider.enabled !== false,
       supportedTypes: provider.supportedTypes,
       contentLanguage: provider.contentLanguage ?? [],
       supportsExternalPlayer: true,

@@ -124,23 +124,8 @@ type WorkerMessage =
   | { type: "result"; value: unknown }
   | { type: "error"; error: string };
 
-const EXTERNAL_EXTENSION_PROJECT_NAME = ["Sea", "nime"].join("");
-const EXTERNAL_EXTENSION_PROJECT_SLUG = EXTERNAL_EXTENSION_PROJECT_NAME.toLowerCase();
-const DEFAULT_MANIFEST_URLS = [
-  "/extensions/seadex/seadex.json",
-  "https://island.clap.ing/api/extensions/anime-torrent-providers/animetosho/animetosho.json",
-  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeKai/manifest.json`,
-  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeSaturn/manifest.json`,
-  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeUnity/animeunity.json`,
-  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/AnimeWorld/manifest.json`,
-  `https://raw.githubusercontent.com/kRYstall9/${EXTERNAL_EXTENSION_PROJECT_NAME}-streaming-providers/refs/heads/main/src/GojoWtf/manifest.json`,
-  `https://raw.githubusercontent.com/9lfx/${EXTERNAL_EXTENSION_PROJECT_SLUG}-extensions/master/src/AnimeFLV/manifest.json`,
-  `https://raw.githubusercontent.com/9lfx/${EXTERNAL_EXTENSION_PROJECT_SLUG}-extensions/master/src/TPB/manifest.json`,
-  "https://raw.githubusercontent.com/Seanime-contributions/Seanime-Providers/main/src/anime/AnimeAV1/manifest.json",
-  "https://raw.githubusercontent.com/Seanime-contributions/Seanime-Providers/main/src/anime/animesaturnmirror/manifest.json",
-  "https://raw.githubusercontent.com/Seanime-contributions/Seanime-Providers/main/src/anime/animeunitymirror/manifest.json",
-  "/extensions/nyaa/nyaa.json",
-];
+// No built-in extension subscriptions. Automatic providers come from the Hub.
+const DEFAULT_MANIFEST_URLS: readonly string[] = [];
 const CONFIG_STORAGE_KEY = ["aetherio-sea", "nime-config"].join("");
 const RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROVIDER_TIMEOUT_MS = 60_000;

@@ -4,14 +4,15 @@ import {
   ChevronDown,
   ChevronUp,
   Delete,
-  Loader2,
   Plus,
   Puzzle,
   Trash2,
   X,
 } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import { TogglePill } from "../../components/ui/ToggleSwitch";
 import { listableAddons, useAddonStore, type InstalledAddon } from "../../store/addonStore.ts";
+import HubScriptSources from "../Addons/HubScriptSources.tsx";
 
 const KEYBOARD_ROWS = [
   ["a", "b", "c", "d", "e", "f", "g", "h"],
@@ -131,7 +132,7 @@ export default function BigPictureAddons() {
             <span>{url || "Escribir URL del manifest"}</span>
           </button>
           <button type="button" className="bp-settings-page__action bp-addons-page__install-button" disabled={isInstalling || !url.trim()} onClick={() => void handleInstall()}>
-            {isInstalling ? <Loader2 size={21} className="bp-addons-page__spin" /> : <Plus size={21} />}
+            {isInstalling ? <AppleSpinner size={21} /> : <Plus size={21} />}
             {isInstalling ? "Instalando" : "Instalar"}
           </button>
         </div>
@@ -167,6 +168,7 @@ export default function BigPictureAddons() {
         )}
       </section>
 
+      <HubScriptSources bigPicture />
       {keyboardOpen ? <AddonKeyboard value={url} onChange={setUrl} onDone={() => setKeyboardOpen(false)} firstRef={keyboardFirstRef} /> : null}
       {removeTarget ? <RemoveDialog addon={removeTarget} onCancel={() => setRemoveTarget(null)} onConfirm={confirmRemove} /> : null}
     </main>

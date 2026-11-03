@@ -7,6 +7,7 @@ import { getScopedStorageKey } from "../../utils/localProfiles";
 import { tmdbFetch } from "../../config/apiKeys";
 import { isSpatialPosterUrl } from "../../config/spatialPosters";
 import { fetchAnilistDiscover } from "../../services/anilist";
+import { TMDB_MOVIE_GENRES, TMDB_TV_GENRES, tmdbGenreName } from "../../services/tmdbGenres";
 
 export type LibrarySort = "added_desc" | "added_asc" | "title_asc" | "title_desc";
 
@@ -130,6 +131,8 @@ export function buildLibraryItems(
         originalPoster: entry.originalPoster,
         background: entry.background ?? entry.episodeStill,
         logo: entry.logo,
+        genres: entry.genres,
+        genreIds: entry.genreIds,
       },
       addedAt: entry.updatedAt,
       listKey: "activity",
@@ -150,7 +153,7 @@ export function buildLibraryItems(
         name: entry.title,
         poster: entry.poster,
         year: entry.year,
-        genres: ["Anime"],
+        genres: entry.genres?.length ? entry.genres : ["Anime"],
       },
       addedAt,
       listKey: `anilist:${entry.status}`,
@@ -264,6 +267,10 @@ export async function fetchDiscoverPage(
           description: raw.overview,
           year: parseYear(raw.release_date ?? raw.first_air_date),
           rating: typeof raw.vote_average === "number" ? raw.vote_average.toFixed(1) : undefined,
+          genreIds: Array.isArray(raw.genre_ids) ? raw.genre_ids.map(Number).filter(Number.isFinite) : undefined,
+          genres: Array.isArray(raw.genre_ids)
+            ? raw.genre_ids.map((genreId: number) => tmdbGenreName(catalog.type, Number(genreId))).filter((genre: string | undefined): genre is string => Boolean(genre))
+            : undefined,
         } satisfies MediaItem];
       }),
       hasMore: page < Number(payload.total_pages ?? page),
@@ -314,32 +321,6 @@ export async function fetchDiscoverPage(
     hasMore: catalog.supportsSkip && metas.length >= catalog.skipStep,
   };
 }
-
-const TMDB_MOVIE_GENRES: Record<string, string> = {
-  Acción: "28",
-  Aventura: "12",
-  Animación: "16",
-  Comedia: "35",
-  Crimen: "80",
-  Documental: "99",
-  Drama: "18",
-  Fantasía: "14",
-  Terror: "27",
-  Romance: "10749",
-  "Ciencia ficción": "878",
-  Suspenso: "53",
-};
-
-const TMDB_TV_GENRES: Record<string, string> = {
-  "Acción y aventura": "10759",
-  Animación: "16",
-  Comedia: "35",
-  Crimen: "80",
-  Documental: "99",
-  Drama: "18",
-  Misterio: "9648",
-  "Ciencia ficción y fantasía": "10765",
-};
 
 const ANILIST_GENRES = [
   "Action",

@@ -1,5 +1,8 @@
 import type { MediaItem } from "../types/ui";
-import { getScopedStorageKey } from "./localProfiles";
+import { captureExperienceScope, getScopedStorageKey } from "./localProfiles";
+import { MediaIdentityError, mediaRefFromLegacy, mediaRefKey } from "../domain/mediaIdentity";
+import { recoverExperienceJournal, writeExperienceJSON } from "../domain/experienceStorage";
+import { storageFailure, type StorageResult } from "../domain/storageResult";
 
 export interface SavedLibraryItem extends MediaItem {
   addedAt: number;
@@ -10,6 +13,7 @@ export const LIBRARY_CHANGED_EVENT = "aetherio-library-changed";
 
 export function readSavedLibrary(): SavedLibraryItem[] {
   try {
+    recoverExperienceJournal();
     const raw = localStorage.getItem(getScopedStorageKey(LIBRARY_KEY));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -32,22 +36,46 @@ export function isInLibrary(type: string, id: string) {
 }
 
 export function addToLibrary(item: MediaItem) {
+  tryAddToLibrary(item);
+}
+
+export function tryAddToLibrary(item: MediaItem): StorageResult {
+  let key: string;
+  try {
+    key = mediaKey(item.type, item.id);
+  } catch (error) {
+    return storageFailure(error instanceof MediaIdentityError ? "invalid-identity" : "invalid-data", error);
+  }
   const items = readSavedLibrary();
-  const key = mediaKey(item.type, item.id);
   const next: SavedLibraryItem = {
     ...item,
     type: normalizeType(item.type),
     addedAt: Date.now(),
   };
-  const index = items.findIndex(current => mediaKey(current.type, current.id) === key);
+  const index = items.findIndex(current => {
+    try { return mediaKey(current.type, current.id) === key; }
+    catch { return false; }
+  });
   if (index >= 0) items[index] = { ...items[index], ...next };
   else items.unshift(next);
-  writeSavedLibrary(items);
+  return writeSavedLibrary(items);
 }
 
 export function removeFromLibrary(type: string, id: string) {
-  const key = mediaKey(type, id);
-  writeSavedLibrary(readSavedLibrary().filter(item => mediaKey(item.type, item.id) !== key));
+  tryRemoveFromLibrary(type, id);
+}
+
+export function tryRemoveFromLibrary(type: string, id: string): StorageResult {
+  let key: string;
+  try {
+    key = mediaKey(type, id);
+  } catch (error) {
+    return storageFailure(error instanceof MediaIdentityError ? "invalid-identity" : "invalid-data", error);
+  }
+  return writeSavedLibrary(readSavedLibrary().filter(item => {
+    try { return mediaKey(item.type, item.id) !== key; }
+    catch { return true; }
+  }));
 }
 
 export function toggleLibraryItem(item: MediaItem) {
@@ -59,16 +87,15 @@ export function toggleLibraryItem(item: MediaItem) {
   return true;
 }
 
-function writeSavedLibrary(items: SavedLibraryItem[]) {
-  localStorage.setItem(getScopedStorageKey(LIBRARY_KEY), JSON.stringify(items));
-  window.dispatchEvent(new CustomEvent(LIBRARY_CHANGED_EVENT));
+function writeSavedLibrary(items: SavedLibraryItem[]): StorageResult {
+  return writeExperienceJSON(captureExperienceScope(), LIBRARY_KEY, items, [LIBRARY_CHANGED_EVENT]);
 }
 
 function mediaKey(type: string, id: string) {
-  return `${normalizeType(type)}:${id}`;
+  return mediaRefKey(mediaRefFromLegacy({ type, id }));
 }
 
 function normalizeType(type: string) {
   const normalized = type.toLowerCase();
-  return normalized === "tv" || normalized === "show" || normalized === "anime" ? "series" : normalized;
+  return normalized === "tv" || normalized === "show" ? "series" : normalized;
 }

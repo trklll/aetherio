@@ -29,6 +29,7 @@ import {
 } from "../../utils/continueWatching";
 import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork";
 import { ensureOriginalTmdbImage, pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork";
+import { writeHomeCardArtwork } from "../../utils/homeCardArtwork";
 import {
   readDetailBackgroundOverride,
   readDetailLogoOverride,
@@ -49,10 +50,14 @@ import { gsap, appleEase, prefersReducedMotion, scrollByGsap, scrollToElementGsa
 import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
 import { useAwardsByTmdbId, awardCategoryLabel, featuredText } from "../../hooks/useAwards";
 import { AwardLogo } from "../../components/awards/AwardLogo";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import CardArtworkPicker, { type CardArtworkPickerOption } from "../Home/CardArtworkPicker";
 import type { MediaItem } from "../../types/ui";
-import LoadingState from "../../components/ui/LoadingState";
 import SeasonTabs from "./SeasonTabs.tsx";
+import RelatedPosterCard from "./RelatedPosterCard";
+import { relatedMediaDetailSeed } from "./relatedMedia";
+import { resolveEpisodeFocusKey } from "./episodeFocus";
+import DetailPageFrame from "./DetailPageFrame";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 import { buildDetailPath, buildEntityPath, buildEpisodePath, buildPersonPath, buildPlayerPath, detailDataMatchesRoute, isBigPictureLocation } from "../../utils/bigPictureDetail";
 import { pickTmdbSearchCandidate, type TmdbSearchCandidate } from "../../utils/tmdbIdentity";
@@ -248,7 +253,7 @@ function addonSupportsMeta(addon: any, type: string, id: string) {
 
 interface CastMember { id:number|string;name:string;character:string;profile_path?:string;voiceActorId?:number; }
 interface Trailer    { key?:string;name:string;thumbnail?:string;stream?:MediaStream; }
-interface Related    { id:number;title?:string;poster_path?:string;media_type:string; }
+interface Related    { id:number|string;title?:string;poster_path?:string;backdrop_path?:string;media_type:string; }
 interface Episode    { id:string;episode:number;season:number;name?:string;overview?:string;still?:string;runtime?:number;airDate?:string; }
 interface MetaCompany { id:number|string;name:string;logo?:string; }
 interface BackgroundOption { url:string;label:string;source:"addon"|"tmdb"|"cache"; }
@@ -337,40 +342,26 @@ function normalizeDetailData(detail: DetailData): DetailData {
   return cast.length === (detail.cast?.length ?? 0) ? detail : { ...detail, cast };
 }
 
-function DetailPageLoading({ background, showSpinner }: { background?: string; showSpinner: boolean }) {
+function DetailPageLoading({ showSpinner }: { showSpinner: boolean }) {
   return (
     <div
       data-vt-hero-claim
       data-detail-loading
       aria-busy="true"
       style={{
-        position: "relative",
+        position: "absolute",
+        inset: 0,
+        zIndex: 3,
         display: "grid",
         placeItems: "center",
-        width: "100vw",
-        height: "100vh",
-        left: "50%",
-        marginLeft: "-50vw",
-        marginTop: "calc(-1 * var(--app-shell-nav-height))",
         overflow: "hidden",
-        background: "#08090b",
+        background: "rgba(0,0,0,0.14)",
+        pointerEvents: "none",
       }}
     >
-      {background ? (
-        <img
-          src={background}
-          alt=""
-          aria-hidden="true"
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      ) : null}
-      <div
-        aria-hidden="true"
-        style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(0,0,0,0.38), rgba(0,0,0,0.68))" }}
-      />
       {showSpinner ? (
         <div role="status" aria-label="Cargando detalle" style={{ position: "relative", zIndex: 1 }}>
-          <span className="aetherio-loading-spinner" aria-hidden="true" />
+          <AppleSpinner />
         </div>
       ) : null}
     </div>
@@ -500,6 +491,7 @@ function buildRelatedItems(main: any, fallbackType: string): Related[] {
       id: item.id,
       title,
       poster_path: `${IMG}/original${item.poster_path}`,
+      backdrop_path: item.backdrop_path ? `${IMG}/original${item.backdrop_path}` : undefined,
       media_type: mediaType === "tv" ? "series" : mediaType,
     }));
 }
@@ -515,6 +507,7 @@ function mapAddonRelated(meta: any): Related[] | undefined {
       const rawId = item?.id ?? item?.imdb_id ?? item?.tmdb_id;
       const title = item?.title ?? item?.name;
       const poster = pickAddonArtwork(item?.poster, item?.poster_path, item?.image, item?.thumbnail);
+      const backdrop = pickAddonArtwork(item?.background, item?.backdrop, item?.backdrop_path);
       if (!rawId || !title || !poster) return null;
       const mediaType = item?.type === "movie" || item?.media_type === "movie" ? "movie" : "series";
       const numericId = Number(String(rawId).replace(/^tmdb:/i, ""));
@@ -522,6 +515,7 @@ function mapAddonRelated(meta: any): Related[] | undefined {
         id: Number.isFinite(numericId) && numericId > 0 ? numericId : rawId,
         title,
         poster_path: poster.startsWith("/") ? `${IMG}/original${poster}` : poster,
+        backdrop_path: backdrop?.startsWith("/") ? `${IMG}/original${backdrop}` : backdrop,
         media_type: mediaType,
       };
     })
@@ -1059,13 +1053,7 @@ export default function DetailPage({
   const loadGenerationRef = useRef(0);
   const backdropImageRef = useRef<HTMLDivElement>(null);
   const backdropBlurAmountRef = useRef(0);
-  const bgPrevImageRef = useRef<HTMLImageElement>(null);
-  const bgCurrImageRef = useRef<HTMLImageElement>(null);
-  const bgLoadTokenRef = useRef(0);
-  const [bgStack, setBgStack] = useState<{ prev: string | null; curr: string }>(() => ({
-    prev: null,
-    curr: data?.backdrop ?? data?.poster ?? "",
-  }));
+  const lastBackdropRef = useRef<string | undefined>(initialDetail?.backdrop ?? initialDetail?.poster);
   const logoImgRef = useRef<HTMLImageElement>(null);
   const logoPrevImageRef = useRef<HTMLImageElement>(null);
   const [logoStack, setLogoStack] = useState<{ prev: string | null; curr: string }>({ prev: null, curr: "" });
@@ -1080,6 +1068,7 @@ export default function DetailPage({
   // enterContentZone se registra una vez y si leyera el closure vería la key
   // del primer render (vacía).
   const episodeScrollKeyRef = useRef("");
+  const lastFocusedEpisodeKeyRef = useRef("");
   const getEnabled = useAddonStore(s => s.getEnabledAddons);
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const mdbListSettings = useMdbListSettings();
@@ -1087,6 +1076,9 @@ export default function DetailPage({
   // bordes, logo y créditos del hero no clicables, y foco inicial en Reproducir.
   const bigPicture = useBigPictureActive();
   const dataMatchesRoute = detailDataMatchesRoute(data, id);
+  const frameBackground = dataMatchesRoute
+    ? data?.backdrop || data?.poster || lastBackdropRef.current
+    : initialDetail?.backdrop || initialDetail?.poster || lastBackdropRef.current || data?.backdrop || data?.poster;
   const contentPending = (loading || episodesLoading || (!bigPicture && tmdbCommentsLoading)) && dataMatchesRoute;
   // Episodie como sección embebida: nunca se sale del Detail, solo cambia de
   // sección sobre el MISMO fondo (una sola imagen). La sección se pilota con
@@ -1351,56 +1343,15 @@ backdropBlurAmountRef.current = 0;
   }, [bigPicture, type, id, location.pathname]);
 
   useLayoutEffect(() => {
+    if (!dataMatchesRoute) return;
+    const currentBackdrop = data?.backdrop ?? data?.poster;
+    if (currentBackdrop) lastBackdropRef.current = currentBackdrop;
+  }, [dataMatchesRoute, data?.backdrop, data?.poster]);
+
+  useLayoutEffect(() => {
     backdropBlurAmountRef.current = -1;
     updateBackdropBlur(detailScrollRef.current?.scrollTop ?? 0);
   }, [data?.backdrop, data?.poster]);
-
-  // Crossfade del fondo del medio: al cambiar backdrop, se hace un fundido de la imagen anterior a la nueva
-  // Sincroniza el stack del fondo. Si ya hay una imagen visible, la nueva se
-  // precarga por completo antes de fundir: así el crossfade nunca muestra un
-  // hueco negro ni un "pop" en los últimos frames mientras descarga.
-  useLayoutEffect(() => {
-    const next = data?.backdrop ?? data?.poster ?? "";
-    if (!next || bgStack.curr === next) return;
-    const token = ++bgLoadTokenRef.current;
-    let cancelled = false;
-    const commit = () => {
-      if (cancelled || bgLoadTokenRef.current !== token) return;
-      setBgStack(latest => (latest.curr === next ? latest : { prev: latest.curr || null, curr: next }));
-    };
-    if (!bgStack.curr) {
-      commit();
-      return () => { cancelled = true; };
-    }
-    const probe = new Image();
-    probe.decoding = "async";
-    probe.src = next;
-    if (probe.complete && probe.naturalWidth > 0) {
-      commit();
-    } else {
-      probe.onload = commit;
-      probe.onerror = commit;
-    }
-    return () => { cancelled = true; };
-  }, [data?.backdrop, data?.poster, bgStack.curr]);
-
-  useLayoutEffect(() => {
-    if (!bgStack.prev || bgStack.prev === bgStack.curr) return;
-    const prevEl = bgPrevImageRef.current;
-    const currEl = bgCurrImageRef.current;
-    if (!prevEl || !currEl) return;
-    const targetCurr = bgStack.curr;
-    gsap.killTweensOf([prevEl, currEl]);
-    gsap.to(prevEl, { opacity: 0, duration: 0.62, ease: "power1.out", overwrite: true });
-    gsap.fromTo(currEl, { opacity: 0 }, {
-      opacity: 1,
-      duration: 0.62,
-      ease: appleEase,
-      overwrite: true,
-      onComplete: () => setBgStack(current => (current.curr === targetCurr && current.prev ? { prev: null, curr: current.curr } : current)),
-    });
-    return () => gsap.killTweensOf([prevEl, currEl]);
-  }, [bgStack]);
 
   // Crossfade del logo: al cambiar logo, fundido de la imagen anterior a la nueva.
   // Estos efectos van antes de cualquier return temprano (Rules of Hooks).
@@ -1446,12 +1397,6 @@ backdropBlurAmountRef.current = 0;
       defaults: { ease: "power3.out" },
       onComplete: () => { entranceAnimatedIdRef.current = mediaId; },
     });
-    timeline.fromTo(
-      backdropImageRef.current,
-      { opacity: 0, scale: reduced ? 1 : 1.02 },
-      { opacity: 1, scale: 1, duration: reduced ? 0.18 : 0.68 },
-      0,
-    );
     timeline.fromTo(
       items,
       { opacity: 0, y: reduced ? 0 : 16 },
@@ -1738,13 +1683,18 @@ backdropBlurAmountRef.current = 0;
     // el contenido a vista con la card enfocada.
     // Las tabs de temporada son solo indicador (LB/RB): el foco cae al
     // primer episodio o tráiler, nunca a la row de temporadas.
-    // Si la serie se está viendo, cae en el capítulo que sigue (resume),
-    // no en el primero.
+    // Se conserva el último episodio enfocado; si todavía no hay uno, se usa
+    // el capítulo de resume/siguiente o el primero disponible.
+    const episodeCards = Array.from(
+      shell.querySelectorAll<HTMLElement>(".detail-episode-card[data-scroll-key]"),
+    );
     const resumeKey = episodeScrollKeyRef.current;
-    const resume = resumeKey
-      ? shell.querySelector<HTMLElement>(`.detail-episode-card[data-scroll-key="${resumeKey}"]`)
-      : null;
-    const ep = resume
+    const focusKey = resolveEpisodeFocusKey(
+      lastFocusedEpisodeKeyRef.current,
+      resumeKey,
+      episodeCards.map(card => card.dataset.scrollKey ?? "").filter(Boolean),
+    );
+    const ep = episodeCards.find(card => card.dataset.scrollKey === focusKey)
       ?? shell.querySelector<HTMLElement>('.detail-episode-card[tabindex="0"]');
     const trailer = shell.querySelector<HTMLElement>(
       '[data-row-key$=":trailers"] button:not([disabled]), [data-row-key$=":trailers"] [tabindex="0"]',
@@ -2542,6 +2492,10 @@ backdropBlurAmountRef.current = 0;
   }, [episodeScrollKey]);
 
   useEffect(() => {
+    lastFocusedEpisodeKeyRef.current = "";
+  }, [type, id]);
+
+  useEffect(() => {
     if (!data) {
       setTmdbComments([]);
       setTmdbCommentsError("");
@@ -2684,16 +2638,22 @@ backdropBlurAmountRef.current = 0;
     };
   }, [bigPicture, regularSeasons, curSeason?.number, season, data?.id, episodeProgressMap]);
 
-  // Mantener solo el fondo mientras se resuelven las filas que todavía
-  // mostrarían skeletons; el detalle completo entra cuando ya está listo.
-  if (loading && !dataMatchesRoute) {
-    if (bigPicture) return <LoadingState label="Cargando detalle" shellPreviewLoading />;
-    return <DetailPageLoading showSpinner background={undefined} />;
+  // Mantener el mismo frame y la misma instancia del fondo entre medios.
+  // También cubre el render síncrono en que los params ya cambiaron, pero el
+  // efecto de carga todavía no ha podido actualizar `loading`.
+  if (!dataMatchesRoute || !data || contentPending) {
+    return (
+      <DetailPageFrame
+        background={frameBackground}
+        bigPictureEpisodeTransitioning={bigPicture && bigPictureEpisodeTransitioning}
+        backdropImageRef={backdropImageRef}
+        metadataVignetteRef={metadataVignetteRef}
+        darkOverlayRef={darkOverlayRef}
+      >
+        <DetailPageLoading showSpinner={!bigPicture || !dataMatchesRoute} />
+      </DetailPageFrame>
+    );
   }
-  if (contentPending) {
-    return <DetailPageLoading background={data?.backdrop ?? data?.poster} showSpinner={!bigPicture} />;
-  }
-  if (!dataMatchesRoute || !data) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"80vh",color:"rgba(255,255,255,0.4)" }}>Error cargando.</div>;
   const detailData = data;
 
   const isMovie = detailData.type==="movie";
@@ -3013,6 +2973,7 @@ backdropBlurAmountRef.current = 0;
 
   function applyDetailBackground(background: string) {
     writeDetailBackgroundOverride(detailData.type, detailData.id, background);
+    writeHomeCardArtwork("background", detailData.type, detailData.id, background);
     writeDetailMediaMeta({
       id: detailData.id,
       type: detailData.type,
@@ -3204,115 +3165,13 @@ function updateBackdropBlur(scrollTop: number) {
   const hasCompanyLogos = Boolean(data.networks?.length || data.productionCompanies?.length);
 
   return (
-    <div
-      className="detail-page-root"
-      data-bp-detail-exiting={bigPicture && bigPictureEpisodeTransitioning ? "true" : undefined}
-      style={{
-        position:"relative",
-        width:"100%",
-        height:"100vh",
-        marginTop:"calc(-1 * var(--app-shell-nav-height))",
-        overflow:"hidden",
-        background:"#000",
-      }}
+    <DetailPageFrame
+      background={frameBackground}
+      bigPictureEpisodeTransitioning={bigPicture && bigPictureEpisodeTransitioning}
+      backdropImageRef={backdropImageRef}
+      metadataVignetteRef={metadataVignetteRef}
+      darkOverlayRef={darkOverlayRef}
     >
-      <div
-        aria-hidden="true"
-        data-bp-detail-background
-        style={{
-          position:"absolute",
-          inset:0,
-          zIndex:0,
-          overflow:"hidden",
-          background:"#000",
-          pointerEvents:"none",
-        }}
-      >
-        {bgStack.curr ? (
-          <div
-            style={{
-              position:"absolute",
-              left:"50%",
-              top:"50%",
-              width:"max(100vw, 177.777778vh)",
-              height:"max(100vh, 56.25vw)",
-              aspectRatio:"16 / 9",
-              transform:"translate(-50%, -50%)",
-            }}
-          >
-            <div
-              ref={backdropImageRef}
-              style={{
-                position:"absolute",
-                inset:0,
-                filter:"blur(0px)",
-                transform:"scale(1)",
-              }}
-            >
-              {bgStack.prev && bgStack.prev !== bgStack.curr ? (
-                <img
-                  ref={bgPrevImageRef}
-                  src={bgStack.prev}
-                  alt=""
-                  width="1920"
-                  height="1080"
-                  style={{
-                    position:"absolute",
-                    inset:0,
-                    width:"100%",
-                    height:"100%",
-                    objectFit:"cover",
-                    objectPosition:"center",
-                    opacity:1,
-                  }}
-                />
-              ) : null}
-              <img
-                ref={bgCurrImageRef}
-                src={bgStack.curr}
-                alt=""
-                width="1920"
-                height="1080"
-                style={{
-                  position:"absolute",
-                  inset:0,
-                  width:"100%",
-                  height:"100%",
-                  objectFit:"cover",
-                  objectPosition:"center",
-                  opacity:bgStack.prev ? 0 : 1,
-                }}
-              />
-            </div>
-          </div>
-        ) : null}
-      </div>
-      <div
-        ref={metadataVignetteRef}
-        aria-hidden="true"
-        data-bp-detail-background
-        style={{
-          position:"absolute",
-          inset:0,
-          zIndex:1,
-          opacity:1,
-          background:"radial-gradient(ellipse 55% 85% at center, transparent 44%, rgba(0,0,0,0.28) 68%, rgba(0,0,0,0.9) 100%)",
-          pointerEvents:"none",
-        }}
-      />
-      <div
-        ref={darkOverlayRef}
-        aria-hidden="true"
-        data-bp-detail-background
-        style={{
-          position:"absolute",
-          inset:0,
-          zIndex:1,
-          opacity:0,
-          background:"rgba(0,0,0,1)",
-          pointerEvents:"none",
-        }}
-      />
       <div
         ref={detailScrollRef}
         data-aetherio-scroll-shell
@@ -3625,6 +3484,7 @@ function updateBackdropBlur(scrollTop: number) {
                   seasonMarked={seasonMarkedMap.get(0) ?? false}
                   previousMarked={arePreviousEpisodesMarked(ep.season, ep.episode)}
                   onPlay={()=>goToStreams(ep.season,ep.episode,ep.name)}
+                  onRememberFocus={() => { lastFocusedEpisodeKeyRef.current = getEpisodeKey(ep.season, ep.episode); }}
                   onMarkWatched={() => markEpisodeFromCard(ep)}
                   onMarkSeasonWatched={() => markSeasonAsWatched(ep.season)}
                   onMarkSeasonUnwatched={() => markSeasonAsUnwatched(ep.season)}
@@ -3660,6 +3520,7 @@ function updateBackdropBlur(scrollTop: number) {
                   seasonMarked={seasonMarkedMap.get(0) ?? false}
                   previousMarked={arePreviousEpisodesMarked(ep.season, ep.episode)}
                   onPlay={()=>goToStreams(ep.season,ep.episode,ep.name)}
+                  onRememberFocus={() => { lastFocusedEpisodeKeyRef.current = getEpisodeKey(ep.season, ep.episode); }}
                   onMarkWatched={() => markEpisodeFromCard(ep)}
                   onMarkSeasonWatched={() => markSeasonAsWatched(ep.season)}
                   onMarkSeasonUnwatched={() => markSeasonAsUnwatched(ep.season)}
@@ -3739,65 +3600,17 @@ function updateBackdropBlur(scrollTop: number) {
             <SectionH title="Más como esto" />
             <ScrollRow rowKey={`detail:${type}:${id}:related`} gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER} arrowTop={DETAIL_RELATED_ARROW_TOP}>
               {data.related.map(r=>(
-                <div key={r.id}
-                  className="media-card-frame"
-                  onClick={()=>navigate(buildDetailPath(r.media_type, `tmdb:${r.id}`))}
-                  // En picture la card es foco del mando: tabIndex + escala, sin anillo blanco.
-                  tabIndex={bigPicture ? 0 : undefined}
-                  role={bigPicture ? "button" : undefined}
-                  aria-label={bigPicture ? r.title : undefined}
-                  onKeyDown={bigPicture ? (e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(buildDetailPath(r.media_type, `tmdb:${r.id}`)); } }) : undefined}
-                  onFocus={bigPicture ? (e=>{
-                    const card = e.currentTarget as HTMLDivElement;
-                    tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
-                    gsap.set(card, { boxShadow: "0 22px 46px rgba(0,0,0,0.56)" });
-                  }) : undefined}
-                  onBlur={bigPicture ? (e=>{
-                    const card = e.currentTarget as HTMLDivElement;
-                    tweenTo(card, { y: 0, scale: 1, zIndex: 1 }, 0.32);
-                    gsap.set(card, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-                  }) : undefined}
-                  style={{ flexShrink:0,width:197,height:296,borderRadius:10,overflow:"hidden",cursor:"pointer",background:"#1c1c1e" }}
-                  onMouseEnter={e=>{
-                    const card = e.currentTarget as HTMLDivElement;
-                    tweenTo(card, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
-                    gsap.set(card, { boxShadow: bigPicture ? "0 22px 46px rgba(0,0,0,0.56)" : "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
+                <RelatedPosterCard
+                  key={`${r.media_type}:${r.id}`}
+                  name={r.title ?? ""}
+                  poster={r.poster_path}
+                  completed={completedMediaKeys.has(`${r.media_type}:tmdb:${r.id}`)}
+                  bigPicture={bigPicture}
+                  onOpen={()=>{
+                    writeDetailMediaMeta(relatedMediaDetailSeed(r));
+                    navigate(buildDetailPath(r.media_type, `tmdb:${r.id}`));
                   }}
-                  onMouseLeave={e=>{
-                    const card = e.currentTarget as HTMLDivElement;
-                    tweenTo(card, { y: 0, scale: 1, zIndex: 1 }, 0.32);
-                    gsap.set(card, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-                  }}
-                >
-                  {completedMediaKeys.has(`${r.media_type}:tmdb:${r.id}`) ? (
-                    <div
-                      style={{
-                        position:"absolute",
-                        top:10,
-                        right:10,
-                        zIndex:2,
-                        width:28,
-                        height:28,
-                        borderRadius:999,
-                        border:"1px solid rgba(255,255,255,0.72)",
-                        background:"linear-gradient(180deg, rgba(255,255,255,0.96), rgba(242,244,247,0.88))",
-                        boxShadow:"0 10px 24px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.92)",
-                        display:"flex",
-                        alignItems:"center",
-                        justifyContent:"center",
-    backdropFilter:"var(--lg-filter-sm)",
-    WebkitBackdropFilter:"var(--lg-filter-sm)",
-                      }}
-                    >
-                      <Check size={15} style={{ color:"rgba(16,18,20,0.94)" }} />
-                    </div>
-                  ) : null}
-                  {r.poster_path ? (
-                    <img src={r.poster_path} alt="" loading="lazy" decoding="async" style={{ width:"100%",height:"100%",objectFit:"cover",transform:"scale(1)" }} />
-                  ) : (
-                    <div style={{ width:"100%",height:"100%",background:"#2c2c2e" }} />
-                  )}
-                </div>
+                />
               ))}
             </ScrollRow>
           </section>
@@ -3826,7 +3639,7 @@ function updateBackdropBlur(scrollTop: number) {
         </div>
       ) : null}
       </div>
-    </div>
+    </DetailPageFrame>
   );
 }
 
@@ -4271,10 +4084,11 @@ function EpCard({
   onMarkSeasonUnwatched,
   onMarkPreviousSeasonWatched,
   onMarkPreviousSeasonUnwatched,
+  onRememberFocus,
   onShowComments,
   hasTmdbComments,
   onMarkUnwatched,
-}:{ep:Episode; scrollKey:string; locked?:boolean; progressEntry?: ContinueWatchingEntry; fallbackImage?:string; onPlay:()=>void; onMarkWatched:()=>void; seasonMarked:boolean; previousMarked:boolean; onMarkSeasonWatched:()=>void; onMarkSeasonUnwatched:()=>void; onMarkPreviousSeasonWatched:()=>void; onMarkPreviousSeasonUnwatched:()=>void; onShowComments:()=>void; hasTmdbComments?:boolean; onMarkUnwatched:(entry: ContinueWatchingEntry)=>void}) {
+}:{ep:Episode; scrollKey:string; locked?:boolean; progressEntry?: ContinueWatchingEntry; fallbackImage?:string; onPlay:()=>void; onMarkWatched:()=>void; seasonMarked:boolean; previousMarked:boolean; onMarkSeasonWatched:()=>void; onMarkSeasonUnwatched:()=>void; onMarkPreviousSeasonWatched:()=>void; onMarkPreviousSeasonUnwatched:()=>void; onRememberFocus?:()=>void; onShowComments:()=>void; hasTmdbComments?:boolean; onMarkUnwatched:(entry: ContinueWatchingEntry)=>void}) {
   const watched = Boolean(progressEntry?.completed);
   const progress = progressEntry ? progressPercent(progressEntry) : 0;
   const showProgress = !watched && progress > 0.5;
@@ -4341,6 +4155,7 @@ function EpCard({
       // En picture el foco del mando espeja el hover: escala sin bordes.
       // Las bloqueadas también escalan al tener foco (solo no reproducen).
       onFocus={bigPicture ? (e)=>{
+        onRememberFocus?.();
         setFocused(true);
         const card = e.currentTarget as HTMLDivElement;
         tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
@@ -4502,9 +4317,6 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
           style={{ width:"100%",height:"100%",objectFit:"cover",transform:"scale(1)" }} />
       ) : null}
       <div style={{ position:"absolute",inset:0,pointerEvents:"none",background:"rgba(0,0,0,0.14)" }} />
-      <div style={{ position:"absolute",left:"50%",top:"50%",width:46,height:46,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,0.92)",color:"#000",boxShadow:"0 14px 34px rgba(0,0,0,0.45)",transform:"translate(-50%,-50%)" }}>
-        <Play size={16} fill="black" />
-      </div>
     </button>
   );
 }

@@ -40,8 +40,10 @@ const PlayerPage = lazy(() => import("../Player/index.tsx"));
 const PersonPage = lazy(() => import("../Person/index.tsx"));
 const EntityPage = lazy(() => import("../Entity/index.tsx"));
 const CatalogPage = lazy(() => import("../Catalog/index.tsx"));
+const StreamingPlatformPage = lazy(() => import("../StreamingPlatform/index.tsx"));
 const BigPictureSettings = lazy(() => import("./BigPictureSettings.tsx"));
 const BigPictureAddons = lazy(() => import("./BigPictureAddons.tsx"));
+const BigPictureSports = lazy(() => import("./BigPictureSportsHome.tsx"));
 
 // Episodie es sección del Detail (un solo fondo): las rutas /big-picture/episode
 // y /big-picture/streams redirigen al Detail con la sección abierta.
@@ -112,6 +114,7 @@ export default function BigPicturePage() {
   const isSearch = location.pathname.startsWith("/big-picture/search");
   const isLibrary = location.pathname.startsWith("/big-picture/library");
   const isParty = location.pathname.startsWith("/big-picture/party");
+  const isSports = location.pathname.startsWith("/big-picture/sports");
   const isGenre = location.pathname.startsWith("/big-picture/genre");
   const isCatalog = location.pathname.startsWith("/big-picture/catalog");
   const isSettings = location.pathname.startsWith("/big-picture/settings");
@@ -121,7 +124,8 @@ export default function BigPicturePage() {
   const isPlayer = location.pathname.startsWith("/big-picture/player");
   const isPerson = location.pathname.startsWith("/big-picture/person/");
   const isEntity = location.pathname.startsWith("/big-picture/entity/");
-  const isSubPage = isSearch || isLibrary || isParty || isGenre || isCatalog || isSettings || isAddons || isEpisode || isDetail || isPlayer || isPerson || isEntity;
+  const isStreamingPlatform = location.pathname.startsWith("/big-picture/platform/");
+  const isSubPage = isSearch || isLibrary || isParty || isSports || isGenre || isCatalog || isSettings || isAddons || isEpisode || isDetail || isPlayer || isPerson || isEntity || isStreamingPlatform;
   const addons = useAddonStore(s => s.addons);
   const prefs = useHomePreferences();
   const { heroItems } = useHomeCatalogs(addons, prefs.contentOrientation, prefs.bothPreference, !isSubPage);
@@ -204,9 +208,9 @@ export default function BigPicturePage() {
   // scroll exterior queda arriba: el scroll real lo lleva el shell interior
   // de la propia page (igual que en PC con AppShell). Sin esto el hero heredaría el scroll.
   useEffect(() => {
-    if (!isDetail && !isCatalog && !isSettings && !isAddons && !isLibrary && !isEpisode && !isPlayer && !isPerson && !isEntity) return;
+    if (!isDetail && !isCatalog && !isSettings && !isAddons && !isLibrary && !isSports && !isEpisode && !isPlayer && !isPerson && !isEntity && !isStreamingPlatform) return;
     scrollRef.current?.scrollTo({ top: 0, behavior: "auto" as ScrollBehavior });
-  }, [isDetail, isCatalog, isSettings, isAddons, isLibrary, isEpisode, isPlayer, isPerson, isEntity, location.pathname]);
+  }, [isDetail, isCatalog, isSettings, isAddons, isLibrary, isSports, isEpisode, isPlayer, isPerson, isEntity, isStreamingPlatform, location.pathname]);
 
   // Root de la page que hay que fundir en cada cambio de ruta: el primer hijo
   // CON className del shell de scroll. Ese descriptor descarta a propósito los
@@ -234,7 +238,27 @@ export default function BigPicturePage() {
   // que exista el root (con tope de tiempo) en lugar de animar el primer hijo
   // del shell, que sería el fallback. El poll se cancela si la ruta cambia
   // antes de encontrarlo.
+  const previousRoutePathRef = useRef<string | null>(null);
   useEffect(() => {
+    const previousPath = previousRoutePathRef.current;
+    previousRoutePathRef.current = location.pathname;
+    const switchingBetweenDetails = Boolean(
+      isDetail
+      && previousPath
+      && previousPath !== location.pathname
+      && previousPath.startsWith("/big-picture/detail/"),
+    );
+    // DetailPage conserva el mismo fondo entre IDs y anima sus propios
+    // elementos. Forzar el root a opacity:0 aquí ocultaría ese fondo y
+    // recrearía el frame negro justo durante la transición entre medios.
+    if (switchingBetweenDetails) {
+      const root = routeRoot();
+      if (root) {
+        gsap.killTweensOf(root);
+        gsap.set(root, { clearProps: "opacity" });
+      }
+      return;
+    }
     if (isPlayer || isEpisode || prefersReducedMotion()) return;
     const shell = scrollRef.current;
     if (!shell) return;
@@ -255,7 +279,7 @@ export default function BigPicturePage() {
       cancelAnimationFrame(frame);
       tween?.kill();
     };
-  }, [location.pathname, isPlayer, isEpisode, routeRoot]);
+  }, [location.pathname, isDetail, isPlayer, isEpisode, routeRoot]);
 
   // Salida: desvanece el contenido del shell y navega al terminar. Se limpia
   // el opacity del SHELL (no el del root) justo antes de navegar, para que la
@@ -310,7 +334,8 @@ export default function BigPicturePage() {
   //   (salir de la app). NUNCA vuelve a la app normal: la única salida a
   //   modo normal es el botón Start del mando.
   // - En las sub-páginas (/big-picture/search, /big-picture/library,
-  //   /big-picture/party, /big-picture/genre, /big-picture/settings,
+  //   /big-picture/party, /big-picture/sports, /big-picture/genre,
+  //   /big-picture/settings,
   //   /big-picture/addons, /big-picture/episode, /big-picture/player,
   //   /big-picture/person, /big-picture/entity,
   //   /big-picture/detail/...): B retrocede a la página
@@ -356,6 +381,12 @@ export default function BigPicturePage() {
       return;
     }
     if (isSubPage) {
+      // Streaming pages return to their source card without waiting for the
+      // decorative route fade; Home restores its scroll and focus in layout.
+      if (isStreamingPlatform) {
+        navigate(-1);
+        return;
+      }
       fadeOutThen(() => navigate(-1));
       return;
     }
@@ -386,6 +417,10 @@ export default function BigPicturePage() {
           <BigPictureLibrary />
         ) : isParty ? (
           <BigPictureParty />
+        ) : isSports ? (
+          <Suspense fallback={<div style={{ minHeight: "100vh", background: "#000" }} />}>
+            <BigPictureSports />
+          </Suspense>
         ) : isGenre ? (
           <BigPictureGenre />
         ) : isCatalog ? (
@@ -405,6 +440,12 @@ export default function BigPicturePage() {
         ) : isPlayer ? (
           <Suspense fallback={<div style={{ minHeight: "100vh", background: "#000" }} />}>
             <PlayerPage />
+          </Suspense>
+        ) : isStreamingPlatform ? (
+          <Suspense fallback={<LoadingState label="Cargando plataforma" />}>
+            <Routes>
+              <Route path="/big-picture/platform/:platformId" element={<StreamingPlatformPage bigPicture />} />
+            </Routes>
           </Suspense>
         ) : isPerson ? (
           <Suspense fallback={<div style={{ minHeight: "100vh", background: "#000" }} />}>

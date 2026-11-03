@@ -234,7 +234,7 @@
   background: #1c1c1e;
   padding: 0;
   cursor: pointer;
-  transition: transform 0.16s ease;
+  transition: none;
   /* Ancla de scroll del modo picture: al subir con el mando la card cae bajo
      la pill, nunca cortada arriba. */
   scroll-margin-top: calc(5vh + 81px);
@@ -245,7 +245,7 @@
 }
 
 .big-picture--home-maximized .bp-library__poster:focus {
-  transform: scale(1.05);
+  transform: none;
 }
 
 .bp-library__poster img {
@@ -267,6 +267,132 @@
   line-height: 1.35;
   text-align: center;
   color: rgba(255, 255, 255, 0.55);
+}
+
+.bp-library__poster-title {
+  margin-top: 10px;
+  padding: 0 2px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(8px);
+  will-change: transform, opacity;
+}
+
+.bp-library__discover {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.bp-library__discover-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(18px);
+}
+
+.bp-library__discover-field {
+  display: flex;
+  flex: 1 1 220px;
+  min-width: 190px;
+  flex-direction: column;
+  gap: 9px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.bp-library__discover-field select {
+  width: 100%;
+  min-height: 56px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  outline: none;
+  background: #1b1b1e;
+  color: #fff;
+  font: inherit;
+  font-size: 17px;
+}
+
+.bp-library__discover-field select:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.86);
+  outline-offset: 3px;
+}
+
+.bp-library__discover-skeleton {
+  aspect-ratio: 217 / 326;
+  border-radius: 14px;
+  background: linear-gradient(110deg, #1b1b1e 8%, #29292e 18%, #1b1b1e 33%);
+  background-size: 200% 100%;
+  animation: bp-library-skeleton 1.3s ease-in-out infinite;
+}
+
+@keyframes bp-library-skeleton {
+  to { background-position-x: -200%; }
+}
+
+.bp-library__discover-message {
+  display: grid;
+  min-height: 300px;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 22px;
+  text-align: center;
+}
+
+.bp-library__discover-message p {
+  margin: 0;
+}
+
+.bp-library__discover-message button,
+.bp-library__discover-more button {
+  min-height: 56px;
+  padding: 0 24px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bp-library__discover-message button:focus-visible,
+.bp-library__discover-more button:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 4px;
+}
+
+.bp-library__discover-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 24px;
+}
+
+.bp-library__discover-more button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.bp-library__discover-error {
+  margin: 0;
+  color: rgba(255, 180, 180, 0.9);
+  text-align: center;
 }
 
 .bp-library__status {
@@ -309,8 +435,17 @@
   }
 
   .bp-library__poster,
+  .bp-library__poster-title,
   .bp-library__indicator,
   .bp-library__row {
     transition: none;
+  }
+
+  .bp-library__poster-title {
+    transform: none;
+  }
+
+  .bp-library__discover-skeleton {
+    animation: none;
   }
 }

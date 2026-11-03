@@ -8,6 +8,7 @@ import {
   isSpatialPostersConfigured,
   spatialPosterSignature,
   SPATIAL_POSTER_CHANGED_EVENT,
+  TOP_SPATIAL_POSTER_OVERRIDES,
   type SpatialPosterOverrides,
   type SpatialPosterSettings,
 } from "../config/spatialPosters.ts";
@@ -16,6 +17,7 @@ import { resolvePosterEndpoint } from "../services/posterServer.ts";
 import { clearSpatialRankCache, fetchSpatialRankMap, spatialRankOf } from "../services/spatialRank.ts";
 import { preloadArtworkImage, preloadPosterArtwork, isPosterArtworkFailed } from "../services/posterArtworkCache.ts";
 import { POSTER_PROBE_MAX_CONCURRENT, forgetPosterFailure } from "../services/posterProbe.ts";
+import { tmdbGenreName } from "../services/tmdbGenres.ts";
 import { isTopFormatRow } from "../utils/topRows.ts";
 import { getMdbListSettings } from "../config/mdblist.ts";
 import {
@@ -26,6 +28,9 @@ import {
   resolveAnilistToTmdb,
 } from "../services/anilist.ts";
 import {
+  fetchJikanBestOf2000s,
+  fetchJikanBestOfNineties,
+  fetchJikanBestOf2010s,
   fetchJikanTopMovies,
   fetchJikanUpcoming,
   fetchJikanTopFavorites,
@@ -50,13 +55,16 @@ import { readHomeCardArtwork } from "../utils/homeCardArtwork.ts";
 import { getContinueWatchingRows } from "../utils/continueWatching.ts";
 import { pickPreferredTmdbBackdrop, tmdbImage as tmdbImageUrl } from "../utils/tmdbArtwork.ts";
 import { fetchTmdbArtwork } from "../services/tmdbArtworkService.ts";
+import { fetchMovieSeriesDecadeRows } from "../services/movieSeriesDecades.ts";
+import { fetchMovieSeriesHomeRows, orderMovieSeriesHomeRows } from "../services/movieSeriesHomeRows.ts";
+import { isYearBasedMovieSeriesHomeRow } from "../utils/homeCatalogFilters.ts";
 
 const HERO_GROUP_FETCH_LIMIT = 7;
 const HERO_TOTAL_LIMIT = 15;
 const HOME_ROWS_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_HERO_STALE_TIME = HOME_CACHE_MAX_AGE;
 const HOME_GC_TIME = 1000 * 60 * 60 * 24;
-const HOME_ROWS_DATA_VERSION = "native-home-rails-v27";
+const HOME_ROWS_DATA_VERSION = "native-home-rails-v35-decade-and-genre-rows-no-yearly-new";
 const HOME_BACKGROUND_IMAGE_SIZE = "w1280" as const;
 const HOME_HERO_IMAGE_VERSION = "hero-metadata-api-original-v5";
 const HOME_EXTRA_VARIANTS_PER_CATALOG = 4;
@@ -576,6 +584,7 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
   let background: string | undefined;
   let runtime: string | undefined;
   let genres: string[] | undefined;
+  let genreIds: number[] | undefined;
   let certification: string | undefined;
   let isAnime = false;
 
@@ -602,6 +611,7 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
     const genreList = detail.genres;
     if (Array.isArray(genreList) && genreList.length) {
       genres = genreList.map((g: any) => g.name);
+      genreIds = genreList.map((g: any) => Number(g.id)).filter(Number.isFinite);
     }
 
     const hasAnimationGenre = Array.isArray(genreList) && genreList.some((g: any) => g.id === 16);
@@ -643,6 +653,7 @@ async function normalizeTmdbHeroItem(item: any, type: "movie" | "series" | "anim
     rating: typeof item.vote_average === "number" && item.vote_average > 0 ? item.vote_average.toFixed(1) : undefined,
     year: yearFrom(item.release_date ?? item.first_air_date),
     genres,
+    genreIds,
     runtime,
     certification,
     heroGroup: group,
@@ -663,6 +674,10 @@ function normalizeTmdbCatalogItem(item: any, type: "movie" | "series" | "anime",
     description: item.overview,
     rating: typeof item.vote_average === "number" && item.vote_average > 0 ? item.vote_average.toFixed(1) : undefined,
     year: yearFrom(item.release_date ?? item.first_air_date),
+    genreIds: Array.isArray(item.genre_ids) ? item.genre_ids.map(Number).filter(Number.isFinite) : undefined,
+    genres: Array.isArray(item.genre_ids)
+      ? item.genre_ids.map((genreId: number) => tmdbGenreName(type, Number(genreId))).filter((genre: string | undefined): genre is string => Boolean(genre))
+      : undefined,
     heroGroup: group,
   });
   return normalized.poster || normalized.background ? normalized : null;
@@ -747,7 +762,9 @@ export async function fetchHomeRows(
   const rowTasks = enabledAddons.flatMap(addon =>
     (addon.manifest?.catalogs ?? [])
       .filter((cat: any) => cat?.type && cat?.id)
-      .flatMap((cat: any) => homeRequests(cat).map(async (request): Promise<CatalogRowData | null> => {
+      .flatMap((cat: any) => homeRequests(cat)
+        .filter(request => !isYearBasedMovieSeriesHomeRow(request.title, request.catalog.type))
+        .map(async (request): Promise<CatalogRowData | null> => {
       try {
         const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
         const data = await fetchJsonWithTimeout(
@@ -791,9 +808,28 @@ export async function fetchHomeRows(
   const rows = await Promise.all(rowTasks);
   const addonRows = rows.filter((row): row is CatalogRowData => row !== null);
   const orientedAddonRows = addonRows.filter(row => matchesContentOrientation(row.type, contentOrientation));
-  const baseRows = orientedAddonRows.length || contentOrientation === "anime"
+  const movieSeriesHomeRowsPromise = contentOrientation === "anime"
+    ? Promise.resolve([] as CatalogRowData[])
+    : fetchMovieSeriesHomeRows();
+  const movieSeriesDecadeRowsPromise = contentOrientation === "anime"
+    ? Promise.resolve([] as CatalogRowData[])
+    : fetchMovieSeriesDecadeRows();
+  const initialBaseRows = orientedAddonRows.length || contentOrientation === "anime"
     ? orientedAddonRows
     : await fetchTmdbStarterRows();
+  if (contentOrientation === "both" && initialBaseRows.length) {
+    try { onPhase?.(initialBaseRows); } catch { /* pintar nunca debe romper la carga */ }
+  }
+  const [fetchedHomeRows, fetchedDecadeRows] = await Promise.all([
+    movieSeriesHomeRowsPromise,
+    movieSeriesDecadeRowsPromise,
+  ]);
+  const existingRowKeys = new Set(initialBaseRows.map(row => `${row.type}:${row.catalogId}`));
+  const movieSeriesRows = orderMovieSeriesHomeRows(
+    [...fetchedHomeRows, ...fetchedDecadeRows]
+      .filter(row => !existingRowKeys.has(`${row.type}:${row.catalogId}`)),
+  );
+  const baseRows = initialBaseRows;
 
   if (contentOrientation === "both") {
     // FASE 1: pintar ya con las filas base (pósters listos). El anime
@@ -801,16 +837,23 @@ export async function fetchHomeRows(
     if (baseRows.length) {
       try { onPhase?.(baseRows); } catch { /* pintar nunca debe romper la carga */ }
     }
+    if (movieSeriesRows.length) {
+      try { onPhase?.([...baseRows, ...movieSeriesRows]); } catch { /* pintar nunca debe romper la carga */ }
+    }
     const animeRows = await fetchAnimeRows();
-    if (!animeRows.length) return baseRows;
+    if (!animeRows.length) return [...baseRows, ...movieSeriesRows];
+    const cinematicRows = animeRows.filter(row => row.presentation === "cinematic");
+    const standardAnimeRows = animeRows.filter(row => row.presentation !== "cinematic");
 
     const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
-    const filteredAnimeRows = animeRows.map(row => ({
+    const filteredAnimeRows = standardAnimeRows.map(row => ({
       ...row,
       items: row.items.filter(item => !baseItemIds.has(`${item.type}:${item.id}`)),
     })).filter(row => row.items.length > 0);
 
-    if (!filteredAnimeRows.length) return baseRows;
+    if (!filteredAnimeRows.length) {
+      return [...buildBothModeRows(baseRows, cinematicRows, bothPreference), ...movieSeriesRows];
+    }
 
     const malResolvedRows = await Promise.all(
       filteredAnimeRows.map(async row => ({
@@ -841,14 +884,15 @@ export async function fetchHomeRows(
 
     const validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
 
-    const balanced = buildBothModeRows(baseRows, validAnimeRows, bothPreference);
+    const balanced = buildBothModeRows(baseRows, [...validAnimeRows, ...cinematicRows], bothPreference);
     const allEnriched = await enrichAllItemsWithLogos(balanced.flatMap(row => row.items));
     let offset = 0;
-    return balanced.map(row => {
+    const enrichedRows = balanced.map(row => {
       const items = allEnriched.slice(offset, offset + row.items.length);
       offset += row.items.length;
       return { ...row, items };
     });
+    return [...enrichedRows, ...movieSeriesRows];
   }
 
   if (contentOrientation === "movies-series") {
@@ -856,19 +900,25 @@ export async function fetchHomeRows(
     if (baseRows.length) {
       try { onPhase?.(baseRows); } catch { /* pintar nunca debe romper la carga */ }
     }
+    if (movieSeriesRows.length) {
+      try { onPhase?.([...baseRows, ...movieSeriesRows]); } catch { /* pintar nunca debe romper la carga */ }
+    }
     const allEnriched = await enrichAllItemsWithLogos(baseRows.flatMap(row => row.items));
     let offset = 0;
-    return baseRows.map(row => {
+    const enrichedRows = baseRows.map(row => {
       const items = allEnriched.slice(offset, offset + row.items.length);
       offset += row.items.length;
       return { ...row, items };
     });
+    return [...enrichedRows, ...movieSeriesRows];
   }
 
   const animeRows = await fetchAnimeRows();
+  const cinematicRows = animeRows.filter(row => row.presentation === "cinematic");
+  const standardAnimeRows = animeRows.filter(row => row.presentation !== "cinematic");
   const baseItemIds = new Set(baseRows.flatMap(r => r.items).map(i => `${i.type}:${i.id}`));
-  const filteredAnimeRows = (animeRows.length
-    ? animeRows.map(row => ({
+  const filteredAnimeRows = (standardAnimeRows.length
+    ? standardAnimeRows.map(row => ({
       ...row,
       items: row.items.filter(item => !baseItemIds.has(`${item.type}:${item.id}`)),
     })).filter(row => row.items.length > 0)
@@ -907,15 +957,18 @@ export async function fetchHomeRows(
     validAnimeRows = dedupedAnimeRows.filter(row => row.items.length > 0);
   }
 
-  const combined = validAnimeRows.length ? [...validAnimeRows, ...baseRows] : baseRows;
+  const combined = validAnimeRows.length
+    ? [...validAnimeRows, ...baseRows, ...cinematicRows]
+    : [...baseRows, ...cinematicRows];
 
   const allEnriched = await enrichAllItemsWithLogos(combined.flatMap(row => row.items));
   let offset = 0;
-  return combined.map(row => {
+  const enrichedRows = combined.map(row => {
     const items = allEnriched.slice(offset, offset + row.items.length);
     offset += row.items.length;
     return { ...row, items };
   });
+  return enrichedRows;
 }
 
 async function fetchTmdbStarterRows(): Promise<CatalogRowData[]> {
@@ -983,6 +1036,8 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
     title: string;
     fetch: () => Promise<MediaItem[]>;
     tmdb?: Record<string, string | undefined>;
+    cinematic?: boolean;
+    decade?: { startYear: number; endYear: number };
     kind: "current" | "top" | "genre" | "other";
     order: number;
   }
@@ -1001,6 +1056,51 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
     { id: "jikan.upcoming", title: "Próximos animes a estrenar", fetch: fetchJikanUpcoming, kind: "current", order: 4, tmdb: { sort_by: "popularity.desc", "air_date.gte": isoDate(1), "air_date.lte": isoDate(180) } },
     { id: "jikan.most_popular", title: "Fenómenos populares", fetch: fetchJikanMostPopular, kind: "other", order: 7, tmdb: { sort_by: "vote_count.desc", "vote_count.gte": "100" } },
     { id: "jikan.top_movies", title: "Películas anime más populares", fetch: fetchJikanTopMovies, kind: "top", order: 10, tmdb: { sort_by: "popularity.desc" } },
+    {
+      id: "jikan.best_anime_90s",
+      title: "Los mejores animes de los 90's",
+      fetch: fetchJikanBestOfNineties,
+      kind: "top",
+      order: 4.5,
+      cinematic: true,
+      decade: { startYear: 1990, endYear: 1999 },
+      tmdb: {
+        sort_by: "vote_average.desc",
+        "first_air_date.gte": "1990-01-01",
+        "first_air_date.lte": "1999-12-31",
+        "vote_count.gte": "50",
+      },
+    },
+    {
+      id: "jikan.best_anime_2000s",
+      title: "Los mejores animes de los 2000",
+      fetch: fetchJikanBestOf2000s,
+      kind: "top",
+      order: 7.5,
+      cinematic: true,
+      decade: { startYear: 2000, endYear: 2009 },
+      tmdb: {
+        sort_by: "vote_average.desc",
+        "first_air_date.gte": "2000-01-01",
+        "first_air_date.lte": "2009-12-31",
+        "vote_count.gte": "50",
+      },
+    },
+    {
+      id: "jikan.best_anime_2010s",
+      title: "Los mejores animes de los 2010",
+      fetch: fetchJikanBestOf2010s,
+      kind: "top",
+      order: 9.5,
+      cinematic: true,
+      decade: { startYear: 2010, endYear: 2019 },
+      tmdb: {
+        sort_by: "vote_average.desc",
+        "first_air_date.gte": "2010-01-01",
+        "first_air_date.lte": "2019-12-31",
+        "vote_count.gte": "50",
+      },
+    },
   ];
 
   // Si AniList/Jikan están caídos (habitual: APIs gratuitas), no se queman
@@ -1063,8 +1163,72 @@ async function fetchAnimeRows(): Promise<CatalogRowData[]> {
   const jikanResults = await Promise.all(jikanRaw);
 
   const allResults = [...anilistRaw, ...jikanResults].sort((a, b) => a.entry.order - b.entry.order);
+  const rows = dedupeAnimeHomeRows(allResults.filter(result => !result.entry.cinematic));
 
-  return dedupeAnimeHomeRows(allResults);
+  for (const { entry, items } of allResults) {
+    if (!entry.cinematic || !entry.decade) continue;
+    const { startYear, endYear } = entry.decade;
+    const isInDecade = (item: MediaItem) => item.year != null && item.year >= startYear && item.year <= endYear;
+    const cinematicItems = items.filter(isInDecade);
+    const seen = new Set(cinematicItems.map(item => `${item.type}:${item.id}`));
+    const fallbackItems = allResults
+      .filter(result => !result.entry.cinematic)
+      .flatMap(result => result.items)
+      .filter(isInDecade)
+      .sort((left, right) => ratingOutOfTen(right) - ratingOutOfTen(left));
+    for (const item of fallbackItems) {
+      if (cinematicItems.length >= HOME_RAIL_ITEM_LIMIT) break;
+      const key = `${item.type}:${item.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cinematicItems.push(item);
+    }
+    const malResolvedItems = await resolveMalToTmdb(cinematicItems);
+    const tmdbResolvedItems = await resolveAnilistToTmdb(malResolvedItems);
+    const seenTmdbItems = new Set<string>();
+    const rankedTmdbItems = tmdbResolvedItems
+      .flatMap(item => {
+        const poster = isTmdbArtworkUrl(item.poster) ? item.poster : undefined;
+        const background = isTmdbArtworkUrl(item.background) ? item.background : poster;
+        if (!background) return [];
+        const key = item.id.startsWith("tmdb:")
+          ? item.id
+          : `${item.name.trim().toLowerCase()}:${item.year ?? ""}`;
+        if (seenTmdbItems.has(key)) return [];
+        seenTmdbItems.add(key);
+        return [{ ...item, poster: poster ?? background, background }];
+      })
+      .sort((left, right) => ratingOutOfTen(right) - ratingOutOfTen(left));
+    if (!rankedTmdbItems.length) continue;
+    rows.push({
+      addonId: "aetherio-jikan",
+      addonName: "Jikan",
+      catalogId: entry.id,
+      type: "anime",
+      name: entry.title,
+      subtitle: `Anime · ${startYear}–${endYear}`,
+      presentation: "cinematic",
+      items: rankedTmdbItems.slice(0, HOME_RAIL_ITEM_LIMIT),
+      order: entry.order,
+    });
+  }
+  return rows;
+}
+
+function ratingOutOfTen(item: MediaItem) {
+  const rating = Number(item.rating ?? item.imdbRating);
+  if (!Number.isFinite(rating)) return 0;
+  return rating > 10 ? rating / 10 : rating;
+}
+
+function isTmdbArtworkUrl(value?: string): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "image.tmdb.org" && url.pathname.startsWith("/t/p/");
+  } catch {
+    return false;
+  }
 }
 
 function buildBothModeRows(
@@ -1582,7 +1746,7 @@ async function prewarmHomePosters(
   const signature = spatialPosterSignature(settings);
   const jobs: Array<() => Promise<void>> = [];
   for (const row of rows) {
-    const overrides = isTopFormatRow(row) ? { rankingBadges: false } : undefined;
+    const overrides = isTopFormatRow(row) ? TOP_SPATIAL_POSTER_OVERRIDES : undefined;
     for (const item of row.items) {
       jobs.push(() => prewarmOnePoster(item, settings, signature, overrides));
     }
@@ -1635,7 +1799,7 @@ function collectMissingPosterTargets(
 ): string[] {
   const missing: string[] = [];
   for (const row of rows) {
-    const overrides = isTopFormatRow(row) ? { rankingBadges: false } : undefined;
+    const overrides = isTopFormatRow(row) ? TOP_SPATIAL_POSTER_OVERRIDES : undefined;
     for (const item of row.items) {
       // Un artwork elegido a mano manda sobre el poster del catalogo: para el
       // no se genera un poster de SpatialPosters, asi que se saltea.

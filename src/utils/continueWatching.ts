@@ -1,6 +1,9 @@
 import type { MediaStream, StreamQuery } from "../types/stream.ts";
 import { sanitizeLogoUrl } from "./artwork";
-import { getScopedStorageKey } from "./localProfiles";
+import { captureExperienceScope, getScopedStorageKey } from "./localProfiles";
+import { mediaRefFromLegacy, MediaIdentityError } from "../domain/mediaIdentity";
+import { recoverExperienceJournal, writeExperienceBatch, writeExperienceJSON } from "../domain/experienceStorage";
+import { storageFailure, type StorageResult } from "../domain/storageResult";
 
 export const CONTINUE_WATCHING_EVENT = "aetherio-continue-watching-updated";
 
@@ -27,6 +30,8 @@ export interface ContinueWatchingEntry {
   background?: string;
   poster?: string;
   originalPoster?: string;
+  genres?: string[];
+  genreIds?: number[];
   episodeStill?: string;
   season?: number;
   episode?: number;
@@ -141,6 +146,7 @@ export function classifyContinueWatchingEntryKind(input: {
 
 export function readContinueWatchingEntries(): ContinueWatchingEntry[] {
   try {
+    recoverPlaybackJournal();
     const raw = localStorage.getItem(getStorageKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -153,6 +159,7 @@ export function readContinueWatchingEntries(): ContinueWatchingEntry[] {
 
 export function readWatchedHistoryEntries(): ContinueWatchingEntry[] {
   try {
+    recoverPlaybackJournal();
     const raw = localStorage.getItem(getWatchedHistoryStorageKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -171,6 +178,7 @@ export function resetPlaybackStateCacheForTests() {
 }
 
 export function readPlaybackStateEntries(): ContinueWatchingEntry[] {
+  ensurePlaybackCacheListener();
   if (_cachedPlaybackEntries) return _cachedPlaybackEntries;
   const byKey = new Map<string, ContinueWatchingEntry>();
   for (const entry of [...readWatchedHistoryEntries(), ...readContinueWatchingEntries()]) {
@@ -209,11 +217,20 @@ export function getResumeStartTime(query: StreamQuery | null | undefined) {
 }
 
 export function updateContinueWatchingSelection(query: StreamQuery | null | undefined, patch: ContinueWatchingSelectionPatch) {
-  if (!query) return;
+  tryUpdateContinueWatchingSelection(query, patch);
+}
+
+export function tryUpdateContinueWatchingSelection(
+  query: StreamQuery | null | undefined,
+  patch: ContinueWatchingSelectionPatch,
+): StorageResult {
+  if (!query) return storageFailure("not-written");
+  try { mediaRefFromLegacy({ type: query.type, id: query.id }); }
+  catch (error) { return storageFailure(error instanceof MediaIdentityError ? "invalid-identity" : "invalid-data", error); }
   const key = buildContinueWatchingKey(query);
   const entries = readContinueWatchingEntries();
   const index = entries.findIndex(entry => entry.key === key);
-  if (index === -1) return;
+  if (index === -1) return storageFailure("not-written");
 
   const current = entries[index];
   const next: ContinueWatchingEntry = {
@@ -228,7 +245,7 @@ export function updateContinueWatchingSelection(query: StreamQuery | null | unde
   };
 
   const updated = [next, ...entries.filter((_, entryIndex) => entryIndex !== index)].slice(0, MAX_ENTRIES);
-  writeEntries(updated);
+  return writeEntries(updated);
 }
 
 export function saveContinueWatchingAudioSelection(
@@ -237,12 +254,13 @@ export function saveContinueWatchingAudioSelection(
 ) {
   if (!query) return;
   try {
+    recoverPlaybackJournal();
     const cache = readAudioSelectionCache();
     cache[buildContinueWatchingKey(query)] = {
       ...selection,
       updatedAt: Date.now(),
     };
-    localStorage.setItem(getAudioSelectionStorageKey(), JSON.stringify(cache));
+    writeExperienceJSON(captureExperienceScope(), AUDIO_SELECTION_STORAGE_KEY, cache);
   } catch {
     // Best-effort local persistence only.
   }
@@ -251,6 +269,7 @@ export function saveContinueWatchingAudioSelection(
 export function getContinueWatchingAudioSelection(query: StreamQuery | null | undefined) {
   if (!query) return null;
   try {
+    recoverPlaybackJournal();
     const cache = readAudioSelectionCache();
     return cache[buildContinueWatchingKey(query)] ?? null;
   } catch {
@@ -259,6 +278,25 @@ export function getContinueWatchingAudioSelection(query: StreamQuery | null | un
 }
 
 export function saveContinueWatchingProgress(input: ContinueWatchingInput) {
+  const entry = buildContinueWatchingProgress(input);
+  if (!entry) return null;
+  persistContinueWatchingProgress(entry);
+  return entry;
+}
+
+export function trySaveContinueWatchingProgress(input: ContinueWatchingInput): StorageResult {
+  let entry: ContinueWatchingEntry | null;
+  try {
+    mediaRefFromLegacy({ type: input.query.type, id: input.query.id });
+    entry = buildContinueWatchingProgress(input);
+  } catch (error) {
+    return storageFailure(error instanceof MediaIdentityError ? "invalid-identity" : "invalid-data", error);
+  }
+  if (!entry) return storageFailure("not-written");
+  return persistContinueWatchingProgress(entry);
+}
+
+function buildContinueWatchingProgress(input: ContinueWatchingInput): ContinueWatchingEntry | null {
   let currentTime = clampFinite(input.currentTime);
   let duration = clampFinite(input.duration);
   if (currentTime < MIN_SAVE_SECONDS) return null;
@@ -299,14 +337,21 @@ export function saveContinueWatchingProgress(input: ContinueWatchingInput) {
     selectedSubtitleLanguage: typeof input.selectedSubtitleLanguage === "string" ? input.selectedSubtitleLanguage : undefined,
   };
 
-  const entries = readContinueWatchingEntries().filter(item => item.key !== key);
-  if (completed) {
-    writeEntries(entries.slice(0, MAX_ENTRIES));
-    writeWatchedHistoryEntries(mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES));
-    return entry;
-  }
-  writeEntries([entry, ...entries].slice(0, MAX_ENTRIES));
   return entry;
+}
+
+function persistContinueWatchingProgress(entry: ContinueWatchingEntry): StorageResult {
+  const entries = readContinueWatchingEntries().filter(item => item.key !== entry.key);
+  if (entry.completed) {
+    const nextHistory = mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES);
+    const result = writeExperienceBatch(captureExperienceScope(), [
+      { key: STORAGE_KEY, value: JSON.stringify(entries.slice(0, MAX_ENTRIES)) },
+      { key: WATCHED_HISTORY_STORAGE_KEY, value: JSON.stringify(nextHistory) },
+    ], [CONTINUE_WATCHING_EVENT]);
+    if (result.ok) _cachedPlaybackEntries = null;
+    return result;
+  }
+  return writeEntries([entry, ...entries].slice(0, MAX_ENTRIES));
 }
 
 export function markEpisodeAsWatched(input: MarkEpisodeWatchedInput) {
@@ -346,8 +391,7 @@ export function markEpisodeAsWatched(input: MarkEpisodeWatchedInput) {
   };
 
   const updated = entries.filter(item => item.key !== key).slice(0, MAX_ENTRIES);
-  writeEntries(updated);
-  writeWatchedHistoryEntries(mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES));
+  writeProgressAndHistory(updated, mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES));
   return entry;
 }
 
@@ -397,8 +441,7 @@ export function removeContinueWatchingEntry(key: string) {
   const watched = readWatchedHistoryEntries();
   const removed = current.find(entry => entry.key === key) ?? watched.find(entry => entry.key === key) ?? null;
   const entries = current.filter(entry => entry.key !== key);
-  writeEntries(entries.slice(0, MAX_ENTRIES));
-  writeWatchedHistoryEntries(watched.filter(entry => entry.key !== key));
+  writeProgressAndHistory(entries.slice(0, MAX_ENTRIES), watched.filter(entry => entry.key !== key));
   return removed;
 }
 
@@ -416,8 +459,10 @@ export function markContinueWatchingEntryAsWatched(key: string) {
     updatedAt: Date.now(),
     source: "local",
   };
-  writeEntries(entries.filter(entry => entry.key !== key).slice(0, MAX_ENTRIES));
-  writeWatchedHistoryEntries(mergeEntries(readWatchedHistoryEntries(), [next], MAX_WATCHED_HISTORY_ENTRIES));
+  writeProgressAndHistory(
+    entries.filter(entry => entry.key !== key).slice(0, MAX_ENTRIES),
+    mergeEntries(readWatchedHistoryEntries(), [next], MAX_WATCHED_HISTORY_ENTRIES),
+  );
   return next;
 }
 
@@ -479,6 +524,34 @@ export function markMediaAsWatched(input: {
   poster?: string;
   originalPoster?: string;
 }) {
+  const entry = buildMediaWatchedEntry(input);
+  persistMediaWatchedEntry(entry);
+  return entry;
+}
+
+export function tryMarkMediaAsWatched(input: {
+  type: string;
+  id: string;
+  name: string;
+  logo?: string;
+  background?: string;
+  poster?: string;
+  originalPoster?: string;
+}): StorageResult {
+  try { mediaRefFromLegacy({ type: input.type, id: input.id }); }
+  catch (error) { return storageFailure(error instanceof MediaIdentityError ? "invalid-identity" : "invalid-data", error); }
+  return persistMediaWatchedEntry(buildMediaWatchedEntry(input));
+}
+
+function buildMediaWatchedEntry(input: {
+  type: string;
+  id: string;
+  name: string;
+  logo?: string;
+  background?: string;
+  poster?: string;
+  originalPoster?: string;
+}) {
   const mediaKey = buildMediaKey(input.type, input.id);
   const key = `${mediaKey}:0:0`;
   const entries = readContinueWatchingEntries();
@@ -506,42 +579,67 @@ export function markMediaAsWatched(input: {
     source: "local",
   };
 
-  writeEntries(entries.filter(item => item.key !== key).slice(0, MAX_ENTRIES));
-  writeWatchedHistoryEntries(mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES));
   return entry;
+}
+
+function persistMediaWatchedEntry(entry: ContinueWatchingEntry): StorageResult {
+  const current = readContinueWatchingEntries();
+  return writeProgressAndHistory(
+    current.filter(item => item.key !== entry.key).slice(0, MAX_ENTRIES),
+    mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES),
+  );
 }
 
 export function mergeContinueWatchingEntries(importedEntries: ContinueWatchingEntry[]) {
   if (!importedEntries.length) return;
   const watchedEntries = importedEntries.filter(entry => entry.completed);
-  if (watchedEntries.length) {
-    writeWatchedHistoryEntries(mergeEntries(readWatchedHistoryEntries(), watchedEntries, MAX_WATCHED_HISTORY_ENTRIES));
-  }
-  writeEntries(mergeEntries(
+  const nextHistory = watchedEntries.length
+    ? mergeEntries(readWatchedHistoryEntries(), watchedEntries, MAX_WATCHED_HISTORY_ENTRIES)
+    : readWatchedHistoryEntries();
+  const nextProgress = mergeEntries(
     readContinueWatchingEntries().filter(entry => !entry.completed),
     importedEntries.filter(entry => !entry.completed),
     MAX_ENTRIES,
-  ));
+  );
+  writeProgressAndHistory(nextProgress, nextHistory, watchedEntries.length > 0);
 }
 
 function writeEntries(entries: ContinueWatchingEntry[]) {
-  try {
-    localStorage.setItem(getStorageKey(), JSON.stringify(entries));
-    _cachedPlaybackEntries = null;
-    window.dispatchEvent(new CustomEvent(CONTINUE_WATCHING_EVENT));
-  } catch {
-    // Ignore storage failures; playback must not depend on local persistence.
-  }
+  const result = writeExperienceJSON(captureExperienceScope(), STORAGE_KEY, entries, [CONTINUE_WATCHING_EVENT]);
+  if (result.ok) _cachedPlaybackEntries = null;
+  return result;
 }
 
-function writeWatchedHistoryEntries(entries: ContinueWatchingEntry[]) {
-  try {
-    localStorage.setItem(getWatchedHistoryStorageKey(), JSON.stringify(entries));
-    _cachedPlaybackEntries = null;
-    window.dispatchEvent(new CustomEvent(CONTINUE_WATCHING_EVENT));
-  } catch {
-    // Best-effort watched history cache only.
-  }
+function writeProgressAndHistory(
+  entries: ContinueWatchingEntry[],
+  history: ContinueWatchingEntry[],
+  includeHistory = true,
+): StorageResult {
+  const writes = [
+    { key: STORAGE_KEY, value: JSON.stringify(entries) },
+    ...(includeHistory ? [{ key: WATCHED_HISTORY_STORAGE_KEY, value: JSON.stringify(history) }] : []),
+  ];
+  const result = writeExperienceBatch(captureExperienceScope(), writes, [CONTINUE_WATCHING_EVENT]);
+  if (result.ok) _cachedPlaybackEntries = null;
+  return result;
+}
+
+function recoverPlaybackJournal() {
+  let hasJournal = false;
+  try { hasJournal = localStorage.getItem("aetherio-experience-write-journal-v1") !== null; }
+  catch { /* recovery reports storage errors */ }
+  const result = recoverExperienceJournal();
+  if (hasJournal && result.ok) _cachedPlaybackEntries = null;
+  return result;
+}
+
+let playbackCacheListenerWindow: Window | null = null;
+
+function ensurePlaybackCacheListener() {
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function" || playbackCacheListenerWindow === window) return;
+  playbackCacheListenerWindow = window;
+  window.addEventListener(CONTINUE_WATCHING_EVENT, () => { _cachedPlaybackEntries = null; });
+  window.addEventListener("storage", () => { _cachedPlaybackEntries = null; });
 }
 
 function getStorageKey() {
@@ -577,7 +675,14 @@ function isContinueWatchingEntry(value: unknown): value is ContinueWatchingEntry
   );
 }
 
+const SCHEDULE_SPORT_TYPES = new Set(["live", "sports-replay", "sports-live"]);
+
+export function isSportsEntry(entry: { type: string }) {
+  return SCHEDULE_SPORT_TYPES.has(entry.type);
+}
+
 function isResumableEntry(entry: ContinueWatchingEntry) {
+  if (isSportsEntry(entry)) return false;
   return !entry.completed && (entry.currentTime >= MIN_RESUME_SECONDS || progressPercent(entry) > 0);
 }
 

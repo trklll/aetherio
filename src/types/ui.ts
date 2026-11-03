@@ -18,6 +18,8 @@ export interface MediaItem {
   rating?: string;
   year?: number;
   genres?: string[];
+  /** TMDB genre IDs preserve the canonical genre identity across translations. */
+  genreIds?: number[];
   runtime?: string;
   certification?: string;
   heroGroup?: string;
@@ -33,6 +35,7 @@ export interface CatalogRowData {
   type: string;
   name: string;
   subtitle?: string;
+  presentation?: "cinematic";
   extraParams?: Record<string, string>;
   items: MediaItem[];
   order?: number;

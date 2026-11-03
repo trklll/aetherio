@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aetherio · Apple petal spinner</title>
+<style>
+  /* ============ motor del spinner (única fuente de verdad de la geometría) ============
+     S=290 disco, pétalo: L=87 W=30.5, cápsula, r0=46, r1=133, r_mid=89.5
+     8 pétalos, rampa [1,.88,.76,.63,.5,.4,.31,.22], head=E, cola visual CCW        */
+  :root {
+    --s: 290px;          /* diámetro disco           */
+    /* ratios derivados de enteros en S=290: L=87, W=30, r0=46, r1=133, rmid=89.5
+       W entero + goto evitar el artefacto de fase de transform (hallazgo F1)      */
+    --pet-l: calc(var(--s) * 0.30);     /* 87       */
+    --pet-w: calc(var(--s) * 0.10345);  /* 30.0     */
+    --pet-rmid: calc(var(--s) * 0.30862); /* 89.5   */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #0b0b0c;
+    font-family: system-ui, sans-serif;
+    display: grid;
+    place-items: center;
+    padding: 48px 32px;
+  }
+  .stage { display: flex; flex-wrap: wrap; gap: 56px; align-items: flex-start; }
+
+  .plate {
+    width: 320px; height: 320px;
+    display: grid; place-items: center;
+  }
+  .plate--ref    { background: #7E2123; }   /* recorte de la referencia (rojo)   */
+  .plate--aeth   { background: #0d0d0d; }   /* superficie aetherio (integración) */
+  /* F3 sin esquinas redondeadas: el crop de la referencia es cuadrado */
+  /* F1 overflow:clip — el AABB del giro no infla scrollWidth (hallazgo ag. funcional) */
+  .plate { overflow: clip; }
+  .plate--label  { justify-self: center; text-align: center; margin-top: 14px;
+    color: rgba(255,255,255,.45); font-size: 13px; letter-spacing: .04em; }
+
+  /* ---- el spinner ------------------------------------------------------------ */
+  .spinner { position: relative; width: var(--s); height: var(--s); }
+  .spinner i {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: var(--pet-w); height: var(--pet-l);
+    margin-left: calc(var(--pet-w) / -2);
+    margin-top:  calc(var(--pet-l) / -2);
+    border-radius: calc(var(--pet-w) / 2);
+    background: var(--pet-color, #F1504B);
+    /* pétalo base apunta arriba; rotate(θ) lo traslada radialmente hacia fuera */
+  }
+  .spinner i:nth-child(1) { transform: rotate(  90deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 1.00; } /* E  head */
+  .spinner i:nth-child(2) { transform: rotate(  45deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.88; } /* NE */
+  .spinner i:nth-child(3) { transform: rotate(   0deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.76; } /* N  */
+  .spinner i:nth-child(4) { transform: rotate( -45deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.63; } /* NW */
+  .spinner i:nth-child(5) { transform: rotate( -90deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.50; } /* W  */
+  .spinner i:nth-child(6) { transform: rotate(-135deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.40; } /* SW */
+  .spinner i:nth-child(7) { transform: rotate(-180deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.31; } /* S  */
+  .spinner i:nth-child(8) { transform: rotate(-225deg) translateY(calc(var(--pet-rmid) * -1)); opacity: 0.22; } /* SE */
+
+  @keyframes ai-rotate { to { transform: rotate(360deg); } }
+  .spinner { animation: ai-rotate 1.05s linear infinite; }
+
+  /* congelado determinista para screenshots (?frozen=1) */
+  html[data-frozen="1"] .spinner { animation: none; }
+
+  /* §14 — reduce motion: pétalos estáticos, sin giro */
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+  }
+
+  /* ---- fila de tamaños reales de aetherio (46 / 28) para ojo de integración --- */
+  .sizes { display: flex; gap: 40px; align-items: center; margin-top: 48px; color: rgba(255,255,255,.4); font-size: 12px; }
+  .sizes .sz { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .spinner.s46 { --s: 46px; }
+  .spinner.s28 { --s: 28px; }
+</style>
+</head>
+<body>
+  <main class="stage">
+    <section>
+      <div class="plate plate--ref">
+        <div class="spinner" id="ref-spinner" role="img" aria-label="Cargando">
+          <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+          <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+        </div>
+      </div>
+      <p class="plate--label">referencia · rojo · S=290 en plato 320 (crop)</p>
+    </section>
+
+    <section>
+      <div class="plate plate--aeth" style="--pet-color:#FFFFFF">
+        <div class="spinner" role="img" aria-label="Cargando">
+          <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+          <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+        </div>
+      </div>
+      <p class="plate--label">integración aetherio · blanco neutro · #0d0d0d</p>
+    </section>
+
+    <div class="sizes">
+      <div class="sz"><div class="spinner s46" style="--pet-color:#fff" role="img" aria-label="Cargando">
+        <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+        <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+      </div><span>46px · LoadingState</span></div>
+      <div class="sz"><div class="spinner s28" style="--pet-color:rgba(255,255,255,.9)" role="img" aria-label="Cargando">
+        <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+        <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+      </div><span>28px · startup / splash</span></div>
+    </div>
+  </main>
+
+  <script>
+    // ?frozen=1 → animación apagada: el disco queda en t=0 (bisagra del diff determinista)
+    if (new URLSearchParams(location.search).has("frozen")) {
+      document.documentElement.setAttribute("data-frozen", "1");
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,1733 @@
+/** DarkMahou — Seanime adaptation; upstream preserved in upstream/darkmahou-provider.ts.txt. */
+// src/seanime/context.ts
+var MAX_BODY_BYTES = 8 * 1024 * 1024;
+var MAX_REQUESTS = 24;
+var USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+function publicUrl(value) {
+  const url = new URL(String(value));
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password || !url.hostname.includes(".") || /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) || /[\[\]:]/.test(url.hostname) || /(?:^|\.)(?:localhost|local|internal|invalid|test|home|lan)$/.test(url.hostname) || /(?:^|\.)(?:nip\.io|sslip\.io|localtest\.me)$/.test(url.hostname)) {
+    throw new Error("URL p\xFAblica http(s) requerida");
+  }
+  return url;
+}
+async function readBytes(response, account) {
+  if (Number(response.headers.get("content-length")) > MAX_BODY_BYTES) throw new Error("Respuesta Seanime demasiado grande");
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      length += chunk.value.byteLength;
+      if (length > MAX_BODY_BYTES) throw new Error("Respuesta Seanime demasiado grande");
+      account(chunk.value.byteLength);
+      chunks.push(chunk.value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+function cookieValues(headers) {
+  const compatible = headers;
+  if (compatible.getSetCookie) return compatible.getSetCookie();
+  if (compatible.getAll) return compatible.getAll("Set-Cookie");
+  return (headers.get("set-cookie") ?? "").split(/,\s*(?=[^=;,\s]+=)/).filter(Boolean);
+}
+function createContext(meta, dependencies, signal) {
+  const store = /* @__PURE__ */ new Map();
+  const jar = /* @__PURE__ */ new Map();
+  const requests = /* @__PURE__ */ new Map();
+  let count = 0;
+  let totalBytes = 0;
+  const config = meta.config ?? {};
+  const networkFetch = fetch;
+  async function request(input, options = {}, hops = 0) {
+    if (signal.aborted) throw new Error("Seanime: tiempo agotado");
+    const url = publicUrl(input);
+    const headers = new Headers(options.headers);
+    if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
+    const cookies = jar.get(url.hostname);
+    const headerCookies = [...cookies ?? []].filter(([, cookie]) => url.pathname.startsWith(cookie.path) && (!cookie.secure || url.protocol === "https:")).map(([name, cookie]) => `${name}=${cookie.value}`).join("; ");
+    if (headerCookies && !headers.has("cookie")) headers.set("cookie", headerCookies);
+    if (++count > MAX_REQUESTS) throw new Error("Seanime: presupuesto de peticiones agotado");
+    const response = await networkFetch(url.href, { ...options, headers, redirect: "manual", signal });
+    for (const raw of cookieValues(response.headers)) {
+      const [pair, ...attributes] = raw.split(";");
+      const equals = pair.indexOf("=");
+      if (equals < 1) continue;
+      const name = pair.slice(0, equals).trim();
+      const domain = attributes.find((value) => /^\s*domain=/i.test(value))?.split("=")[1]?.trim().replace(/^\./, "");
+      if (domain && domain.toLowerCase() !== url.hostname) continue;
+      const path = attributes.find((value) => /^\s*path=/i.test(value))?.trim().slice(5) || "/";
+      const hostCookies = cookies ?? jar.get(url.hostname) ?? /* @__PURE__ */ new Map();
+      hostCookies.set(name, { value: pair.slice(equals + 1).trim(), path, secure: attributes.some((value) => /^\s*secure\s*$/i.test(value)) });
+      jar.set(url.hostname, hostCookies);
+    }
+    const location = response.headers.get("location");
+    if (location && [301, 302, 303, 307, 308].includes(response.status) && options.redirect !== "manual") {
+      await response.body?.cancel();
+      if (hops >= 4) throw new Error("Seanime: demasiadas redirecciones");
+      const next = publicUrl(new URL(location, url));
+      if (next.origin !== url.origin) {
+        headers.delete("cookie");
+        headers.delete("authorization");
+      }
+      const get = response.status === 303 || [301, 302].includes(response.status) && options.method === "POST";
+      return request(next.href, { ...options, headers, ...get ? { method: "GET", body: void 0 } : {} }, hops + 1);
+    }
+    const bytes = await readBytes(response, (size) => {
+      totalBytes += size;
+      if (totalBytes > 16 * 1024 * 1024) throw new Error("Seanime: presupuesto de datos agotado");
+    });
+    const torrentData = /application\/x-bittorrent/i.test(response.headers.get("content-type") ?? "") || /\.torrent(?:$|\?)/i.test(url.href);
+    let text = "";
+    if (torrentData) {
+      for (let offset = 0; offset < bytes.length; offset += 8192) text += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    } else text = new TextDecoder().decode(bytes);
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url || url.href,
+      redirected: hops > 0,
+      headers: response.headers,
+      cookies: Object.fromEntries([...jar.get(url.hostname) ?? []].map(([name, cookie]) => [name, cookie.value])),
+      contentType: response.headers.get("content-type") ?? "",
+      contentLength: bytes.length,
+      text: () => text,
+      json: () => JSON.parse(text),
+      arrayBuffer: () => bytes.slice().buffer
+    };
+  }
+  const compatFetch = (input, options = {}) => {
+    const url = publicUrl(input).href;
+    const key = JSON.stringify([url, options.method ?? "GET", options.body ?? null, [...new Headers(options.headers)].sort()]);
+    let pending = requests.get(key);
+    if (!pending) {
+      pending = request(url, options);
+      requests.set(key, pending);
+    }
+    return pending;
+  };
+  return {
+    fetch: compatFetch,
+    CryptoJS: dependencies.CryptoJS,
+    $store: { get: (key) => store.get(key), set: (key, value) => store.set(key, value), has: (key) => store.has(key), remove: (key) => store.delete(key) },
+    $getUserPreference: (key) => config[key],
+    $toString: (value) => typeof value === "string" ? value : value instanceof Uint8Array || value instanceof ArrayBuffer ? new TextDecoder().decode(value) : JSON.stringify(value),
+    $toBytes: (value) => value instanceof Uint8Array ? value : new TextEncoder().encode(String(value)),
+    $isOffline: () => false,
+    $sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(Number(ms) || 0, 100))),
+    ...dependencies.compat
+  };
+}
+
+// src/seanime/policy.ts
+var HARD_SUB = /\b(?:hard[ ._-]*sub(?:bed|s)?|burn(?:ed|t)[ ._-]*in|hardsubbed)\b/i;
+var FOREIGN_DUB = /\b(?:dub(?:bed|s)?|dual[ ._-]*audio|multi[ ._-]*audio|english[ ._-]*audio|german[ ._-]*audio|french[ ._-]*audio)\b/i;
+var RAW_OR_SOFT = /\b(?:raws?|soft[ ._-]*sub(?:bed|s)?|unsubbed|no[ ._-]*subs?)\b/i;
+var KNOWN_SOFT_RELEASE = /^\s*\[(?:SubsPlease|Erai-raws|Ohys-Raws|Leopard-Raws)\]/i;
+function allowsAdditionalTorrent(torrent, rawCategory = false) {
+  const name = String(torrent.name ?? "");
+  if (HARD_SUB.test(name) || torrent.hardsub === true || FOREIGN_DUB.test(name)) return false;
+  const audio = String(torrent.audio_lang ?? torrent.audioLanguage ?? "").toLowerCase();
+  if (audio && !/^(ja|jpn|japanese|es(?:-[a-z0-9]+)?|spa|spanish)$/.test(audio)) return false;
+  return rawCategory || torrent.hardsub === false && Boolean(audio) || RAW_OR_SOFT.test(name) || KNOWN_SOFT_RELEASE.test(name);
+}
+function allowsAdditionalVideo(source, server, trustedSoft = false) {
+  const label = [server, source.label, source.quality, source.subType].filter(Boolean).join(" ");
+  if (HARD_SUB.test(label) || /\b(?:dub|english|hindi|tamil|telugu|german|french|portuguese|italian|korean|russian|arabic)\b/i.test(label)) return false;
+  return /\b(?:soft(?:[ ._-]*sub)?|raw)\b/i.test(label) || trustedSoft && Array.isArray(source.subtitles) && source.subtitles.length > 0;
+}
+
+// src/seanime/adapter.ts
+function normalizeTitle(value) {
+  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\b(?:audio\s+)?(?:latino|castellano|japones|subtitulado)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+}
+function seasonNumber(title) {
+  const numeric = title.match(/(\d+)\s*(?:st|nd|rd|th|ª)?\s*(?:season|temporada|cour)|\b(?:season|temporada|cour|s)\s*(\d+)/i);
+  if (numeric) return Number(numeric[1] ?? numeric[2]);
+  const roman = title.match(/(?:^|\s)(iv|v|iii|ii|i)(?:\s*:|$)/i);
+  if (roman) return { i: 1, ii: 2, iii: 3, iv: 4, v: 5 }[roman[1].toLowerCase()];
+  const trailing = title.match(/\b(\d{1,2})\s*$/);
+  return trailing && Number(trailing[1]) <= 50 && !/\b(?:part|parte|movie|film)\s+\d+\s*$/i.test(title) ? Number(trailing[1]) : null;
+}
+function rankSearchResults(results, title, season, mediaType) {
+  const wanted = normalizeTitle(title);
+  const movie = /\b(movie|film|pelicula|ova|special|especial)\b/i;
+  return (Array.isArray(results) ? results : []).filter((result) => result && typeof result.id === "string").map((result, index) => {
+    const name = String(result.title ?? result.Title ?? "");
+    const normalized = normalizeTitle(name);
+    const parsedSeason = seasonNumber(name);
+    if (mediaType !== "movie" && parsedSeason !== null && parsedSeason !== season) return null;
+    let score = Math.max(0, 100 - index);
+    if (normalized === wanted) score += 1e3;
+    else if (normalized.startsWith(wanted)) score += 500;
+    else if (normalized.includes(wanted) || wanted.includes(normalized) && normalized) score += 300;
+    if (mediaType !== "movie" && movie.test(name) && !movie.test(title)) score -= 2e3;
+    if (mediaType !== "movie" && parsedSeason === season) score += 2e3;
+    if (season === 1 && /(?:-hen|final season)\s*$/i.test(name)) score -= 2e3;
+    score -= normalized.length;
+    return { result: { ...result, title: name }, score };
+  }).filter((entry) => entry !== null).sort((a, b) => b.score - a.score).map((entry) => entry.result);
+}
+async function pool(items, concurrency, task) {
+  const results = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await task(items[index]);
+      } catch {
+      }
+    }
+  }));
+  return results.filter((value) => value !== void 0);
+}
+function audioMode(result, episode, requestedDub) {
+  try {
+    const parsed = JSON.parse(episode.id);
+    if (parsed.type === "sub" || parsed.type === "dub") return parsed.type;
+  } catch {
+  }
+  return result.subOrDub === "dub" || result.subOrDub === "both" && requestedDub ? "dub" : "sub";
+}
+function playbackHeaders(meta, headers) {
+  const merged = Object.fromEntries(Object.entries(headers).filter(([, value]) => typeof value === "string"));
+  if (meta.id === "animeav1") {
+    const referer = Object.entries(merged).find(([key]) => key.toLowerCase() === "referer")?.[1];
+    if (referer) {
+      merged.Origin = new URL(referer).origin;
+      merged["Sec-Fetch-Site"] = "same-origin";
+      merged["Sec-Fetch-Mode"] = "cors";
+      merged["Sec-Fetch-Dest"] = "empty";
+    }
+  }
+  return merged;
+}
+async function online(provider, meta, media, title, season, number, type) {
+  const settings = await provider.getSettings();
+  const strict = meta.policy === "original-soft";
+  const modes = settings.supportsDub && !strict ? [false, true] : [false];
+  const variants = await pool(modes, 2, async (dub) => {
+    const results = await provider.search({ query: title, dub, ...meta.id === "animeav1" ? {} : { media } });
+    const ranked = rankSearchResults(results, title, season, type);
+    const result = ranked.find((item) => dub ? item.subOrDub === "dub" || item.subOrDub === "both" : item.subOrDub !== "dub");
+    if (!result || !provider.findEpisodes || !provider.findEpisodeServer) return [];
+    const episodes = await provider.findEpisodes(result.id);
+    const episode = episodes.find((item) => Number(item.number) === number);
+    if (!episode) return [];
+    const mode = audioMode(result, episode, dub);
+    if (strict && mode === "dub") return [];
+    const servers = Array.isArray(settings.episodeServers) && settings.episodeServers.length ? settings.episodeServers : ["default"];
+    const selected = servers.filter((server) => !strict || !/\b(?:dub|hard|english|hindi|tamil|telugu|german|french)\b/i.test(server)).slice(0, 8);
+    const found = await pool(selected, 3, (server) => provider.findEpisodeServer(episode, server));
+    return found.flatMap((server) => (server.videoSources ?? []).flatMap((source) => {
+      if (typeof source.url !== "string" || !["mp4", "m3u8", "hls", "mpd", "mkv"].includes(String(source.type).toLowerCase())) return [];
+      try {
+        publicUrl(source.url);
+      } catch {
+        return [];
+      }
+      if (strict && !allowsAdditionalVideo(source, server.server, meta.trustedSoft)) return [];
+      const headers = playbackHeaders(meta, { ...server.headers, ...source.headers });
+      return [{
+        name: meta.name,
+        sourceName: meta.name,
+        title: [server.server, source.quality, mode === "dub" ? "Audio Espa\xF1ol" : strict ? "Audio Japon\xE9s \xB7 subt\xEDtulos opcionales" : "Sub: Espa\xF1ol"].filter(Boolean).join(" \xB7 "),
+        url: source.url,
+        type: "direct",
+        quality: source.quality,
+        headers,
+        languages: [mode === "dub" ? "es" : "ja"],
+        subtitles: Array.isArray(source.subtitles) ? source.subtitles.filter((subtitle) => typeof subtitle?.url === "string" && /^https?:\/\//i.test(subtitle.url)) : [],
+        behaviorHints: { providerName: meta.name, providerId: meta.id, mediaExtensionManifest: meta.manifestURI, scraperResolvedDirect: true, headers }
+      }];
+    }));
+  });
+  return variants.flat();
+}
+function torrentHash(value) {
+  const input = String(value ?? "").trim();
+  if (/^[a-f\d]{40}$/i.test(input)) return input.toLowerCase();
+  const hash = input.match(/[?&]xt=urn(?::|%3A)btih(?::|%3A)([a-z0-9]{32,40})(?:&|$)/i)?.[1] ?? input;
+  if (/^[a-f\d]{40}$/i.test(hash)) return hash.toLowerCase();
+  if (!/^[a-z2-7]{32}$/i.test(hash)) return null;
+  let bits = 0, accumulator = 0, hex = "";
+  for (const character of hash.toUpperCase()) {
+    accumulator = accumulator << 5 | "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(character);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      hex += (accumulator >>> bits & 255).toString(16).padStart(2, "0");
+    }
+  }
+  return hex;
+}
+async function torrents(provider, meta, media, title, episode, type) {
+  const settings = await provider.getSettings();
+  const options = { media, query: title, batch: false, episodeNumber: episode, resolution: "", anidbAID: 0, anidbEID: 0, bestReleases: true };
+  const raw = settings.canSmartSearch && provider.smartSearch ? await provider.smartSearch(options) : await provider.search(options);
+  const candidates = (Array.isArray(raw) ? raw : []).filter((torrent) => {
+    if (!torrent || !allowsAdditionalTorrent(torrent, meta.rawCategory)) return false;
+    if (type === "movie") return true;
+    const name = String(torrent.name ?? "");
+    const parsed = name.match(/\bS\d{1,2}E(\d{1,4})\b/i)?.[1] ?? name.match(/(?:\s-\s|\bEP?\s*)(\d{1,4})\b/i)?.[1];
+    const number = Number(torrent.episodeNumber) > 0 ? Number(torrent.episodeNumber) : Number(parsed);
+    return !torrent.isBatch && number === episode;
+  }).slice(0, 12);
+  return (await pool(candidates, 3, async (torrent) => {
+    let magnet = String(torrent.magnetLink ?? "");
+    let infoHash = torrentHash(torrent.infoHash) ?? torrentHash(magnet);
+    if (!infoHash && provider.getTorrentInfoHash) infoHash = torrentHash(await provider.getTorrentInfoHash(torrent));
+    if (!infoHash && provider.getTorrentMagnetLink) {
+      magnet = await provider.getTorrentMagnetLink(torrent);
+      infoHash = torrentHash(magnet);
+    }
+    if (!infoHash) return null;
+    return {
+      name: meta.name,
+      title: String(torrent.name),
+      infoHash,
+      seeders: Number.isFinite(Number(torrent.seeders)) && Number(torrent.seeders) >= 0 ? Number(torrent.seeders) : void 0,
+      size: Number(torrent.size) > 0 ? Number(torrent.size) : void 0,
+      languages: ["ja"],
+      sources: torrentHash(magnet) ? [magnet] : void 0,
+      behaviorHints: { providerId: meta.id, providerName: meta.name, filename: String(torrent.name), subtitlePolicy: "raw-or-soft", mediaExtensionManifest: meta.manifestURI }
+    };
+  })).filter((stream) => stream !== null);
+}
+async function animeMedia(context, meta, title, type, season) {
+  const media = { id: 0, romajiTitle: title, englishTitle: title, synonyms: [], isAdult: false, format: type === "movie" ? "MOVIE" : "TV", episodeCount: 0, absoluteSeasonOffset: 0, season };
+  if (!meta.needsAnimeId) return media;
+  const response = await context.fetch("https://graphql.anilist.co", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+    query: "query($search:String){Page(perPage:8){media(search:$search,type:ANIME,isAdult:false){id idMal title{romaji english} synonyms format episodes startDate{year}}}}",
+    variables: { search: title }
+  }) });
+  if (!response.ok) return media;
+  const found = response.json()?.data?.Page?.media ?? [];
+  const ranked = rankSearchResults(found.map((item) => ({ ...item, id: String(item.id), title: item.title?.romaji ?? item.title?.english })), title, season, type);
+  const match = found.find((item) => String(item.id) === ranked[0]?.id);
+  return match ? { ...media, id: match.id, idMal: match.idMal, romajiTitle: match.title.romaji || title, englishTitle: match.title.english || title, synonyms: match.synonyms ?? [], episodeCount: match.episodes ?? 0, format: match.format, startDate: match.startDate } : media;
+}
+function createSeanimeAdapter(factory, meta, dependencies = {}) {
+  return {
+    async getStreams(first, ...rest) {
+      const args = Array.isArray(first) ? first : [first, ...rest];
+      const [, inputType, rawSeason, rawEpisode, rawTitle] = args;
+      const type = inputType === "series" || inputType === "anime" ? "tv" : inputType;
+      const title = typeof rawTitle === "string" ? rawTitle.trim().slice(0, 300) : "";
+      const season = Number(rawSeason ?? 1);
+      const episode = type === "movie" ? 1 : Number(rawEpisode ?? 1);
+      if (!title || !["movie", "tv"].includes(String(type)) || !Number.isInteger(episode) || episode < 1 || !Number.isInteger(season) || season < 1) return [];
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12e3);
+      try {
+        const context = createContext(meta, dependencies, controller.signal);
+        const provider = factory(context);
+        const media = await animeMedia(context, meta, title, String(type), season);
+        if (meta.needsAnimeId && !media.id) return [];
+        const streams = meta.type === "anime-torrent-provider" ? await torrents(provider, meta, media, title, episode, String(type)) : await online(provider, meta, media, title, season, episode, String(type));
+        const seen = /* @__PURE__ */ new Set();
+        return streams.filter((stream) => {
+          const key = String(stream.url ?? stream.infoHash);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 12);
+      } finally {
+        controller.abort();
+        clearTimeout(timeout);
+      }
+    }
+  };
+}
+
+// src/seanime/compat.ts
+function createCompatibility(cheerio, CryptoJS) {
+  function wrap($, selection) {
+    const value = { __selection: selection };
+    const length = () => selection.length;
+    length.valueOf = () => selection.length;
+    length.toString = () => String(selection.length);
+    length[Symbol.toPrimitive] = () => selection.length;
+    value.length = length;
+    value.html = () => selection.html();
+    value.text = () => selection.text();
+    value.attr = (name) => selection.attr(name);
+    value.attrs = () => selection.get(0)?.attribs ?? {};
+    value.data = (name) => name == null ? selection.data() : selection.attr("data-" + name);
+    for (const method of ["find", "children", "parent", "parents", "closest", "first", "last", "eq", "contents", "filter", "not", "has", "next", "nextAll", "prev", "prevAll", "siblings", "end", "parentsUntil", "nextUntil", "prevUntil"]) {
+      value[method] = (...args) => wrap($, selection[method](...args));
+    }
+    value.is = (selector) => selection.is(selector);
+    value.each = (callback) => {
+      selection.each((index, element) => callback(index, wrap($, $(element))));
+      return value;
+    };
+    value.map = (callback) => selection.map((index, element) => callback(index, wrap($, $(element)))).get();
+    return value;
+  }
+  function LoadDoc(html) {
+    const $ = cheerio.load(String(html ?? ""));
+    return (selector) => wrap($, selector?.__selection ?? $(String(selector ?? "")));
+  }
+  const clean = (value) => String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[()[\]{}|"'~*?\\^!]/g, " ").replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+  const season = (value) => Number(String(value).match(/(?:\bseason\s*|\bs)(\d{1,2})(?=\b|e\d)/i)?.[1] ?? String(value).match(/\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/i)?.[1] ?? -1);
+  const part = (value) => Number(String(value).match(/\b(?:part|cour)\s*(\d{1,2})\b/i)?.[1] ?? -1);
+  const base = (value) => clean(value).replace(/\b(?:s\d{1,2}e\d{1,4}|season\s*\d+|s\d{1,2}|\d+(?:st|nd|rd|th)\s+season|(?:part|cour)\s*\d+)\b/gi, " ").replace(/\b(?:1080p|720p|480p|2160p|bluray|blu-ray|webrip|web-dl|hdtv|x264|x265|hevc|aac|flac)\b/gi, " ").replace(/\s+/g, " ").trim();
+  const compareTitles = (left, right) => {
+    const a = new Set(base(left).toLowerCase().split(/\s+/).filter(Boolean));
+    const b = new Set(base(right).toLowerCase().split(/\s+/).filter(Boolean));
+    return a.size && b.size ? 2 * [...a].filter((word) => b.has(word)).length / (a.size + b.size) : 0;
+  };
+  const scanner = {
+    normalizeTitle(value) {
+      const original = String(value ?? "");
+      const cleanBaseTitle = base(original);
+      return {
+        original,
+        normalized: clean(original).toLowerCase(),
+        cleanBaseTitle,
+        denoisedTitle: cleanBaseTitle,
+        tokens: cleanBaseTitle.toLowerCase().split(/\s+/).filter(Boolean),
+        season: season(original),
+        part: part(original),
+        year: Number(original.match(/\b(?:19|20)\d{2}\b/)?.[0] ?? -1),
+        isMain: true
+      };
+    },
+    extractSeasonNumber: season,
+    extractPartNumber: part,
+    extractYear: (value) => Number(String(value).match(/\b(?:19|20)\d{2}\b/)?.[0] ?? -1),
+    compareTitles,
+    getSignificantTokens: (value) => base(value).toLowerCase().split(/\s+/).filter(Boolean),
+    buildSearchQuery: base,
+    sanitizeQuery: clean,
+    findBestMatch: (target, candidates) => candidates.slice().sort((a, b) => compareTitles(target, b) - compareTitles(target, a))[0] ?? "",
+    buildAdvancedQuery: (titles) => "(" + [...new Set(titles.map(base).filter(Boolean))].join(" | ") + ")",
+    buildSeasonQuery: (title, n) => n <= 1 ? base(title) : `(${base(title)} S${String(n).padStart(2, "0")} | ${base(title)} S${n} | ${base(title)} Season ${n})`,
+    buildPartQuery: (title, n) => n <= 1 ? base(title) : `(${base(title)} Part ${n} | ${base(title)} Cour ${n})`,
+    buildSmartSearchTitles: (titles) => ({ titles: [...new Set(titles.map(base).filter(Boolean))], season: titles.map(season).find((n) => n > 0) ?? -1, part: titles.map(part).find((n) => n > 0) ?? -1 })
+  };
+  const habari = {
+    parse(value) {
+      const name = String(value ?? "");
+      const ep = name.match(/\bS\d{1,2}E(\d{1,4}(?:\.\d+)?)\b/i)?.[1] ?? name.match(/(?:\s-\s|\bEP?\s*)(\d{1,4}(?:\.\d+)?)\b/i)?.[1];
+      const title = base(name.replace(/^\s*\[[^\]]+\]\s*/, "").replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\bS\d{1,2}E\d{1,4}\b|\s-\s\d{1,4}\b/ig, " "));
+      return {
+        title,
+        formatted_title: title,
+        file_name: name,
+        file_extension: name.match(/\.([a-z0-9]{2,5})$/i)?.[1],
+        release_group: name.match(/^\s*\[([^\]]+)\]/)?.[1],
+        video_resolution: name.match(/\b(2160p|1080p|720p|576p|480p|360p)\b/i)?.[1],
+        episode_number: ep ? [ep] : [],
+        season_number: season(name) > 0 ? [String(season(name))] : [],
+        part_number: part(name) > 0 ? [String(part(name))] : [],
+        audio_term: /dual[ ._-]*audio|multi[ ._-]*audio/i.test(name) ? ["Dual Audio"] : [],
+        language: [],
+        subtitles: []
+      };
+    }
+  };
+  function torrentMagnet(data) {
+    let position = 0;
+    let start = -1;
+    let end = -1;
+    function parse(depth) {
+      if (depth > 64 || position >= data.length) throw new Error("Torrent bencode inv\xE1lido");
+      const kind = data[position];
+      if (/\d/.test(kind)) {
+        const colon = data.indexOf(":", position);
+        if (colon < 0 || colon - position > 9) throw new Error("Torrent bencode inv\xE1lido");
+        const length = Number(data.slice(position, colon));
+        position = colon + 1;
+        const value = data.slice(position, position + length);
+        position += length;
+        if (position > data.length) throw new Error("Torrent bencode incompleto");
+        return value;
+      }
+      position++;
+      if (kind === "i") {
+        const next = data.indexOf("e", position);
+        if (next < 0) throw new Error("Torrent bencode inv\xE1lido");
+        position = next + 1;
+      } else if (kind === "l" || kind === "d") {
+        while (data[position] !== "e") {
+          const key = kind === "d" ? parse(depth + 1) : void 0;
+          const before = position;
+          parse(depth + 1);
+          if (depth === 0 && key === "info") {
+            start = before;
+            end = position;
+          }
+        }
+        position++;
+      } else throw new Error("Torrent bencode inv\xE1lido");
+      return void 0;
+    }
+    parse(0);
+    if (start < 0 || end <= start) return "";
+    return "magnet:?xt=urn:btih:" + CryptoJS.SHA1(CryptoJS.enc.Latin1.parse(data.slice(start, end))).toString();
+  }
+  return {
+    LoadDoc,
+    load: LoadDoc,
+    Doc: function(html) {
+      return LoadDoc(html)("html");
+    },
+    $scannerUtils: scanner,
+    $habari: habari,
+    $torrentUtils: { getMagnetLinkFromTorrentData: torrentMagnet }
+  };
+}
+
+// seanime-provider.ts
+var Crypto = require("crypto-js");
+var dom = require("cheerio");
+module.exports = createSeanimeAdapter((context) => {
+  const {
+    fetch: fetch2,
+    CryptoJS,
+    $store,
+    $scannerUtils,
+    $habari,
+    $torrentUtils,
+    $getUserPreference,
+    $toString,
+    $toBytes,
+    $isOffline,
+    $sleep,
+    LoadDoc,
+    Doc,
+    load
+  } = context;
+  const PROVIDER_CONFIG = {
+    API_BASE_URL: "https://darkmahou.io",
+    USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    MAX_EP_IDX: 9999,
+    MIN_EP_IDX: 1,
+    MAX_YEAR: 2e3,
+    COMMON_RES: [480, 720, 1080],
+    MAX_BATCH_EPS: 999
+  };
+  const REGEX_PATTERNS = {
+    INFO_HASH: /btih:([a-fA-F0-9]{40})/i,
+    MAGNET_LINK: /magnet:\?[^"'\s<>]+/gi,
+    RESOLUTION: /\b(\d{3,4}p)\b/i,
+    RELEASE_GROUP: /^\[([^\]]+)\]/,
+    EP_RANGE: /\b(\d{2,3})\s*[-~]\s*(\d{2,3})\b/,
+    SEASON_EP: /S(\d+)E(\d+)/i,
+    EP_DASH: /\s-\s(\d{1,4})\s/,
+    EP_IDX_RGX: /\b(\d{1,4})\b/g,
+    EP_PATTERNS: {
+      PORTUGUESE: /episódio\s+(\d+)/i,
+      ENGLISH: /(?:ep|episode)\s*(\d+)/i
+    },
+    SEASON_ORDINAL: /\b(\d+)(?:st|nd|rd|th)\s+season\b/gi,
+    SEASON_IDX_RGX: /\bseason\s+(\d+)\b/gi,
+    PAGE_LINK_RGX: new RegExp('<a[^>]+href="(https:\\/\\/darkmahou\\.io\\/[^\\/]+\\/)"(?:[^>]*title="([^"]*)")?[^>]*>', "gi")
+  };
+  const PT_BR_TRANS = {
+    ORDINAL_IDXS: {
+      "first": "1\xAA",
+      "second": "2\xAA",
+      "third": "3\xAA",
+      "fourth": "4\xAA",
+      "fifth": "5\xAA"
+    },
+    TERMS: {
+      "movie": "filme",
+      "ova": "ova",
+      "special": "especial"
+    }
+  };
+  const EXCLUDED_URLS = [
+    "/?s=",
+    "/tag/",
+    "/blog/",
+    "/contato",
+    "/az-lists",
+    "/em-breve",
+    "/animes-populares",
+    "/categoria",
+    "/genero",
+    "/lord-of-mysteries/",
+    "/yofukashi-no-uta",
+    "/zutaboro-reijou",
+    "/watari-kun",
+    "/silent-witch",
+    "/tougen-anki",
+    "/arknights"
+  ];
+  const PERF_CONFIG = {
+    CACHE_TTL: 5 * 60 * 1e3,
+    MAX_CACHE_SIZE: 100,
+    EARLY_EXIT: 95,
+    MAX_FUZZY_CANDS: 500,
+    MIN_LABEL_LEN: 2
+  };
+  const FUZZY_CONFIG = {
+    maxDist: 5,
+    minSim: 0.6,
+    strats: ["exact", "fuzzy", "normalized", "phonetic"],
+    weights: {
+      exact: 100,
+      fuzzy: 80,
+      normalized: 70,
+      phonetic: 60
+    }
+  };
+  const CHAR_NORMS = {
+    "\xE1": "a",
+    "\xE0": "a",
+    "\xE2": "a",
+    "\xE3": "a",
+    "\xE4": "a",
+    "\xE9": "e",
+    "\xE8": "e",
+    "\xEA": "e",
+    "\xEB": "e",
+    "\xED": "i",
+    "\xEC": "i",
+    "\xEE": "i",
+    "\xEF": "i",
+    "\xF3": "o",
+    "\xF2": "o",
+    "\xF4": "o",
+    "\xF5": "o",
+    "\xF6": "o",
+    "\xFA": "u",
+    "\xF9": "u",
+    "\xFB": "u",
+    "\xFC": "u",
+    "\xE7": "c",
+    "\xF1": "n",
+    "\u014D": "o",
+    "\u016B": "u",
+    "\u0101": "a",
+    "\u0113": "e",
+    "\u012B": "i",
+    "\u3000": " ",
+    "	": " ",
+    "\n": " ",
+    "\r": " "
+  };
+  const ANIME_LABEL_VARS = {
+    patterns: [
+      { from: /mahou\s+tsukai/gi, to: "mahoutsukai" },
+      { from: /maho\s+tsukai/gi, to: "mahotsukai" },
+      { from: /seirei\s+tsukai/gi, to: "seireitsukai" },
+      { from: /ken\s+shi/gi, to: "kenshi" },
+      { from: /yuu\s+sha/gi, to: "yuusha" },
+      { from: /ou/g, to: "o" },
+      { from: /uu/g, to: "u" },
+      { from: /ei/g, to: "e" },
+      { from: /season\s*(\d+)/gi, to: "S$1" },
+      { from: /episod[ei]o?\s*(\d+)/gi, to: "E$1" }
+    ]
+  };
+  const isValidMag = (link) => link.startsWith("magnet:?") && link.length > 20;
+  const isValidHash = (hash) => /^[a-fA-F0-9]{40}$/.test(hash);
+  const isValidEpIdx = (idx) => idx >= PROVIDER_CONFIG.MIN_EP_IDX && idx <= PROVIDER_CONFIG.MAX_EP_IDX;
+  class PortugueseTranslator {
+    static RULES = {
+      seasonOrdinal: (q) => q.replace(REGEX_PATTERNS.SEASON_ORDINAL, (_, idx) => `${idx}\xAA temporada`),
+      seasonIdx: (q) => q.replace(REGEX_PATTERNS.SEASON_IDX_RGX, "$1\xAA temporada"),
+      ordinalIdxs: (q) => {
+        let res = q;
+        const entries = Object.entries(PT_BR_TRANS.ORDINAL_IDXS);
+        for (let i = 0; i < entries.length; i++) {
+          const [eng, pt] = entries[i];
+          const rgx = new RegExp(`\\b${eng}\\s+season\\b`, "gi");
+          res = res.replace(rgx, `${pt} temporada`);
+        }
+        return res;
+      },
+      commonTerms: (q) => {
+        let res = q;
+        const entries = Object.entries(PT_BR_TRANS.TERMS);
+        for (let i = 0; i < entries.length; i++) {
+          const [eng, pt] = entries[i];
+          const rgx = new RegExp(`\\b${eng}\\b`, "gi");
+          res = res.replace(rgx, pt);
+        }
+        return res;
+      },
+      partIdxs: (q) => q.replace(/\bpart\s+(\d+)\b/gi, "parte $1"),
+      normalize: (q) => q.replace(/\s+/g, " ").trim()
+    };
+    static convertQuery(q) {
+      const rules = Object.values(this.RULES);
+      let res = q;
+      for (let i = 0; i < rules.length; i++) {
+        res = rules[i](res);
+      }
+      return res;
+    }
+    parse(input) {
+      return PortugueseTranslator.convertQuery(input);
+    }
+  }
+  class TorrentParser {
+    static extractInfoHash(mag) {
+      if (!isValidMag(mag)) {
+        return "";
+      }
+      const match = mag.match(REGEX_PATTERNS.INFO_HASH);
+      const hash = match?.[1];
+      return hash && isValidHash(hash) ? hash : "";
+    }
+    static parseRes(name) {
+      const match = name.match(REGEX_PATTERNS.RESOLUTION);
+      const res = match?.[1];
+      const validRes = ["480p", "720p", "1080p", "1440p", "4K"];
+      return validRes.indexOf(res) !== -1 ? res : "";
+    }
+    static extractReleaseGroup(name) {
+      const match = name.match(REGEX_PATTERNS.RELEASE_GROUP);
+      return match?.[1] ?? "";
+    }
+    static checkIsBatch(name, epLabel) {
+      const lName = name.toLowerCase();
+      const lLabel = epLabel.toLowerCase();
+      if (lName.indexOf("batch") !== -1 || lName.indexOf("complete") !== -1 || lLabel.indexOf("~") !== -1) {
+        return true;
+      }
+      const rangeMatch = name.match(REGEX_PATTERNS.EP_RANGE);
+      if (rangeMatch) {
+        const start = parseInt(rangeMatch[1]);
+        const end = parseInt(rangeMatch[2]);
+        if (end > start && start >= PROVIDER_CONFIG.MIN_EP_IDX && end <= PROVIDER_CONFIG.MAX_BATCH_EPS) {
+          return true;
+        }
+      }
+      if (lName.match(/\bs\d+\b/) && !lName.match(/\bs\d+e\d+\b/)) {
+        return true;
+      }
+      if (name.match(/\s-\s\d{1,3}(\s|$)/)) {
+        return false;
+      }
+      return false;
+    }
+    static getEpIdx(name, epLabel) {
+      if (TorrentParser.checkIsBatch(name, epLabel)) {
+        return -1;
+      }
+      const res1 = TorrentParser.tryPattern(epLabel, REGEX_PATTERNS.EP_PATTERNS.PORTUGUESE);
+      if (res1 !== null) return res1;
+      const res2 = TorrentParser.tryPattern(name, REGEX_PATTERNS.EP_DASH);
+      if (res2 !== null) return res2;
+      const res3 = TorrentParser.trySeasonEp(name);
+      if (res3 !== null) return res3;
+      const res4 = TorrentParser.tryPattern(name, REGEX_PATTERNS.EP_PATTERNS.ENGLISH);
+      if (res4 !== null) return res4;
+      const res5 = TorrentParser.tryIsolatedIdxs(name);
+      if (res5 !== null) return res5;
+      return -1;
+    }
+    static tryPattern(text, pat) {
+      const match = text.match(pat);
+      if (match) {
+        const idx = parseInt(match[1]);
+        return isValidEpIdx(idx) ? idx : null;
+      }
+      return null;
+    }
+    static trySeasonEp(name) {
+      const match = name.match(REGEX_PATTERNS.SEASON_EP);
+      if (match) {
+        const epIdx = parseInt(match[2]);
+        return isValidEpIdx(epIdx) ? epIdx : null;
+      }
+      return null;
+    }
+    static tryIsolatedIdxs(name) {
+      const matches = name.match(REGEX_PATTERNS.EP_IDX_RGX);
+      if (matches) {
+        for (let i = 0; i < matches.length; i++) {
+          const s = matches[i];
+          const idx = parseInt(s);
+          if (TorrentParser.isValidForIsolation(idx)) {
+            return idx;
+          }
+        }
+      }
+      return null;
+    }
+    static isValidForIsolation(idx) {
+      return isValidEpIdx(idx) && PROVIDER_CONFIG.COMMON_RES.indexOf(idx) === -1 && idx < PROVIDER_CONFIG.MAX_YEAR;
+    }
+  }
+  class PerformanceCache {
+    static _cache = /* @__PURE__ */ new Map();
+    static _metrics = {
+      searchTime: 0,
+      parseTime: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      fuzzyCount: 0
+    };
+    static get(k) {
+      const ck = this.createKey(k);
+      const entry = this._cache.get(ck);
+      if (!entry) {
+        this._metrics.cacheMisses++;
+        return null;
+      }
+      const now = Date.now();
+      if (now - entry.timestamp > PERF_CONFIG.CACHE_TTL) {
+        this._cache.delete(ck);
+        this._metrics.cacheMisses++;
+        return null;
+      }
+      this._metrics.cacheHits++;
+      return entry.data;
+    }
+    static set(k, data) {
+      if (this._cache.size >= PERF_CONFIG.MAX_CACHE_SIZE) {
+        const fk = this._cache.keys().next().value;
+        if (fk) this._cache.delete(fk);
+      }
+      const ck = this.createKey(k);
+      const entry = {
+        data,
+        timestamp: Date.now(),
+        key: ck
+      };
+      this._cache.set(ck, entry);
+    }
+    static createKey(k) {
+      return k.toLowerCase().replace(/\s+/g, "_");
+    }
+    static getMetrics() {
+      return { ...this._metrics };
+    }
+    static incFuzzy() {
+      this._metrics.fuzzyCount++;
+    }
+    static recSearch(t) {
+      this._metrics.searchTime += t;
+    }
+    static recParse(t) {
+      this._metrics.parseTime += t;
+    }
+  }
+  class PageLinkFinder {
+    static _fm = null;
+    static get fm() {
+      if (!this._fm) {
+        this._fm = new FuzzyMatcher();
+      }
+      return this._fm;
+    }
+    static extractPageURL(html, q) {
+      try {
+        const ck = "page_extract_" + q;
+        const cached = PerformanceCache.get(ck);
+        if (cached) {
+          console.log("Cache hit for page extraction: " + q);
+          return cached;
+        }
+        const pot = [];
+        let m;
+        const rgx = new RegExp(REGEX_PATTERNS.PAGE_LINK_RGX.source, "gi");
+        let count = 0;
+        while ((m = rgx.exec(html)) !== null) {
+          const url = m[1];
+          let matchLabel = m[2] || "";
+          if (!matchLabel) {
+            matchLabel = PageLinkFinder.extractSlug(url);
+          }
+          if (PageLinkFinder.skipURL(url) || matchLabel.length < PERF_CONFIG.MIN_LABEL_LEN) {
+            continue;
+          }
+          const res = PageLinkFinder.calcScore(q, matchLabel, url);
+          if (res.score > 0) {
+            pot.push(res);
+            if (res.score >= PERF_CONFIG.EARLY_EXIT) {
+              const final2 = res.url;
+              PerformanceCache.set(ck, final2);
+              return final2;
+            }
+          }
+          count++;
+          if (count >= PERF_CONFIG.MAX_FUZZY_CANDS * 2) {
+            console.log("Limiting fuzzy matching candidates for performance");
+            break;
+          }
+        }
+        const final = PageLinkFinder.best(pot);
+        if (final) {
+          PerformanceCache.set(ck, final);
+        }
+        return final;
+      } catch (err) {
+        console.log("Error extracting anime page URL: " + err.message);
+        return "";
+      }
+    }
+    static skipURL(url) {
+      const lUrl = url.toLowerCase();
+      for (let i = 0; i < EXCLUDED_URLS.length; i++) {
+        if (lUrl.indexOf(EXCLUDED_URLS[i]) !== -1) return true;
+      }
+      return lUrl.indexOf("/page/") !== -1 || lUrl.indexOf("/search/") !== -1 || lUrl.indexOf("/category/") !== -1 || lUrl.indexOf("/?") !== -1 || lUrl.endsWith(".jpg") || lUrl.endsWith(".png") || lUrl.endsWith(".css") || lUrl.endsWith(".js");
+    }
+    static calcScore(q, matchLabel, url) {
+      PerformanceCache.incFuzzy();
+      const qL = q.toLowerCase();
+      const lL = matchLabel.toLowerCase();
+      if (qL === lL) {
+        return {
+          url,
+          matchLabel,
+          score: 100,
+          strat: "exact",
+          normLabel: lL
+        };
+      }
+      if (lL.indexOf(qL) !== -1) {
+        return {
+          url,
+          matchLabel,
+          score: 90,
+          strat: "exact",
+          normLabel: lL
+        };
+      }
+      const cScore = this.calcCompound(q, matchLabel);
+      if (cScore >= 80) {
+        return {
+          url,
+          matchLabel,
+          score: cScore,
+          strat: "phonetic",
+          normLabel: lL
+        };
+      }
+      const slug = this.extractSlug(url);
+      if (slug.length > 3) {
+        const uScore = this.fm.match(q, slug);
+        if (uScore >= 75) {
+          return {
+            url,
+            matchLabel,
+            score: uScore,
+            strat: "normalized",
+            normLabel: lL
+          };
+        }
+      }
+      const nQ = this.fm.normalize(q);
+      const nL = this.fm.normalize(matchLabel);
+      const fScore = this.fm.match(nQ, nL);
+      const final = fScore >= 0 && fScore <= 100 ? fScore : 0;
+      return {
+        url,
+        matchLabel,
+        score: final,
+        strat: "fuzzy",
+        normLabel: nL.length > 0 ? nL : void 0
+      };
+    }
+    static extractSlug(url) {
+      const m = url.match(/\/([^\/]+)\/?$/);
+      if (m) {
+        return m[1].replace(/-/g, " ").replace(/_/g, " ").trim();
+      }
+      return "";
+    }
+    static calcCompound(q, matchLabel) {
+      const words = q.toLowerCase().split(/\s+/);
+      const lL = matchLabel.toLowerCase();
+      const joined = words.join("");
+      if (lL.indexOf(joined) !== -1) {
+        return 85;
+      }
+      const exL = lL.replace(/mahoutsukai/g, "mahou tsukai").replace(/seireitsukai/g, "seirei tsukai").replace(/kenshi/g, "ken shi").replace(/yuusha/g, "yuu sha");
+      if (exL.indexOf(q.toLowerCase()) !== -1) {
+        return 80;
+      }
+      let pMatch = 0;
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        if (lL.indexOf(w) !== -1 && w.length > 2) {
+          pMatch++;
+        }
+      }
+      if (pMatch > 0) {
+        return Math.min(70, pMatch * 25);
+      }
+      return 0;
+    }
+    static best(pot) {
+      if (pot.length === 0) {
+        console.log("No anime page found");
+        return "";
+      }
+      pot.sort((a, b) => {
+        if (a.score !== b.score) {
+          return b.score - a.score;
+        }
+        const order = {
+          "exact": 4,
+          "fuzzy": 3,
+          "normalized": 2,
+          "phonetic": 1
+        };
+        return (order[b.strat] || 0) - (order[a.strat] || 0);
+      });
+      const top = pot[0];
+      console.log("Best match: " + top.matchLabel + " - " + top.url + " (Score: " + top.score + ", Strat: " + top.strat + ")");
+      return top.url;
+    }
+  }
+  class HTTPClient {
+    static getHeader(res, key) {
+      if (!res || !res.headers) return "";
+      if (typeof res.headers.get === "function") return res.headers.get(key) || "";
+      const lKey = key.toLowerCase();
+      for (const k in res.headers) {
+        if (k.toLowerCase() === lKey) return res.headers[k];
+      }
+      return "";
+    }
+    static getAllCookies(res) {
+      if (!res || !res.headers) return "";
+      const cookiesMap = /* @__PURE__ */ new Map();
+      const process = (val) => {
+        const parts = val.split(/,(?=[^;]*=)/);
+        parts.forEach((p) => {
+          const cookiePart = p.split(";")[0].trim();
+          const eqIdx = cookiePart.indexOf("=");
+          if (eqIdx > 0) {
+            const name = cookiePart.substring(0, eqIdx);
+            const value = cookiePart.substring(eqIdx + 1);
+            cookiesMap.set(name, value);
+          }
+        });
+      };
+      if (typeof res.headers.forEach === "function") {
+        res.headers.forEach((value, key) => {
+          if (key.toLowerCase() === "set-cookie") {
+            process(value);
+          }
+        });
+      } else if (res.headers["set-cookie"]) {
+        const sc = res.headers["set-cookie"];
+        const scArr = Array.isArray(sc) ? sc : [String(sc)];
+        scArr.forEach(process);
+      }
+      const result = [];
+      cookiesMap.forEach((v, k) => result.push(`${k}=${v}`));
+      return result.join("; ");
+    }
+    static async fetchWithUA(url, parser, headers, redir) {
+      try {
+        const res = await fetch2(url, {
+          headers: {
+            "User-Agent": PROVIDER_CONFIG.USER_AGENT,
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            ...headers
+          },
+          redirect: redir || "follow"
+        });
+        if (!res.ok && res.status !== 301 && res.status !== 302) {
+          return {
+            success: false,
+            error: {
+              status: res.status,
+              message: "HTTP " + res.status + ": " + res.statusText
+            }
+          };
+        }
+        const data = parser ? await parser(res) : await res.text();
+        return { success: true, data, response: res };
+      } catch (err) {
+        return {
+          success: false,
+          error: {
+            status: 0,
+            message: err instanceof Error ? err.message : "Unknown error"
+          }
+        };
+      }
+    }
+    static async postForm(url, payload, headers, redir) {
+      try {
+        const fd = new URLSearchParams();
+        const entries = Object.entries(payload);
+        for (let i = 0; i < entries.length; i++) {
+          const [k, v] = entries[i];
+          fd.append(k, String(v));
+        }
+        const res = await fetch2(url, {
+          method: "POST",
+          headers: {
+            "User-Agent": PROVIDER_CONFIG.USER_AGENT,
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "*/*",
+            "Content-Type": "application/x-www-form-urlencoded",
+            ...headers
+          },
+          body: fd.toString(),
+          redirect: redir || "follow"
+        });
+        return { success: true, data: res };
+      } catch (err) {
+        return {
+          success: false,
+          error: {
+            status: 0,
+            message: err instanceof Error ? err.message : "Unknown error"
+          }
+        };
+      }
+    }
+  }
+  class StringNorm {
+    static normalize(input) {
+      let res = input.toLowerCase().trim();
+      const entries = Object.entries(CHAR_NORMS);
+      for (let i = 0; i < entries.length; i++) {
+        const [f, t] = entries[i];
+        res = res.replace(new RegExp(f, "g"), t);
+      }
+      for (let i = 0; i < ANIME_LABEL_VARS.patterns.length; i++) {
+        const v = ANIME_LABEL_VARS.patterns[i];
+        res = res.replace(v.from, v.to);
+      }
+      res = res.replace(/\s+/g, " ").trim();
+      return res;
+    }
+    static clean(input) {
+      return input.replace(/[\[\](){}]/g, "").replace(/[^\w\s\-]/g, "").replace(/\s+/g, " ").trim();
+    }
+  }
+  class DistCalc {
+    calculate(a, b) {
+      const matrix = [];
+      const aL = a.length;
+      const bL = b.length;
+      for (let i = 0; i <= bL; i++) {
+        matrix[i] = [i];
+      }
+      for (let j = 0; j <= aL; j++) {
+        matrix[0][j] = j;
+      }
+      for (let i = 1; i <= bL; i++) {
+        for (let j = 1; j <= aL; j++) {
+          if (b.charAt(i - 1) === a.charAt(j - 1)) {
+            matrix[i][j] = matrix[i - 1][j - 1];
+          } else {
+            matrix[i][j] = Math.min(
+              matrix[i - 1][j - 1] + 1,
+              matrix[i][j - 1] + 1,
+              matrix[i - 1][j] + 1
+            );
+          }
+        }
+      }
+      return matrix[bL][aL];
+    }
+    static similarity(a, b, d) {
+      const max = Math.max(a.length, b.length);
+      if (max === 0) return 1;
+      return Math.max(0, (max - d) / max);
+    }
+  }
+  class SoraBypass {
+    static AJAX_URL = "https://otakufilmes.org/wp-admin/admin-ajax.php";
+    static WAIT = 5e3;
+    static async bypass(sUrl, _ref) {
+      console.log("Attempting to bypass SoraLink protection for: " + sUrl);
+      try {
+        let currentUrl = sUrl;
+        const cookiesMap = /* @__PURE__ */ new Map();
+        let response;
+        let html = "";
+        const getCookieHeader = () => {
+          const parts = [];
+          cookiesMap.forEach((v, k) => parts.push(`${k}=${v}`));
+          return parts.join("; ");
+        };
+        const updateCookies = (res2) => {
+          const raw = HTTPClient.getAllCookies(res2);
+          if (!raw) return;
+          raw.split(";").forEach((c) => {
+            const eqIdx = c.indexOf("=");
+            if (eqIdx > 0) {
+              const name = c.substring(0, eqIdx).trim();
+              const val = c.substring(eqIdx + 1).trim();
+              if (name) {
+                cookiesMap.set(name, val);
+              }
+            }
+          });
+        };
+        for (let i = 0; i < 5; i++) {
+          const cookieHeader = getCookieHeader();
+          const pRes = await HTTPClient.fetchWithUA(
+            currentUrl,
+            void 0,
+            { "Referer": "https://darkmahou.io/", "Cookie": cookieHeader },
+            "manual"
+          );
+          if (!pRes.success) break;
+          response = pRes.response;
+          updateCookies(response);
+          if (response.status === 301 || response.status === 302) {
+            const loc = HTTPClient.getHeader(response, "Location");
+            if (loc) {
+              currentUrl = loc.startsWith("http") ? loc : new URL(loc, currentUrl).href;
+              continue;
+            }
+          }
+          html = await response.text();
+          break;
+        }
+        if (!html) {
+          console.log("Failed to fetch landing page content");
+          return "";
+        }
+        const dMatch = html.match(/(?:var|const|let)\s+(?:item|soralinklite)\s*=\s*({.*?})/s);
+        if (!dMatch || !dMatch[1]) {
+          console.log("Failed to extract var item from page");
+          return "";
+        }
+        const aMatch = html.match(/"soralink_z":"(.*?)"/s);
+        if (!aMatch || !aMatch[1]) {
+          console.log("Failed to extract soralink_z action");
+          return "";
+        }
+        let dJson;
+        try {
+          dJson = JSON.parse(dMatch[1]);
+        } catch (e) {
+          console.log("Failed to parse var item JSON: " + e.message);
+          return "";
+        }
+        const reqFields = ["token", "id", "time", "post", "redirect", "cacha", "link"];
+        for (let i = 0; i < reqFields.length; i++) {
+          const f = reqFields[i];
+          if (dJson[f] === void 0 || dJson[f] === null) {
+            console.log("Missing required field in extracted data: " + f);
+            return "";
+          }
+        }
+        const action = aMatch[1];
+        const toPyBool = (v) => {
+          if (v === true) return "true";
+          if (v === false) return "false";
+          return String(v || "");
+        };
+        const payload = {
+          "token": dJson["token"],
+          "id": dJson["id"],
+          "time": dJson["time"],
+          "post": dJson["post"],
+          "redirect": dJson["redirect"],
+          "cacha": dJson["cacha"],
+          "new": toPyBool(dJson["new"]),
+          "link": dJson["link"],
+          "action": action
+        };
+        console.log("Waiting 5 seconds before validation request...");
+        await this.delay(this.WAIT);
+        const postHeaders = {
+          "Referer": currentUrl,
+          "Cookie": getCookieHeader()
+        };
+        const postRes = await HTTPClient.postForm(
+          this.AJAX_URL,
+          payload,
+          postHeaders,
+          "manual"
+        );
+        if (!postRes.success) {
+          console.log("POST request failed: " + postRes.error.message);
+          return "";
+        }
+        const res = postRes.data;
+        if (res.status === 302) {
+          const loc = HTTPClient.getHeader(res, "Location");
+          if (loc) return loc;
+        } else if (res.url && res.url !== this.AJAX_URL) {
+          return res.url;
+        } else if (res.status === 200) {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            if (j.url) return j.url;
+          } catch (e) {
+          }
+        }
+        console.log("Expected redirect but got status: " + res.status);
+        return "";
+      } catch (err) {
+        console.log("Error in SoraLink bypass: " + err.message);
+        return "";
+      }
+    }
+    static async delay(ms) {
+      if (typeof $sleep !== "undefined") {
+        await $sleep(ms);
+      } else {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+    }
+  }
+  class FuzzyMatcher {
+    dc = new DistCalc();
+    match(q, t, config = FUZZY_CONFIG) {
+      const s1 = this.exactMatch(q, t, config.weights.exact);
+      if (s1 === 100) return 100;
+      const s2 = this.fuzzy(q, t, config);
+      const s3 = this.norm(q, t, config.weights.normalized);
+      const s4 = this.phonetic(q, t, config.weights.phonetic);
+      return Math.max(s1, s2, s3, s4);
+    }
+    normalize(input) {
+      return StringNorm.normalize(input);
+    }
+    exactMatch(q, t, w) {
+      const qN = q.toLowerCase().trim();
+      const tN = t.toLowerCase().trim();
+      if (qN === tN) return w;
+      if (tN.indexOf(qN) !== -1) return w * 0.8;
+      if (qN.indexOf(tN) !== -1) return w * 0.7;
+      return 0;
+    }
+    fuzzy(q, t, config) {
+      const d = this.dc.calculate(q, t);
+      if (d > config.maxDist) return 0;
+      const sim = DistCalc.similarity(q, t, d);
+      if (sim < config.minSim) return 0;
+      return Math.round(sim * config.weights.fuzzy);
+    }
+    norm(q, t, w) {
+      const qN = this.normalize(q);
+      const tN = this.normalize(t);
+      if (qN === tN) return w;
+      if (tN.indexOf(qN) !== -1) return w * 0.8;
+      if (qN.indexOf(tN) !== -1) return w * 0.7;
+      const qC = StringNorm.clean(qN);
+      const tC = StringNorm.clean(tN);
+      if (qC === tC) return w * 0.6;
+      if (tC.indexOf(qC) !== -1) return w * 0.5;
+      return 0;
+    }
+    phonetic(q, t, w) {
+      const qP = this.toPh(q);
+      const tP = this.toPh(t);
+      if (qP === tP) return w;
+      if (tP.indexOf(qP) !== -1) return w * 0.7;
+      return 0;
+    }
+    toPh(input) {
+      return input.toLowerCase().replace(/ou/g, "o").replace(/uu/g, "u").replace(/ei/g, "e").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "").trim();
+    }
+  }
+  class Provider {
+    api = PROVIDER_CONFIG.API_BASE_URL;
+    translator = new PortugueseTranslator();
+    getSettings() {
+      return {
+        canSmartSearch: true,
+        smartSearchFilters: ["episodeNumber", "resolution", "query"],
+        supportsAdult: false,
+        type: "main"
+      };
+    }
+    async search(opts) {
+      const t0 = Date.now();
+      try {
+        const ck = "search_" + opts.query;
+        const cached = PerformanceCache.get(ck);
+        if (cached) {
+          console.log("Cache hit for search: " + opts.query);
+          PerformanceCache.recSearch(Date.now() - t0);
+          return cached;
+        }
+        const cQ = this.translator.parse(opts.query);
+        const sUrl = this.api + "/?s=" + encodeURIComponent(cQ);
+        const fRes = await HTTPClient.fetchWithUA(sUrl);
+        if (!fRes.success) {
+          console.log("Search failed: " + fRes.error.message + " (Status: " + fRes.error.status + ")");
+          PerformanceCache.recSearch(Date.now() - t0);
+          return [];
+        }
+        const aURL = PageLinkFinder.extractPageURL(fRes.data, cQ);
+        if (!aURL) {
+          console.log("No anime page found for: " + opts.query);
+          PerformanceCache.recSearch(Date.now() - t0);
+          return [];
+        }
+        const results = await this.fetchTorrents(aURL, opts.media);
+        if (results.length > 0) {
+          PerformanceCache.set(ck, results);
+        }
+        PerformanceCache.recSearch(Date.now() - t0);
+        return results;
+      } catch (err) {
+        console.log("Error in search: " + err.message);
+        PerformanceCache.recSearch(Date.now() - t0);
+        return [];
+      }
+    }
+    async smartSearch(opts) {
+      try {
+        const romKey = "romajiTitle";
+        const engKey = "englishTitle";
+        const epNumKey = "episodeNumber";
+        const q = opts.query || opts.media[romKey] || opts.media[engKey] || "";
+        const epIdx = opts[epNumKey] || 1;
+        const results = await this.search({ media: opts.media, query: q });
+        if (results.length === 0) {
+          return [];
+        }
+        return this.applyFilters(results, opts);
+      } catch (err) {
+        console.log("Error in smart search: " + err.message);
+        return [];
+      }
+    }
+    applyFilters(results, opts) {
+      let fil = results;
+      const epNumKey = "episodeNumber";
+      const targetEp = opts[epNumKey];
+      if (targetEp && targetEp > 0) {
+        fil = fil.filter(
+          (t) => t[epNumKey] === targetEp || t.isBatch || t[epNumKey] === -1
+        );
+      }
+      if (opts.resolution) {
+        fil = fil.filter(
+          (t) => !t.resolution || t.resolution.indexOf(opts.resolution) !== -1
+        );
+      }
+      if (opts.batch) {
+        fil = fil.filter((t) => t.isBatch);
+      }
+      return fil;
+    }
+    async getTorrentInfoHash(torrent) {
+      console.log("Getting info hash for torrent: " + (torrent.name || "Unknown"));
+      if (!torrent || typeof torrent !== "object") {
+        console.log("Invalid torrent object provided");
+        return "";
+      }
+      if (torrent.infoHash && torrent.infoHash.length === 40) {
+        console.log("Info hash found: " + torrent.infoHash);
+        return torrent.infoHash;
+      }
+      if (torrent.magnetLink && isValidMag(torrent.magnetLink)) {
+        console.log("Trying to extract info hash from magnet link...");
+        const hash = TorrentParser.extractInfoHash(torrent.magnetLink);
+        if (hash) {
+          console.log("Extracted info hash from magnet link: " + hash);
+          return hash;
+        }
+      }
+      console.log("No valid info hash found for torrent: " + (torrent.name || "Unknown"));
+      return "";
+    }
+    async getTorrentMagnetLink(torrent) {
+      console.log("Getting magnet link for torrent: " + (torrent.name || "Unknown"));
+      if (!torrent || typeof torrent !== "object") {
+        console.log("Invalid torrent object provided");
+        return "";
+      }
+      if (torrent.magnetLink && isValidMag(torrent.magnetLink)) {
+        console.log("Magnet link found: " + torrent.magnetLink.substring(0, 100) + "...");
+        return torrent.magnetLink;
+      }
+      if (torrent.link && torrent.link.includes("systemads.net")) {
+        console.log("Extracting magnet link from systemads.net...");
+        try {
+          const req = await fetch2(torrent.link, {
+            headers: {
+              "User-Agent": PROVIDER_CONFIG.USER_AGENT
+            },
+            redirect: "follow"
+          });
+          const html = await req.text();
+          const match = html.match(/const\s+DEST_URL\s*=\s*["'](magnet:\?[^"']+)["']/i);
+          if (match && match[1]) {
+            console.log("Extracted magnet link successfully");
+            return match[1];
+          }
+        } catch (e) {
+          console.error("Error extracting magnet from systemads:", e);
+        }
+      }
+      console.log("No valid magnet link found for torrent: " + (torrent.name || "Unknown"));
+      return "";
+    }
+    async getLatest() {
+      return [];
+    }
+    async fetchTorrents(aURL, _m) {
+      const fRes = await HTTPClient.fetchWithUA(aURL);
+      if (!fRes.success) {
+        console.log("Failed to fetch anime page: " + fRes.error.message + " (Status: " + fRes.error.status + ")");
+        return [];
+      }
+      return this.parseHTML(fRes.data, aURL);
+    }
+    async parseHTML(html, aURL) {
+      const t0 = Date.now();
+      try {
+        const ck = "torrents_" + aURL;
+        const cached = PerformanceCache.get(ck);
+        if (cached) {
+          console.log("Cache hit for torrents parsing: " + aURL);
+          PerformanceCache.recParse(Date.now() - t0);
+          return cached;
+        }
+        const results = await this.parseRegex(html, aURL);
+        if (results.length > 0) {
+          PerformanceCache.set(ck, results);
+        }
+        PerformanceCache.recParse(Date.now() - t0);
+        return results;
+      } catch (err) {
+        console.log("Error parsing torrents: " + err.message);
+        PerformanceCache.recParse(Date.now() - t0);
+        return [];
+      }
+    }
+    // Reads episode numbers straight from the DOM instead of guessing them from
+    // magnet dn= filenames: each div.mctnx div.soraddl block belongs to one
+    // episode per its .sorattl h3 heading (matches the real Kotlin extractor's
+    // structure), so every magnet inside that block gets that exact number
+    // instead of running through the regex heuristics in TorrentParser.getEpIdx.
+    parseStructured(html, aURL) {
+      const res = [];
+      try {
+        const $ = LoadDoc(html);
+        $("div.mctnx div.soraddl").each((_, block) => {
+          const epLabel = block.find(".sorattl h3").text().trim();
+          const epMatch = epLabel.match(/(\d+(?:\.\d+)?)/);
+          if (!epMatch) return;
+          const epIdx = parseFloat(epMatch[1]);
+          block.find(".content table tr").each((_2, row) => {
+            row.find(".slink a").each((_3, link) => {
+              const mag = link.attr("href");
+              if (!mag || !isValidMag(mag)) return;
+              const name = this.getName(mag, res.length + 1);
+              res.push(this.makeTorrentObj(name, mag, aURL, TorrentParser.parseRes(name), epLabel, epIdx));
+            });
+          });
+          block.find(".soraurl").each((_2, group) => {
+            group.find(".slink a").each((_3, link) => {
+              const mag = link.attr("href");
+              if (!mag || !isValidMag(mag)) return;
+              const name = this.getName(mag, res.length + 1);
+              res.push(this.makeTorrentObj(name, mag, aURL, TorrentParser.parseRes(name), epLabel, epIdx));
+            });
+          });
+        });
+      } catch (err) {
+        console.log("Error in structured (DOM) parsing: " + err.message);
+      }
+      return res;
+    }
+    async parseRegex(html, aURL) {
+      const res = this.parseStructured(html, aURL);
+      try {
+        const labeledPat = /<a[^>]+href=["'](https?:\/\/darkmahou\.io\?([a-zA-Z0-9]+)=([a-zA-Z0-9+\/]+=*))["'][^>]*>(.*?)<\/a>/gi;
+        let m;
+        while ((m = labeledPat.exec(html)) !== null) {
+          const sUrl = m[1];
+          const label = m[4] || "";
+          if (this.isSora(sUrl)) {
+            console.log("Found protected URL: " + sUrl.substring(0, 50) + "... (Label: " + label + ")");
+            const mag = await this.tryBypass(sUrl, aURL);
+            if (mag) {
+              const name = this.getName(mag, res.length + 1);
+              const resolution = TorrentParser.parseRes(label) || TorrentParser.parseRes(name);
+              res.push(this.makeTorrentObj(
+                name,
+                mag,
+                aURL,
+                resolution,
+                label
+              ));
+            }
+          }
+        }
+        const fallbackPats = [
+          /(?:href|data-link|data-url)=["'](https?:\/\/[^"']*(?:otakufilmes\.org|soralink)[^"']*)["']/gi,
+          /(?:href|data-link|data-url)=["']([^"']*\?[a-zA-Z0-9_=]{20,})["']/gi
+        ];
+        for (let i = 0; i < fallbackPats.length; i++) {
+          const pat = fallbackPats[i];
+          let m2;
+          while ((m2 = pat.exec(html)) !== null) {
+            const sUrl = m2[1];
+            if (res.some((t) => t.magnetLink === sUrl || t.link === sUrl)) continue;
+            if (this.isSora(sUrl)) {
+              const mag = await this.tryBypass(sUrl, aURL);
+              if (mag) {
+                if (res.some((t) => t.magnetLink === mag)) continue;
+                const name = this.getName(mag, res.length + 1);
+                res.push(this.makeTorrentObj(
+                  name,
+                  mag,
+                  aURL,
+                  TorrentParser.parseRes(name),
+                  ""
+                ));
+              }
+            }
+          }
+        }
+        const mMatches = html.match(REGEX_PATTERNS.MAGNET_LINK);
+        if (mMatches && mMatches.length > 0) {
+          const seen = /* @__PURE__ */ new Set();
+          for (let i = 0; i < res.length; i++) {
+            if (res[i].infoHash) seen.add(res[i].infoHash);
+          }
+          for (let i = 0; i < mMatches.length; i++) {
+            const mag = mMatches[i];
+            const hash = TorrentParser.extractInfoHash(mag);
+            if (hash && seen.has(hash)) {
+              continue;
+            }
+            if (hash) seen.add(hash);
+            const name = this.getName(mag, res.length + 1);
+            res.push(this.makeTorrentObj(
+              name,
+              mag,
+              aURL,
+              TorrentParser.parseRes(name),
+              ""
+            ));
+          }
+        }
+        return res;
+      } catch (err) {
+        console.log("Error in optimized regex parsing: " + err.message);
+        return [];
+      }
+    }
+    isSora(url) {
+      if (!url) return false;
+      const lUrl = url.toLowerCase();
+      const excluded = [
+        "youtube.com",
+        "google.com",
+        "facebook.com",
+        "twitter.com",
+        "instagram.com",
+        "xmlrpc.php",
+        "wp-admin",
+        "wp-content",
+        "wp-includes",
+        "/wp-json/",
+        "wordpress.org",
+        "schema.org",
+        "gravatar.com",
+        "w.org"
+      ];
+      for (let i = 0; i < excluded.length; i++) {
+        if (lUrl.indexOf(excluded[i]) !== -1) return false;
+      }
+      if (lUrl.indexOf("otakufilmes.org") !== -1 || lUrl.indexOf("soralink") !== -1) {
+        return true;
+      }
+      if (lUrl.indexOf("darkmahou.io") !== -1 && lUrl.indexOf("?") !== -1 && url.length > 40) {
+        return true;
+      }
+      if (/[\?&][a-zA-Z0-9]{20,}/.test(url)) {
+        if (lUrl.indexOf("/?") !== -1 && lUrl.indexOf("=") === -1) return true;
+        if (/[\?&](?:token|link|id|cacha|post)=/.test(lUrl)) return true;
+      }
+      return false;
+    }
+    async tryBypass(sUrl, ref) {
+      try {
+        const final = await SoraBypass.bypass(sUrl, ref);
+        if (final) {
+          if (final.indexOf("magnet:") === 0) {
+            return final;
+          } else {
+            const fRes = await HTTPClient.fetchWithUA(final);
+            if (fRes.success) {
+              const m = fRes.data.match(REGEX_PATTERNS.MAGNET_LINK);
+              if (m && m.length > 0) {
+                return m[0];
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.log("Error attempting SoraLink bypass: " + err.message);
+      }
+      return "";
+    }
+    getName(mag, fIdx) {
+      const m = mag.match(/&dn=([^&]+)/);
+      if (m) {
+        try {
+          return decodeURIComponent(m[1]);
+        } catch (e) {
+          return m[1];
+        }
+      }
+      return "Episode " + fIdx;
+    }
+    makeTorrentObj(name, mag, aURL, res, epLabel, epIdxOverride) {
+      const hash = TorrentParser.extractInfoHash(mag);
+      const pRes = TorrentParser.parseRes(name) || res;
+      const batch = TorrentParser.checkIsBatch(name, epLabel);
+      const epIdx = epIdxOverride !== void 0 && !batch ? epIdxOverride : TorrentParser.getEpIdx(name, epLabel);
+      const group = TorrentParser.extractReleaseGroup(name);
+      return {
+        name,
+        date: (/* @__PURE__ */ new Date()).toISOString(),
+        size: 0,
+        formattedSize: "N/A",
+        seeders: 0,
+        leechers: 0,
+        downloadCount: 0,
+        link: aURL,
+        downloadUrl: "",
+        magnetLink: mag,
+        infoHash: hash,
+        resolution: pRes,
+        isBatch: batch,
+        ["episodeNumber"]: epIdx !== null ? epIdx : -1,
+        releaseGroup: group,
+        isBestRelease: false,
+        confirmed: true
+      };
+    }
+  }
+  const provider = new Provider();
+  return provider;
+}, { "id": "darkmahou-provider", "name": "DarkMahou", "lang": "ja", "type": "anime-torrent-provider", "policy": "original-soft", "trustedSoft": false, "rawCategory": false, "config": {}, "needsAnimeId": false, "manifestURI": "https://raw.githubusercontent.com/Jhoorodre/seanime-provider/refs/heads/master/src/darkmahou/darkmahou-provider.json", "sourceVersion": "1.0.11", "sourceSha256": "743d8fe7f5f3eb834922ead329fb3c3326862dea1a4f4f6c632ab98575de8a9b", "payloadURI": "https://raw.githubusercontent.com/Jhoorodre/seanime-provider/refs/heads/master/src/darkmahou/darkmahou-provider.ts", "icon": "https://raw.githubusercontent.com/Jhoorodre/seanime-provider/master/icon/darkmahou.png", "logo": "https://aetherio-provider-hub.xoolinnbeats.workers.dev/addons/logos/seanime/darkmahou-provider", "enabled": true, "description": "Torrents con audio original y RAW/softsubs; descarta DUB y formato desconocido." }, { CryptoJS: Crypto, compat: createCompatibility(dom, Crypto) });

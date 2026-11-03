@@ -111,15 +111,6 @@
   bottom: 42px;
 }
 
-.startup-spinner {
-  display: block;
-  width: 28px;
-  height: 28px;
-  border: 2px solid rgba(255, 255, 255, 0.18);
-  border-top-color: rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-}
-
 @media (max-width: 480px) {
   .startup-panel {
     width: min(420px, calc(100vw - 28px));

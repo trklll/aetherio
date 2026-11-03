@@ -1,5 +1,5 @@
-import { buildSeekrContent } from "../seekPreview/seekr";
 import type { StreamQuery } from "../../../types/stream";
+import { buildMediaTitleIdentity, mediaTitleIdentityKey } from "../mediaTitleIdentity";
 
 export type AutoSyncTitleMode = "on" | "off";
 export type AutoSyncGlobalMode = "off" | "learned" | "on";
@@ -38,19 +38,8 @@ function writeAll(modes: TitleModes) {
   }
 }
 
-// La identidad del titulo es la misma que usa Seekr para pedir sus previews, asi
-// que la reutilizamos en vez de mantener dos normalizaciones distintas.
 export function buildAutoSyncTitleKey(query: StreamQuery | null | undefined): string {
-  const content = buildSeekrContent(query);
-  if (!content) return "";
-  if (content.kind === "movie") {
-    if (content.tmdbId) return `movie:tmdb:${content.tmdbId}`;
-    if (content.imdbId) return `movie:${content.imdbId}`;
-    return "";
-  }
-  if (content.showTmdbId) return `episode:tmdb:${content.showTmdbId}:${content.season}:${content.episode}`;
-  if (content.showImdbId) return `episode:${content.showImdbId}:${content.season}:${content.episode}`;
-  return "";
+  return mediaTitleIdentityKey(buildMediaTitleIdentity(query));
 }
 
 export function getAutoSyncTitleMode(titleKey: string): AutoSyncTitleMode | null {

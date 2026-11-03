@@ -18,6 +18,7 @@ export interface AniListLibraryEntry {
   watchedEpisodes: number;
   totalEpisodes: number;
   poster?: string;
+  genres?: string[];
   year?: number;
   updatedAt?: string | null;
 }
@@ -68,6 +69,7 @@ export async function syncAniListLibrary() {
             episodes?: number;
             coverImage?: { extraLarge?: string; large?: string };
             startDate?: { year?: number };
+            genres?: string[];
           };
         }>;
       }>;
@@ -89,6 +91,7 @@ export async function syncAniListLibrary() {
               episodes
               coverImage { extraLarge large }
               startDate { year }
+              genres
             }
           }
         }
@@ -113,6 +116,7 @@ export async function syncAniListLibrary() {
         watchedEpisodes: entry.progress ?? 0,
         totalEpisodes: media?.episodes ?? 0,
         poster: media?.coverImage?.extraLarge ?? media?.coverImage?.large,
+        genres: media?.genres?.length ? media.genres : undefined,
         year: media?.startDate?.year,
         updatedAt: entry.updatedAt ? new Date(entry.updatedAt * 1000).toISOString() : null,
       }];

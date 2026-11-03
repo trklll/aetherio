@@ -1,0 +1,206 @@
+function cfg(value, fallback) {
+    if (!value || value.indexOf("{{") === 0) {
+        return fallback
+    }
+    return value.replace(/\/$/, "")
+}
+
+/**
+ * UniqueStream through the restream proxy.
+ *
+ * Player mapping:
+ *   Box 1 "Source" -> getSettings().episodeServers = the AUDIO language
+ *   Box 2          -> videoSources[] = that audio's playlist
+ *
+ * Everything upstream is reached through the proxy, which holds the sticky exit
+ * the CDN signs its playlists against.
+ */
+class Provider {
+    proxy = cfg("{{proxyUrl}}", "https://uniquestream.sharky.systems")
+    apiKey = cfg("{{apiKey}}", "")
+
+    // Friendly name -> audio locale. "Auto" defers to Seanime's own sub/dub
+    // toggle, which arrives as opts.dub on search().
+    audioByServer = {
+        "Japanese": "ja-JP",
+        "English": "en-US",
+        "Spanish (Latin America)": "es-419",
+        "Spanish": "es-ES",
+        "Portuguese (Brazil)": "pt-BR",
+        "French": "fr-FR",
+        "German": "de-DE",
+        "Italian": "it-IT",
+        "Korean": "ko-KR",
+        "Hindi": "hi-IN",
+        "Tamil": "ta-IN",
+        "Telugu": "te-IN",
+    }
+
+    getSettings() {
+        return {
+            episodeServers: [
+                "Auto", "Japanese", "English", "Spanish (Latin America)", "Spanish",
+                "Portuguese (Brazil)", "French", "German", "Italian", "Korean",
+                "Hindi", "Tamil", "Telugu",
+            ],
+            supportsDub: true,
+        }
+    }
+
+    headers() {
+        const out = { Accept: "application/json" }
+        if (this.apiKey) {
+            out["X-API-Key"] = this.apiKey
+        }
+        return out
+    }
+
+    async search(opts) {
+        const media = opts.media
+        const title = (media && (media.englishTitle || media.romajiTitle)) || opts.query
+        const audio = opts.dub ? "dub" : "sub"
+        const req = await fetch(
+            this.proxy + "/api/search?query=" + encodeURIComponent(title),
+            { headers: this.headers() },
+        )
+        if (!req.ok) {
+            throw new Error("UniqueStream proxy HTTP " + req.status + ".")
+        }
+        let data = null
+        try {
+            data = await req.json()
+        } catch (_err) {
+            throw new Error("UniqueStream proxy returned an unreadable reply.")
+        }
+        if (!data || !data.ok) {
+            return []
+        }
+
+        const rows = data.results || []
+        const results = []
+        // Seasons carry a mal_id. When AniList gave us one too that is an exact
+        // identity match and beats any amount of title guessing - but only when
+        // it is unambiguous. Companion shows reuse the parent's mal_id, so a
+        // non-unique hit falls back to letting Seanime match on titles.
+        const wantMal = media && media.idMal ? String(media.idMal) : ""
+        let exact
+        let malHits = 0
+
+        for (const row of rows) {
+            const name = row.seasonTitle
+                ? (row.seasonTitle === row.title ? row.title : row.title + " " + row.seasonTitle)
+                : row.title
+            const hit = {
+                id: "season:" + row.id + "|eps:" + (row.episodeCount || 0) + "|aud:" + audio,
+                title: name,
+                url: this.proxy + "/s/series/" + row.id + "/1/" + audio + ".m3u8",
+                subOrDub: row.subbed && row.dubbed ? "both" : (row.dubbed ? "dub" : "sub"),
+            }
+            if (wantMal && row.malId && row.malId === wantMal) {
+                malHits++
+                exact = hit
+            }
+            results.push(hit)
+        }
+        if (exact && malHits === 1) {
+            return [exact]
+        }
+        return results
+    }
+
+    async findEpisodes(id) {
+        const parsed = this.parseId(id)
+        if (!parsed.season) {
+            return []
+        }
+        // The season record already gave an episode count, so the proxy can
+        // fetch every page at once instead of probing for the end.
+        const qs = "seasonId=" + encodeURIComponent(parsed.season) +
+            "&episodeCount=" + parsed.eps +
+            "&lang=" + encodeURIComponent(parsed.audio)
+        const req = await fetch(this.proxy + "/api/episodes?" + qs, { headers: this.headers() })
+        if (!req.ok) {
+            return []
+        }
+        let data = null
+        try {
+            data = await req.json()
+        } catch (_err) {
+            return []
+        }
+        if (!data || !data.ok) {
+            return []
+        }
+        // An empty list is authoritative: the season endpoint returns real
+        // published episodes, so nothing is invented from an announced total.
+        const ref = parsed
+        return (data.episodes || []).map(function (episode) {
+            return {
+                // The audio rides on the episode id, because findEpisodeServer()
+                // is handed a server name, not opts.dub.
+                id: "ep:" + episode.id + "|aud:" + ref.audio,
+                number: episode.number,
+                title: episode.title,
+                url: episode.url,
+            }
+        })
+    }
+
+    async findEpisodeServer(episode, server) {
+        const parsed = this.parseId(episode.id)
+        if (!parsed.ep) {
+            throw new Error("missing episode id; search the title again")
+        }
+        // A named language wins; "Auto" leaves it to the sub/dub toggle.
+        const locale = this.audioByServer[String(server || "")] || parsed.audio
+        const req = await fetch(
+            this.proxy + "/api/resolve/ep/" + encodeURIComponent(parsed.ep) + "/" + locale,
+            { headers: this.headers() },
+        )
+        if (!req.ok) {
+            throw new Error(
+                "UniqueStream proxy HTTP " + req.status + ". Confirm " + this.proxy + " is reachable.",
+            )
+        }
+        const data = await req.json()
+        if (!data || !data.ok || !data.streamUrl) {
+            throw new Error((data && data.error) || "UniqueStream proxy did not return a stream URL.")
+        }
+        const subs = (data.subtitles || []).map(function (track) {
+            return {
+                id: track.id,
+                url: track.url,
+                language: track.language,
+                isDefault: track.isDefault,
+            }
+        })
+        return {
+            // Echo back the server Seanime asked for, not the one that
+            // resolved: it calls this once per entry in episodeServers and
+            // pools the results keyed on this field.
+            server: server || "Auto",
+            headers: {},
+            videoSources: [{
+                url: data.streamUrl,
+                type: data.type === "mp4" ? "mp4" : "m3u8",
+                // The master is adaptive, so there is one source and the player
+                // picks the rendition.
+                quality: "auto",
+                subtitles: subs,
+            }],
+        }
+    }
+
+    parseId(id) {
+        const seasonMatch = id.match(/season:([^|]+)/)
+        const epMatch = id.match(/ep:([^|]+)/)
+        const epsMatch = id.match(/eps:(\d+)/)
+        const audMatch = id.match(/aud:(sub|dub)/)
+        return {
+            season: seasonMatch ? seasonMatch[1] : "",
+            ep: epMatch ? epMatch[1] : "",
+            eps: epsMatch ? parseInt(epsMatch[1], 10) : 0,
+            audio: audMatch ? audMatch[1] : "sub",
+        }
+    }
+}

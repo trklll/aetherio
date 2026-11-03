@@ -1,6 +1,7 @@
 ﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Compass, Film, RefreshCw, Tv } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import { appleEase, gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import PageContainer from "../../components/layout/PageContainer";
 import LibraryIcon from "../../components/ui/LibraryIcon";
@@ -379,7 +380,7 @@ function DiscoverLibrary({
                 onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)}
                 className="liquid-glass gsap-transition inline-flex h-11 items-center gap-2 rounded-full px-5 text-sm font-black text-white disabled:opacity-50"
               >
-                <RefreshCw size={16} className={loadingMore ? "animate-spin" : ""} />
+                {loadingMore ? <AppleSpinner size={16} /> : <RefreshCw size={16} />}
                 {loadingMore ? "Cargando…" : "Mostrar más"}
               </button>
             </div>
@@ -481,7 +482,7 @@ function AniListSyncBanner({
           Conectar cuenta
         </button>
         <button type="button" onClick={() => void onSync()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="gsap-transition inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-xs font-black text-black disabled:opacity-55">
-          <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
+          {syncing ? <AppleSpinner size={15} color="#111" /> : <RefreshCw size={15} />}
           {syncing ? "Sincronizando…" : "Sincronizar ahora"}
         </button>
       </div>

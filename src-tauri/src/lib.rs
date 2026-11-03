@@ -3,10 +3,14 @@ mod embedded_subtitles;
 mod player_glass;
 mod poster_cache;
 mod poster_server;
+mod nuvio_server;
 mod tmdb_text_cache;
 pub mod p2p;
 mod scraper;
 mod secure_credentials;
+mod seek_preview;
+mod sports_hls;
+mod mpv_events;
 
 use std::{
     collections::HashMap,
@@ -26,7 +30,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::Engine as _;
 use libloading::Library;
 
 use librqbit::{
@@ -420,123 +423,6 @@ async fn cache_subtitle_text(
     .map_err(|error| format!("Fallo la cache de subtitulos: {}", error))?
 }
 
-#[tauri::command]
-async fn seekr_load_track(
-    api_key: String,
-    lookup_path: String,
-) -> Result<serde_json::Value, String> {
-    let api_key = api_key.trim().to_string();
-    if api_key.len() < 8 || api_key.len() > 512 || api_key.contains(['\r', '\n']) {
-        return Err(String::from("Clave de Seekr invalida."));
-    }
-    if !lookup_path.starts_with("/sprites?") || lookup_path.contains(['\r', '\n']) {
-        return Err(String::from("Consulta de Seekr invalida."));
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        let redirect_count = Arc::new(AtomicUsize::new(0));
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::custom(move |attempt: reqwest::redirect::Attempt| {
-                let safe = attempt.url().scheme() == "https" && is_public_http_url(attempt.url());
-                if redirect_count.fetch_add(1, Ordering::AcqRel) >= 3 || !safe {
-                    attempt.stop()
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .build()
-            .map_err(|error| format!("No se pudo crear el cliente de Seekr: {}", error))?;
-        let lookup_url = format!("https://api.seekr.tv{}", lookup_path);
-        let lookup = client
-            .get(&lookup_url)
-            .header("X-API-Key", &api_key)
-            .send()
-            .map_err(|error| format!("Seekr no respondio: {}", error))?
-            .error_for_status()
-            .map_err(|error| format!("Seekr rechazo la consulta: {}", error))?
-            .json::<serde_json::Value>()
-            .map_err(|error| format!("Respuesta de Seekr invalida: {}", error))?;
-        let vtt_url = lookup
-            .get("vtt_url")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| String::from("Seekr no devolvio una pista de previews."))?;
-        let mut signed_url = reqwest::Url::parse(vtt_url)
-            .map_err(|_| String::from("URL de previews de Seekr invalida."))?;
-        if signed_url.scheme() != "https" || !is_public_http_url(&signed_url) {
-            return Err(String::from("URL de previews de Seekr no permitida."));
-        }
-        signed_url.query_pairs_mut().append_pair("st", "1");
-        let vtt = client
-            .get(signed_url)
-            .send()
-            .map_err(|error| format!("No se pudo cargar la pista de previews: {}", error))?
-            .error_for_status()
-            .map_err(|error| format!("Seekr no pudo entregar los previews: {}", error))?
-            .text()
-            .map_err(|error| format!("VTT de Seekr invalido: {}", error))?;
-        if vtt.len() > 4 * 1024 * 1024 {
-            return Err(String::from("La pista de previews es demasiado grande."));
-        }
-        Ok(serde_json::json!({
-            "vtt": vtt,
-            "scale": lookup.get("scale").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
-            "sourceDurationMs": lookup.get("source_duration_ms").and_then(serde_json::Value::as_i64).unwrap_or(0)
-        }))
-    })
-    .await
-    .map_err(|error| format!("Fallo la tarea de Seekr: {}", error))?
-}
-
-#[tauri::command]
-async fn seekr_fetch_sprite(url: String) -> Result<serde_json::Value, String> {
-    let parsed = reqwest::Url::parse(url.trim())
-        .map_err(|_| String::from("URL de sprite de Seekr invalida."))?;
-    if parsed.scheme() != "https" || !is_public_http_url(&parsed) {
-        return Err(String::from("URL de sprite de Seekr no permitida."));
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        let redirect_count = Arc::new(AtomicUsize::new(0));
-        let response = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::custom(move |attempt: reqwest::redirect::Attempt| {
-                let safe = attempt.url().scheme() == "https" && is_public_http_url(attempt.url());
-                if redirect_count.fetch_add(1, Ordering::AcqRel) >= 3 || !safe {
-                    attempt.stop()
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .build()
-            .map_err(|error| format!("No se pudo crear el cliente de sprites: {}", error))?
-            .get(parsed)
-            .send()
-            .map_err(|error| format!("No se pudo cargar el sprite: {}", error))?
-            .error_for_status()
-            .map_err(|error| format!("Seekr no pudo entregar el sprite: {}", error))?;
-        let mime_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.split(';').next().unwrap_or("image/png").trim().to_string())
-            .filter(|value| matches!(value.as_str(), "image/png" | "image/jpeg" | "image/webp"))
-            .unwrap_or_else(|| "image/png".to_string());
-        let bytes = response
-            .bytes()
-            .map_err(|error| format!("No se pudo leer el sprite: {}", error))?;
-        if bytes.is_empty() || bytes.len() > 12 * 1024 * 1024 {
-            return Err(String::from("Sprite de Seekr invalido."));
-        }
-        Ok(serde_json::json!({
-            "base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
-            "mimeType": mime_type
-        }))
-    })
-    .await
-    .map_err(|error| format!("Fallo la carga del sprite: {}", error))?
-}
-
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(value) => {
@@ -837,6 +723,8 @@ const MPV_FORMAT_NODE_ARRAY: c_int = 7;
 const MPV_FORMAT_NODE_MAP: c_int = 8;
 const MPV_EVENT_NONE: c_int = 0;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
+const MPV_EVENT_LOG_MESSAGE: c_int = 2;
+const MPV_EVENT_START_FILE: c_int = 6;
 const MPV_EVENT_END_FILE: c_int = 7;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
 const MPV_EVENT_TRACKS_CHANGED: c_int = 9;
@@ -894,6 +782,20 @@ struct MpvEventProperty {
     data: *mut c_void,
 }
 
+#[repr(C)]
+struct MpvEventEndFile {
+    reason: c_int,
+    error: c_int,
+}
+
+#[repr(C)]
+struct MpvEventLogMessage {
+    prefix: *const c_char,
+    level: *const c_char,
+    text: *const c_char,
+    log_level: c_int,
+}
+
 #[derive(Clone, Copy)]
 struct MpvHandlePtr(*mut MpvHandle);
 
@@ -915,6 +817,7 @@ struct MpvApi {
     wait_event: unsafe extern "C" fn(*mut MpvHandle, f64) -> *mut MpvEvent,
     event_name: unsafe extern "C" fn(c_int) -> *const c_char,
     error_string: unsafe extern "C" fn(c_int) -> *const c_char,
+    request_log_messages: unsafe extern "C" fn(*mut MpvHandle, *const c_char) -> c_int,
 }
 
 unsafe impl Send for MpvApi {}
@@ -1825,6 +1728,7 @@ impl MpvApi {
         let wait_event = unsafe { load_mpv_symbol(&library, b"mpv_wait_event\0") }?;
         let event_name = unsafe { load_mpv_symbol(&library, b"mpv_event_name\0") }?;
         let error_string = unsafe { load_mpv_symbol(&library, b"mpv_error_string\0") }?;
+        let request_log_messages = unsafe { load_mpv_symbol(&library, b"mpv_request_log_messages\0") }?;
 
         Ok(Arc::new(Self {
             _library: library,
@@ -1840,6 +1744,7 @@ impl MpvApi {
             wait_event,
             event_name,
             error_string,
+            request_log_messages,
         }))
     }
 }
@@ -2049,6 +1954,7 @@ fn empty_mpv_status_snapshot() -> serde_json::Value {
         "demuxerCacheIdle": true,
         "eofReached": false,
         "demuxerCacheDuration": 0,
+        "fileSizeBytes": serde_json::Value::Null,
         "chapter": serde_json::Value::Null,
         "chapterList": [],
         "tracks": [],
@@ -2085,11 +1991,21 @@ fn update_cached_mpv_status(app: &tauri::AppHandle, event_id: c_int, payload: &s
         *status = empty_mpv_status_snapshot();
     }
 
-    if event_id == MPV_EVENT_FILE_LOADED {
+    if event_id == MPV_EVENT_START_FILE {
+        *status = empty_mpv_status_snapshot();
+    } else if event_id == MPV_EVENT_FILE_LOADED {
         status["fileLoaded"] = serde_json::Value::Bool(true);
+        status["playbackFailure"] = serde_json::Value::Null;
     } else if event_id == MPV_EVENT_END_FILE || event_id == MPV_EVENT_SHUTDOWN {
         status["fileLoaded"] = serde_json::Value::Bool(false);
         status["pause"] = serde_json::Value::Bool(true);
+        if event_id == MPV_EVENT_END_FILE {
+            status["playbackFailure"] = serde_json::json!({
+                "endReason": payload.get("endReason"),
+                "errorCode": payload.get("errorCode"),
+                "httpStatus": payload.get("httpStatus"),
+            });
+        }
     }
 
     if event_id != MPV_EVENT_PROPERTY_CHANGE {
@@ -2117,6 +2033,7 @@ fn update_cached_mpv_status(app: &tauri::AppHandle, event_id: c_int, payload: &s
         "demuxer-cache-idle" => "demuxerCacheIdle",
         "eof-reached" => "eofReached",
         "demuxer-cache-duration" => "demuxerCacheDuration",
+        "file-size" => "fileSizeBytes",
         "chapter" => "chapter",
         "chapter-list" => "chapterList",
         "track-list" => "tracks",
@@ -2145,6 +2062,7 @@ fn observe_mpv_properties(client: &Arc<MpvClient>) {
         "demuxer-cache-idle",
         "eof-reached",
         "demuxer-cache-duration",
+        "file-size",
         "chapter",
         "chapter-list",
         "track-list",
@@ -2213,13 +2131,23 @@ fn mpv_event_payload(client: &Arc<MpvClient>, event: &MpvEvent) -> serde_json::V
     if event.event_id == MPV_EVENT_PROPERTY_CHANGE {
         payload["property"] = unsafe { mpv_event_property_payload(event) };
     }
+    if event.event_id == MPV_EVENT_END_FILE && !event.data.is_null() {
+        let end = unsafe { &*(event.data as *const MpvEventEndFile) };
+        payload["endReason"] = serde_json::json!(mpv_events::end_reason_name(end.reason));
+        payload["errorCode"] = serde_json::json!(end.error);
+        if end.error < 0 {
+            payload["error"] = serde_json::json!(mpv_error(&client.api, end.error));
+        }
+    }
     payload
 }
 
 fn should_emit_status_for_event(event_id: c_int) -> bool {
     matches!(
         event_id,
-        MPV_EVENT_FILE_LOADED
+        MPV_EVENT_START_FILE
+            | MPV_EVENT_FILE_LOADED
+            | MPV_EVENT_END_FILE
             | MPV_EVENT_TRACKS_CHANGED
             | MPV_EVENT_TRACK_SWITCHED
             | MPV_EVENT_PAUSE
@@ -2249,9 +2177,11 @@ fn spawn_mpv_event_forwarder(
     client: Arc<MpvClient>,
     start_time: Option<f64>,
     p2p: Option<P2pPlaybackInfo>,
+    generation: u64,
 ) {
     thread::spawn(move || {
         let mut resume_seek_applied = false;
+        let mut http_status = None;
         loop {
             let event = unsafe { (client.api.wait_event)(client.handle.0, 0.25) };
             if event.is_null() {
@@ -2261,6 +2191,34 @@ fn spawn_mpv_event_forwarder(
             if event.event_id == MPV_EVENT_NONE {
                 continue;
             }
+
+            // Old cores emit stop/end-file after their replacement starts.
+            // Serialize with opening; never overwrite the new core's snapshot.
+            let state = app.state::<MpvState>();
+            let lifecycle = match state.lifecycle.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let is_current = state.open_generation.load(Ordering::Acquire) == generation
+                && state.session.lock().map(|session| session.as_ref()
+                    .is_some_and(|session| Arc::ptr_eq(&session.client, &client))).unwrap_or(false);
+            if !is_current {
+                drop(lifecycle);
+                if event.event_id == MPV_EVENT_SHUTDOWN { break; }
+                continue;
+            }
+            if event.event_id == MPV_EVENT_START_FILE { http_status = None; }
+            if event.event_id == MPV_EVENT_LOG_MESSAGE {
+                if !event.data.is_null() {
+                    let message = unsafe { &*(event.data as *const MpvEventLogMessage) };
+                    if !message.text.is_null() {
+                        let text = unsafe { CStr::from_ptr(message.text) }.to_string_lossy();
+                        if let Some(code) = mpv_events::http_status_from_log(&text) { http_status = Some(code); }
+                    }
+                }
+                continue;
+            }
+            if event.event_id == MPV_EVENT_PLAYBACK_RESTART { http_status = None; }
 
             if event.event_id == MPV_EVENT_FILE_LOADED && !resume_seek_applied {
                 if let Some(start_time) = start_time {
@@ -2276,7 +2234,15 @@ fn spawn_mpv_event_forwarder(
                 }
             }
 
-            let payload = mpv_event_payload(&client, event);
+            let mut payload = mpv_event_payload(&client, event);
+            if event.event_id == MPV_EVENT_END_FILE && payload.get("endReason").and_then(|value| value.as_str()) == Some("error") {
+                if let Some(code) = http_status { payload["httpStatus"] = serde_json::json!(code); }
+                mpv_bridge_log("playback_end", serde_json::json!({
+                    "generation": generation, "endReason": payload.get("endReason"),
+                    "errorCode": payload.get("errorCode"), "httpStatus": payload.get("httpStatus"),
+                }));
+            }
+            payload["generation"] = serde_json::json!(generation);
             update_cached_mpv_status(&app, event.event_id, &payload);
             let _ = app.emit_to(&window_label, "mpv-event", payload);
             if should_emit_status_for_event(event.event_id) {
@@ -2286,6 +2252,7 @@ fn spawn_mpv_event_forwarder(
                     &mpv_event_name(&client.api, event.event_id),
                 );
             }
+            drop(lifecycle);
             if event.event_id == MPV_EVENT_END_FILE || event.event_id == MPV_EVENT_SHUTDOWN {
                 schedule_p2p_cleanup(p2p.clone());
             }
@@ -4632,14 +4599,14 @@ fn anime4k_shader_names(profile: &str) -> Option<&'static [&'static str]> {
         "hq:mode-aa" => Some(ANIME4K_MODE_AA_HQ),
         "hq:mode-bb" => Some(ANIME4K_MODE_BB_HQ),
         "hq:mode-ca" => Some(ANIME4K_MODE_CA_HQ),
-        "fast:cnn-2x-medium" | "hq:cnn-2x-medium" => Some(&["Anime4K_Upscale_CNN_x2_M.glsl"]),
-        "fast:cnn-2x-very-large" | "hq:cnn-2x-very-large" => {
+        "fast:cnn-2x-medium" => Some(&["Anime4K_Upscale_CNN_x2_M.glsl"]),
+        "fast:cnn-2x-very-large" => {
             Some(&["Anime4K_Upscale_CNN_x2_VL.glsl"])
         }
-        "fast:denoise-cnn-2x-very-large" | "hq:denoise-cnn-2x-very-large" => {
+        "fast:denoise-cnn-2x-very-large" => {
             Some(&["Anime4K_Upscale_Denoise_CNN_x2_VL.glsl"])
         }
-        "fast:cnn-2x-ultra-large" | "hq:cnn-2x-ultra-large" => {
+        "fast:cnn-2x-ultra-large" => {
             Some(&["Anime4K_Upscale_CNN_x2_UL.glsl"])
         }
         _ => None,
@@ -4690,10 +4657,15 @@ fn video_enhancement_configuration(
         deband: "no",
     };
     if let Some(shader_names) = anime4k_shader_names(profile) {
-        return Some(defaults(
+        let mut configuration = defaults(
             if profile == "off" { "off" } else { "anime4k" },
             shader_names,
-        ));
+        );
+        if profile == "off" {
+            // Restore MPV's default scaler instead of degrading the baseline to bilinear.
+            configuration.scale = "lanczos";
+        }
+        return Some(configuration);
     }
     match profile {
         "fsr:quality" => Some(defaults("fsr", &["FSR.glsl"])),
@@ -4752,9 +4724,9 @@ mod video_enhancement_tests {
         "hq:mode-bb",
         "hq:mode-ca",
         "fast:cnn-2x-medium",
-        "hq:cnn-2x-very-large",
+        "fast:cnn-2x-very-large",
         "fast:denoise-cnn-2x-very-large",
-        "hq:cnn-2x-ultra-large",
+        "fast:cnn-2x-ultra-large",
         "fsr:quality",
         "vsr:nvidia-2x",
         "scaler:ewa-lanczossharp",
@@ -4779,7 +4751,17 @@ mod video_enhancement_tests {
     fn unsupported_profiles_are_rejected() {
         assert!(video_enhancement_configuration("anime4k:mode-a").is_none());
         assert!(video_enhancement_configuration("fsr:ultra").is_none());
+        assert!(video_enhancement_configuration("hq:cnn-2x-medium").is_none());
         assert!(anime4k_shader_names("unknown").is_none());
+    }
+
+    #[test]
+    fn off_restores_the_native_mpv_scaler() {
+        let configuration = video_enhancement_configuration("off").unwrap();
+        assert_eq!(configuration.scale, "lanczos");
+        assert!(configuration.shader_names.is_empty());
+        assert!(configuration.video_filter.is_empty());
+        assert_eq!(configuration.deband, "no");
     }
 }
 
@@ -5020,6 +5002,22 @@ async fn open_mpv(
     // borde. Un target no reproducible (magnet sin swarm, o URL de P2P) se trata
     // como VOD aunque el frontend lo marque como live.
     let is_live = live.unwrap_or(false) && !is_p2p_target(&target) && !looks_like_ytdlp_url(&target);
+    let preview_headers = headers.clone();
+    // Reserve identity before any await: a slower old request cannot become
+    // the newest session after a fast source change or Stop.
+    let state = app.state::<MpvState>();
+    let open_generation = {
+        let _lifecycle = state.lifecycle.lock()
+            .map_err(|_| String::from("No se pudo acceder al ciclo de vida de MPV."))?;
+        let generation = state.open_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        // Polling must not return the previous source's frame/EOF while this
+        // request is still checking transport or preparing its new core.
+        match state.last_status.lock() {
+            Ok(mut status) => *status = empty_mpv_status_snapshot(),
+            Err(poisoned) => *poisoned.into_inner() = empty_mpv_status_snapshot(),
+        }
+        generation
+    };
 
     // Un target HTTPS puede redirigir a un host HTTP. Aqui se resuelve la
     // cadena antes de arrancar mpv para saber si acaba en claro; el salto se
@@ -5077,16 +5075,18 @@ async fn open_mpv(
         }),
     );
 
-    let state = app.state::<MpvState>();
+    let seek_preview_state = app.state::<seek_preview::SeekPreviewState>();
     let p2p_state = app.state::<P2pState>();
-    let open_generation = state.open_generation.fetch_add(1, Ordering::AcqRel) + 1;
-    let previous_pending_p2p = take_pending_p2p(&p2p_state);
-    let previous_p2p = {
+    let (previous_pending_p2p, previous_p2p) = {
         let _lifecycle = state
             .lifecycle
             .lock()
             .map_err(|_| String::from("No se pudo acceder al ciclo de vida de MPV."))?;
-        stop_current_mpv(&state)
+        if state.open_generation.load(Ordering::Acquire) != open_generation {
+            return Err(String::from("La apertura fue reemplazada por otra fuente."));
+        }
+        seek_preview_state.clear();
+        (take_pending_p2p(&p2p_state), stop_current_mpv(&state))
     };
 
     let runtime_dir = find_mpv_runtime_dir(&app).ok_or_else(|| {
@@ -5234,11 +5234,14 @@ async fn open_mpv(
     ] {
         mpv_set_option_string(&client, name, value)?;
     }
-    if is_live {
+    if let Some(options) = sports_hls::stream_options(is_live) {
+        mpv_set_option_string(&client, "stream-lavf-o", options)?;
+    }
+    if let Some(options) = sports_hls::demuxer_options(&target, is_live) {
         // Reconexion agresiva: en un directo la caida de un segmento es la
         // razon principal de un freeze, y el proveedor reinicia el manifiesto
         // antes que el usuario llegue a notarlo.
-        mpv_set_option_string(&client, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=4")?;
+        mpv_set_option_string(&client, "demuxer-lavf-o", options)?;
     }
     if audio_passthrough.unwrap_or(false) {
         mpv_set_option_string(&client, "audio-spdif", "ac3,eac3,dts,dts-hd,truehd")?;
@@ -5317,6 +5320,10 @@ async fn open_mpv(
         )?;
     }
 
+    // libavformat emits HTTP failures at warning level. Raw log text is never
+    // sent to the UI: only parsed numeric HTTP codes are retained. Subscribe
+    // before initialization so very fast failures cannot outrun log setup.
+    unsafe { (client.api.request_log_messages)(client.handle.0, b"warn\0".as_ptr().cast()); }
     mpv_initialize_client(&client)?;
     mpv_bridge_log("libmpv_initialized", serde_json::json!({}));
 
@@ -5344,6 +5351,7 @@ async fn open_mpv(
         client.clone(),
         normalized_start_time,
         playback_target.p2p.clone(),
+        open_generation,
     );
     if let Err(error) = mpv_command_value_async(
         &client,
@@ -5354,6 +5362,27 @@ async fn open_mpv(
         return Err(error);
     }
     pending_p2p_cleanup.disarm();
+
+    // The thumbnail decoder is isolated in a second libmpv core and a
+    // dedicated worker thread. Do not open a second HTTP reader for P2P: it
+    // bypasses the torrent scheduler's priority accounting.
+    if !is_live && !looks_like_ytdlp_url(&target) && playback_target.p2p.is_none() {
+        if let Ok(cache_root) = app.path().app_cache_dir() {
+            match seek_preview::SeekPreviewSession::new(
+                runtime_dir.clone(),
+                playback_target.target.clone(),
+                preview_headers,
+                cache_root.join("seek-previews"),
+            ) {
+                Ok(session) => seek_preview_state.begin(session),
+                Err(error) => mpv_bridge_log(
+                    "seek_preview_session_unavailable",
+                    serde_json::json!({ "reason": error }),
+                ),
+            }
+        }
+    }
+
     mpv_bridge_log(
         "loadfile_queued",
         serde_json::json!({
@@ -5720,7 +5749,7 @@ async fn set_mpv_video_profile(
         let shaders_verified = shader_names
             .iter()
             .all(|name| active_shaders.contains(name));
-        let verified = shaders_verified
+        let configuration_applied = shaders_verified
             && (video_filter.is_empty() || active_video_filter.contains(&video_filter))
             && active_scale == scale
             && active_deband == deband;
@@ -5728,7 +5757,7 @@ async fn set_mpv_video_profile(
         let result = serde_json::json!({
             "profile": profile,
             "kind": kind,
-            "verified": verified,
+            "configurationApplied": configuration_applied,
             "requestedShaders": shader_names,
             "activeShaders": active_shaders,
             "requestedVideoFilter": video_filter,
@@ -5737,9 +5766,9 @@ async fn set_mpv_video_profile(
             "activeDeband": active_deband,
         });
         eprintln!("[AETHERIO:VIDEO-FILTER] {}", result);
-        if !verified {
+        if !configuration_applied {
             return Err(format!(
-                "MPV aceptó la mejora, pero la verificación activa no coincide: {}",
+                "MPV no dejó aplicada la configuración solicitada: {}",
                 result
             ));
         }
@@ -5906,9 +5935,24 @@ fn mpv_status(state: tauri::State<'_, MpvState>) -> Result<serde_json::Value, St
 }
 
 #[tauri::command]
+async fn seek_preview_frame(
+    state: tauri::State<'_, seek_preview::SeekPreviewState>,
+    time_seconds: f64,
+) -> Result<seek_preview::PreviewFrame, String> {
+    if !time_seconds.is_finite() || !(0.0..=24.0 * 60.0 * 60.0).contains(&time_seconds) {
+        return Err(String::from("El tiempo solicitado para el preview no es válido."));
+    }
+    let session = state.session()?;
+    tauri::async_runtime::spawn_blocking(move || session.frame_at(time_seconds))
+        .await
+        .map_err(|error| format!("Fallo la tarea de extracción de previews: {error}"))?
+}
+
+#[tauri::command]
 async fn stop_mpv(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
     {
         let state = app.state::<MpvState>();
+        app.state::<seek_preview::SeekPreviewState>().clear();
         state.open_generation.fetch_add(1, Ordering::AcqRel);
         let p2p_state = app.state::<P2pState>();
         schedule_p2p_cleanup(take_pending_p2p(&p2p_state));
@@ -6212,6 +6256,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .manage(MpvState::default())
+        .manage(seek_preview::SeekPreviewState::default())
         .manage(PendingOpenFiles::new(initial_open_files))
         .manage(P2pState::default())
         .manage(youtube_state)
@@ -6226,8 +6271,7 @@ pub fn run() {
             fetch_subtitle_text,
             embedded_subtitle_text,
             cache_subtitle_text,
-            seekr_load_track,
-            seekr_fetch_sprite,
+            seek_preview_frame,
             toggle_window_maximize,
             toggle_window_fullscreen,
             take_pending_open_files,
@@ -6259,6 +6303,9 @@ pub fn run() {
             poster_server::start_posters_server,
             poster_server::stop_posters_server,
             poster_server::posters_server_status,
+            nuvio_server::start_nuvio_sports_server,
+            nuvio_server::stop_nuvio_sports_server,
+            nuvio_server::nuvio_sports_server_status,
             poster_cache::poster_cache_url,
             tmdb_text_cache::tmdb_text_cache_get,
             tmdb_text_cache::tmdb_text_cache_set_many
@@ -6266,6 +6313,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             let state = window.state::<MpvState>();
             if let tauri::WindowEvent::Destroyed = event {
+                window.state::<seek_preview::SeekPreviewState>().clear();
                 state.open_generation.fetch_add(1, Ordering::AcqRel);
                 let p2p_state = window.state::<P2pState>();
                 schedule_p2p_cleanup(take_pending_p2p(&p2p_state));
@@ -6280,6 +6328,7 @@ pub fn run() {
             // 3000 y ~200 MB de RAM sin que nadie lo pida.
             if let tauri::RunEvent::Exit = event {
                 poster_server::stop();
+                nuvio_server::stop();
             }
         });
 }

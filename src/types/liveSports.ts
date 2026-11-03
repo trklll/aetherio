@@ -32,11 +32,31 @@ export interface LiveSource {
   /** "1080p", "720p", "auto"... solo informativo. */
   quality?: string;
   language?: string;
+  /** Stable provider identity, independent of its display label. */
+  providerId?: string;
   /** Cabeceras HTTP necesarias (Referer/Origin/User-Agent) para que el host no corte. */
   headers?: Record<string, string>;
   referrer?: string;
   userAgent?: string;
   isDefault?: boolean;
+  /** Provenance stays distinct from the addon's display name. */
+  origin?: "iptv";
+  channelName?: string;
+  verifiedAt?: number;
+  /** A match association expires when its XMLTV programme ends. */
+  validUntil?: string;
+}
+
+export interface LiveChannelProgramme {
+  channelId: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  categories: string[];
+  startsAt: string;
+  endsAt: string;
+  live: boolean;
+  repeat: boolean;
 }
 
 export interface LiveTeam {
@@ -69,6 +89,8 @@ export interface LiveEvent {
   status: LiveEventStatus;
   /** ISO 8601. En eventos "live" se usa para el minuto de juego. */
   startsAt: string;
+  /** Providers that publish a real kickoff can opt out of the legacy clock heuristic. */
+  startsAtPrecision?: "exact" | "day" | "synthesized" | "unknown";
   home?: LiveTeam;
   away?: LiveTeam;
   venue?: string;
@@ -98,6 +120,13 @@ export interface LiveChannel {
    */
   note?: string;
   sources: LiveSource[];
+  tvgId?: string;
+  tvgName?: string;
+  language?: string;
+  country?: string;
+  sports?: string[];
+  currentProgramme?: LiveChannelProgramme;
+  nextProgramme?: LiveChannelProgramme;
 }
 
 export interface LiveSnapshot {
@@ -110,6 +139,8 @@ export interface LiveSnapshot {
   channels: LiveChannel[];
   /** Epoch ms de la ultima respuesta correcta. */
   fetchedAt: number;
+  /** Imported IPTV data may not be reused by another local profile. */
+  iptvProfileKey?: string;
 }
 
 export interface LiveSportsConfig {
@@ -119,6 +150,10 @@ export interface LiveSportsConfig {
   refreshSeconds: number;
   /** Ocultar eventos ya terminados. */
   hideEnded: boolean;
+  /** One-time activation of the native FMHY providers; explicit disables survive reloads. */
+  nativeProvidersVersion?: number;
+  iptvProvidersVersion?: number;
+  sportsStreamsProvidersVersion?: number;
 }
 
 /**
@@ -130,9 +165,12 @@ export interface LiveSportsConfig {
  * con anadir el id aqui; la pagina ya sabe pintarlos.
  */
 export const DEFAULT_LIVE_SPORTS_CONFIG: LiveSportsConfig = {
-  enabledProviders: ["nuvio-sports", "stremverse", "local"],
+  enabledProviders: ["sports-streams", "nuvio-sports", "stremverse", "fmhy-native", "local", "iptv-sports"],
   refreshSeconds: 60,
   hideEnded: true,
+  nativeProvidersVersion: 1,
+  iptvProvidersVersion: 1,
+  sportsStreamsProvidersVersion: 1,
 };
 
 /**
@@ -154,10 +192,10 @@ export function liveSourceToMediaStream(event: LiveEvent, source: LiveSource): M
 
   return {
     id: source.id,
-    addonId: `live:${event.id}`,
-    addonName: source.label,
+    addonId: source.origin === "iptv" ? "iptv-sports" : source.providerId === "sports-streams" ? "community.sports.fly" : `live:${event.id}`,
+    addonName: source.origin === "iptv" ? "IPTV" : source.providerId === "sports-streams" ? "Sports Streams · Highfly" : source.label,
     name: source.label,
-    title: event.title,
+    title: source.origin === "iptv" ? source.label : event.title,
     description: [event.league, event.venue].filter(Boolean).join(" · "),
     url: source.url,
     behaviorHints: {
@@ -166,6 +204,10 @@ export function liveSourceToMediaStream(event: LiveEvent, source: LiveSource): M
       liveStatus: event.status,
       liveLeague: event.league,
       liveSport: event.sport,
+      sourceType: source.origin === "iptv" ? "iptv" : "addon",
+      ...(source.providerId ? { sourceProviderId: source.providerId } : {}),
+      ...(source.channelName ? { channelName: source.channelName } : {}),
+      ...(source.validUntil ? { liveSourceExpiresAt: source.validUntil } : {}),
       quality: source.quality ?? "",
       language: source.language ?? "",
       ...(Object.keys(headers).length ? { headers } : {}),

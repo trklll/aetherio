@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * Boton "Saltar intro / outro" de Big Picture.
+ * Pastilla compartida para "Saltar intro / outro" y "Siguiente episodio".
  *
  * El boton real solo existe cuando MPV devuelve un segmento (`fetch_introdb_segments`,
  * comando nativo) y el arnes no puede simularlo. El diseno vive entero en la
@@ -122,28 +122,25 @@ test("el boton de saltar cumple la referencia", async ({ page }) => {
     };
   });
 
-  // Proporcion de la referencia: 3.8-4.75 : 1. La etiqueta espanola es mas
-  // larga que "Skip Intro", asi que se queda en el extremo bajo del rango.
+  // Proporcion igual a la referencia y compartida por todas las acciones.
   const ratio = measured.width / measured.height;
-  expect(ratio).toBeGreaterThan(3.4);
-  expect(ratio).toBeLessThan(6);
+  expect(ratio).toBeGreaterThan(3.9);
+  expect(ratio).toBeLessThan(4.1);
 
-  // Alto y aire lateral proporcional al alto. La referencia de la TV da ~1.3 x;
-  // aqui se cierra a 0.85 x porque la etiqueta espanola es mas larga y en
-  // pantalla la pastilla debia pesar menos.
-  expect(measured.paddingLeft / measured.height).toBeGreaterThan(0.7);
-  expect(measured.paddingLeft / measured.height).toBeLessThan(1.2);
+  // El padding conserva aire en las etiquetas cortas y deja espacio al CTA largo.
+  expect(measured.paddingLeft / measured.height).toBeGreaterThan(0.2);
+  expect(measured.paddingLeft / measured.height).toBeLessThan(0.3);
 
   // Radio: rectangulo muy redondeado, NO un circulo (seria height/2).
   expect(measured.radius / measured.height).toBeGreaterThan(0.18);
   expect(measured.radius / measured.height).toBeLessThan(0.45);
 
-  // Cuerpo de texto ~0.42 x alto, peso fuerte, tinta sobre relleno claros.
+  // Cuerpo de texto ~0.37 x alto, peso fuerte, tinta negra sobre blanco.
   expect(measured.fontSize / measured.height).toBeGreaterThan(0.3);
   expect(measured.fontSize / measured.height).toBeLessThan(0.55);
   expect(Number(measured.fontWeight)).toBeGreaterThanOrEqual(700);
-  expect(measured.background).toBe("rgb(246, 246, 247)");
-  expect(measured.color).toBe("rgb(17, 17, 17)");
+  expect(measured.background).toBe("rgb(255, 255, 255)");
+  expect(measured.color).toBe("rgb(0, 0, 0)");
   expect(measured.borderTopWidth).toBe("0px");
 
   // Alineacion: el extremo derecho coincide con el de la linea de tiempo.
@@ -165,7 +162,7 @@ test("el boton de saltar cumple la referencia", async ({ page }) => {
   await page.screenshot({ path: "artifacts/player-skip/measure/skip-focus.png" });
 });
 
-test("una etiqueta larga no rompe la forma", async ({ page }) => {
+test("las etiquetas comparten forma y caben en viewport estrecho", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1920, height: 1080 });
   await stubPlayback(page);
@@ -175,24 +172,42 @@ test("una etiqueta larga no rompe la forma", async ({ page }) => {
   await page.mouse.move(size.width / 2, size.height / 2);
   await page.waitForTimeout(600);
   await page.addStyleTag({ content: "*, *::before, *::after { visibility: visible !important; }" });
-  await mountProbeButton(page, "Saltar resumen");
+  await mountProbeButton(page, "Saltar intro");
 
-  const box = await page.locator("[data-probe='true']").evaluate(node => {
-    const rect = node.getBoundingClientRect();
-    const style = getComputedStyle(node);
-    return {
-      height: rect.height,
-      width: rect.width,
-      radius: Number.parseFloat(style.borderTopLeftRadius),
-      overflows: rect.width > window.innerWidth,
-    };
-  });
-  // La etiqueta mas larga no puede cambiar el alto ni el radio (todo sale de
-  // --bp-skip-height), y la pastilla no se sale de la ventana.
-  expect(box.height).toBeGreaterThan(50);
-  expect(box.height).toBeLessThan(80);
-  expect(box.radius / box.height).toBeLessThan(0.45);
-  expect(box.overflows).toBe(false);
+  for (const viewport of [{ width: 1920, height: 1080 }, { width: 360, height: 720 }]) {
+    await page.setViewportSize(viewport);
+    const boxes = await page.locator("[data-probe='true']").evaluate(node => {
+      const button = node as HTMLButtonElement;
+      const style = getComputedStyle(button);
+      const labels = ["Saltar intro", "Saltar outro", "Siguiente episodio"];
+      return labels.map(label => {
+        button.textContent = label;
+        const rect = button.getBoundingClientRect();
+        const textRange = document.createRange();
+        textRange.selectNodeContents(button);
+        const textWidth = textRange.getBoundingClientRect().width;
+        return {
+          height: rect.height,
+          width: rect.width,
+          radius: Number.parseFloat(style.borderTopLeftRadius),
+          innerWidth: rect.width - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight),
+          textWidth,
+          overflows: rect.width > window.innerWidth,
+        };
+      });
+    });
+    // Las tres etiquetas comparten exactamente la caja y se mantienen dentro
+    // de su area de texto; solo cambia la copia.
+    for (const box of boxes) {
+      expect(box.height).toBeGreaterThan(50);
+      expect(box.height).toBeLessThan(80);
+      expect(box.radius / box.height).toBeLessThan(0.45);
+      expect(box.textWidth).toBeLessThanOrEqual(box.innerWidth + 1);
+      expect(box.overflows).toBe(false);
+      expect(box.width).toBeCloseTo(boxes[0].width, 1);
+      expect(box.height).toBeCloseTo(boxes[0].height, 1);
+    }
+  }
 });
 
 test("Saltar intro no se solapa con las acciones en rutas normal y TV, ni a 720p", async ({ page }) => {

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b1215" />
+    <title>Provider Hub · Administración</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css" />
+    <script src="/admin/assets/admin.js" defer></script>
+  </head>
+  <body>
+    <div class="login-screen" id="login-screen">
+      <form class="login-card" id="login-form">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">AH</span>
+          <span><small>AETHERIO / CONTROL PLANE</small><strong>Provider Hub</strong></span>
+        </div>
+        <div class="eyebrow">ACCESO DE ADMINISTRACIÓN</div>
+        <h1>Conecta con tu Hub.</h1>
+        <p>Introduce el token administrativo de Cloudflare. Se conserva solo mientras esta pestaña permanezca abierta.</p>
+        <label for="admin-token">Token de administración</label>
+        <input id="admin-token" name="token" type="password" autocomplete="current-password" required spellcheck="false" />
+        <button class="button button-primary button-wide" type="submit" id="login-submit">Entrar al panel <span aria-hidden="true">→</span></button>
+        <p class="form-message" id="login-message" role="status"></p>
+        <div class="secure-note"><span class="status-dot"></span> Conexión cifrada · token no persistente</div>
+      </form>
+    </div>
+
+    <main class="app-shell" id="app-shell" hidden>
+      <header class="topbar">
+        <a class="brand-lockup" href="/admin" aria-label="Provider Hub inicio">
+          <span class="brand-mark" aria-hidden="true">AH</span>
+          <span><small>AETHERIO / CONTROL PLANE</small><strong>Provider Hub</strong></span>
+        </a>
+        <div class="topbar-right">
+          <div class="connection-state"><span class="status-dot" id="health-dot"></span><span id="health-label">Conectando</span></div>
+          <button class="button button-quiet" id="refresh-button" type="button" title="Actualizar directorio">Actualizar <span aria-hidden="true">↻</span></button>
+          <button class="button button-quiet logout-button" id="logout-button" type="button">Salir</button>
+        </div>
+      </header>
+
+      <section class="page-heading">
+        <div>
+          <div class="eyebrow">OPERACIÓN · FUENTES DE STREAMING</div>
+          <h1>Directorio de proveedores</h1>
+          <p>Add-ons de Stremio y proveedores de scripts, en un mismo directorio. Las configuraciones personales se conservan en Aetherio.</p>
+        </div>
+        <div class="heading-actions">
+          <button class="button button-secondary" id="add-provider" type="button">Nuevo script</button>
+          <button class="button button-primary" id="add-addon" type="button">Nuevo add-on</button>
+        </div>
+      </section>
+
+      <section class="stats-row" aria-label="Resumen">
+        <div class="stat"><span>Registradas</span><strong id="stat-total">—</strong></div>
+        <div class="stat"><span>Activas / por defecto</span><strong id="stat-enabled">—</strong></div>
+        <div class="stat"><span>Scripts compilados</span><strong id="stat-compiled">—</strong></div>
+        <div class="stat stat-wide"><span>Versión del Hub</span><strong id="stat-version">—</strong></div>
+      </section>
+
+      <section class="workspace" id="workspace">
+        <div class="directory-column">
+          <div class="directory-toolbar">
+            <label class="search-box"><span class="sr-only">Buscar fuente</span><input id="search-input" type="search" placeholder="Nombre, ID o integración…" autocomplete="off" /></label>
+            <label class="filter-select"><span class="sr-only">Filtrar tipo de fuente</span><select id="kind-filter"><option value="all">Todos los tipos</option><option value="stremio">Stremio</option><option value="script">Scripts</option></select></label>
+            <label class="filter-select"><span class="sr-only">Filtrar estado</span><select id="status-filter"><option value="all">Todos</option><option value="enabled">Activos</option><option value="disabled">Desactivados</option></select></label>
+          </div>
+          <div class="list-heading"><span>FUENTE</span><span>TIPOS</span><span>ESTADO</span><span></span></div>
+          <div class="provider-list" id="provider-list" aria-live="polite"></div>
+          <div class="empty-state" id="empty-state" hidden>No hay proveedores que coincidan con la búsqueda.</div>
+          <div class="directory-footer"><span id="directory-count">—</span><span>Orden del Hub · el original se conserva al editar</span></div>
+        </div>
+
+        <aside class="editor-panel" id="editor-panel" hidden aria-labelledby="editor-title">
+          <div class="editor-heading">
+            <div><div class="eyebrow" id="editor-kicker">NUEVA ENTRADA</div><h2 id="editor-title">Agregar fuente</h2></div>
+            <button class="icon-button" id="close-editor" type="button" aria-label="Cerrar editor">×</button>
+          </div>
+          <form id="provider-form" novalidate>
+            <div class="form-grid">
+              <label class="field field-full">ID interno <span class="field-hint" id="id-hint">minúsculas, números y guiones</span>
+                <input id="provider-id" name="id" required maxlength="128" autocomplete="off" />
+              </label>
+              <label class="field field-full">Nombre visible
+                <input id="provider-name" name="name" required maxlength="120" placeholder="Ej. Cine Latino" />
+              </label>
+              <label class="field field-full">Descripción
+                <textarea id="provider-description" name="description" rows="2" maxlength="300" placeholder="Qué contenido ofrece esta fuente"></textarea>
+              </label>
+              <label class="field field-full"><span id="logo-label">Logo · URL HTTPS</span>
+                <div class="logo-input-row"><input id="provider-logo" name="logo" type="url" placeholder="https://…/logo.png" /><div class="logo-preview-wrap"><img id="logo-preview" alt="Vista previa del logo" hidden /><span id="logo-placeholder">LOGO</span></div></div>
+              </label>
+              <fieldset class="field field-full type-field" data-script-field><legend>Tipos de contenido</legend>
+                <label class="check-option"><input id="type-movie" type="checkbox" value="movie" /><span>Películas</span></label>
+                <label class="check-option"><input id="type-tv" type="checkbox" value="tv" /><span>Series</span></label>
+              </fieldset>
+              <label class="field field-full" data-script-field>Idiomas
+                <input id="provider-languages" name="languages" placeholder="es, latino (separados por coma)" />
+              </label>
+              <label class="field field-full" data-script-field>Cabeceras para Aetherio móvil
+                <select id="provider-headers"><option value="drop">No reenviar cabeceras</option><option value="keep">Conservar cabeceras permitidas</option></select>
+              </label>
+              <label class="switch-field field-full"><input id="provider-enabled" type="checkbox" /><span class="switch-ui" aria-hidden="true"></span><span id="enabled-label">Fuente activa</span></label>
+            </div>
+
+            <section id="addon-fields" class="addon-fields" hidden aria-label="Configuración de Stremio">
+              <label class="field" for="addon-manifest-url">Manifest URL</label>
+              <input id="addon-manifest-url" type="text" inputmode="url" placeholder="https://…/manifest.json" maxlength="2048" spellcheck="false" />
+              <button class="button button-secondary button-wide" id="check-addon-manifest" type="button">Comprobar manifest</button>
+              <p class="field-note" id="addon-check-result" role="status">Comprueba el manifest para importar los datos de un add-on nuevo.</p>
+              <p class="field-note" id="addon-integration-note">Este directorio es público: no introduzcas tokens ni URLs personales. Las fuentes separadas en Aetherio conservan su propia identidad y filtro de streams.</p>
+              <div class="form-grid addon-options">
+                <label class="field field-full">Catálogos en Aetherio<select id="addon-catalog-policy"><option value="empty">Solo streams · ocultar catálogos</option><option value="keep">Conservar catálogos del manifest</option></select></label>
+                <label class="switch-field field-full"><input id="addon-hidden" type="checkbox" /><span class="switch-ui" aria-hidden="true"></span><span>Integración oculta en la app</span></label>
+                <label class="field">Timeout de streams (ms)<input id="addon-timeout" type="number" min="1000" max="120000" placeholder="Automático" /></label>
+                <label class="field">Intentos de streams<input id="addon-attempts" type="number" min="1" max="3" placeholder="Automático" /></label>
+              </div>
+              <details class="manifest-details"><summary>Manifest de respaldo · avanzado</summary>
+                <label class="field" for="addon-fallback">JSON de respaldo</label>
+                <textarea id="addon-fallback" class="code-editor" rows="10" spellcheck="false" placeholder='{"id":"…","name":"…","version":"1.0.0","types":["movie"],"resources":["stream"],"catalogs":[]}'></textarea>
+              </details>
+              <p class="field-note">Los cambios se guardan en el directorio del Hub sin redespliegue. El estado personal de cada instalación no se sobrescribe.</p>
+            </section>
+
+            <div class="source-editor" id="source-editor">
+              <div class="section-label"><span>IMPLEMENTACIÓN</span><span class="field-hint">límite 512 KB</span></div>
+              <div class="segmented" role="group" aria-label="Tipo de script">
+                <button type="button" class="segment active" data-source-mode="inline">Script inline</button>
+                <button type="button" class="segment" data-source-mode="url">URL de script</button>
+              </div>
+              <div id="inline-source-group">
+                <label class="field" for="provider-script">Código del proveedor</label>
+                <textarea id="provider-script" class="code-editor" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="module.exports = { getStreams: async (...) => [] };" rows="12"></textarea>
+                <p class="field-note">El panel no ejecuta código sin publicar. Guarda y despliega el bundle para probar esta versión en el Worker.</p>
+              </div>
+              <div id="url-source-group" hidden>
+                <label class="field" for="provider-script-url">URL HTTPS del script</label>
+                <div class="url-test-row"><input id="provider-script-url" type="url" placeholder="https://…/provider.js" /><button class="button button-secondary" id="check-script-url" type="button">Comprobar URL</button></div>
+                <p class="field-note" id="url-check-result">El Hub descargará esta URL cuando necesite el script.</p>
+              </div>
+            </div>
+
+            <section class="test-section" id="test-section" hidden>
+              <div class="section-label"><span>PRUEBA DE STREAM</span><span class="field-hint">bundle publicado</span></div>
+              <p class="field-note">Ejecuta la versión compilada actualmente en el Worker; no prueba cambios pendientes de despliegue.</p>
+              <div class="test-grid">
+                <label class="field">Tipo<select id="test-type"><option value="movie">Película</option><option value="tv">Serie</option></select></label>
+                <label class="field">TMDb ID<input id="test-tmdb-id" type="number" min="1" value="603" /></label>
+                <label class="field field-full">Título<input id="test-title" value="The Matrix" /></label>
+                <label class="field">Temporada<input id="test-season" type="number" min="0" value="1" /></label>
+                <label class="field">Episodio<input id="test-episode" type="number" min="1" value="1" /></label>
+              </div>
+              <button class="button button-secondary button-wide" id="test-provider" type="button">Probar versión publicada</button>
+              <div class="test-results" id="test-results" role="status" hidden></div>
+            </section>
+
+            <div class="form-actions">
+              <button class="button button-danger" id="delete-provider" type="button" hidden>Eliminar</button>
+              <span class="form-spacer"></span>
+              <button class="button button-quiet" id="cancel-edit" type="button">Cancelar</button>
+              <button class="button button-primary" id="save-provider" type="submit">Guardar fuente</button>
+            </div>
+            <p class="form-message" id="save-message" role="status"></p>
+          </form>
+        </aside>
+      </section>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      <footer class="page-footer"><span>Provider Hub · administración protegida</span><a href="/health" target="_blank" rel="noreferrer">Estado del Worker ↗</a></footer>
+    </main>
+  </body>
+</html>

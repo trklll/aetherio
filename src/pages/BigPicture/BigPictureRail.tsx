@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Settings, Users } from "lucide-react";
+import { Users } from "lucide-react";
 import LibraryIcon from "../../components/ui/LibraryIcon.tsx";
 import SearchThinIcon from "../../components/ui/SearchThinIcon.tsx";
 import HomeBoldIcon from "../../components/ui/HomeBoldIcon.tsx";
-import ConnectionIcon from "../../components/ui/ConnectionIcon.tsx";
+import SportsIcon from "../../components/ui/SportsIcon.tsx";
+import { getStreamingPlatformPath, STREAMING_PLATFORMS } from "../../services/streamingPlatforms";
 import {
   getActiveProfile,
   getProfileInitial,
@@ -23,7 +24,7 @@ import "./BigPictureRail.css";
  * - Rail 276px → item 60px → gap 8px → padding 13px → perfil 62px
  * - Colapsado: pill 53px (icono 38px + etiqueta), radio full
  * - Expandido: radio 31px, indicador blanco #F6F6F7, overlay #080A0E 38%
- * - Items: Buscar / Inicio / Biblioteca / Party / Ajustes / Extensiones
+ * - Items principales + sección Plataformas (logos y rutas del catálogo)
  *
  * Party es ruta (/big-picture/party, page 10-foot con teclado en pantalla),
  * no modal: el modal de Home es patrón PC (ratón + teclado físico).
@@ -40,18 +41,26 @@ interface RailItem {
    * `forwardRef` (con `$$typeof`), pero un SVG propio es un componente de
    * función normal. Este tipo acepta ambos sin castear.
    */
-  Icon: ComponentType<{ size?: number; className?: string }>;
+  Icon?: ComponentType<{ size?: number; className?: string }>;
   route: string;
+  logoImage?: string;
 }
 
-const RAIL_ITEMS: readonly RailItem[] = [
+const PRIMARY_RAIL_ITEMS: readonly RailItem[] = [
   { key: "search", route: "/big-picture/search", label: "Buscar", Icon: SearchThinIcon },
   { key: "home", route: "/big-picture", label: "Inicio", Icon: HomeBoldIcon },
   { key: "library", route: "/big-picture/library", label: "Biblioteca", Icon: LibraryIcon },
+  { key: "sports", route: "/big-picture/sports", label: "Sports", Icon: SportsIcon },
   { key: "party", route: "/big-picture/party", label: "Party", Icon: Users },
-  { key: "settings", route: "/big-picture/settings", label: "Ajustes", Icon: Settings },
-  { key: "addons", route: "/big-picture/addons", label: "Extensiones", Icon: ConnectionIcon },
 ];
+const PLATFORM_RAIL_ITEMS: readonly RailItem[] = STREAMING_PLATFORMS.map(platform => ({
+  key: `platform-${platform.id}`,
+  route: getStreamingPlatformPath(platform.id, true),
+  label: platform.name,
+  logoImage: platform.logoImage,
+}));
+const RAIL_ITEMS: readonly RailItem[] = [...PRIMARY_RAIL_ITEMS, ...PLATFORM_RAIL_ITEMS];
+const PLATFORM_RAIL_START_INDEX = PRIMARY_RAIL_ITEMS.length;
 
 // Tokens nativos × 1.2 (ver TvPagePill.kt: 230 / 11 / 52 / 7 / 50).
 const RAIL_W = 276;
@@ -59,9 +68,26 @@ const RAIL_PAD = 13;
 const RAIL_PROFILE_H = 62;
 const RAIL_GAP = 8;
 const RAIL_ITEM_H = 60;
+const PLATFORM_ITEM_H = 48;
+const PLATFORM_ITEM_GAP = 4;
+const PLATFORM_SECTION_H = 48;
+const PLATFORM_RAIL_MENU_H =
+  PLATFORM_SECTION_H +
+  PLATFORM_RAIL_ITEMS.length * PLATFORM_ITEM_H +
+  Math.max(0, PLATFORM_RAIL_ITEMS.length - 1) * PLATFORM_ITEM_GAP;
 const RAIL_OPEN_H =
   RAIL_PAD + RAIL_PROFILE_H + RAIL_GAP +
-  RAIL_ITEMS.length * (RAIL_ITEM_H + RAIL_GAP) + RAIL_PAD;
+  PRIMARY_RAIL_ITEMS.length * (RAIL_ITEM_H + RAIL_GAP) +
+  PLATFORM_RAIL_MENU_H + RAIL_PAD;
+
+function getRailItemOffset(index: number): number {
+  if (index < PLATFORM_RAIL_START_INDEX) return index * (RAIL_ITEM_H + RAIL_GAP);
+  return (
+    PLATFORM_RAIL_START_INDEX * (RAIL_ITEM_H + RAIL_GAP) +
+    PLATFORM_SECTION_H +
+    (index - PLATFORM_RAIL_START_INDEX) * (PLATFORM_ITEM_H + PLATFORM_ITEM_GAP)
+  );
+}
 
 function formatClock(): string {
   try {
@@ -78,11 +104,13 @@ export default function BigPictureRail() {
   const navigate = useNavigate();
   const location = useLocation();
   const [expanded, setExpanded] = useState(false);
-  const [cursor, setCursor] = useState<number | null>(null);
+  const [cursor, setCursor] = useState<number | "profile" | null>(null);
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
   const [clock, setClock] = useState(() => formatClock());
   const [collapsedW, setCollapsedW] = useState(0);
   const collapsedMeasureRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const profileButtonRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   // Igual que la TopNav normal (collapsed = scrolled && !hovering): al
@@ -113,7 +141,8 @@ export default function BigPictureRail() {
     if (exact >= 0) return exact;
     return Math.max(0, RAIL_ITEMS.findIndex(item => item.key === "home"));
   })();
-  const indicatorIndex = cursor ?? activeIndex;
+  const cursorIndex = typeof cursor === "number" ? cursor : null;
+  const indicatorIndex = cursor === "profile" ? null : cursorIndex ?? activeIndex;
   const collapsedItem = RAIL_ITEMS[activeIndex];
   const CollapsedIcon = collapsedItem.Icon;
 
@@ -180,15 +209,18 @@ export default function BigPictureRail() {
       const scrollTop = Math.max(...shells.map(s => s.scrollTop));
       // Hero del home picture o hero del Detail de PC reutilizado.
       const hero = document.querySelector<HTMLElement>(
-        "[data-aetherio-big-picture] [data-hero-panel], [data-aetherio-big-picture] .detail-page-hero",
+        "[data-aetherio-big-picture] [data-hero-panel], [data-aetherio-big-picture] .detail-page-hero, [data-aetherio-big-picture] .bp-sports__hero",
       );
       // Search, Library, Party, Genre, Settings y Addons Big Picture no tienen
       // hero: la pill se aparca en cuanto se scrollea (si no, queda
-      // flotando sobre tabs/contenido).
+      // flotando sobre tabs/contenido). Sports sí mide su hero propio
+      // (.bp-sports__hero); solo entra en este renglón cuando muestra el
+      // onboarding, que no tiene hero (raíz con data-bp-sports).
       if (!hero) {
         const isSubPage =
           document.querySelector("[data-aetherio-big-picture] [data-bp-search-kb]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-library]") !== null ||
+          document.querySelector("[data-aetherio-big-picture] [data-bp-sports]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-party]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-genre]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-settings]") !== null ||
@@ -300,11 +332,29 @@ export default function BigPictureRail() {
     }
   };
 
+  const focusRailItem = (index: number) => {
+    const item = itemRefs.current[index];
+    const menu = menuRef.current;
+    if (!item || !menu) return;
+
+    item.focus({ preventScroll: true });
+    const itemTop = item.offsetTop;
+    const itemBottom = itemTop + item.offsetHeight;
+    if (itemTop < menu.scrollTop) {
+      menu.scrollBy({ top: itemTop - menu.scrollTop, behavior: "smooth" });
+    } else if (itemBottom > menu.scrollTop + menu.clientHeight) {
+      menu.scrollBy({
+        top: itemBottom - menu.scrollTop - menu.clientHeight,
+        behavior: "smooth",
+      });
+    }
+  };
+
   // Al expandir, foco al item actual (como el nativo tras 130ms).
   useEffect(() => {
     if (!expanded) return;
     const t = window.setTimeout(() => {
-      itemRefs.current[cursor ?? activeIndex]?.focus({ preventScroll: true });
+      focusRailItem(cursorIndex ?? activeIndex);
     }, 130);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -342,28 +392,91 @@ export default function BigPictureRail() {
     // desde el detail vuelve al carrusel).
     if (item.route === "/big-picture") clearPendingShellPreview();
     navigate(item.route);
+    // Con mando el item activado queda enfocado y el rail ya colapsado lo
+    // oculta: el motor ignora teclas dentro de `.bp-rail`, así que la page
+    // destino ve el mando completamente muerto (Up/Down absorben las flechas
+    // moviendo el foco por items invisibles y Left no reabre nada). El restore de collapse() sirve
+    // dentro de la misma page; al cambiar de ruta su elemento ya se desmontó
+    // y no hay a quién devolverlo. Solo queda soltar el foco: body despierta
+    // al requester de la page destino (el suyo o el del motor a 380 ms).
+    window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".bp-rail")) active.blur();
+    }, 160);
   };
 
   const onRailKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
+      if (document.activeElement === profileButtonRef.current) {
+        if (e.key === "ArrowDown") {
+          setCursor(0);
+          focusRailItem(0);
+        }
+        return;
+      }
+
+      const currentIndex = cursorIndex ?? activeIndex;
+      if (e.key === "ArrowUp" && currentIndex === 0) {
+        setCursor("profile");
+        profileButtonRef.current?.focus({ preventScroll: true });
+        return;
+      }
+
       const dir = e.key === "ArrowDown" ? 1 : -1;
-      const next = ((cursor ?? activeIndex) + dir + RAIL_ITEMS.length) % RAIL_ITEMS.length;
+      const next = (currentIndex + dir + RAIL_ITEMS.length) % RAIL_ITEMS.length;
       setCursor(next);
-      itemRefs.current[next]?.focus({ preventScroll: true });
+      focusRailItem(next);
     } else if (e.key === "Home") {
       e.preventDefault();
       setCursor(0);
-      itemRefs.current[0]?.focus({ preventScroll: true });
+      focusRailItem(0);
     } else if (e.key === "End") {
       e.preventDefault();
       setCursor(RAIL_ITEMS.length - 1);
-      itemRefs.current[RAIL_ITEMS.length - 1]?.focus({ preventScroll: true });
+      focusRailItem(RAIL_ITEMS.length - 1);
     } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       // Como el nativo: izquierda/derecha cierra el rail y devuelve el foco al contenido.
       e.preventDefault();
       collapse();
     }
+  };
+
+  const renderRailItem = (item: RailItem, index: number) => {
+    const focused = indicatorIndex === index;
+    const ItemIcon = item.Icon;
+    const isPlatform = index >= PLATFORM_RAIL_START_INDEX;
+    const logoClass = "bp-rail__item-logo";
+
+    return (
+      <button
+        key={item.key}
+        ref={el => {
+          itemRefs.current[index] = el;
+        }}
+        className={`bp-rail__item${isPlatform ? " is-platform" : ""}${focused ? " is-focused" : ""}`}
+        tabIndex={expanded ? 0 : -1}
+        onFocus={() => setCursor(index)}
+        onMouseEnter={() => setCursor(index)}
+        onClick={() => go(item)}
+        aria-current={index === activeIndex ? "page" : undefined}
+      >
+        <span className="bp-rail__item-icon">
+          {item.logoImage ? (
+            <img
+              className={logoClass}
+              src={item.logoImage}
+              alt=""
+              aria-hidden="true"
+              onError={event => { event.currentTarget.style.display = "none"; }}
+            />
+          ) : ItemIcon ? (
+            <ItemIcon size={26} />
+          ) : null}
+        </span>
+        <span className="bp-rail__item-label">{item.label}</span>
+      </button>
+    );
   };
 
   return (
@@ -387,7 +500,14 @@ export default function BigPictureRail() {
         {/* Medida invisible de la pill colapsada */}
         <div ref={collapsedMeasureRef} className="bp-rail__measure" aria-hidden="true">
           <span className="bp-rail__collapsed-icon">
-            <CollapsedIcon size={20} />
+            {collapsedItem.logoImage ? (
+              <img
+                src={collapsedItem.logoImage}
+                alt=""
+              />
+            ) : CollapsedIcon ? (
+              <CollapsedIcon size={20} />
+            ) : null}
           </span>
           <span className="bp-rail__collapsed-label">{collapsedItem.label}</span>
         </div>
@@ -407,20 +527,33 @@ export default function BigPictureRail() {
               aria-label={`Abrir navegación, sección actual: ${collapsedItem.label}`}
             >
               <span className="bp-rail__collapsed-icon">
-                <CollapsedIcon size={20} />
+                {collapsedItem.logoImage ? (
+                  <img
+                    src={collapsedItem.logoImage}
+                    alt=""
+                  />
+                ) : CollapsedIcon ? (
+                  <CollapsedIcon size={20} />
+                ) : null}
               </span>
               <span className={`bp-rail__collapsed-label${contracted ? " is-contracted" : ""}`}>{collapsedItem.label}</span>
             </button>
           )}
 
           <div className={`bp-rail__expanded${expanded ? " is-visible" : ""}`} aria-hidden={!expanded}>
-            {/* Indicador blanco animado (pill de foco) */}
-            <div
-              className="bp-rail__indicator"
-              style={{ top: RAIL_PAD + RAIL_PROFILE_H + RAIL_GAP + indicatorIndex * (RAIL_ITEM_H + RAIL_GAP) }}
-            />
             {/* Perfil + reloj */}
-            <div className="bp-rail__profile">
+            <button
+              ref={profileButtonRef}
+              type="button"
+              className="bp-rail__profile"
+              tabIndex={expanded ? 0 : -1}
+              onFocus={() => setCursor("profile")}
+              aria-label="Abrir ajustes del perfil"
+              onClick={() => {
+                collapse();
+                navigate("/big-picture/settings");
+              }}
+            >
               <span className="bp-rail__avatar">
                 {profile?.avatarDataUrl ? (
                   <img src={profile.avatarDataUrl} alt="" />
@@ -430,31 +563,23 @@ export default function BigPictureRail() {
               </span>
               <span className="bp-rail__profile-name">{profile?.name?.trim() || "Perfil"}</span>
               <span className="bp-rail__clock">{clock}</span>
+            </button>
+            <div ref={menuRef} className="bp-rail__menu">
+              {/* Indicador blanco animado (pill de foco) */}
+              <div
+                className="bp-rail__indicator"
+                style={{
+                  top: getRailItemOffset(indicatorIndex ?? 0),
+                  height: indicatorIndex !== null && indicatorIndex >= PLATFORM_RAIL_START_INDEX ? PLATFORM_ITEM_H : RAIL_ITEM_H,
+                  display: indicatorIndex === null ? "none" : undefined,
+                }}
+              />
+              {PRIMARY_RAIL_ITEMS.map((item, index) => renderRailItem(item, index))}
+              <div className="bp-rail__section-title">Plataformas</div>
+              {PLATFORM_RAIL_ITEMS.map((item, index) =>
+                renderRailItem(item, PLATFORM_RAIL_START_INDEX + index),
+              )}
             </div>
-            {/* Items */}
-            {RAIL_ITEMS.map((item, i) => {
-              const focused = indicatorIndex === i;
-              const ItemIcon = item.Icon;
-              return (
-                <button
-                  key={item.key}
-                  ref={el => {
-                    itemRefs.current[i] = el;
-                  }}
-                  className={`bp-rail__item${focused ? " is-focused" : ""}`}
-                  tabIndex={expanded ? 0 : -1}
-                  onFocus={() => setCursor(i)}
-                  onMouseEnter={() => setCursor(i)}
-                  onClick={() => go(item)}
-                  aria-current={i === activeIndex ? "page" : undefined}
-                >
-                  <span className="bp-rail__item-icon">
-                    <ItemIcon size={26} />
-                  </span>
-                  <span className="bp-rail__item-label">{item.label}</span>
-                </button>
-              );
-            })}
           </div>
         </div>
       </nav>

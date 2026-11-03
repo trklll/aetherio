@@ -23,6 +23,8 @@ export interface PlaybackPreferences {
   secondAudioLanguage: string;
   secondSubtitleLanguage: string;
   reuseLastLink: boolean;
+  /** Try a bounded automatic VOD source recovery after a playback failure. */
+  automaticSourceRecovery: boolean;
   lastLinkCacheHours: number;
   sourceSelectionMode: SourceSelectionMode;
   hardwareDecoding: HardwareDecodingMode;
@@ -69,6 +71,7 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   secondAudioLanguage: "eng",
   secondSubtitleLanguage: "",
   reuseLastLink: true,
+  automaticSourceRecovery: false,
   lastLinkCacheHours: 24,
   sourceSelectionMode: "manual",
   hardwareDecoding: "auto",
@@ -249,6 +252,9 @@ function normalizePlaybackPreferences(preferences: Partial<PlaybackPreferences>)
     secondAudioLanguage: normalizeLanguage(preferences.secondAudioLanguage, DEFAULT_PLAYBACK_PREFERENCES.secondAudioLanguage),
     secondSubtitleLanguage: normalizeLanguage(preferences.secondSubtitleLanguage, DEFAULT_PLAYBACK_PREFERENCES.secondSubtitleLanguage),
     reuseLastLink: typeof preferences.reuseLastLink === "boolean" ? preferences.reuseLastLink : DEFAULT_PLAYBACK_PREFERENCES.reuseLastLink,
+    automaticSourceRecovery: typeof preferences.automaticSourceRecovery === "boolean"
+      ? preferences.automaticSourceRecovery
+      : DEFAULT_PLAYBACK_PREFERENCES.automaticSourceRecovery,
     lastLinkCacheHours: clampNumber(preferences.lastLinkCacheHours, 1, 720, DEFAULT_PLAYBACK_PREFERENCES.lastLinkCacheHours),
     sourceSelectionMode: preferences.sourceSelectionMode === "first" ? "first" : "manual",
     hardwareDecoding: normalizeHardwareDecoding(preferences.hardwareDecoding),

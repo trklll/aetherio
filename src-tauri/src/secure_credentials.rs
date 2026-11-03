@@ -8,10 +8,9 @@ const R2_ACCESS_KEY_ID_KEY: &str = "r2-access-key-id";
 const R2_SECRET_ACCESS_KEY_KEY: &str = "r2-secret-access-key";
 const R2_BUCKET_NAME_KEY: &str = "r2-bucket-name";
 
-const ALLOWED_KEYS: [&str; 7] = [
+const ALLOWED_KEYS: [&str; 6] = [
     "account-session",
     "anilist-access-token",
-    "seekr-api-key",
     R2_ACCOUNT_ID_KEY,
     R2_ACCESS_KEY_ID_KEY,
     R2_SECRET_ACCESS_KEY_KEY,
@@ -107,7 +106,6 @@ mod tests {
         for key in [
             "account-session",
             "anilist-access-token",
-            "seekr-api-key",
             R2_ACCOUNT_ID_KEY,
             R2_ACCESS_KEY_ID_KEY,
             R2_SECRET_ACCESS_KEY_KEY,
@@ -119,7 +117,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_keys() {
-        for key in ["", "seekr", "SEEKR-API-KEY", "seekr_api_key", "seekr-api-key-2", "r2"] {
+        for key in ["", "unsupported", "R2", "r2", "unknown-service-key"] {
             assert!(validate_key(key).is_err(), "{key} no deberia estar permitido");
         }
     }

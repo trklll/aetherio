@@ -56,6 +56,7 @@
 
 .bp-rail__box.is-expanded {
   border-radius: 31px;
+  max-height: calc(95vh - 16px);
 }
 
 /* Aparcado fuera de pantalla (izquierda). La vuelta quita la clase y la
@@ -124,9 +125,12 @@
 /* ——— Rail expandido (tokens nativos × 1.2) ——— */
 .bp-rail__expanded {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 276px;
-  height: 368px;
+  height: 100%;
   padding: 13px;
+  overflow: hidden;
   opacity: 0;
   transform: scale(0.88);
   transition: opacity 0.26s ease 0.16s, transform 0.26s cubic-bezier(0.25, 0.1, 0.25, 1) 0.16s;
@@ -141,12 +145,14 @@
 
 .bp-rail__indicator {
   position: absolute;
-  left: 13px;
+  left: 0;
   width: 250px;
   height: 60px;
   border-radius: 999px;
   background: rgba(246, 246, 247, 0.96);
-  transition: top 0.22s cubic-bezier(0.25, 0.1, 0.25, 1);
+  transition:
+    top 0.22s cubic-bezier(0.25, 0.1, 0.25, 1),
+    height 0.22s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 .bp-rail__profile {
@@ -154,10 +160,23 @@
   z-index: 1;
   display: flex;
   align-items: center;
+  width: 100%;
   height: 62px;
+  flex: 0 0 62px;
   padding-left: 8px;
   padding-right: 12px;
   margin-bottom: 8px;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bp-rail__profile:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: -2px;
 }
 
 .bp-rail__avatar {
@@ -202,6 +221,33 @@
   white-space: nowrap;
 }
 
+.bp-rail__menu {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.bp-rail__menu::-webkit-scrollbar {
+  display: none;
+}
+
+.bp-rail__section-title {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
 .bp-rail__item {
   position: relative;
   z-index: 1;
@@ -235,6 +281,11 @@
   color: #08080a;
 }
 
+.bp-rail__item.is-platform {
+  height: 48px;
+  margin-bottom: 4px;
+}
+
 .big-picture--home-maximized .bp-rail__item:focus,
 .big-picture--home-maximized .bp-rail__item:focus-visible,
 .shell-preview-app .bp-rail__item:focus,
@@ -266,6 +317,39 @@
 .bp-rail__item-icon svg {
   display: block;
   flex: 0 0 auto;
+}
+
+.bp-rail__item-logo {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 50%;
+}
+
+.bp-rail__item-logo--inverted,
+.bp-rail__collapsed-icon img.is-inverted {
+  filter: brightness(0) invert(1);
+}
+
+.bp-rail__collapsed-icon img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+/* Cada servicio ocupa el mismo badge circular; el logo mantiene su proporción
+   dentro del círculo, igualando marcas con wordmarks y símbolos. */
+.bp-rail__item.is-platform .bp-rail__item-icon {
+  width: 38px;
+  height: 38px;
+}
+
+.bp-rail__item.is-platform .bp-rail__item-logo {
+  width: 32px;
+  height: 32px;
 }
 
 .bp-rail__item-label {

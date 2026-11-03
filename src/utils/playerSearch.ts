@@ -19,7 +19,7 @@ function readPositiveInt(raw: string | null): number | undefined {
  * se renderiza embebido dentro de Detail, donde la URL es `/detail/:type/:id` y
  * no lleva search params. Leyendo solo los params, el reproductor quedaba sin
  * `type`/`id` y todo lo que se apoya en la identidad del titulo (streams,
- * continuacion, Seekr) se caia.
+ * continuación y preferencias de Auto Sync) se caía.
  */
 export function buildPlayerSearch(params: URLSearchParams, query: StreamQuery | null) {
   const next = new URLSearchParams();

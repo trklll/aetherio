@@ -23,6 +23,7 @@ import {
   Search,
 } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import ProfileAvatar from "../../components/profile/ProfileAvatar";
 import SourcesPanel from "./SourcesPanel";
 import ToggleSwitch from "../../components/ui/ToggleSwitch";
@@ -51,7 +52,6 @@ import {
   savePlaybackPreferences,
   type PlaybackPreferences,
 } from "../../config/playbackPreferences";
-import { useSeekrApiKey } from "../../config/useSeekrApiKey";
 import {
   getSpatialPosterSettings,
   saveSpatialPosterSettings,
@@ -99,7 +99,7 @@ import packageJson from "../../../package.json";
 import PinPad from "../../components/pin/PinPad.tsx";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "trakt" | "mdblist" | "discord" | "seekr";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "trakt" | "mdblist" | "discord";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 type SavedSections = {
   profile: boolean;
@@ -670,7 +670,6 @@ async function startTraktConnection() {
           <NavRow title="TheIntroDB" description="Timestamps de créditos (outros) para disparar Up Next en películas y series." onClick={() => onViewChange("theintrodb")} />
           <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
           <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estás viendo en Aetherio." onClick={() => onViewChange("discord")} />
-          <NavRow title="Seekr" description="Previsualizaciones de escenas en la barra del reproductor." onClick={() => onViewChange("seekr")} />
         </PillBlock>
       </PanelScaffold>
     );
@@ -726,10 +725,6 @@ async function startTraktConnection() {
         </div>
       </PanelScaffold>
     );
-  }
-
-  if (view === "seekr") {
-    return <SeekrPanel onBack={() => onViewChange("integrations")} />;
   }
 
   if (view === "mdblist") {
@@ -864,7 +859,7 @@ return (
           </>
         ) : null}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
-        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt, Discord y Seekr." onClick={() => onViewChange("integrations")} />
+        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt y Discord." onClick={() => onViewChange("integrations")} />
       </PillBlock>
     </PanelScaffold>
   );
@@ -935,91 +930,6 @@ function MdbListPanel({
           {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
 
-      </div>
-    </PanelScaffold>
-  );
-}
-
-function SeekrPanel({ onBack }: { onBack: () => void }) {
-  const { apiKey, ready, save, clear } = useSeekrApiKey();
-  const [draft, setDraft] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const persist = async () => {
-    setBusy(true);
-    setError(null);
-    setStatus(null);
-    try {
-      await save(draft);
-      setDraft("");
-      setStatus("Clave guardada en el almacén seguro.");
-    } catch (cause) {
-      setError(describeUnknownError(cause, "No se pudo guardar la clave de Seekr."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    setBusy(true);
-    setError(null);
-    setStatus(null);
-    try {
-      await clear();
-      setDraft("");
-      setStatus("Clave eliminada de este equipo.");
-    } catch (cause) {
-      setError(describeUnknownError(cause, "No se pudo eliminar la clave de Seekr."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <PanelScaffold title="Seekr" onBack={onBack}>
-      <div className="grid gap-5">
-        <PillBlock title="CLAVE DE API">
-          <PillRow
-            title="API Key"
-            titleAction={(
-              <a
-                href="https://seekr.tv"
-                target="_blank"
-                rel="noreferrer"
-                onClick={event => { event.preventDefault(); void openExternalUrl("https://seekr.tv"); }}
-                className="text-xs font-bold text-white/62 underline underline-offset-2 gsap-transition hover:text-white"
-              >
-                Obtener API
-              </a>
-            )}
-            description="Muestra miniaturas de cada escena al arrastrar la barra del reproductor. Se guarda en el almacén seguro de Windows, no en el archivo de preferencias."
-          >
-            <input
-              type="password"
-              value={draft}
-              onChange={event => setDraft(event.target.value)}
-              placeholder={ready && apiKey ? "•••••••• (guardada)" : "Pega aquí tu API key de Seekr"}
-              disabled={!ready}
-              className="w-full rounded-full border border-white/18 bg-white px-4 py-2.5 text-sm text-black outline-none gsap-transition placeholder:text-black/45 focus:border-white/34"
-            />
-          </PillRow>
-        </PillBlock>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <ActionButton onClick={() => void persist()} icon={<Save size={15} />} disabled={busy || !ready || !draft.trim()}>
-            Guardar clave
-          </ActionButton>
-          <ActionButton onClick={() => void remove()} icon={<Trash2 size={15} />} disabled={busy || !ready || !apiKey}>
-            Eliminar
-          </ActionButton>
-          {status ? <span className="text-sm text-white/54">{status}</span> : null}
-        </div>
-        {error ? <p className="text-sm font-semibold text-red-300">{error}</p> : null}
-        <p className="text-xs text-white/36">
-          Sin clave, la barra del reproductor sigue funcionando igual; solo se ocultan las miniaturas de escenas.
-        </p>
       </div>
     </PanelScaffold>
   );
@@ -1254,6 +1164,15 @@ function DesignPanel({
             <p className="mt-3 text-xs text-white/36">Prioriza el contenido elegido sin ocultar los demás catálogos.</p>
           </section>
 
+          <PillBlock title="Plataformas de streaming">
+            <ToggleRow
+              title="Reproducir intros de plataformas"
+              description="Muestra la intro cada vez que entras a una página de plataforma."
+              checked={preferences.playStreamingPlatformIntros}
+              onChange={checked => onPreferencesChange({ playStreamingPlatformIntros: checked })}
+            />
+          </PillBlock>
+
           {preferences.contentOrientation === "both" ? (
             <section>
               <SectionLabel>¿Con qué preferencia?</SectionLabel>
@@ -1264,15 +1183,6 @@ function DesignPanel({
               <p className="mt-3 text-xs text-white/36">Si eliges Anime, los catálogos de anime se muestran primero y viceversa.</p>
             </section>
           ) : null}
-
-          <PillBlock>
-            <ToggleRow
-              title="Posters horizontales"
-              description="Solo aplica a catálogos. Continuar viendo mantiene su formato actual."
-              checked={preferences.posterLayout === "horizontal"}
-              onChange={checked => onPreferencesChange({ posterLayout: checked ? "horizontal" : "vertical" })}
-            />
-          </PillBlock>
 
           <PillBlock title="SPATIALPOSTERS">
             <ToggleRow
@@ -1497,6 +1407,12 @@ function PlaybackPanel({
             ]}
             onChange={value => onPlaybackChange("sourceSelectionMode", value)}
           />
+          <ToggleRow
+            title="Probar otra fuente automáticamente"
+            description="Tras un fallo, prueba hasta dos fuentes alternativas. Puede que ninguna funcione; esta opción solo cambia los reintentos automáticos."
+            checked={playback.automaticSourceRecovery}
+            onChange={checked => onPlaybackChange("automaticSourceRecovery", checked)}
+          />
         </PillBlock>
 
         <PillBlock title="VIDEO Y AUDIO (DESKTOP)">
@@ -1686,7 +1602,7 @@ function AboutPanel() {
             disabled={checkingUpdate}
             className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/8 px-5 py-2.5 text-sm font-semibold text-white/80 transition-colors hover:bg-white/14 hover:text-white disabled:opacity-50"
           >
-            <Search size={15} className={checkingUpdate ? "animate-spin" : ""} />
+            {checkingUpdate ? <AppleSpinner size={15} /> : <Search size={15} />}
             {checkingUpdate ? "Buscando…" : "Buscar actualizaciones"}
           </button>
           {updateReady && !installingUpdate ? (
@@ -1936,7 +1852,6 @@ function getInitialAccountView(search: string): AccountView {
   if (tab === "services") return "integrations";
   if (tab === "trakt") return "trakt";
   if (tab === "mdblist") return "mdblist";
-  if (tab === "seekr") return "seekr";
   return "overview";
 }
 

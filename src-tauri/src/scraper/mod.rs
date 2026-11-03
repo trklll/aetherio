@@ -11,9 +11,7 @@ use adapters::build_entry_target;
 use generic::{extract_detail_urls, extract_embed_urls, extract_stream_urls, follow_embed_chain};
 use http::build_scraper_client;
 use serde::Serialize;
-use sites::{
-    all_recommended_sites, get_site_by_id, is_enabled_by_default, ScraperSite, SiteCategory,
-};
+use sites::{all_recommended_sites, get_site_by_id, is_enabled_by_default, ScraperSite, SiteCategory};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -266,8 +264,12 @@ pub async fn scrape_from_sites(
     let client = build_scraper_client()?;
     let client = Arc::new(client);
 
+    let normalized_media_type = if media_type == "tv" { "series" } else { media_type.as_str() };
     let target_sites: Vec<ScraperSite> = if let Some(ids) = &site_ids {
-        ids.iter().filter_map(|id| get_site_by_id(id)).collect()
+        ids.iter()
+            .filter_map(|id| get_site_by_id(id))
+            .filter(|site| site.types.contains(&normalized_media_type))
+            .collect()
     } else {
         sites::sites_for_type(&media_type)
     };
@@ -376,6 +378,13 @@ mod tests {
     use super::*;
 
     use sites::SearchStyle;
+
+    #[tokio::test]
+    async fn restored_native_defaults_are_exposed() {
+        let sites = get_scraper_sites().await.unwrap();
+        let enabled: Vec<_> = sites.iter().filter(|site| site.enabled_by_default).map(|site| site.id.as_str()).collect();
+        assert_eq!(enabled, ["animeav1", "okru", "cineby", "rive", "flixer", "miruro", "kickassanime", "animetsu"]);
+    }
 
     #[test]
     fn site_category_string_coverage() {
@@ -566,7 +575,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_scraper_sites_returns_all() {
+    async fn get_scraper_sites_returns_full_inventory() {
         let sites = get_scraper_sites().await.unwrap();
         assert!(sites.len() >= 25);
         for site in &sites {
@@ -574,6 +583,7 @@ mod tests {
             assert!(!site.name.is_empty());
             assert!(site.base_url.starts_with("https://"));
         }
+        assert!(sites.iter().any(|site| site.id == "animeav1"));
     }
 
     #[test]

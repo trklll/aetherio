@@ -1,11 +1,8 @@
 import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
 import type { ProviderRuntimeRepositoryInfo } from "./providerRuntimeService.ts";
 
-export const GLOBAL_CLOUDSTREAM_REPOSITORY_URLS = [
-  "https://raw.githubusercontent.com/redblacker8/storm-ext/refs/heads/builds/repo.json",
-  "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/refs/heads/builds/repo.json",
-  "https://raw.githubusercontent.com/Kraptor123/cs-Karma/refs/heads/master/repo.json",
-] as const;
+// No implicit repository subscriptions outside Provider Hub.
+export const GLOBAL_CLOUDSTREAM_REPOSITORY_URLS: readonly string[] = [];
 
 interface ProviderHttpResponse {
   status: number;

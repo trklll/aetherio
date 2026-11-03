@@ -1,0 +1,872 @@
+/** DKB — Seanime adaptation; upstream preserved in upstream/dkb.ts.txt. */
+// src/seanime/context.ts
+var MAX_BODY_BYTES = 8 * 1024 * 1024;
+var MAX_REQUESTS = 24;
+var USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+function publicUrl(value) {
+  const url = new URL(String(value));
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password || !url.hostname.includes(".") || /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) || /[\[\]:]/.test(url.hostname) || /(?:^|\.)(?:localhost|local|internal|invalid|test|home|lan)$/.test(url.hostname) || /(?:^|\.)(?:nip\.io|sslip\.io|localtest\.me)$/.test(url.hostname)) {
+    throw new Error("URL p\xFAblica http(s) requerida");
+  }
+  return url;
+}
+async function readBytes(response, account) {
+  if (Number(response.headers.get("content-length")) > MAX_BODY_BYTES) throw new Error("Respuesta Seanime demasiado grande");
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      length += chunk.value.byteLength;
+      if (length > MAX_BODY_BYTES) throw new Error("Respuesta Seanime demasiado grande");
+      account(chunk.value.byteLength);
+      chunks.push(chunk.value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+function cookieValues(headers) {
+  const compatible = headers;
+  if (compatible.getSetCookie) return compatible.getSetCookie();
+  if (compatible.getAll) return compatible.getAll("Set-Cookie");
+  return (headers.get("set-cookie") ?? "").split(/,\s*(?=[^=;,\s]+=)/).filter(Boolean);
+}
+function createContext(meta, dependencies, signal) {
+  const store = /* @__PURE__ */ new Map();
+  const jar = /* @__PURE__ */ new Map();
+  const requests = /* @__PURE__ */ new Map();
+  let count = 0;
+  let totalBytes = 0;
+  const config = meta.config ?? {};
+  const networkFetch = fetch;
+  async function request(input, options = {}, hops = 0) {
+    if (signal.aborted) throw new Error("Seanime: tiempo agotado");
+    const url = publicUrl(input);
+    const headers = new Headers(options.headers);
+    if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
+    const cookies = jar.get(url.hostname);
+    const headerCookies = [...cookies ?? []].filter(([, cookie]) => url.pathname.startsWith(cookie.path) && (!cookie.secure || url.protocol === "https:")).map(([name, cookie]) => `${name}=${cookie.value}`).join("; ");
+    if (headerCookies && !headers.has("cookie")) headers.set("cookie", headerCookies);
+    if (++count > MAX_REQUESTS) throw new Error("Seanime: presupuesto de peticiones agotado");
+    const response = await networkFetch(url.href, { ...options, headers, redirect: "manual", signal });
+    for (const raw of cookieValues(response.headers)) {
+      const [pair, ...attributes] = raw.split(";");
+      const equals = pair.indexOf("=");
+      if (equals < 1) continue;
+      const name = pair.slice(0, equals).trim();
+      const domain = attributes.find((value) => /^\s*domain=/i.test(value))?.split("=")[1]?.trim().replace(/^\./, "");
+      if (domain && domain.toLowerCase() !== url.hostname) continue;
+      const path = attributes.find((value) => /^\s*path=/i.test(value))?.trim().slice(5) || "/";
+      const hostCookies = cookies ?? jar.get(url.hostname) ?? /* @__PURE__ */ new Map();
+      hostCookies.set(name, { value: pair.slice(equals + 1).trim(), path, secure: attributes.some((value) => /^\s*secure\s*$/i.test(value)) });
+      jar.set(url.hostname, hostCookies);
+    }
+    const location = response.headers.get("location");
+    if (location && [301, 302, 303, 307, 308].includes(response.status) && options.redirect !== "manual") {
+      await response.body?.cancel();
+      if (hops >= 4) throw new Error("Seanime: demasiadas redirecciones");
+      const next = publicUrl(new URL(location, url));
+      if (next.origin !== url.origin) {
+        headers.delete("cookie");
+        headers.delete("authorization");
+      }
+      const get = response.status === 303 || [301, 302].includes(response.status) && options.method === "POST";
+      return request(next.href, { ...options, headers, ...get ? { method: "GET", body: void 0 } : {} }, hops + 1);
+    }
+    const bytes = await readBytes(response, (size) => {
+      totalBytes += size;
+      if (totalBytes > 16 * 1024 * 1024) throw new Error("Seanime: presupuesto de datos agotado");
+    });
+    const torrentData = /application\/x-bittorrent/i.test(response.headers.get("content-type") ?? "") || /\.torrent(?:$|\?)/i.test(url.href);
+    let text = "";
+    if (torrentData) {
+      for (let offset = 0; offset < bytes.length; offset += 8192) text += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    } else text = new TextDecoder().decode(bytes);
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url || url.href,
+      redirected: hops > 0,
+      headers: response.headers,
+      cookies: Object.fromEntries([...jar.get(url.hostname) ?? []].map(([name, cookie]) => [name, cookie.value])),
+      contentType: response.headers.get("content-type") ?? "",
+      contentLength: bytes.length,
+      text: () => text,
+      json: () => JSON.parse(text),
+      arrayBuffer: () => bytes.slice().buffer
+    };
+  }
+  const compatFetch = (input, options = {}) => {
+    const url = publicUrl(input).href;
+    const key = JSON.stringify([url, options.method ?? "GET", options.body ?? null, [...new Headers(options.headers)].sort()]);
+    let pending = requests.get(key);
+    if (!pending) {
+      pending = request(url, options);
+      requests.set(key, pending);
+    }
+    return pending;
+  };
+  return {
+    fetch: compatFetch,
+    CryptoJS: dependencies.CryptoJS,
+    $store: { get: (key) => store.get(key), set: (key, value) => store.set(key, value), has: (key) => store.has(key), remove: (key) => store.delete(key) },
+    $getUserPreference: (key) => config[key],
+    $toString: (value) => typeof value === "string" ? value : value instanceof Uint8Array || value instanceof ArrayBuffer ? new TextDecoder().decode(value) : JSON.stringify(value),
+    $toBytes: (value) => value instanceof Uint8Array ? value : new TextEncoder().encode(String(value)),
+    $isOffline: () => false,
+    $sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(Number(ms) || 0, 100))),
+    ...dependencies.compat
+  };
+}
+
+// src/seanime/policy.ts
+var HARD_SUB = /\b(?:hard[ ._-]*sub(?:bed|s)?|burn(?:ed|t)[ ._-]*in|hardsubbed)\b/i;
+var FOREIGN_DUB = /\b(?:dub(?:bed|s)?|dual[ ._-]*audio|multi[ ._-]*audio|english[ ._-]*audio|german[ ._-]*audio|french[ ._-]*audio)\b/i;
+var RAW_OR_SOFT = /\b(?:raws?|soft[ ._-]*sub(?:bed|s)?|unsubbed|no[ ._-]*subs?)\b/i;
+var KNOWN_SOFT_RELEASE = /^\s*\[(?:SubsPlease|Erai-raws|Ohys-Raws|Leopard-Raws)\]/i;
+function allowsAdditionalTorrent(torrent, rawCategory = false) {
+  const name = String(torrent.name ?? "");
+  if (HARD_SUB.test(name) || torrent.hardsub === true || FOREIGN_DUB.test(name)) return false;
+  const audio = String(torrent.audio_lang ?? torrent.audioLanguage ?? "").toLowerCase();
+  if (audio && !/^(ja|jpn|japanese|es(?:-[a-z0-9]+)?|spa|spanish)$/.test(audio)) return false;
+  return rawCategory || torrent.hardsub === false && Boolean(audio) || RAW_OR_SOFT.test(name) || KNOWN_SOFT_RELEASE.test(name);
+}
+function allowsAdditionalVideo(source, server, trustedSoft = false) {
+  const label = [server, source.label, source.quality, source.subType].filter(Boolean).join(" ");
+  if (HARD_SUB.test(label) || /\b(?:dub|english|hindi|tamil|telugu|german|french|portuguese|italian|korean|russian|arabic)\b/i.test(label)) return false;
+  return /\b(?:soft(?:[ ._-]*sub)?|raw)\b/i.test(label) || trustedSoft && Array.isArray(source.subtitles) && source.subtitles.length > 0;
+}
+
+// src/seanime/adapter.ts
+function normalizeTitle(value) {
+  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\b(?:audio\s+)?(?:latino|castellano|japones|subtitulado)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+}
+function seasonNumber(title) {
+  const numeric = title.match(/(\d+)\s*(?:st|nd|rd|th|ª)?\s*(?:season|temporada|cour)|\b(?:season|temporada|cour|s)\s*(\d+)/i);
+  if (numeric) return Number(numeric[1] ?? numeric[2]);
+  const roman = title.match(/(?:^|\s)(iv|v|iii|ii|i)(?:\s*:|$)/i);
+  if (roman) return { i: 1, ii: 2, iii: 3, iv: 4, v: 5 }[roman[1].toLowerCase()];
+  const trailing = title.match(/\b(\d{1,2})\s*$/);
+  return trailing && Number(trailing[1]) <= 50 && !/\b(?:part|parte|movie|film)\s+\d+\s*$/i.test(title) ? Number(trailing[1]) : null;
+}
+function rankSearchResults(results, title, season, mediaType) {
+  const wanted = normalizeTitle(title);
+  const movie = /\b(movie|film|pelicula|ova|special|especial)\b/i;
+  return (Array.isArray(results) ? results : []).filter((result) => result && typeof result.id === "string").map((result, index) => {
+    const name = String(result.title ?? result.Title ?? "");
+    const normalized = normalizeTitle(name);
+    const parsedSeason = seasonNumber(name);
+    if (mediaType !== "movie" && parsedSeason !== null && parsedSeason !== season) return null;
+    let score = Math.max(0, 100 - index);
+    if (normalized === wanted) score += 1e3;
+    else if (normalized.startsWith(wanted)) score += 500;
+    else if (normalized.includes(wanted) || wanted.includes(normalized) && normalized) score += 300;
+    if (mediaType !== "movie" && movie.test(name) && !movie.test(title)) score -= 2e3;
+    if (mediaType !== "movie" && parsedSeason === season) score += 2e3;
+    if (season === 1 && /(?:-hen|final season)\s*$/i.test(name)) score -= 2e3;
+    score -= normalized.length;
+    return { result: { ...result, title: name }, score };
+  }).filter((entry) => entry !== null).sort((a, b) => b.score - a.score).map((entry) => entry.result);
+}
+async function pool(items, concurrency, task) {
+  const results = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await task(items[index]);
+      } catch {
+      }
+    }
+  }));
+  return results.filter((value) => value !== void 0);
+}
+function audioMode(result, episode, requestedDub) {
+  try {
+    const parsed = JSON.parse(episode.id);
+    if (parsed.type === "sub" || parsed.type === "dub") return parsed.type;
+  } catch {
+  }
+  return result.subOrDub === "dub" || result.subOrDub === "both" && requestedDub ? "dub" : "sub";
+}
+function playbackHeaders(meta, headers) {
+  const merged = Object.fromEntries(Object.entries(headers).filter(([, value]) => typeof value === "string"));
+  if (meta.id === "animeav1") {
+    const referer = Object.entries(merged).find(([key]) => key.toLowerCase() === "referer")?.[1];
+    if (referer) {
+      merged.Origin = new URL(referer).origin;
+      merged["Sec-Fetch-Site"] = "same-origin";
+      merged["Sec-Fetch-Mode"] = "cors";
+      merged["Sec-Fetch-Dest"] = "empty";
+    }
+  }
+  return merged;
+}
+async function online(provider, meta, media, title, season, number, type) {
+  const settings = await provider.getSettings();
+  const strict = meta.policy === "original-soft";
+  const modes = settings.supportsDub && !strict ? [false, true] : [false];
+  const variants = await pool(modes, 2, async (dub) => {
+    const results = await provider.search({ query: title, dub, ...meta.id === "animeav1" ? {} : { media } });
+    const ranked = rankSearchResults(results, title, season, type);
+    const result = ranked.find((item) => dub ? item.subOrDub === "dub" || item.subOrDub === "both" : item.subOrDub !== "dub");
+    if (!result || !provider.findEpisodes || !provider.findEpisodeServer) return [];
+    const episodes = await provider.findEpisodes(result.id);
+    const episode = episodes.find((item) => Number(item.number) === number);
+    if (!episode) return [];
+    const mode = audioMode(result, episode, dub);
+    if (strict && mode === "dub") return [];
+    const servers = Array.isArray(settings.episodeServers) && settings.episodeServers.length ? settings.episodeServers : ["default"];
+    const selected = servers.filter((server) => !strict || !/\b(?:dub|hard|english|hindi|tamil|telugu|german|french)\b/i.test(server)).slice(0, 8);
+    const found = await pool(selected, 3, (server) => provider.findEpisodeServer(episode, server));
+    return found.flatMap((server) => (server.videoSources ?? []).flatMap((source) => {
+      if (typeof source.url !== "string" || !["mp4", "m3u8", "hls", "mpd", "mkv"].includes(String(source.type).toLowerCase())) return [];
+      try {
+        publicUrl(source.url);
+      } catch {
+        return [];
+      }
+      if (strict && !allowsAdditionalVideo(source, server.server, meta.trustedSoft)) return [];
+      const headers = playbackHeaders(meta, { ...server.headers, ...source.headers });
+      return [{
+        name: meta.name,
+        sourceName: meta.name,
+        title: [server.server, source.quality, mode === "dub" ? "Audio Espa\xF1ol" : strict ? "Audio Japon\xE9s \xB7 subt\xEDtulos opcionales" : "Sub: Espa\xF1ol"].filter(Boolean).join(" \xB7 "),
+        url: source.url,
+        type: "direct",
+        quality: source.quality,
+        headers,
+        languages: [mode === "dub" ? "es" : "ja"],
+        subtitles: Array.isArray(source.subtitles) ? source.subtitles.filter((subtitle) => typeof subtitle?.url === "string" && /^https?:\/\//i.test(subtitle.url)) : [],
+        behaviorHints: { providerName: meta.name, providerId: meta.id, mediaExtensionManifest: meta.manifestURI, scraperResolvedDirect: true, headers }
+      }];
+    }));
+  });
+  return variants.flat();
+}
+function torrentHash(value) {
+  const input = String(value ?? "").trim();
+  if (/^[a-f\d]{40}$/i.test(input)) return input.toLowerCase();
+  const hash = input.match(/[?&]xt=urn(?::|%3A)btih(?::|%3A)([a-z0-9]{32,40})(?:&|$)/i)?.[1] ?? input;
+  if (/^[a-f\d]{40}$/i.test(hash)) return hash.toLowerCase();
+  if (!/^[a-z2-7]{32}$/i.test(hash)) return null;
+  let bits = 0, accumulator = 0, hex = "";
+  for (const character of hash.toUpperCase()) {
+    accumulator = accumulator << 5 | "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(character);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      hex += (accumulator >>> bits & 255).toString(16).padStart(2, "0");
+    }
+  }
+  return hex;
+}
+async function torrents(provider, meta, media, title, episode, type) {
+  const settings = await provider.getSettings();
+  const options = { media, query: title, batch: false, episodeNumber: episode, resolution: "", anidbAID: 0, anidbEID: 0, bestReleases: true };
+  const raw = settings.canSmartSearch && provider.smartSearch ? await provider.smartSearch(options) : await provider.search(options);
+  const candidates = (Array.isArray(raw) ? raw : []).filter((torrent) => {
+    if (!torrent || !allowsAdditionalTorrent(torrent, meta.rawCategory)) return false;
+    if (type === "movie") return true;
+    const name = String(torrent.name ?? "");
+    const releaseSeason = seasonNumber(name);
+    if (releaseSeason !== null && releaseSeason !== Number(media.season ?? 1)) return false;
+    const parsed = name.match(/\bS\d{1,2}E(\d{1,4})\b/i)?.[1] ?? name.match(/(?:\s-\s|\bEP?\s*)(\d{1,4})\b/i)?.[1];
+    const number = Number(torrent.episodeNumber) > 0 ? Number(torrent.episodeNumber) : Number(parsed);
+    return !torrent.isBatch && number === episode;
+  }).slice(0, 12);
+  return (await pool(candidates, 3, async (torrent) => {
+    let magnet = String(torrent.magnetLink ?? "");
+    let infoHash = torrentHash(torrent.infoHash) ?? torrentHash(magnet);
+    if (!infoHash && provider.getTorrentInfoHash) infoHash = torrentHash(await provider.getTorrentInfoHash(torrent));
+    if (!infoHash && provider.getTorrentMagnetLink) {
+      magnet = await provider.getTorrentMagnetLink(torrent);
+      infoHash = torrentHash(magnet);
+    }
+    if (!infoHash) return null;
+    return {
+      name: meta.name,
+      title: String(torrent.name),
+      infoHash,
+      seeders: Number.isFinite(Number(torrent.seeders)) && Number(torrent.seeders) >= 0 ? Number(torrent.seeders) : void 0,
+      size: Number(torrent.size) > 0 ? Number(torrent.size) : void 0,
+      languages: ["ja"],
+      sources: torrentHash(magnet) ? [magnet] : void 0,
+      behaviorHints: { providerId: meta.id, providerName: meta.name, filename: String(torrent.name), subtitlePolicy: "raw-or-soft", mediaExtensionManifest: meta.manifestURI }
+    };
+  })).filter((stream) => stream !== null);
+}
+async function animeMedia(context, meta, title, type, season) {
+  const media = { id: 0, romajiTitle: title, englishTitle: title, synonyms: [], isAdult: false, format: type === "movie" ? "MOVIE" : "TV", episodeCount: 0, absoluteSeasonOffset: 0, season };
+  if (!meta.needsAnimeId) return media;
+  const response = await context.fetch("https://graphql.anilist.co", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+    query: "query($search:String){Page(perPage:8){media(search:$search,type:ANIME,isAdult:false){id idMal title{romaji english} synonyms format episodes startDate{year}}}}",
+    variables: { search: title }
+  }) });
+  if (!response.ok) return media;
+  const found = response.json()?.data?.Page?.media ?? [];
+  const ranked = rankSearchResults(found.map((item) => ({ ...item, id: String(item.id), title: item.title?.romaji ?? item.title?.english })), title, season, type);
+  const match = found.find((item) => String(item.id) === ranked[0]?.id);
+  return match ? { ...media, id: match.id, idMal: match.idMal, romajiTitle: match.title.romaji || title, englishTitle: match.title.english || title, synonyms: match.synonyms ?? [], episodeCount: match.episodes ?? 0, format: match.format, startDate: match.startDate } : media;
+}
+function createSeanimeAdapter(factory, meta, dependencies = {}) {
+  return {
+    async getStreams(first, ...rest) {
+      const args = Array.isArray(first) ? first : [first, ...rest];
+      const [, inputType, rawSeason, rawEpisode, rawTitle] = args;
+      const type = inputType === "series" || inputType === "anime" ? "tv" : inputType;
+      const title = typeof rawTitle === "string" ? rawTitle.trim().slice(0, 300) : "";
+      const season = Number(rawSeason ?? 1);
+      const episode = type === "movie" ? 1 : Number(rawEpisode ?? 1);
+      if (!title || !["movie", "tv"].includes(String(type)) || !Number.isInteger(episode) || episode < 1 || !Number.isInteger(season) || season < 1) return [];
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12e3);
+      try {
+        const context = createContext(meta, dependencies, controller.signal);
+        const provider = factory(context);
+        const media = await animeMedia(context, meta, title, String(type), season);
+        if (meta.needsAnimeId && !media.id) return [];
+        const streams = meta.type === "anime-torrent-provider" ? await torrents(provider, meta, media, title, episode, String(type)) : await online(provider, meta, media, title, season, episode, String(type));
+        const seen = /* @__PURE__ */ new Set();
+        return streams.filter((stream) => {
+          const key = String(stream.url ?? stream.infoHash);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 12);
+      } finally {
+        controller.abort();
+        clearTimeout(timeout);
+      }
+    }
+  };
+}
+
+// src/seanime/compat.ts
+function createCompatibility(cheerio, CryptoJS) {
+  function wrap($, selection) {
+    const value = { __selection: selection };
+    const length = () => selection.length;
+    length.valueOf = () => selection.length;
+    length.toString = () => String(selection.length);
+    length[Symbol.toPrimitive] = () => selection.length;
+    value.length = length;
+    value.html = () => selection.html();
+    value.text = () => selection.text();
+    value.attr = (name) => selection.attr(name);
+    value.attrs = () => selection.get(0)?.attribs ?? {};
+    value.data = (name) => name == null ? selection.data() : selection.attr("data-" + name);
+    for (const method of ["find", "children", "parent", "parents", "closest", "first", "last", "eq", "contents", "filter", "not", "has", "next", "nextAll", "prev", "prevAll", "siblings", "end", "parentsUntil", "nextUntil", "prevUntil"]) {
+      value[method] = (...args) => wrap($, selection[method](...args));
+    }
+    value.is = (selector) => selection.is(selector);
+    value.each = (callback) => {
+      selection.each((index, element) => callback(index, wrap($, $(element))));
+      return value;
+    };
+    value.map = (callback) => selection.map((index, element) => callback(index, wrap($, $(element)))).get();
+    return value;
+  }
+  function LoadDoc(html) {
+    const $ = cheerio.load(String(html ?? ""));
+    return (selector) => wrap($, selector?.__selection ?? $(String(selector ?? "")));
+  }
+  const clean = (value) => String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[()[\]{}|"'~*?\\^!]/g, " ").replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+  const season = (value) => Number(String(value).match(/(?:\bseason\s*|\bs)(\d{1,2})(?=\b|e\d)/i)?.[1] ?? String(value).match(/\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/i)?.[1] ?? -1);
+  const part = (value) => Number(String(value).match(/\b(?:part|cour)\s*(\d{1,2})\b/i)?.[1] ?? -1);
+  const base = (value) => clean(value).replace(/\b(?:s\d{1,2}e\d{1,4}|season\s*\d+|s\d{1,2}|\d+(?:st|nd|rd|th)\s+season|(?:part|cour)\s*\d+)\b/gi, " ").replace(/\b(?:1080p|720p|480p|2160p|bluray|blu-ray|webrip|web-dl|hdtv|x264|x265|hevc|aac|flac)\b/gi, " ").replace(/\s+/g, " ").trim();
+  const compareTitles = (left, right) => {
+    const a = new Set(base(left).toLowerCase().split(/\s+/).filter(Boolean));
+    const b = new Set(base(right).toLowerCase().split(/\s+/).filter(Boolean));
+    return a.size && b.size ? 2 * [...a].filter((word) => b.has(word)).length / (a.size + b.size) : 0;
+  };
+  const scanner = {
+    normalizeTitle(value) {
+      const original = String(value ?? "");
+      const cleanBaseTitle = base(original);
+      return {
+        original,
+        normalized: clean(original).toLowerCase(),
+        cleanBaseTitle,
+        denoisedTitle: cleanBaseTitle,
+        tokens: cleanBaseTitle.toLowerCase().split(/\s+/).filter(Boolean),
+        season: season(original),
+        part: part(original),
+        year: Number(original.match(/\b(?:19|20)\d{2}\b/)?.[0] ?? -1),
+        isMain: true
+      };
+    },
+    extractSeasonNumber: season,
+    extractPartNumber: part,
+    extractYear: (value) => Number(String(value).match(/\b(?:19|20)\d{2}\b/)?.[0] ?? -1),
+    compareTitles,
+    getSignificantTokens: (value) => base(value).toLowerCase().split(/\s+/).filter(Boolean),
+    buildSearchQuery: base,
+    sanitizeQuery: clean,
+    findBestMatch: (target, candidates) => candidates.slice().sort((a, b) => compareTitles(target, b) - compareTitles(target, a))[0] ?? "",
+    buildAdvancedQuery: (titles) => "(" + [...new Set(titles.map(base).filter(Boolean))].join(" | ") + ")",
+    buildSeasonQuery: (title, n) => n <= 1 ? base(title) : `(${base(title)} S${String(n).padStart(2, "0")} | ${base(title)} S${n} | ${base(title)} Season ${n})`,
+    buildPartQuery: (title, n) => n <= 1 ? base(title) : `(${base(title)} Part ${n} | ${base(title)} Cour ${n})`,
+    buildSmartSearchTitles: (titles) => ({ titles: [...new Set(titles.map(base).filter(Boolean))], season: titles.map(season).find((n) => n > 0) ?? -1, part: titles.map(part).find((n) => n > 0) ?? -1 })
+  };
+  const habari = {
+    parse(value) {
+      const name = String(value ?? "");
+      const ep = name.match(/\bS\d{1,2}E(\d{1,4}(?:\.\d+)?)\b/i)?.[1] ?? name.match(/(?:\s-\s|\bEP?\s*)(\d{1,4}(?:\.\d+)?)\b/i)?.[1];
+      const title = base(name.replace(/^\s*\[[^\]]+\]\s*/, "").replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\bS\d{1,2}E\d{1,4}\b|\s-\s\d{1,4}\b/ig, " "));
+      return {
+        title,
+        formatted_title: title,
+        file_name: name,
+        file_extension: name.match(/\.([a-z0-9]{2,5})$/i)?.[1],
+        release_group: name.match(/^\s*\[([^\]]+)\]/)?.[1],
+        video_resolution: name.match(/\b(2160p|1080p|720p|576p|480p|360p)\b/i)?.[1],
+        episode_number: ep ? [ep] : [],
+        season_number: season(name) > 0 ? [String(season(name))] : [],
+        part_number: part(name) > 0 ? [String(part(name))] : [],
+        audio_term: /dual[ ._-]*audio|multi[ ._-]*audio/i.test(name) ? ["Dual Audio"] : [],
+        language: [],
+        subtitles: []
+      };
+    }
+  };
+  function torrentMagnet(data) {
+    let position = 0;
+    let start = -1;
+    let end = -1;
+    function parse(depth) {
+      if (depth > 64 || position >= data.length) throw new Error("Torrent bencode inv\xE1lido");
+      const kind = data[position];
+      if (/\d/.test(kind)) {
+        const colon = data.indexOf(":", position);
+        if (colon < 0 || colon - position > 9) throw new Error("Torrent bencode inv\xE1lido");
+        const length = Number(data.slice(position, colon));
+        position = colon + 1;
+        const value = data.slice(position, position + length);
+        position += length;
+        if (position > data.length) throw new Error("Torrent bencode incompleto");
+        return value;
+      }
+      position++;
+      if (kind === "i") {
+        const next = data.indexOf("e", position);
+        if (next < 0) throw new Error("Torrent bencode inv\xE1lido");
+        position = next + 1;
+      } else if (kind === "l" || kind === "d") {
+        while (data[position] !== "e") {
+          const key = kind === "d" ? parse(depth + 1) : void 0;
+          const before = position;
+          parse(depth + 1);
+          if (depth === 0 && key === "info") {
+            start = before;
+            end = position;
+          }
+        }
+        position++;
+      } else throw new Error("Torrent bencode inv\xE1lido");
+      return void 0;
+    }
+    parse(0);
+    if (start < 0 || end <= start) return "";
+    return "magnet:?xt=urn:btih:" + CryptoJS.SHA1(CryptoJS.enc.Latin1.parse(data.slice(start, end))).toString();
+  }
+  return {
+    LoadDoc,
+    load: LoadDoc,
+    Doc: function(html) {
+      return LoadDoc(html)("html");
+    },
+    $scannerUtils: scanner,
+    $habari: habari,
+    $torrentUtils: { getMagnetLinkFromTorrentData: torrentMagnet }
+  };
+}
+
+// seanime-provider.ts
+var Crypto = require("crypto-js");
+var dom = require("cheerio");
+module.exports = createSeanimeAdapter((context) => {
+  const {
+    fetch: fetch2,
+    CryptoJS,
+    $store,
+    $scannerUtils,
+    $habari,
+    $torrentUtils,
+    $getUserPreference,
+    $toString,
+    $toBytes,
+    $isOffline,
+    $sleep,
+    LoadDoc,
+    Doc,
+    load
+  } = context;
+  const DKB_BASE = "https://dkb.lowpolyfire.com";
+  const DAY = 24 * 3600 * 1e3;
+  let showTitlesCache = null;
+  const mappingCache = {};
+  function decodeEntities(s) {
+    return s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  }
+  function pick(s, re) {
+    const m = s.match(re);
+    return m ? m[1].trim() : "";
+  }
+  function norm(s) {
+    let out = (s || "").toLowerCase().replace(/×/g, "x");
+    try {
+      out = out.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+    } catch (e) {
+    }
+    return out.replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function pad2(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+  function parseSize(text) {
+    const m = text.match(/([\d.]+)\s*([KMGT]?i?B)/i);
+    if (!m) return 0;
+    const units = { b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1048576, gib: 1073741824, tib: 1099511627776 };
+    return Math.round(parseFloat(m[1]) * (units[m[2].toLowerCase()] || 1));
+  }
+  function parseResolution(name) {
+    const m = name.match(/\b(2160|1080|720|540|480)p\b/i);
+    return m ? m[1] + "p" : "";
+  }
+  function parseReleases(html) {
+    const out = [];
+    for (const block of html.split('<div class="release_container').slice(1)) {
+      const label = pick(block, /class="episode">([^<]*)</).toUpperCase();
+      const showTitle = decodeEntities(pick(block, /class="title">\s*<a[^>]*>([^<]*)</));
+      const magnet = decodeEntities(pick(block, /href="(magnet:[^"]+)"/));
+      const infoHash = pick(magnet, /btih:([a-fA-F0-9]{40})/).toLowerCase();
+      if (!magnet || !infoHash) continue;
+      const dn = pick(magnet, /[?&]dn=([^&]*)/);
+      let name = "";
+      try {
+        name = dn ? decodeURIComponent(dn.replace(/\+/g, " ")) : "";
+      } catch (e) {
+      }
+      if (!name) name = `[DKB] ${showTitle} - ${label}`;
+      let kind = "episode";
+      let season = -1;
+      let episode = -1;
+      let m;
+      if (m = label.match(/^S(\d+)E(\d+)/)) {
+        season = parseInt(m[1]);
+        episode = parseInt(m[2]);
+        if (season === 0) kind = "special";
+      } else if (m = label.match(/^S(\d+)\s*-\s*BATCH/)) {
+        kind = "batch";
+        season = parseInt(m[1]);
+      } else if (label.indexOf("MOVIE") !== -1) {
+        kind = "movie";
+      } else if (m = name.match(/\bS(\d+)E(\d+)\b/i)) {
+        season = parseInt(m[1]);
+        episode = parseInt(m[2]);
+        kind = season === 0 ? "special" : "episode";
+      } else if (/batch/i.test(name)) {
+        kind = "batch";
+        season = parseInt(pick(name, /Season\s*(\d+)/i)) || -1;
+      } else {
+        kind = "movie";
+      }
+      const date = pick(block, /class="date">([^<]*)</);
+      const sizeText = pick(block, /class="size">[\s\S]*?class="value">([^<]*)</);
+      out.push({
+        kind,
+        season,
+        episode,
+        showTitle,
+        name,
+        date: /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(date) ? date.replace(" ", "T") + ":00Z" : date,
+        seeders: parseInt(pick(block, /class="seeders">[\s\S]*?class="value">(\d+)/)) || 0,
+        leechers: parseInt(pick(block, /class="leechers">[\s\S]*?class="value">(\d+)/)) || 0,
+        sizeText,
+        size: parseSize(sizeText),
+        torrentUrl: decodeEntities(pick(block, /href="(https?:\/\/[^"]+\.torrent)"/)),
+        magnet,
+        infoHash
+      });
+    }
+    return out;
+  }
+  async function fetchReleases(query, filter = "") {
+    const url = `${DKB_BASE}/index/releases?query=${encodeURIComponent(query)}${filter}`;
+    const res = await fetch2(url, { headers: { "HX-Request": "true" } });
+    if (!res.ok) throw new Error(`DKB request failed: ${res.status}`);
+    return parseReleases(await res.text());
+  }
+  async function fetchAll(queries, filter = "") {
+    const lists = await Promise.all(queries.map((q) => fetchReleases(q, filter)));
+    const seen = {};
+    const out = [];
+    for (const l of lists) {
+      for (const r of l) {
+        if (seen[r.infoHash]) continue;
+        seen[r.infoHash] = true;
+        out.push(r);
+      }
+    }
+    return out;
+  }
+  async function getShowTitles() {
+    if (showTitlesCache && Date.now() - showTitlesCache.at < 6 * 3600 * 1e3) return showTitlesCache.titles;
+    try {
+      const html = await (await fetch2(`${DKB_BASE}/`)).text();
+      const raw = pick(html, /var shows_titles = (\[[\s\S]*?\]);?\s*<\/script>/);
+      const titles = JSON.parse(raw.replace(/\\'/g, "'"));
+      showTitlesCache = { at: Date.now(), titles };
+      return titles;
+    } catch (e) {
+      return showTitlesCache ? showTitlesCache.titles : [];
+    }
+  }
+  function titleSeason(title) {
+    const t = (title || "").toLowerCase().replace(/\s+(?:part|cour)\s*\d+\s*$/, "");
+    let m;
+    if (m = t.match(/(\d+)(?:st|nd|rd|th)\s+season/)) return parseInt(m[1]);
+    if (m = t.match(/season\s*(\d+)/)) return parseInt(m[1]);
+    if (m = t.match(/\s(\d{1,2})$/)) return parseInt(m[1]);
+    const roman = { ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8 };
+    if (m = t.match(/\s(ii|iii|iv|v|vi|vii|viii)$/)) return roman[m[1]];
+    return 1;
+  }
+  function baseTitle(title) {
+    return (title || "").replace(/\(?\b\d+(?:st|nd|rd|th)\s+season\b\)?/gi, "").replace(/\b(?:season|part|cour)\s*\d+\b/gi, "").replace(/\s+(?:ii|iii|iv|v|vi|vii|viii|\d{1,2})\s*$/i, "").replace(/[\s:\-–]+$/, "").trim();
+  }
+  function mediaTitles(media, extra) {
+    const all = [media.romajiTitle, media.englishTitle, ...media.synonyms || [], ...extra];
+    const out = [];
+    for (const t of all) {
+      if (t && /[a-z]/i.test(t) && out.indexOf(t) === -1) out.push(t);
+    }
+    return out;
+  }
+  async function getMapping(media) {
+    if (mappingCache[media.id]) return mappingCache[media.id];
+    const mapping = { episodes: {}, seasons: [], titles: [] };
+    try {
+      const res = await fetch2(`https://api.ani.zip/mappings?anilist_id=${media.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        for (const key of Object.keys(data.titles || {})) {
+          const t = data.titles[key];
+          if (typeof t === "string" && /[a-z]/i.test(t)) mapping.titles.push(t);
+        }
+        const eps = data.episodes || {};
+        for (const key of Object.keys(eps)) {
+          if (!/^\d+$/.test(key)) continue;
+          const e = eps[key];
+          if (typeof e.seasonNumber !== "number" || typeof e.episodeNumber !== "number") continue;
+          mapping.episodes[parseInt(key)] = { season: e.seasonNumber, episode: e.episodeNumber, airdate: e.airdate || e.airDate || "" };
+          if (mapping.seasons.indexOf(e.seasonNumber) === -1) mapping.seasons.push(e.seasonNumber);
+        }
+      }
+    } catch (e) {
+    }
+    mappingCache[media.id] = mapping;
+    return mapping;
+  }
+  function related(a, b) {
+    const x = norm(a);
+    const y = norm(b);
+    if (!x || !y) return 0;
+    if (x === y) return 1e3;
+    const squash = (s) => s.replace(/ /g, "");
+    if (squash(x) === squash(y)) return 900;
+    const long = (s) => s.length >= 6 || s.indexOf(" ") !== -1;
+    if (y.startsWith(x + " ") && long(x)) return 100 + x.length;
+    const bx = norm(baseTitle(a));
+    const by = norm(baseTitle(b));
+    if (bx && long(bx) && squash(bx) === squash(by)) return 500;
+    if (squash(x).length >= 10 && squash(y).startsWith(squash(x))) return 100 + x.length;
+    if (x.startsWith(y + " ") && long(y)) return 10;
+    return 0;
+  }
+  function matchShowTitles(showTitles, titles) {
+    const scored = [];
+    for (const showTitle of showTitles) {
+      let score = 0;
+      for (const t of titles) score = Math.max(score, related(showTitle, t));
+      if (score > 0) scored.push({ title: showTitle, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const strong = scored.filter((x) => x.score >= 100);
+    return (strong.length ? strong : scored).slice(0, 3).map((x) => x.title);
+  }
+  function ownerOf(release, showTitles) {
+    const r = norm(release.showTitle);
+    let best = "";
+    let bestLen = -1;
+    for (const t of showTitles) {
+      const s = norm(t);
+      if (s === r) return t;
+      if (r.startsWith(s + " ") && s.length > bestLen) {
+        best = t;
+        bestLen = s.length;
+      }
+    }
+    return best || release.showTitle;
+  }
+  function tokenOverlap(a, b) {
+    const words = norm(a).split(" ").filter((w) => w.length > 1 && !/^(movie|the|no|dkb|\d+)$/.test(w));
+    if (!words.length) return 0;
+    const pool2 = " " + b.map(norm).join(" ") + " ";
+    return words.filter((w) => pool2.indexOf(" " + w + " ") !== -1).length / words.length;
+  }
+  function time(s) {
+    const t = Date.parse(s);
+    return isNaN(t) ? 0 : t;
+  }
+  function airsMatch(r, airdate) {
+    if (!airdate || !/\bweekly\b/i.test(r.name)) return true;
+    const d = time(r.date) - time(airdate);
+    return d > -3 * DAY && d < 180 * DAY;
+  }
+  function nyaaLink(torrentUrl) {
+    const id = pick(torrentUrl, /nyaa\.si\/download\/(\d+)/);
+    return id ? `https://nyaa.si/view/${id}` : torrentUrl;
+  }
+  function toTorrent(r, episodeNumber, confirmed) {
+    return {
+      name: r.name,
+      date: r.date,
+      size: r.size,
+      formattedSize: r.sizeText,
+      seeders: r.seeders,
+      leechers: r.leechers,
+      downloadCount: 0,
+      link: nyaaLink(r.torrentUrl),
+      downloadUrl: r.torrentUrl,
+      magnetLink: r.magnet,
+      infoHash: r.infoHash,
+      resolution: parseResolution(r.name),
+      isBatch: r.kind === "batch",
+      episodeNumber,
+      releaseGroup: "DKB",
+      isBestRelease: false,
+      confirmed
+    };
+  }
+  function plainTorrents(releases) {
+    return releases.map((r) => toTorrent(r, r.kind === "episode" || r.kind === "special" ? r.episode : -1, false));
+  }
+  class Provider {
+    getSettings() {
+      return {
+        canSmartSearch: true,
+        smartSearchFilters: ["batch", "episodeNumber", "resolution", "query"],
+        supportsAdult: false,
+        type: "main"
+      };
+    }
+    async getLatest() {
+      return plainTorrents(await fetchReleases(""));
+    }
+    async search(opts) {
+      return plainTorrents(await fetchReleases(opts.query || ""));
+    }
+    async smartSearch(opts) {
+      const media = opts.media;
+      const isMovie = media.format === "MOVIE";
+      const [showTitles, mapping] = await Promise.all([getShowTitles(), getMapping(media)]);
+      const titles = mediaTitles(media, mapping.titles);
+      const customQuery = (opts.query || "").trim();
+      const matched = matchShowTitles(showTitles, titles);
+      let queries;
+      if (customQuery) {
+        queries = [customQuery];
+      } else {
+        queries = matched.slice();
+        const own = baseTitle((media.romajiTitle || media.englishTitle || "").split(/:\s| - /)[0]);
+        if (own && !queries.some((q) => norm(q) === norm(own))) queries.push(own);
+      }
+      if (!queries.length) return [];
+      const belongs = (r) => !!customQuery || matched.indexOf(ownerOf(r, showTitles)) !== -1 || titles.some((t) => related(r.showTitle, t) >= 100);
+      const resolutionOk = (r) => !opts.resolution || !parseResolution(r.name) || parseInt(parseResolution(r.name)) === parseInt(opts.resolution);
+      if (isMovie) {
+        const releases = await fetchAll(queries, "&m=1");
+        return releases.filter((r) => belongs(r) && resolutionOk(r) && r.kind === "movie" && tokenOverlap(r.showTitle, titles) >= 0.6).map((r) => toTorrent(r, 1, true));
+      }
+      const fallbackSeason = titleSeason(media.romajiTitle || media.englishTitle || "");
+      const seasons = mapping.seasons.length ? mapping.seasons : [fallbackSeason];
+      if (opts.batch) {
+        const releases = await fetchAll(queries, "&b=1");
+        return releases.filter((r) => belongs(r) && resolutionOk(r) && r.kind === "batch" && seasons.indexOf(r.season) !== -1).map((r) => toTorrent(r, -1, false));
+      }
+      const known = opts.episodeNumber > 0 ? mapping.episodes[opts.episodeNumber] : void 0;
+      if (known) {
+        const releases = (await fetchAll(queries.map((q) => `${q} S${pad2(known.season)}E${pad2(known.episode)}`))).filter((r) => belongs(r) && resolutionOk(r) && r.season === known.season && r.episode === known.episode && airsMatch(r, known.airdate));
+        if (releases.length) return releases.map((r) => toTorrent(r, opts.episodeNumber, true));
+      }
+      const reverse = {};
+      const offsets = {};
+      for (const ep of Object.keys(mapping.episodes)) {
+        const p = mapping.episodes[parseInt(ep)];
+        reverse[p.season + "x" + p.episode] = parseInt(ep);
+        offsets[p.season] = p.episode - parseInt(ep);
+      }
+      const lastKey = Object.keys(mapping.episodes).map((k) => parseInt(k)).sort((a, b) => b - a)[0];
+      const lastSeason = lastKey ? mapping.episodes[lastKey].season : fallbackSeason;
+      const wanted = opts.episodeNumber > 0 ? [lastSeason] : seasons.slice(0, 3);
+      const episodeOk = (ep) => ep >= 1 && !(media.episodeCount > 0 && ep > media.episodeCount) && !(opts.episodeNumber > 0 && ep !== opts.episodeNumber);
+      const out = [];
+      const fetched = await Promise.all(wanted.map((s) => fetchAll(queries.map((q) => `${q} S${pad2(s)}`))));
+      wanted.forEach((season2, i) => {
+        const offset2 = offsets[season2];
+        if (offset2 === void 0) return;
+        for (const r of fetched[i]) {
+          if (!belongs(r) || !resolutionOk(r) || r.kind !== "episode" || r.season !== season2) continue;
+          const mapped = reverse[r.season + "x" + r.episode];
+          const ep = mapped || r.episode - offset2;
+          if (!episodeOk(ep)) continue;
+          if (mapped && !airsMatch(r, mapping.episodes[mapped].airdate)) continue;
+          out.push(toTorrent(r, ep, !!mapped));
+        }
+      });
+      if (out.length) return out;
+      const sd = media.startDate;
+      if (!sd || !sd.year || !sd.month || !sd.day) return [];
+      const start = Date.UTC(sd.year, sd.month - 1, sd.day);
+      const pool2 = (await fetchAll(queries.concat(queries.map((q) => `${q} S${pad2(fallbackSeason)}`)))).filter((r) => belongs(r) && r.kind === "episode" && r.season > 0);
+      const firstAfter = pool2.filter((r) => time(r.date) >= start - 2 * DAY).sort((a, b) => time(a.date) - time(b.date))[0];
+      if (!firstAfter || time(firstAfter.date) - start > 30 * DAY) return [];
+      const season = firstAfter.season;
+      const offset = Math.min(...pool2.filter((r) => r.season === season && time(r.date) >= start - 2 * DAY).map((r) => r.episode)) - 1;
+      for (const r of pool2) {
+        if (r.season !== season || !resolutionOk(r)) continue;
+        const ep = r.episode - offset;
+        if (!episodeOk(ep)) continue;
+        const air = mapping.episodes[ep] ? mapping.episodes[ep].airdate : "";
+        if (!airsMatch(r, air)) continue;
+        out.push(toTorrent(r, ep, false));
+      }
+      return out;
+    }
+    async getTorrentInfoHash(torrent) {
+      return torrent.infoHash || pick(torrent.magnetLink || "", /btih:([a-fA-F0-9]{40})/).toLowerCase();
+    }
+    async getTorrentMagnetLink(torrent) {
+      return torrent.magnetLink || "";
+    }
+  }
+  const provider = new Provider();
+  return provider;
+}, { "id": "dkb", "name": "DKB", "lang": "ja", "type": "anime-torrent-provider", "policy": "original-soft", "trustedSoft": false, "rawCategory": false, "config": {}, "needsAnimeId": false, "manifestURI": "https://raw.githubusercontent.com/Lampe332/seanime-dkb/main/manifest.json" }, { CryptoJS: Crypto, compat: createCompatibility(dom, Crypto) });

@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * Capturas de la barra de Big Picture con el diseño nuevo (referencia Apple TV).
  *
- * No hace falta MPV: se inyecta el mismo IPC falso que en seekr-preview.spec.ts
+ * No hace falta MPV: se inyecta un IPC falso de reproducción
  * con pistas de audio reales (rotulo con tecnologia + technicalMetadata del
  * .json de la stream) para poder abrir los menus contextuales.
  */
@@ -82,13 +82,14 @@ async function stubForeignStreamsSnapshot(page: Page) {
   });
 }
 
+const URL_NORMAL = "/player?type=movie&id=tmdb%3A4951";
 const URL_BP = "/big-picture/player?type=movie&id=tmdb%3A4951";
 
 test("el panel de fuentes se ofrece sin depender de la instantanea ajena", async ({ page }) => {
   test.setTimeout(90_000);
   await stubForeignStreamsSnapshot(page);
   await stubPlayback(page);
-  await page.goto(URL_BP);
+  await page.goto(URL_NORMAL);
   await page.waitForTimeout(2500);
   const size = page.viewportSize();
   if (size) {
@@ -112,6 +113,51 @@ test("el panel de fuentes se ofrece sin depender de la instantanea ajena", async
   await expect(panel).not.toContainText("Fuente ajena");
   const stray = await page.locator("text=Fuente ajena").count();
   expect(stray).toBe(0);
+});
+
+test("Fuentes se mantiene en modo normal y se oculta en modo TV", async ({ page }) => {
+  test.setTimeout(90_000);
+  await stubPlayback(page);
+  await page.goto(URL_BP);
+  await page.waitForTimeout(2500);
+  const size = page.viewportSize();
+  if (size) await page.mouse.move(size.width / 2, size.height / 2);
+  await page.addStyleTag({ content: "*, *::before, *::after { visibility: visible !important; }" });
+
+  await expect(page.locator(".bp-bar-actions").getByRole("button", { name: "Fuentes", exact: true })).toHaveCount(0);
+});
+
+test("modo TV abre la fila horizontal de episodios, no el panel lateral", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.route("**/api/tmdb/tv/1/season/1**", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      episodes: [
+        { episode_number: 1, name: "Primer episodio", air_date: "2026-01-01" },
+        { episode_number: 2, name: "Episodio actual", air_date: "2026-01-08" },
+      ],
+    }),
+  }));
+  await page.route("**/api/tmdb/tv/1?**", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ episode_run_time: [24], seasons: [{ season_number: 1 }] }),
+  }));
+  await stubPlayback(page);
+  await page.goto("/big-picture/player?type=series&id=tmdb%3A1&season=1&ep=2");
+  await page.waitForTimeout(2500);
+  await page.addStyleTag({ content: "*, *::before, *::after { visibility: visible !important; }" });
+
+  await expect.poll(() => page.locator("[data-bp-episodes-label]").count()).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("aetherio-gamepad-action", { detail: { id: "y" } }));
+  });
+
+  const row = page.locator("[data-bp-episode-row]");
+  await expect(row).toHaveAttribute("aria-hidden", "false");
+  await expect(row.getByRole("button", { name: /Episodio 2/ })).toBeVisible();
+  await expect(page.locator("[data-player-side-panel]")).toHaveCount(0);
 });
 
 async function openBar(page: Page) {
@@ -159,15 +205,19 @@ test("barra de Big Picture: capturas del diseño nuevo", async ({ page }) => {
   await page.waitForTimeout(400);
   await page.screenshot({ path: "artifacts/bp-controls/measure/bar-bp.png" });
 
-  // Big Picture no pide blur: solo la sombra degradada. El shader de MPV
-  // recortaria un rectangulo recto sobre el video, asi que la barra debe
-  // quedarse fuera (blurAlpha 0) mientras este visible.
+  // Big Picture no difumina la barra completa: solo recorta blur GPU alrededor
+  // de cada control. El fondo de la barra conserva la sombra (blurAlpha 0).
   const blur = await page.evaluate(() => {
     const calls = (window as unknown as { __blurCalls?: Record<string, unknown>[] }).__blurCalls ?? [];
-    return calls.map(call => Number(call.blurAlpha ?? 0));
+    return calls.map(call => ({
+      blurAlpha: Number(call.blurAlpha ?? 0),
+      controlAlpha: Number(call.controlAlpha ?? 0),
+      controlSurfaces: Array.isArray(call.controlSurfaces) ? call.controlSurfaces.length : 0,
+    }));
   });
   expect(blur.length).toBeGreaterThan(0);
-  expect(Math.max(...blur)).toBeLessThanOrEqual(0.01);
+  expect(Math.max(...blur.map(call => call.blurAlpha))).toBeLessThanOrEqual(0.01);
+  expect(blur.some(call => call.controlAlpha > 0.01 && call.controlSurfaces > 0)).toBe(true);
 
   // Sin backdrop-filter, sin bordes y sin inset: cualquier recorte o linea de
   // 1px devuelve el corte recto. La sombra es un degradado que vive en el pseudo
@@ -175,16 +225,17 @@ test("barra de Big Picture: capturas del diseño nuevo", async ({ page }) => {
   // no se veria nada.
   const surface = await bar.evaluate(node => {
     const style = getComputedStyle(node);
-    const veil = getComputedStyle(node, "::before");
+    const veil = node.querySelector<HTMLElement>(".bp-player-shadow");
+    const veilStyle = veil ? getComputedStyle(veil) : null;
     return {
       backdropFilter: style.backdropFilter,
       borderTopWidth: style.borderTopWidth,
       boxShadow: style.boxShadow,
       backgroundImage: style.backgroundImage,
-      veilImage: veil.backgroundImage,
-      veilTop: veil.top,
-      veilHeight: veil.height,
-      veilPointerEvents: veil.pointerEvents,
+      veilImage: veilStyle?.backgroundImage ?? "none",
+      veilTop: veilStyle?.top ?? "0px",
+      veilHeight: veilStyle?.height ?? "0px",
+      veilPointerEvents: veilStyle?.pointerEvents ?? "auto",
     };
   });
   expect(surface.backdropFilter).toBe("none");
@@ -239,7 +290,8 @@ test("material y separacion de los controles de la barra", async ({ page }) => {
 
   const buttons = row.locator("button");
   const count = await buttons.count();
-  expect(count).toBe(4);
+  expect(count).toBeGreaterThanOrEqual(3);
+  await expect(row.getByRole("button", { name: "Fuentes", exact: true })).toHaveCount(0);
 
   // Separacion: la unidad del `gap` de flex son los hijos ([data-player-menu]),
   // no los botones que hay dentro. Se mide en los dos sitios para que un cambio
@@ -261,12 +313,13 @@ test("material y separacion de los controles de la barra", async ({ page }) => {
     expect(gap).toBeGreaterThanOrEqual(6);
   }
 
-  // Material determinista: relleno translucido fijo, sin backdrop-filter.
+  // Superficie translucida con el filtro del navegador como fallback; en MPV
+  // el blur de verdad se verifica en las máscaras GPU de los controles.
   const material = await buttons.first().evaluate(node => {
     const style = getComputedStyle(node);
     return { background: style.backgroundColor, border: style.borderTopWidth, filter: style.backdropFilter };
   });
-  expect(material.filter).toBe("none");
+  expect(material.filter).not.toBe("none");
   expect(material.background).not.toBe("rgba(0, 0, 0, 0)");
   expect(Number.parseFloat(material.border)).toBeGreaterThan(0);
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { resolvePosterRenderConfig, clamp, type PosterRenderConfigInput } from "@/lib/poster-config"
+import { hasExplicitBadgeOverrides, resolvePosterRenderConfig, clamp, type PosterRenderConfigInput } from "@/lib/poster-config"
 import type { Mapping } from "@/lib/types"
 import type { PictoriumUserConfig } from "@/lib/config-token"
 
@@ -46,6 +46,14 @@ describe("clamp", () => {
     expect(clamp(150, 5, 100)).toBe(100)
     expect(clamp(-3, 5, 100)).toBe(5)
     expect(clamp(42, 5, 100)).toBe(42)
+  })
+})
+
+describe("hasExplicitBadgeOverrides", () => {
+  it("recognizes master badge flags on direct poster URLs but ignores ordinary URL params", () => {
+    expect(hasExplicitBadgeOverrides(new URLSearchParams({ ranking: "0" }))).toBe(true)
+    expect(hasExplicitBadgeOverrides(new URLSearchParams({ badges: "0" }))).toBe(true)
+    expect(hasExplicitBadgeOverrides(new URLSearchParams({ region: "MX", lang: "es", rs: "default" }))).toBe(false)
   })
 })
 
@@ -154,6 +162,19 @@ describe("resolvePosterRenderConfig", () => {
     }))
     expect(r.badgesEnabled).toBe(false)
     expect(r.rankingEnabled).toBe(false)
+  })
+
+  it("honors direct badge flags without poster, mapping, or config token", () => {
+    const searchParams = new URLSearchParams({ badges: "0", ranking: "0", bg: "0", by: "0", br: "0", netLogo: "0" })
+    const hasQuery = hasExplicitBadgeOverrides(searchParams)
+    const r = resolvePosterRenderConfig(baseInput({ searchParams, hasQuery }))
+
+    expect(r.badgesEnabled).toBe(false)
+    expect(r.rankingEnabled).toBe(false)
+    expect(r.badgeGenre).toBe(false)
+    expect(r.badgeYear).toBe(false)
+    expect(r.badgeRating).toBe(false)
+    expect(r.networkLogo).toBe(false)
   })
 
   it("config token with ranking=0/other OFF flags disables them even with a configOverride", () => {

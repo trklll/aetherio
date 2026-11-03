@@ -97,6 +97,7 @@ const PersonPage = lazy(() => import("./pages/Person"));
 const EntityPage = lazy(() => import("./pages/Entity"));
 const SearchPage = lazy(() => import("./pages/Search"));
 const GenreListingPage = lazy(() => import("./pages/GenreListing"));
+const StreamingPlatformPage = lazy(() => import("./pages/StreamingPlatform"));
 const BigPicturePage = lazy(() => import("./pages/BigPicture"));
 const QuickStart = lazy(() => import("./pages/QuickStart"));
 const ProfileSelection = lazy(() => import("./pages/ProfileSelection"));
@@ -639,6 +640,7 @@ function PageRoutes({ location, defaultRoute }: { location: Location; defaultRou
         <Route path="/entity/:kind/:id"  element={<EntityPage />} />
         <Route path="/search"            element={<SearchPage />} />
         <Route path="/genre"             element={<GenreListingPage />} />
+        <Route path="/platform/:platformId" element={<StreamingPlatformPage />} />
       </Routes>
     </Suspense>
   );

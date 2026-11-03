@@ -35,7 +35,7 @@ async function stubApp(page: Page) {
 /**
  * Sin la superficie nativa de MPV la transicion de entrada no termina y la raiz
  * se queda en visibility:hidden, lo que saca los botones del arbol de
- * accesibilidad. Mismo forzaje que usa el E2E de Seekr.
+ * accesibilidad. Mismo forzaje que usa el E2E del reproductor.
  */
 async function forceVisible(page: Page) {
   await page.addStyleTag({ content: "*, *::before, *::after { visibility: visible !important; }" });

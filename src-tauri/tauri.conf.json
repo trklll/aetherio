@@ -5,7 +5,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build && npm run posters:stage",
+    "beforeBuildCommand": "npm run nuvio:stage && npm run build && npm run posters:stage",
     "frontendDist": "../dist"
   },
   "app": {
@@ -115,7 +115,8 @@
     "resources": [
       "bin/mpv",
       "resources/bin/node.exe",
-      "resources/spatialposters"
+      "resources/spatialposters",
+      "resources/nuvio-live-sports"
     ],
     "icon": [
       "icons/32x32.png",

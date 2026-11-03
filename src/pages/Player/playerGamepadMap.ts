@@ -15,11 +15,22 @@ export interface PlayerGamepadContext {
   controlsMode: boolean;
   /** Zona activa de la barra: timeline, controles o fila de episodios. */
   zone: "timeline" | "buttons" | "episodes";
+  /** Hay un destino temporal provisional esperando confirmación. */
+  previewActive: boolean;
+  /** El aviso de siguiente episodio tiene dos controles, fuera de la barra. */
+  postPlayFocused?: boolean;
+  postPlayAvailable?: boolean;
 }
 
 export type PlayerGamepadOutcome =
+  | { type: "activate-post-play" }
+  | { type: "dismiss-post-play" }
+  | { type: "focus-post-play"; target: "play" | "cancel" }
   | { type: "toggle" }
   | { type: "seek"; offset: number }
+  | { type: "preview-seek"; offset: number }
+  | { type: "confirm-preview" }
+  | { type: "cancel-preview" }
   | { type: "volume"; delta: number }
   | { type: "prev-episode" }
   | { type: "next-episode" }
@@ -60,11 +71,25 @@ export function resolvePlayerGamepadAction(
   id: GamepadActionId,
   ctx: PlayerGamepadContext,
 ): PlayerGamepadOutcome | null {
+  if (ctx.directMode && ctx.previewActive && id === "back") return { type: "cancel-preview" };
+
   // Con overlay abierto la cruceta y A vuelven a la navegación espacial
   // (el polling del mando los deja pasar como flechas/Enter). B cierra.
   if (!ctx.directMode) {
     if (id === "back") return { type: "close-overlay" };
     return null;
+  }
+
+  if (ctx.postPlayFocused) {
+    if (id === "confirm") return ctx.transportLocked ? null : { type: "activate-post-play" };
+    if (id === "back") return { type: "dismiss-post-play" };
+    if (id === "dpad-left") return { type: "focus-post-play", target: "play" };
+    if (id === "dpad-right") return { type: "focus-post-play", target: "cancel" };
+    if (id === "dpad-up" || id === "dpad-down" || id === "open-controls") return { type: "open-controls" };
+  }
+
+  if (ctx.controlsMode && ctx.zone === "timeline" && ctx.previewActive && id === "confirm") {
+    return { type: "confirm-preview" };
   }
 
   // Con segmento visible, A omite intro/resumen/outro (el botón ya tomó foco
@@ -81,10 +106,10 @@ export function resolvePlayerGamepadAction(
     if (ctx.zone === "timeline") {
       if (id === "back") return { type: "exit-controls" };
       if (id === "dpad-left") {
-        return ctx.transportLocked ? null : { type: "seek", offset: -PLAYER_SEEK_STEP_S };
+        return ctx.transportLocked ? null : { type: "preview-seek", offset: -PLAYER_SEEK_STEP_S };
       }
       if (id === "dpad-right") {
-        return ctx.transportLocked ? null : { type: "seek", offset: PLAYER_SEEK_STEP_S };
+        return ctx.transportLocked ? null : { type: "preview-seek", offset: PLAYER_SEEK_STEP_S };
       }
       if (id === "confirm") {
         return ctx.transportLocked ? null : { type: "toggle" };

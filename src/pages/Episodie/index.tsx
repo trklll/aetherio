@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Film, LoaderCircle, LogOut, RefreshCw, User, Users, X, Zap } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Film, LogOut, RefreshCw, User, Users, X, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys.ts";
 import { useHomePreferences } from "../../config/homePreferences.ts";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
@@ -46,6 +46,7 @@ import { buildDetailPath, buildPlayerPath, isBigPictureLocation } from "../../ut
 import { useParty } from "../../party/PartyContext.tsx";
 import { normalizeRoomCode, isCompleteRoomCode, isEncryptedPayload, partyMediaKey, type PartyMedia } from "../../party/protocol.ts";
 import ContextMenu from "../../components/ui/ContextMenu.tsx";
+import AppleSpinner from "../../components/ui/AppleSpinner.tsx";
 import { pickBestMatchingSource, type AutoNextSourceHint } from "../../utils/autoNextSource.ts";
 import { registerAutoResolve } from "../../utils/autoResolveGuard.ts";
 import { shouldAutoResolveOnEntry } from "./autoResolveRules.ts";
@@ -2016,29 +2017,13 @@ function StreamPanelPlaceholder({
       >
         {children}
       </p>
-      {loading ? <span className="aetherio-loading-spinner" aria-hidden="true" /> : null}
+      {loading ? <AppleSpinner /> : null}
     </div>
   );
 }
 
 function SourceStatusSpinner() {
-  const spinnerRef = useRef<SVGSVGElement>(null);
-
-  useLayoutEffect(() => {
-    const tween = gsap.to(spinnerRef.current, {
-      rotation: 360,
-      duration: 0.85,
-      ease: "none",
-      repeat: -1,
-      transformOrigin: "50% 50%",
-    });
-    return () => {
-      tween.kill();
-      gsap.set(spinnerRef.current, { clearProps: "transform" });
-    };
-  }, []);
-
-  return <LoaderCircle ref={spinnerRef} size={13} className="ml-0.5 shrink-0 text-white/48" aria-hidden="true" />;
+  return <AppleSpinner size={13} color="rgba(255,255,255,0.48)" className="ml-0.5 shrink-0" />;
 }
 
 function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
@@ -2074,7 +2059,7 @@ function StreamFormatBadges({ badges }: { badges: StreamFormatBadge[] }) {
 /**
  * El query resuelto manda sobre los search params. Embebido en Detail la URL
  * es /detail/:type/:id y no lleva search params, asi que leerlos aqui dejaba al
- * reproductor sin type/id y con ello a Seekr sin forma de identificar el titulo.
+ * reproductor sin type/id y con ello sin identidad para Auto Sync.
  */
 function pickDefaultStream(
   streams: MediaStream[],
@@ -2324,6 +2309,7 @@ function extractSourceFileName(stream: MediaStream) {
 }
 
 function extractSourceName(stream: MediaStream): string | null {
+  if (stream.sourceName) return stream.sourceName;
   const addonId = stream.addonId?.trim() ?? "";
   const isTorrentio = addonId === "torrentio" || addonId === ["com.stre", "mio.torrentio"].join("");
   const isMediaExtension = addonId.startsWith("mediaExtension:");

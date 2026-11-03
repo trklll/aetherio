@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAddonStore } from "../../store/addonStore";
-import { Puzzle, Plus, Trash2, ToggleLeft, ToggleRight, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { Puzzle, Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import PageContainer from "../../components/layout/PageContainer";
 
 export default function AddonsPage() {
@@ -112,7 +113,7 @@ export default function AddonsPage() {
             className="flex items-center gap-2 px-5 py-3 bg-accent hover:bg-accent-dark text-white font-semibold rounded-card gsap-transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isInstalling
-              ? <Loader2 size={16} className="gsap-spin" />
+              ? <AppleSpinner size={16} />
               : <Plus size={16} />}
             {isInstalling ? "Instalando..." : "Instalar"}
           </button>

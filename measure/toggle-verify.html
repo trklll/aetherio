@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Toggle verification</title>
+<link rel="stylesheet" href="/assets/ToggleSwitch-Cz1s2qBw.css" />
+<style>
+  body { margin:0; background:#141416; color:#fff; font:14px system-ui, sans-serif; padding:28px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:rgba(255,255,255,.5); margin:0 0 10px; }
+  .row { display:flex; align-items:center; gap:16px; margin-bottom:14px; }
+  .lbl { width:190px; color:rgba(255,255,255,.85); }
+  /* Boton interactivo real (md) */
+  button.aetherio-toggle { position:relative; display:inline-block; flex:0 0 auto;
+    width:var(--toggle-width); height:var(--toggle-height); padding:0; border:0;
+    border-radius:999px; background:rgba(255,255,255,.14);
+    box-shadow:inset 0 1px 2px rgba(0,0,0,.26); cursor:pointer; transition:background 180ms ease; }
+  .aetherio-toggle--lg { --toggle-height:38px; --toggle-width:89px; --toggle-knob:31px; --toggle-inset:3.5px; --toggle-travel:51px; }
+  .aetherio-toggle__knob { position:absolute; top:var(--toggle-inset); left:var(--toggle-inset);
+    display:block; width:var(--toggle-knob); height:var(--toggle-knob); border-radius:999px;
+    background:rgba(255,255,255,.62); box-shadow:0 2px 6px rgba(0,0,0,.34);
+    transition:transform 200ms cubic-bezier(.22,.61,.36,1), background 180ms ease; }
+  button.aetherio-toggle[aria-checked="true"] { background:#fff; }
+  button.aetherio-toggle[aria-checked="true"] .aetherio-toggle__knob { transform:translateX(var(--toggle-travel)); background:#090a0c; }
+  /* Presentacional (lg) */
+  .aetherio-toggle-pill { --toggle-height:38px; --toggle-width:89px; --toggle-knob:31px;
+    --toggle-inset:3.5px; --toggle-travel:51px; position:relative; display:inline-block; flex:0 0 auto;
+    width:var(--toggle-width); height:var(--toggle-height); border-radius:999px;
+    background:rgba(255,255,255,.2); box-shadow:inset 0 1px 2px rgba(0,0,0,.26); transition:background 180ms ease; }
+  .aetherio-toggle-pill[data-checked="true"] { background:#fff; }
+  .aetherio-toggle-pill[data-checked="true"] .aetherio-toggle__knob { transform:translateX(var(--toggle-travel)); background:#090a0c; }
+</style>
+</head>
+<body>
+  <h2>ToggleSwitch md (Settings / Sources)</h2>
+  <div class="row"><span class="lbl">off</span><button class="aetherio-toggle" role="switch" aria-checked="false"><span class="aetherio-toggle__knob"></span></button></div>
+  <div class="row"><span class="lbl">on</span><button class="aetherio-toggle" role="switch" aria-checked="true"><span class="aetherio-toggle__knob"></span></button></div>
+  <div class="row"><span class="lbl">disabled off</span><button class="aetherio-toggle" role="switch" aria-checked="false" disabled><span class="aetherio-toggle__knob"></span></button></div>
+
+  <h2 style="margin-top:26px">TogglePill lg (BigPicture)</h2>
+  <div class="row"><span class="lbl">off</span><span class="aetherio-toggle-pill" data-checked="false"><span class="aetherio-toggle__knob"></span></span></div>
+  <div class="row"><span class="lbl">on</span><span class="aetherio-toggle-pill" data-checked="true"><span class="aetherio-toggle__knob"></span></span></div>
+
+  <h2 style="margin-top:26px">Caja de referencia (pista 2.35:1)</h2>
+  <div class="row" id="probe"></div>
+<script>
+  const b = document.querySelector('button.aetherio-toggle');
+  const k = document.querySelector('button.aetherio-toggle .aetherio-toggle__knob');
+  const r = b.getBoundingClientRect(), kr = k.getBoundingClientRect();
+  document.getElementById('probe').textContent =
+    `pista ${r.width.toFixed(1)}x${r.height.toFixed(1)} ratio=${(r.width/r.height).toFixed(2)} | ` +
+    `knob ${kr.width.toFixed(1)}x${kr.height.toFixed(1)} ratio=${(kr.width/kr.height).toFixed(2)} | ` +
+    `knob/alto=${(kr.height/r.height).toFixed(2)} | inset=${kr.left-r.left} | rightGap=${(r.right-kr.right).toFixed(1)}`;
+</script>
+</body>
+</html>

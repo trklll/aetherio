@@ -40,7 +40,6 @@ import {
   saveMdbListSettings,
   useMdbListSettings,
 } from "../../config/mdblist.ts";
-import { useSeekrApiKey } from "../../config/useSeekrApiKey.ts";
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
   LANGUAGE_OPTIONS,
@@ -50,6 +49,13 @@ import {
 } from "../../config/playbackPreferences.ts";
 import { useHomeCatalogs } from "../../hooks/useCatalogs.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
+import {
+  ensureLocalNuvioSportsServer,
+  readNuvioSportsMode,
+  writeNuvioSportsMode,
+  type NuvioSportsMode,
+} from "../../services/nuvioSportsRuntime.ts";
+import { probeStremioSportsProvider } from "../../services/stremioSportsProviders.ts";
 import {
   AETHERIO_AUTH_CHANGED_EVENT,
   connectAniListAccount,
@@ -324,8 +330,8 @@ function DesignSection({ onNotice }: { onNotice: (message?: string) => void }) {
             onChange={value => updateHome({ bothPreference: value as BothContentPreference })}
           />
         ) : null}
-        <ToggleRow title="Pósters horizontales" description="Usa tarjetas panorámicas en los catálogos compatibles." value={preferences.posterLayout === "horizontal"} onChange={value => updateHome({ posterLayout: value ? "horizontal" : "vertical" })} />
         <ToggleRow title="Completar arte con TMDB" description="Usa TMDB como respaldo cuando el addon no trae imagen." value={preferences.allowTmdbArtworkFallback} onChange={value => updateHome({ allowTmdbArtworkFallback: value })} />
+        <ToggleRow title="Reproducir intros de plataformas" description="Muestra la intro al entrar a una página de plataforma." value={preferences.playStreamingPlatformIntros} onChange={value => updateHome({ playStreamingPlatformIntros: value })} />
       </SettingsGroup>
 
       <SettingsGroup title="SpatialPosters">
@@ -372,6 +378,7 @@ function PlaybackSection({ onNotice }: { onNotice: (message?: string) => void })
         <CycleRow title="Velocidad al mantener" value={`${preferences.holdToAccelerateSpeed}x`} options={["1.25x", "1.5x", "2x", "2.5x", "3x"]} onChange={value => update({ holdToAccelerateSpeed: Number.parseFloat(value) })} />
         <ToggleRow title="Reutilizar último enlace" description="Prueba el último stream que funcionó para este título." value={preferences.reuseLastLink} onChange={value => update({ reuseLastLink: value })} />
         <CycleRow title="Modo de selección de stream" value={preferences.sourceSelectionMode === "first" ? "Primera fuente" : "Manual"} options={["Manual", "Primera fuente"]} onChange={value => update({ sourceSelectionMode: value === "Primera fuente" ? "first" : "manual" })} />
+        <ToggleRow title="Probar otra fuente automáticamente" description="Tras un fallo, prueba hasta dos fuentes alternativas. Puede que ninguna funcione; esta opción solo cambia los reintentos automáticos." value={preferences.automaticSourceRecovery} onChange={value => update({ automaticSourceRecovery: value })} />
       </SettingsGroup>
 
       <SettingsGroup title="Audio y subtítulos">
@@ -426,28 +433,9 @@ function SourcesSection({ onNavigate, onNotice }: { onNavigate: (path: string) =
   const addons = useAddonStore(state => state.addons);
   const mdbList = useMdbListSettings();
   const [keys, setKeys] = useState<ApiKeys>(() => getApiKeys());
+  const [nuvioMode, setNuvioMode] = useState<NuvioSportsMode>(() => readNuvioSportsMode());
+  const [checkingNuvio, setCheckingNuvio] = useState(false);
   const [editing, setEditing] = useState<{ title: string; value: string; save: (value: string) => void } | null>(null);
-  const {
-    apiKey: seekrApiKey,
-    ready: seekrReady,
-    save: saveSeekrKey,
-    clear: clearSeekrKey,
-  } = useSeekrApiKey();
-  const [seekrStatus, setSeekrStatus] = useState<string | null>(null);
-
-  const persistSeekrKey = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      void clearSeekrKey().then(() => setSeekrStatus(null)).catch(() => setSeekrStatus("No se pudo eliminar la clave de Seekr."));
-      return;
-    }
-    void saveSeekrKey(trimmed)
-      .then(() => setSeekrStatus(null))
-      .catch(cause => setSeekrStatus(
-        cause instanceof Error && cause.message.trim() ? cause.message : "No se pudo guardar la clave de Seekr.",
-      ));
-  };
-
   useEffect(() => {
     if (!editing) return;
     const onKey = (event: KeyboardEvent) => {
@@ -472,12 +460,47 @@ function SourcesSection({ onNavigate, onNotice }: { onNavigate: (path: string) =
     onNotice();
   }
 
+  async function checkNuvio() {
+    setCheckingNuvio(true);
+    try {
+      await ensureLocalNuvioSportsServer();
+      const result = await probeStremioSportsProvider("nuvio");
+      onNotice(result.ok
+        ? `Sports${result.version ? ` ${result.version}` : ""} responde correctamente.`
+        : result.error ?? "Sports no respondió.");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "No se pudo comprobar Sports.");
+    } finally {
+      setCheckingNuvio(false);
+    }
+  }
+
   return (
     <SettingsPanel title="Fuentes" description="Los servicios conectados a Aetherio aparecen aquí y en sus pantallas dedicadas.">
       <SettingsGroup title="Estado">
         <SettingsInfoRow title="Catálogos instalados" description={`${addons.length} complementos disponibles para buscar y reproducir.`} />
         <SettingsInfoRow title="TMDB" description="Se usa el proxy de Aetherio cuando no tienes una clave propia." />
         <SettingsInfoRow title="AniList" description="La cuenta de anime se gestiona desde Cuenta en la app normal." />
+      </SettingsGroup>
+      <SettingsGroup title="Sports">
+        <ChoiceRow
+          title="Instancia deportiva"
+          description="Sports se ejecuta dentro de Aetherio; no tienes que abrir otra app. También puedes elegir la instancia remota."
+          value={nuvioMode}
+          options={[{ value: "local", label: "Local" }, { value: "remote", label: "Remota" }]}
+          onChange={value => {
+            const mode = value as NuvioSportsMode;
+            writeNuvioSportsMode(mode);
+            setNuvioMode(mode);
+            onNotice("Preferencia de Sports guardada.");
+          }}
+        />
+        <SettingsHint>La instancia local escucha solo en este equipo. El addon todavía puede contactar proveedores o Workers de terceros para descubrir y resolver streams.</SettingsHint>
+        <SettingsActionRow
+          title={checkingNuvio ? "Comprobando Sports…" : "Comprobar conexión"}
+          description={nuvioMode === "local" ? "Inicia la instancia local si aún no está activa." : "Verifica la instancia remota configurada."}
+          onClick={() => void checkNuvio()}
+        />
       </SettingsGroup>
       <SettingsGroup title="Ratings MDBList">
         <ToggleRow title="Activar MDBList Ratings" description="Obtiene puntuaciones externas para la pantalla de detalle." value={mdbList.enabled} onChange={value => updateMdb({ enabled: value })} />
@@ -489,12 +512,7 @@ function SourcesSection({ onNavigate, onNotice }: { onNavigate: (path: string) =
       <SettingsGroup title="Credenciales de servicios">
         <CredentialRow title="Anime Skip Client ID" configured={Boolean(keys.animeSkipClientId)} onClick={() => setEditing({ title: "Anime Skip Client ID", value: keys.animeSkipClientId, save: value => saveCredential("animeSkipClientId", value) })} />
         <CredentialRow title="Token de TheIntroDB" configured={Boolean(keys.introDbApiKey)} onClick={() => setEditing({ title: "Token de TheIntroDB", value: keys.introDbApiKey, save: value => saveCredential("introDbApiKey", value) })} />
-        <CredentialRow title="API key de Seekr" configured={seekrReady && Boolean(seekrApiKey)} onClick={() => setEditing({ title: "API key de Seekr", value: "", save: persistSeekrKey })} />
-        {seekrReady && seekrApiKey ? (
-          <SettingsAction onClick={() => persistSeekrKey("")}>Eliminar la clave de Seekr</SettingsAction>
-        ) : null}
-        {seekrStatus ? <SettingsHint>{seekrStatus}</SettingsHint> : null}
-        <SettingsHint>Las claves se guardan en el perfil local activo y se muestran siempre ocultas; la de Seekr va al almacén seguro de Windows.</SettingsHint>
+        <SettingsHint>Las claves se guardan en el perfil local activo y se muestran siempre ocultas.</SettingsHint>
       </SettingsGroup>
       <SettingsGroup title="Acciones">
         <SettingsActionRow title="Gestionar complementos" description="Activa, desactiva o instala fuentes de contenido." onClick={() => onNavigate("/big-picture/addons")} />

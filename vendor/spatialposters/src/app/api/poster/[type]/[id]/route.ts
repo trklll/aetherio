@@ -60,7 +60,7 @@ import { computeTopBadge } from "@/lib/poster-badge"
 import { resolveImdbToTmdb } from "@/lib/imdb-resolver"
 import { decodeConfig } from "@/lib/config-token"
 import { createLogger } from "@/lib/logger"
-import { resolvePosterRenderConfig } from "@/lib/poster-config"
+import { hasExplicitBadgeOverrides, resolvePosterRenderConfig } from "@/lib/poster-config"
 import { normalizeGenreLabel } from "@/lib/genre-label"
 import { getAiringScheduleLabel } from "@/lib/airing-schedule"
 import { selectBestLogo, logoBestLogoFallbackReason } from "@/lib/logo-selection"
@@ -341,6 +341,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<RouteP
   let imdbId: string | null = null
 
   const queryPoster = req.nextUrl.searchParams.get("poster")
+  const hasExplicitRenderConfig = !!queryPoster || !!mapping || !!configToken || hasExplicitBadgeOverrides(req.nextUrl.searchParams)
   const queryLogo = req.nextUrl.searchParams.get("logo")
   const queryBackdrop = req.nextUrl.searchParams.get("backdrop")
   const queryGenre = req.nextUrl.searchParams.get("genreName")
@@ -630,7 +631,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<RouteP
     // (tutti ON), così un link ?config= con "ranking=0" mostrava comunque il badge
     // trend. Con un config token la personalizzazione è esplicita → i flag off
     // devono valere.
-    const hasQueryEarly = !!queryPoster || !!mapping || !!configToken
+    const hasQueryEarly = hasExplicitRenderConfig
     const badgesEnabledEarly = hasQueryEarly ? (qBadgesEarly !== null ? qBadgesEarly !== "0" : showBadges) : true
     const rankingEnabledEarly = hasQueryEarly ? (qRankingEarly !== null ? qRankingEarly !== "0" : rankingBadges) : true
     const qMqEarly = req.nextUrl.searchParams.get("mq")
@@ -829,7 +830,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<RouteP
       mapping,
       configOverride,
       sd,
-      hasQuery: !!queryPoster || !!mapping || !!configToken,
+      hasQuery: hasExplicitRenderConfig,
       showBadges,
       rankingBadges,
       animeRank: animeRankResult,

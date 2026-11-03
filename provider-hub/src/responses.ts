@@ -7,8 +7,9 @@ export function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), { status, headers: JSON_HEADERS });
 }
 
-export function hubJson(status: number, payload: unknown, cacheMaxAge?: number): Response {
+export function hubJson(status: number, payload: unknown, cacheMaxAge?: number, allowCors = false): Response {
   const headers = { ...JSON_HEADERS };
   if (cacheMaxAge) headers["cache-control"] = `public, max-age=${cacheMaxAge}`;
+  if (allowCors) headers["access-control-allow-origin"] = "*";
   return new Response(JSON.stringify(payload), { status, headers });
 }

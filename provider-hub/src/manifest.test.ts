@@ -22,4 +22,12 @@ describe("buildManifest", () => {
 
     expect(manifest.scrapers[0]).not.toHaveProperty("logo");
   });
+
+  it("publishes broken/paused scripts as visible but not executable metadata", () => {
+    const manifest = buildManifest("1.0.0", [{
+      id: "animeflv", name: "AnimeFLV", description: "Averiado en el marketplace",
+      supportedTypes: ["movie", "tv"], enabled: false,
+    }]);
+    expect(manifest.scrapers[0]).toMatchObject({ id: "animeflv", enabled: false, description: "Averiado en el marketplace" });
+  });
 });

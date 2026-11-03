@@ -343,9 +343,6 @@
 .bp-addons-page__log > button { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 14px; font-weight: 750; }
 .bp-addons-page__log-body { max-height: 180px; overflow: auto; margin-top: 10px; padding: 15px 18px; border: 1px solid var(--bp-line); border-radius: 18px; background: rgba(0, 0, 0, 0.28); color: rgba(255, 255, 255, 0.55); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .bp-addons-page__log-body p { margin: 4px 0; }
-.bp-addons-page__spin { animation: bp-addon-spin 0.9s linear infinite; }
-@keyframes bp-addon-spin { to { transform: rotate(360deg); } }
-
 .bp-addons-page__modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 34px; background: rgba(0, 0, 0, 0.68); backdrop-filter: var(--lg-filter-sm); }
 .bp-addons-page__keyboard,
 .bp-addons-page__confirm { width: min(760px, 100%); padding: 25px; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 28px; background: rgba(27, 29, 33, 0.96); box-shadow: 0 30px 100px rgba(0, 0, 0, 0.58); }

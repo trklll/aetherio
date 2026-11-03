@@ -1,0 +1,348 @@
+[
+  {
+    "id": "T1",
+    "title": "Rotation ~90deg/262ms 1.05s linear; frozen=1 -> none",
+    "status": "PASS",
+    "metrics": {
+      "intervals_262ms": [
+        {
+          "delta_deg": 91.393,
+          "expected_deg": 92.674,
+          "elapsed_ms": 270.3,
+          "ok": true
+        },
+        {
+          "delta_deg": 91.44,
+          "expected_deg": 92.571,
+          "elapsed_ms": 270.0,
+          "ok": true
+        },
+        {
+          "delta_deg": 97.12,
+          "expected_deg": 92.846,
+          "elapsed_ms": 270.8,
+          "ok": true
+        },
+        {
+          "delta_deg": 97.166,
+          "expected_deg": 100.457,
+          "elapsed_ms": 293.0,
+          "ok": true
+        }
+      ],
+      "animName": "ai-rotate",
+      "animDur": "1.05s",
+      "iteration": "infinite",
+      "all_intervals_ok": true,
+      "direction": "CW(+)",
+      "frozen": [
+        {
+          "sel": "spinner",
+          "animName": "none",
+          "transform": "none",
+          "n": 8
+        },
+        {
+          "sel": "spinner",
+          "animName": "none",
+          "transform": "none",
+          "n": 8
+        },
+        {
+          "sel": "spinner s46",
+          "animName": "none",
+          "transform": "none",
+          "n": 8
+        },
+        {
+          "sel": "spinner s28",
+          "animName": "none",
+          "transform": "none",
+          "n": 8
+        }
+      ]
+    },
+    "error": null
+  },
+  {
+    "id": "T2",
+    "title": "role=img+Cargando x4; 8 pAtilo <i> aria-hidden c/u",
+    "status": "PASS",
+    "metrics": {
+      "spinners": 4,
+      "roles": [
+        "img",
+        "img",
+        "img",
+        "img"
+      ],
+      "aria_labels": [
+        "Cargando",
+        "Cargando",
+        "Cargando",
+        "Cargando"
+      ],
+      "petals_per_spinner": [
+        8,
+        8,
+        8,
+        8
+      ],
+      "i_total": 32,
+      "i_aria_hidden_true": 32,
+      "role_all_img": true,
+      "label_all_cargando": true,
+      "aria_hidden_cover": true,
+      "petals_8_each": true
+    },
+    "error": null
+  },
+  {
+    "id": "T3",
+    "title": "W/S~=0.105, L/S~=0.30, R~=W/2 (width=pet-w, height=pet-l)",
+    "status": "PASS",
+    "metrics": {
+      "per_spinner": [
+        {
+          "sel": "#ref-spinner",
+          "S_px": 290.0,
+          "W_computed": 30.5,
+          "L_computed": 87.0,
+          "R": 15.25,
+          "W_declared": 30.5,
+          "L_declared": 87.0,
+          "rmid": 89.5,
+          "W_over_S": 0.10517,
+          "L_over_S": 0.3,
+          "R_eq_decl_W_half": true,
+          "R_vs_comp_W_half_px": 0.0,
+          "box_eq_S": true,
+          "tipOuter_over_S": 0.45862,
+          "tipInner_over_S": 0.15862
+        },
+        {
+          "sel": ".spinner.s46",
+          "S_px": 46.0,
+          "W_computed": 4.82812,
+          "L_computed": 13.7969,
+          "R": 2.415,
+          "W_declared": 4.83,
+          "L_declared": 13.8,
+          "rmid": 13.71,
+          "W_over_S": 0.10496,
+          "L_over_S": 0.29993,
+          "R_eq_decl_W_half": true,
+          "R_vs_comp_W_half_px": 0.0009,
+          "box_eq_S": true,
+          "tipOuter_over_S": 0.44804,
+          "tipInner_over_S": 0.14804
+        },
+        {
+          "sel": ".spinner.s28",
+          "S_px": 28.0,
+          "W_computed": 2.9375,
+          "L_computed": 8.39062,
+          "R": 1.47,
+          "W_declared": 2.94,
+          "L_declared": 8.4,
+          "rmid": 8.344,
+          "W_over_S": 0.10491,
+          "L_over_S": 0.29967,
+          "R_eq_decl_W_half": true,
+          "R_vs_comp_W_half_px": 0.0012,
+          "box_eq_S": true,
+          "tipOuter_over_S": 0.448,
+          "tipInner_over_S": 0.148
+        }
+      ],
+      "checks": [
+        {
+          "sel": "#ref-spinner",
+          "L_ok": true,
+          "W_ok": true,
+          "R_decl_ok": true,
+          "R_comp_ok": true,
+          "box_ok": true,
+          "in_disk": true
+        },
+        {
+          "sel": ".spinner.s46",
+          "L_ok": true,
+          "W_ok": true,
+          "R_decl_ok": true,
+          "R_comp_ok": true,
+          "box_ok": true,
+          "in_disk": true
+        },
+        {
+          "sel": ".spinner.s28",
+          "L_ok": true,
+          "W_ok": true,
+          "R_decl_ok": true,
+          "R_comp_ok": true,
+          "box_ok": true,
+          "in_disk": true
+        }
+      ]
+    },
+    "error": null
+  },
+  {
+    "id": "T4",
+    "title": "reducedMotion=reduce -> animation:none, pAtilo estAticos visibles",
+    "status": "PASS",
+    "metrics": {
+      "outlined": [
+        {
+          "cls": "spinner",
+          "animName": "none",
+          "petOpacity": "1",
+          "petBg": "rgb(241, 80, 75)"
+        },
+        {
+          "cls": "spinner",
+          "animName": "none",
+          "petOpacity": "1",
+          "petBg": "rgb(255, 255, 255)"
+        },
+        {
+          "cls": "spinner s46",
+          "animName": "none",
+          "petOpacity": "1",
+          "petBg": "rgb(255, 255, 255)"
+        },
+        {
+          "cls": "spinner s28",
+          "animName": "none",
+          "petOpacity": "1",
+          "petBg": "rgba(255, 255, 255, 0.9)"
+        }
+      ],
+      "angle_t0": 0,
+      "angle_t250ms": 0,
+      "really_static": true
+    },
+    "error": null
+  },
+  {
+    "id": "T5[320x320]",
+    "title": "0 errores consola; sin scroll horizontal",
+    "status": "FAIL",
+    "metrics": {
+      "viewport": "320x320",
+      "console_errors": [],
+      "pageerrors": [],
+      "http_gt4xx": [],
+      "scrollX_loaded": 0,
+      "maxScrollLeft": 37,
+      "maxScrollTop": 690,
+      "scrollW": 357,
+      "clientW": 320,
+      "overflow_x_px": 37,
+      "scrollH": 1010,
+      "clientH": 320,
+      "dropped": true,
+      "stage": "row/wrap",
+      "overflow_culprits": []
+    },
+    "error": null
+  },
+  {
+    "id": "T5[800x600]",
+    "title": "0 errores consola; sin scroll horizontal",
+    "status": "PASS",
+    "metrics": {
+      "viewport": "800x600",
+      "console_errors": [],
+      "pageerrors": [],
+      "http_gt4xx": [],
+      "scrollX_loaded": 0,
+      "maxScrollLeft": 0,
+      "maxScrollTop": 0,
+      "scrollW": 800,
+      "clientW": 800,
+      "overflow_x_px": 0,
+      "scrollH": 600,
+      "clientH": 600,
+      "dropped": false,
+      "stage": "row/wrap",
+      "overflow_culprits": []
+    },
+    "error": null
+  },
+  {
+    "id": "T5[1440x900]",
+    "title": "0 errores consola; sin scroll horizontal",
+    "status": "PASS",
+    "metrics": {
+      "viewport": "1440x900",
+      "console_errors": [],
+      "pageerrors": [],
+      "http_gt4xx": [],
+      "scrollX_loaded": 0,
+      "maxScrollLeft": 0,
+      "maxScrollTop": 0,
+      "scrollW": 1440,
+      "clientW": 1440,
+      "overflow_x_px": 0,
+      "scrollH": 900,
+      "clientH": 900,
+      "dropped": false,
+      "stage": "row/wrap",
+      "overflow_culprits": []
+    },
+    "error": null
+  },
+  {
+    "id": "T6",
+    "title": "60 rAF sin variar geometria; 2 screenshots congeladas identicas",
+    "status": "PASS",
+    "metrics": {
+      "raf_frames": 60,
+      "unique_geometry_states": 1,
+      "geometry_ok": true,
+      "sample_frame_0": "#ref-spinner|228.9375|283.0000|290px|290px|none|30.5px|87px|1|290px|87px#main section:nth-of-type(2) .spinner|604.9375|283.0000|290px|290px|none|30.5px|87px|1|290px|87px#.spinner.s46|994.8281|316.0000|46px|46px|none|4.82812px|13.7969px|1|46px|13.8px#.spinner.s28|1153.8906|325.0000|28px|28px|none|2.9375px|8.39062px|1|28px|8.4px",
+      "divergent_frame": null,
+      "shape": [
+        900,
+        1440,
+        3
+      ],
+      "pixdiff_max": 0,
+      "pixdiff_pixels": 0,
+      "screens_ok": true
+    },
+    "error": null
+  },
+  {
+    "id": "T7",
+    "title": "0 enlaces/botones muertos; elementFromPoint centro -> spinner",
+    "status": "PASS",
+    "metrics": {
+      "dead_clickables": 0,
+      "hits": [
+        {
+          "target": "plate-ref",
+          "rel": "self"
+        },
+        {
+          "target": "plate-aeth",
+          "rel": "self"
+        },
+        {
+          "target": "s46",
+          "rel": "self"
+        },
+        {
+          "target": "s28",
+          "rel": "self"
+        },
+        {
+          "target": "plato-ref(animado, rot random)",
+          "rel": "inside #ref-spinner"
+        }
+      ]
+    },
+    "error": null
+  }
+]

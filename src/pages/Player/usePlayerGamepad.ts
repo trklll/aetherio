@@ -22,6 +22,13 @@ interface UsePlayerGamepadOptions {
   controlsMode: boolean;
   /** Zona enfocada en la barra de Big Picture. */
   barZone: "timeline" | "buttons" | "episodes";
+  previewActive: boolean;
+  postPlay?: {
+    focused: () => boolean;
+    activate: () => void;
+    dismiss: () => void;
+    focus: (target: "play" | "cancel") => void;
+  };
   /** true cuando hay un segmento de intro/resumen/outro accionable. */
   skipAvailable: () => boolean;
   skipSegment: () => void;
@@ -34,6 +41,9 @@ interface UsePlayerGamepadOptions {
   activateFocusedControl: () => void;
   togglePlay: () => void;
   jump: (offset: number) => void;
+  previewSeek: (offset: number) => void;
+  confirmPreview: () => void;
+  cancelPreview: () => void;
   applyVolume: (value: number) => void;
   flash: (kind: PlayerFeedbackKind, extra?: { deltaSeconds?: number; volume?: number }) => void;
   navigateEpisode: (direction: "prev" | "next") => void;
@@ -79,10 +89,24 @@ export function usePlayerGamepad(options: UsePlayerGamepadOptions) {
         skipAvailable: current.skipAvailable(),
         controlsMode: current.controlsMode,
         zone: current.barZone,
+        previewActive: current.previewActive,
+        postPlayFocused: current.postPlay?.focused() ?? false,
       });
       if (!outcome) return;
 
       switch (outcome.type) {
+        case "activate-post-play":
+          current.postPlay?.activate();
+          event.preventDefault();
+          return;
+        case "dismiss-post-play":
+          current.postPlay?.dismiss();
+          event.preventDefault();
+          return;
+        case "focus-post-play":
+          current.postPlay?.focus(outcome.target);
+          event.preventDefault();
+          return;
         case "toggle": {
           const wasPlaying = current.playing;
           current.togglePlay();
@@ -98,6 +122,18 @@ export function usePlayerGamepad(options: UsePlayerGamepadOptions) {
           event.preventDefault();
           return;
         }
+        case "preview-seek":
+          current.previewSeek(outcome.offset);
+          event.preventDefault();
+          return;
+        case "confirm-preview":
+          current.confirmPreview();
+          event.preventDefault();
+          return;
+        case "cancel-preview":
+          current.cancelPreview();
+          event.preventDefault();
+          return;
         case "volume": {
           const next = Math.min(2, Math.max(0, current.volume + outcome.delta));
           current.applyVolume(next);

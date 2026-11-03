@@ -14,6 +14,7 @@ import { HERO_NEXT_EVENT } from "../../navigation/spatialNav.ts";
  * background maximizado. Hace scroll junto al contenido como el header de Detail.
  */
 function BigPictureHeroText({ item }: { item: MediaItem }) {
+  const Heading = item.type === "live" ? "h1" : "h2";
   return (
     <div className="bp-hero-copy-layer__content" style={{ maxWidth: 640 }}>
       <div style={{ minHeight: 140, display: "flex", alignItems: "flex-end", marginBottom: 8, overflow: "visible", paddingTop: 16, marginTop: -16, paddingLeft: 16, marginLeft: -16, paddingRight: 16, marginRight: -16 }}>
@@ -26,16 +27,16 @@ function BigPictureHeroText({ item }: { item: MediaItem }) {
             style={{ maxHeight: 140, maxWidth: "100%", objectFit: "contain", objectPosition: "left bottom", transformOrigin: "left center", filter: "drop-shadow(0 2px 12px rgba(0,0,0,0.7))", display: "block" }}
           />
         ) : (
-          <h2 style={{ fontSize: 26, fontWeight: 800, color: "#fff", margin: 0, lineHeight: 1.1 }}>
+          <Heading style={{ fontSize: item.type === "live" ? "2.6rem" : 26, fontWeight: 800, color: "#fff", margin: 0, lineHeight: 1.1 }}>
             {item.name}
-          </h2>
+          </Heading>
         )}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 8, flexWrap: "wrap" }}>
         {item.genres?.[0] ? (
           <>
             <span style={{ fontSize: 13, color: "rgba(255,255,255,0.55)" }}>
-              {item.genres[0]}
+              {item.type === "live" ? item.genres.join(" · ") : item.genres[0]}
             </span>
             {(item.year || item.runtime || item.certification) && (
               <span style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</span>
@@ -79,7 +80,13 @@ function BigPictureHeroText({ item }: { item: MediaItem }) {
   );
 }
 
-export default function BigPictureHero({ item, contentVisible = true }: { item: MediaItem | undefined; contentVisible?: boolean }) {
+export default function BigPictureHero({ item, contentVisible = true, onOpenItem, primaryLabel = "Ver ahora", primaryDisabled = false }: {
+  item: MediaItem | undefined;
+  contentVisible?: boolean;
+  onOpenItem?: (item: MediaItem) => void;
+  primaryLabel?: string;
+  primaryDisabled?: boolean;
+}) {
   const navigate = useNavigate();
   const [displayItem, setDisplayItem] = useState(item);
   const [transitionItem, setTransitionItem] = useState<MediaItem | undefined>();
@@ -109,6 +116,10 @@ export default function BigPictureHero({ item, contentVisible = true }: { item: 
   if (!item) return null;
 
   const openDetail = (targetItem: MediaItem) => {
+    if (onOpenItem) {
+      onOpenItem(targetItem);
+      return;
+    }
     const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
     saveHomeScroll({
       vertical: shell?.scrollTop ?? 0,
@@ -166,6 +177,7 @@ export default function BigPictureHero({ item, contentVisible = true }: { item: 
         <div style={{ display: "flex", alignItems: "center", gap: 18, marginTop: 12 }}>
           <button
             onClick={() => openDetail(activeTarget)}
+            disabled={primaryDisabled}
             data-hero-primary
             data-hero-cycle
             style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 26px", background: "#fff", color: "#000", fontWeight: 800, borderRadius: 999, fontSize: 14, border: "none", cursor: "pointer", boxShadow: "0 3px 12px rgba(0,0,0,0.38)" }}
@@ -177,7 +189,7 @@ export default function BigPictureHero({ item, contentVisible = true }: { item: 
             }}
           >
             <Play size={15} fill="black" />
-            Ver ahora
+            {primaryLabel}
           </button>
           <button
             onClick={() => window.dispatchEvent(new CustomEvent(HERO_NEXT_EVENT))}

@@ -5,6 +5,7 @@ import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork.ts";
 import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion.ts";
 import { GAMEPAD_ACTION_EVENT, type GamepadActionDetail } from "../../hooks/useGamepad.ts";
 import { useYouTubePlayer } from "../../hooks/useYouTubePlayer.ts";
+import { getHomeScroll } from "../../store/homeScrollStore.ts";
 import {
   fetchYouTubeClip,
   getCachedFirstTrailerClipInfo,
@@ -39,6 +40,9 @@ interface Props {
   onActiveItem: (item: MediaItem | undefined) => void;
   animateEntrance?: boolean;
   contentVisible?: boolean;
+  /** Live events have no movie trailers; keep their artwork and manual cycling. */
+  trailersEnabled?: boolean;
+  selectedItemId?: string;
 }
 
 /**
@@ -46,7 +50,18 @@ interface Props {
  * Por cada medio carga su clip; cuando el clip termina, pasa al siguiente.
  * El video va en el background maximizado (lógica Detail: blur al bajar).
  */
-export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, animateEntrance = false, contentVisible = true }: Props) {
+export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, animateEntrance = false, contentVisible = true, trailersEnabled = true, selectedItemId }: Props) {
+  const [initialScrollTop] = useState(() => {
+    const saved = getHomeScroll();
+    return saved?.focus?.rowKey === "streaming-platforms"
+      ? saved.vertical
+      : scrollRef.current?.scrollTop ?? 0;
+  });
+  const heroHeightAtMount = Math.min((typeof window === "undefined" ? 0 : window.innerHeight) * 0.62, 640);
+  const initiallyPastHero = initialScrollTop > heroHeightAtMount;
+  const initialBlur = Math.round(Math.min(28, Math.max(0, initialScrollTop / 12)));
+  const initialVignette = Math.round(Math.max(0, 1 - initialScrollTop / 240) * 100) / 100;
+  const initialDark = Math.round(Math.min(0.55, Math.max(0, initialScrollTop / 400)) * 100) / 100;
   const [activeIndex, setActiveIndex] = useState(0);
   const [clipCandidates, setClipCandidates] = useState<YouTubeClipCandidate[]>([]);
   const [clipIndex, setClipIndex] = useState(0);
@@ -80,20 +95,31 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
   const backdropRef = useRef<HTMLDivElement>(null);
   const vignetteRef = useRef<HTMLDivElement>(null);
   const darkRef = useRef<HTMLDivElement>(null);
-  const blurRef = useRef(0);
-  const vignetteValueRef = useRef(1);
-  const darkValueRef = useRef(0);
+  const blurRef = useRef(initialBlur);
+  const vignetteValueRef = useRef(initialVignette);
+  const darkValueRef = useRef(initialDark);
   const holdTimerRef = useRef<number | null>(null);
   // Trailer en pausa por scroll (bajó a las rows): muestra el still.
   // El video SOLO suena/reproduce en el hero; en las rows rotan stills.
-  const pausedByScrollRef = useRef(false);
-  const [inHero, setInHero] = useState(true);
+  const pausedByScrollRef = useRef(initiallyPastHero);
+  const [inHero, setInHero] = useState(!initiallyPastHero);
 
   const activeItem = items.length ? items[activeIndex % items.length] : undefined;
+  useEffect(() => {
+    if (!selectedItemId) return;
+    const index = items.findIndex(item => item.id === selectedItemId);
+    if (index >= 0) setActiveIndex(index);
+  }, [selectedItemId, items]);
   const [displayItem, setDisplayItem] = useState<MediaItem | undefined>(activeItem);
   const [transitionItem, setTransitionItem] = useState<MediaItem | undefined>(undefined);
-  const displayBg = ensureOriginalTmdbImage(displayItem?.background) ?? displayItem?.poster ?? "";
-  const transitionBg = ensureOriginalTmdbImage(transitionItem?.background) ?? transitionItem?.poster ?? "";
+  const [failedBackgrounds, setFailedBackgrounds] = useState<ReadonlySet<string>>(() => new Set());
+  const displaySource = ensureOriginalTmdbImage(displayItem?.background) ?? displayItem?.poster ?? "";
+  const transitionSource = ensureOriginalTmdbImage(transitionItem?.background) ?? transitionItem?.poster ?? "";
+  const displayBg = displayItem?.type === "live" && failedBackgrounds.has(displaySource)
+    ? displayItem.originalPoster ?? "" : displaySource;
+  const transitionBg = transitionItem?.type === "live" && failedBackgrounds.has(transitionSource)
+    ? transitionItem.originalPoster ?? "" : transitionSource;
+  const markBackgroundFailed = (url: string) => setFailedBackgrounds(previous => previous.has(url) ? previous : new Set([...previous, url]));
 
   useEffect(() => {
     onActiveItem(activeItem);
@@ -211,7 +237,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
     setClipCandidates([]);
     setClipIndex(0);
     setFetchSettled(false);
-    if (!activeItem) {
+    if (!activeItem || !trailersEnabled) {
       setFetchSettled(true);
       return;
     }
@@ -236,7 +262,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
       setFetchSettled(true);
     });
     return () => { cancelled = true; };
-  }, [activeItem?.id, activeItem?.type]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeItem?.id, activeItem?.type, trailersEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clipInfo = clipCandidates[clipIndex] ?? null;
   const { stream, loading: streamLoading, error: streamError } = useYouTubePlayer(
@@ -322,7 +348,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
   // pause pero el play queda bloqueado abajo hasta volver al hero.
   const exhausted = clipCandidates.length > 0 && streamError != null && clipIndex >= clipCandidates.length - 1;
   useEffect(() => {
-    if (!activeItem || !fetchSettled || !preHoldDone) return;
+    if (!trailersEnabled || !activeItem || !fetchSettled || !preHoldDone) return;
     if (!inHero) {
       const timer = window.setTimeout(advance, POST_VIDEO_STILL_MS);
       return () => window.clearTimeout(timer);
@@ -331,7 +357,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
     if (hasPlayableTrailer) return;
     const timer = window.setTimeout(advance, POST_VIDEO_STILL_MS);
     return () => window.clearTimeout(timer);
-  }, [activeItem, fetchSettled, preHoldDone, stream, streamLoading, exhausted, clipCandidates.length, inHero]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeItem, fetchSettled, preHoldDone, stream, streamLoading, exhausted, clipCandidates.length, inHero, trailersEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Al terminar el pre-hold (info visible + 2.5s), arrancar el trailer si ya hay stream.
   useEffect(() => {
@@ -486,6 +512,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
       }
     };
     shell.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
     return () => shell.removeEventListener("scroll", onScroll);
   }, [scrollRef, stream, isMuted]);
 
@@ -500,7 +527,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
         }}
       >
         <div className="bp-bg__frame">
-          <div ref={backdropRef} className="bp-bg__image" style={{ filter: "blur(0px)", transform: "scale(1)" }}>
+          <div ref={backdropRef} className="bp-bg__image" style={{ filter: `blur(${initialBlur}px)`, transform: `scale(${1 + initialBlur * 0.0018})` }}>
             {displayBg ? (
               <img
                 key={`bp-current-${displayBg}`}
@@ -508,7 +535,10 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
                 alt=""
                 decoding="async"
                 onLoad={fadeEntranceIn}
-                onError={fadeEntranceIn}
+                onError={() => {
+                  if (displayItem?.type === "live") markBackgroundFailed(displaySource);
+                  fadeEntranceIn();
+                }}
                 className="bp-bg__still"
                 style={{
                   opacity: showTrailer ? 0 : 1,
@@ -524,6 +554,7 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
                 src={transitionBg}
                 alt=""
                 decoding="async"
+                onError={() => { if (transitionItem.type === "live") markBackgroundFailed(transitionSource); }}
                 className="bp-bg__still bp-bg__still--incoming bp-wipe-layer"
               />
             ) : null}
@@ -609,8 +640,8 @@ export default function BigPictureBackdrop({ items, scrollRef, onActiveItem, ani
             )}
           </div>
         </div>
-        <div ref={vignetteRef} className="bp-bg__vignette" />
-        <div ref={darkRef} className="bp-bg__dark" />
+        <div ref={vignetteRef} className="bp-bg__vignette" style={{ opacity: initialVignette }} />
+        <div ref={darkRef} className="bp-bg__dark" style={{ opacity: initialDark }} />
       </div>
     </>
   );

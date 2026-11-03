@@ -6,6 +6,7 @@ import { buildDetailPath } from "../../utils/bigPictureDetail.ts";
 import { tweenTo } from "../../utils/motion.ts";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
+import { fetchAllMovieSeriesGenreItems, getMovieSeriesGenre } from "../../services/movieSeriesGenres";
 import type { MediaItem } from "../../types/ui.ts";
 import "./BigPictureGenre.css";
 
@@ -142,15 +143,21 @@ export default function BigPictureGenre() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const genre = params.get("genre") ?? "";
-  const displayTitle = GENRE_LABELS[genre] ?? genre;
+  const movieSeries = params.get("media") === "movie-series";
+  const displayTitle = movieSeries
+    ? getMovieSeriesGenre(genre)?.label ?? genre
+    : GENRE_LABELS[genre] ?? genre;
 
   // Misma caché que la page normal: si ya se visitó en PC, entra instantáneo.
-  const cachedItems = genre ? readPageDataCache<MediaItem[]>("genre", genre) : null;
+  const cacheNamespace = movieSeries ? "genre-movie-series" : "genre";
+  const cachedItems = genre ? readPageDataCache<MediaItem[]>(cacheNamespace, genre) : null;
   const { data: items = cachedItems ?? [], isLoading } = useQuery({
-    queryKey: ["genre-listing", genre],
+    queryKey: ["genre-listing", movieSeries ? "movie-series" : "anime", genre],
     queryFn: async () => {
-      const fetched = await fetchAllGenrePages(genre);
-      writePageDataCache("genre", genre, fetched);
+      const fetched = movieSeries
+        ? await fetchAllMovieSeriesGenreItems(genre)
+        : await fetchAllGenrePages(genre);
+      writePageDataCache(cacheNamespace, genre, fetched);
       return fetched;
     },
     enabled: !!genre,
@@ -198,10 +205,10 @@ export default function BigPictureGenre() {
 
   return (
     <div className="bp-genre" data-bp-genre>
-      <div className="bp-genre__header" key={genre}>
+      <div className="bp-genre__header" key={`header:${genre}`}>
         <h1 className="bp-genre__title">{displayTitle || "Género"}</h1>
         <p className="bp-genre__subtitle">
-          {isLoading ? "Cargando…" : `${items.length} animes`}
+          {isLoading ? "Cargando…" : movieSeries ? `${items.length} títulos` : `${items.length} animes`}
         </p>
       </div>
 
@@ -212,16 +219,18 @@ export default function BigPictureGenre() {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <p className="bp-genre__status">No se encontraron animes para este género.</p>
+        <p className="bp-genre__status">
+          {movieSeries ? "No se encontraron películas ni series para este género." : "No se encontraron animes para este género."}
+        </p>
       ) : (
-        <div className="bp-genre__grid" key={genre}>
+        <div className="bp-genre__grid" key={`grid:${genre}`}>
           {items.map((item, index) => (
             <GenreCard
               key={`${item.id}-${index}`}
               item={item}
               index={index}
               isPrimary={index === 0}
-              onOpen={(detailId) => navigate(buildDetailPath("anime", detailId))}
+              onOpen={(type, detailId) => navigate(buildDetailPath(type, detailId))}
             />
           ))}
         </div>
@@ -239,7 +248,7 @@ function GenreCard({
   item: MediaItem;
   index: number;
   isPrimary: boolean;
-  onOpen: (detailId: string) => void;
+  onOpen: (type: string, detailId: string) => void;
 }) {
   const [resolving, setResolving] = useState(false);
   const image = item.poster ?? item.background ?? "";
@@ -248,16 +257,18 @@ function GenreCard({
     if (resolving) return;
     setResolving(true);
     try {
-      const tmdbId = await resolveTmdbId(item.name);
+      const tmdbId = item.type === "anime" ? await resolveTmdbId(item.name) : item.id;
       const detailId = tmdbId ?? item.id;
       writeDetailMediaMeta({
         id: detailId,
-        type: "anime",
+        type: item.type,
         name: item.name,
+        poster: item.poster,
+        background: item.background,
         description: item.description,
         year: item.year,
       });
-      onOpen(detailId);
+      onOpen(item.type, detailId);
     } finally {
       setResolving(false);
     }

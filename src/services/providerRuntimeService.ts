@@ -2,6 +2,8 @@ import { tmdbFetch } from "../config/apiKeys.ts";
 import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
 import type { MediaStream, StreamQuery, StreamSubtitle } from "../types/stream.ts";
 import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetadata.ts";
+import { PROVIDER_HUB_MANIFEST_URL } from "./providerHubConfig.ts";
+import { normalizeProviderRuntimeTorrent } from "./providerRuntimeTorrent.ts";
 
 interface ProviderManifestSource {
   key: string;
@@ -18,7 +20,7 @@ const PROVIDER_MANIFEST_SOURCES: readonly ProviderManifestSource[] = [
     fallbackName: "Aetherio Hub",
     // Única fuente default. Se administra centralmente en Provider Hub; no
     // añadir repos de proveedores en esta app.
-    url: "https://aetherio-provider-hub.xoolinnbeats.workers.dev/manifest.json",
+    url: PROVIDER_HUB_MANIFEST_URL,
   },
 ] as const;
 const PROVIDER_MANIFEST_URLS = PROVIDER_MANIFEST_SOURCES.map(source => source.url);
@@ -180,6 +182,11 @@ export interface ProviderBatchStatus {
 }
 
 interface RawProviderStream {
+  sourceName?: unknown;
+  infoHash?: unknown;
+  sources?: unknown;
+  seeders?: unknown;
+  fileIdx?: unknown;
   url?: unknown;
   externalUrl?: unknown;
   name?: unknown;
@@ -467,6 +474,11 @@ async function providerHttp(request: ProviderHttpRequest): Promise<ProviderHttpR
 }
 
 async function fetchText(url: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    const response = await fetch(url, { headers: { Accept: "application/json, text/javascript" }, signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    return response.text();
+  }
   const response = await providerHttp({ url, method: "GET" });
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -487,6 +499,9 @@ export async function getProviderRuntimeRepositories(): Promise<ProviderRuntimeR
         manifestUrl: source.url,
         custom: source.custom,
         scrapers: manifest.scrapers
+          // AnimeAV1 is bundled and executed by Aetherio's Rust scraper, never
+          // by a Provider Hub or user-supplied JavaScript provider.
+          .filter(scraper => scraper.id !== "animeav1")
           .filter(scraper => isProviderManifestScraperAllowed(source.key, scraper.id))
           .filter(scraper => !isProviderRetired(`${source.key}:${scraper.id}`))
           .map(scraper => ({
@@ -738,6 +753,10 @@ function normalizeStreams(
   origin?: ProviderStreamOrigin,
 ): MediaStream[] {
   return streams.flatMap((raw, index) => {
+    const torrent = normalizeProviderRuntimeTorrent(raw as Record<string, unknown>, {
+      key: definition.key, name: definition.scraper.name, ownerName: definition.ownerName, repositoryName: definition.repositoryName, logo: definition.scraper.logo,
+    }, index);
+    if (torrent) return [torrent];
     const url = [raw.url, raw.externalUrl].find(value => typeof value === "string" && /^https?:\/\//i.test(value.trim()));
     if (typeof url !== "string") return [];
     const parsedUrl = new URL(url);
@@ -771,6 +790,8 @@ function normalizeStreams(
         ? `Cloudstream · ${origin.repositoryName}`
         : `${definition.ownerName} · ${definition.repositoryName}`,
       name: providerName,
+      sourceName: typeof raw.sourceName === "string" ? raw.sourceName.trim().slice(0, 120) : undefined,
+      sourceLogo: typeof raw.sourceName === "string" ? definition.scraper.logo : undefined,
       title: rawTitle ?? providerName,
       description: [quality, ...(definition.scraper.contentLanguage ?? [])].filter(Boolean).join(" · ") || definition.scraper.description,
       url,

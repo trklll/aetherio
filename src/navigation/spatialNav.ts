@@ -627,6 +627,22 @@ function firstEntityRowScrollTop(el: HTMLElement, shell: HTMLElement): number | 
   return 0;
 }
 
+/**
+ * Al volver hacia arriba a la primera fila de una plataforma, restaura el
+ * hero completo (logo y descripción) en vez de alinear la fila al borde del
+ * shell y dejar el encabezado fuera de pantalla.
+ */
+function firstStreamingPlatformRowScrollTop(el: HTMLElement): number | null {
+  const page = el.closest<HTMLElement>(".streaming-platform-page[data-streaming-platform]");
+  const row = el.closest<HTMLElement>("[data-row-key]");
+  if (!page || !row) return null;
+  const visibleRows = Array.from(page.querySelectorAll<HTMLElement>("[data-row-key]")).filter(candidate => {
+    const rect = candidate.getBoundingClientRect();
+    return rect.width >= 2 && rect.height >= 2;
+  });
+  return visibleRows[0] === row ? 0 : null;
+}
+
 /** ScrollTop que conserva el ancla de entrada de la primera row del Detail. */
 function detailRowContentTop(row: HTMLElement, shell: HTMLElement): number | null {
   if (!((row.getAttribute("data-row-key") ?? "").startsWith("detail:"))) return null;
@@ -815,7 +831,9 @@ function fastBringIntoView(el: HTMLElement, dir: SpatialDir) {
     return;
   }
   if ((dir === "up" || dir === "down") && el.closest("[data-row-card]")) {
-    const firstTop = dir === "up" ? (firstDetailRowScrollTop(el, shell) ?? firstEntityRowScrollTop(el, shell)) : null;
+    const firstTop = dir === "up"
+      ? (firstStreamingPlatformRowScrollTop(el) ?? firstDetailRowScrollTop(el, shell) ?? firstEntityRowScrollTop(el, shell))
+      : null;
     if (firstTop !== null) {
       target = firstTop;
     } else {
@@ -880,7 +898,9 @@ function bringIntoView(el: HTMLElement, dir: SpatialDir, fast = false) {
     const scaleY = contentVisualScaleY(el, shell);
     let target = shell.scrollTop;
     if ((dir === "up" || dir === "down") && el.closest("[data-row-card]")) {
-      const firstTop = dir === "up" ? (firstDetailRowScrollTop(el, shell) ?? firstEntityRowScrollTop(el, shell)) : null;
+      const firstTop = dir === "up"
+        ? (firstStreamingPlatformRowScrollTop(el) ?? firstDetailRowScrollTop(el, shell) ?? firstEntityRowScrollTop(el, shell))
+        : null;
       if (firstTop !== null) {
         target = firstTop;
       } else {
@@ -1333,6 +1353,10 @@ export function installSpatialNavigation() {
     if (event.key !== "ArrowRight" && event.key !== "ArrowDown" && event.key !== "ArrowLeft" && event.key !== "ArrowUp") return;
     const target = event.target as HTMLElement | null;
     if (isTextEntry(target)) return;
+    // A contained editor owns its visual-row map and local viewport. The global
+    // handler still supplies focus marks and A/Enter activation, but must not
+    // move twice or scroll the outer shell before the editor receives arrows.
+    if (target?.closest('[data-spatial-navigation="local"]')) return;
     // El rail gestiona sus propias flechas (arriba/abajo/izquierda/derecha/cierre).
     if (target?.closest(".bp-rail")) return;
 

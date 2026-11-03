@@ -1,0 +1,98 @@
+/* Home owns geometry and card material; Sports only supplies its content. */
+.bp-sports.bp-sports--home {
+  position: relative;
+  padding: 0;
+  background: transparent;
+}
+
+.bp-sports--home > .home-page-scale {
+  position: relative;
+  z-index: 1;
+  margin-top: calc(-1 * var(--app-shell-nav-height));
+  padding-top: var(--app-shell-nav-height);
+}
+
+.bp-sports-home__catalogs {
+  padding-bottom: 56px;
+}
+
+.bp-sports-home__empty {
+  min-height: min(62vh, 640px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 120px var(--app-gutter-x) var(--app-gutter-bottom);
+}
+
+.bp-sports-home__empty h1 {
+  margin: 0;
+  font-size: 2.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.bp-sports-home__empty p,
+.bp-sports-home__status {
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+}
+
+.bp-sports-home__status {
+  padding-inline: var(--app-gutter-x);
+}
+
+.bp-sports-home__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 24px var(--app-gutter-x);
+}
+
+.bp-sports-home__replays-title {
+  margin: 8px 0 14px;
+  padding-inline: var(--app-gutter-x);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.bp-sports-home__replays-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  padding: 0 var(--app-gutter-x) 24px;
+}
+
+.bp-sports-home__replays-tools p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bp-sports--home .bp-hero-copy-stage .bp-hero-copy-layer__content h1 {
+  font-size: 2.6rem;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.bp-sports--home .bp-sports__cta {
+  font-size: 14px;
+  font-weight: 700;
+  min-height: 44px;
+}
+
+.bp-sports--home .bp-sports__cta:is(:focus, .spatial-focus) {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.bp-sports--home button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

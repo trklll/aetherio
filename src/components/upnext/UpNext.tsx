@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Info, Play } from "lucide-react";
 import { gsap } from "../../utils/motion";
 import { getUpNextMiniRect } from "../../utils/upnextMiniRect";
@@ -54,7 +54,10 @@ export default function UpNext({
   onExitComplete,
 }: UpNextProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const playButtonRef = useRef<HTMLButtonElement>(null);
+  const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const [count, setCount] = useState(countdownSeconds);
+  const [userNavigating, setUserNavigating] = useState(false);
   const countdownEndedRef = useRef(false);
   const exitRanRef = useRef(false);
   const [, setResizeTick] = useState(0);
@@ -69,6 +72,13 @@ export default function UpNext({
       window.removeEventListener("resize", onResize);
       window.visualViewport?.removeEventListener("resize", onResize);
     };
+  }, []);
+
+  // TV starts on the primary action. Without an initial focus, A/Enter has no
+  // target and the spatial navigator can leave the recommendation overlay.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => playButtonRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   // Fuente unica de verdad: la misma caja que usa MPV en Player/index.tsx.
@@ -141,7 +151,7 @@ export default function UpNext({
   }, [countdownSeconds, recommendation.logoUrl, recommendation.backdropUrl]);
 
   useEffect(() => {
-    if (!onCountdownEnd) return;
+    if (!onCountdownEnd || userNavigating) return;
     if (count <= 0) {
       if (!countdownEndedRef.current) {
         countdownEndedRef.current = true;
@@ -151,10 +161,38 @@ export default function UpNext({
     }
     const t = window.setTimeout(() => setCount((c) => c - 1), 1000);
     return () => window.clearTimeout(t);
-  }, [count, onCountdownEnd]);
+  }, [count, onCountdownEnd, userNavigating]);
+
+  function handleRemoteKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const buttons = [playButtonRef.current, detailsButtonRef.current].filter((button): button is HTMLButtonElement => Boolean(button));
+    const activeIndex = buttons.findIndex(button => button === document.activeElement);
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      setUserNavigating(true);
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        if (buttons.length > 1 && activeIndex !== -1) {
+          event.preventDefault();
+          event.stopPropagation();
+          buttons[(activeIndex + (event.key === "ArrowRight" ? 1 : buttons.length - 1)) % buttons.length]?.focus({ preventScroll: true });
+        }
+      } else if (event.key === "ArrowUp" && activeIndex !== -1 && onMiniClick) {
+        event.preventDefault();
+        event.stopPropagation();
+        rootRef.current?.querySelector<HTMLElement>("[data-upnext-mini]")?.focus({ preventScroll: true });
+      } else if (event.key === "ArrowDown" && event.target instanceof HTMLElement && event.target.closest("[data-upnext-mini]")) {
+        event.preventDefault();
+        event.stopPropagation();
+        playButtonRef.current?.focus({ preventScroll: true });
+      }
+    } else if (event.key === "Escape" || event.key === "Backspace") {
+      if (!onMiniClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onMiniClick();
+    }
+  }
 
   return (
-    <div ref={rootRef} data-player-interactive className="absolute inset-0 z-40 isolate overflow-hidden bg-transparent">
+    <div ref={rootRef} data-player-interactive data-upnext-root onKeyDownCapture={handleRemoteKey} className="absolute inset-0 z-40 isolate overflow-hidden bg-transparent">
       {/* Backdrop z-0: arte de la recomendación. Con hueco redondeado para que el VIDEO VIVO nativo
           (detrás del webview, achicado a la caja mini por MPV) se vea a través. */}
       <div
@@ -202,6 +240,7 @@ export default function UpNext({
         onClick={onMiniClick}
         role={onMiniClick ? "button" : undefined}
         tabIndex={onMiniClick ? 0 : undefined}
+        aria-label={onMiniClick ? "Volver a la película" : undefined}
         onKeyDown={e => { if (onMiniClick && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onMiniClick(); } }}
         title={onMiniClick ? "Volver a la película" : undefined}
       />
@@ -236,10 +275,12 @@ export default function UpNext({
 
         <div className="flex items-center justify-start gap-3 pt-1">
           <button
+            ref={playButtonRef}
             type="button"
             data-player-interactive
+            data-upnext-action="play"
             onClick={onPlay}
-            className="flex items-center gap-2.5 rounded-full border border-white/[0.08] bg-white px-7 py-3 text-[16px] font-bold text-black shadow-[0_8px_24px_rgba(0,0,0,0.35)] gsap-transition hover:bg-white/90 hover:scale-[1.02] active:scale-[0.98]"
+            className="upnext-tv-action flex min-h-16 items-center gap-2.5 rounded-full border border-white/[0.08] bg-white px-8 py-4 text-[18px] font-bold text-black shadow-[0_8px_24px_rgba(0,0,0,0.35)] gsap-transition hover:bg-white/90"
           >
             <Play size={20} strokeWidth={2.6} fill="currentColor" />
             Reproducir
@@ -247,13 +288,15 @@ export default function UpNext({
 
           {onDetails && (
             <button
+              ref={detailsButtonRef}
               type="button"
               data-player-interactive
+              data-upnext-action="details"
               onClick={onDetails}
-              className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.06] px-6 py-3 text-[15px] font-semibold text-white/80 backdrop-blur-glass-sm gsap-transition hover:bg-white/[0.12] hover:text-white"
+              className="upnext-tv-action liquid-glass-pill flex min-h-16 items-center gap-2 rounded-full px-7 py-4 text-[17px] font-semibold text-white transition-colors hover:bg-white/[0.2] hover:text-white"
             >
               <Info size={19} strokeWidth={2.2} />
-              Mas info
+              Más info
             </button>
           )}
         </div>

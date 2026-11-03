@@ -215,7 +215,7 @@ export async function upsertProvider(
 ): Promise<void> {
   const payload = recordToPayload({ ...record, origin: "kv" });
   if (script !== undefined) {
-    if (script.length > MAX_SCRIPT_BYTES) throw new Error("El script excede el límite de 512 KB.");
+    if (new TextEncoder().encode(script).byteLength > MAX_SCRIPT_BYTES) throw new Error("El script excede el límite de 512 KB.");
     await env.PROVIDERS.put(scriptStorageKey(record.id), script);
     scriptCache.delete(record.id);
   }

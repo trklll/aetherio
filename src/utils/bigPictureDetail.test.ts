@@ -59,6 +59,16 @@ describe("big picture never escapes to normal mode", () => {
 });
 
 describe("buildPlayerBackPath", () => {
+  it("returns Sports replays to Sports while retaining VOD playback mode", () => {
+    expect(buildPlayerBackPath("type=sports-replay&id=replay-1", "/big-picture/player")).toBe("/big-picture/sports");
+  });
+  it("returns Sports live playback to its board instead of a stream picker", () => {
+    expect(buildPlayerBackPath("type=live&id=event-1", "/big-picture/player"))
+      .toBe("/big-picture/sports");
+    expect(buildPlayerBackPath("type=live&id=event-1", "/player"))
+      .toBe("/home");
+  });
+
   it("returns to the episode picker, never to the detail", () => {
     expect(buildPlayerBackPath("type=series&id=tt123&season=2&ep=5", "/player"))
       .toBe("/episode?type=series&id=tt123&season=2&ep=5&fromPlayer=1");
@@ -76,8 +86,18 @@ describe("buildPlayerBackPath", () => {
       .toBe("/episode?type=series&id=tt123&fromSearch=1&q=obsesion&fromPlayer=1");
   });
 
+  it("returns trailers to their title detail in normal mode", () => {
+    expect(buildPlayerBackPath("type=movie&id=tt123&trailer=1", "/player"))
+      .toBe("/detail/movie/tt123");
+  });
+
+  it("returns trailers to their title detail in Big Picture mode", () => {
+    expect(buildPlayerBackPath("type=movie&id=tt123&trailer=1", "/big-picture/player"))
+      .toBe("/big-picture/detail/movie/tt123");
+  });
+
   it("drops params the picker does not need", () => {
-    expect(buildPlayerBackPath("type=movie&id=tt123&trailer=1&local=7", "/player"))
+    expect(buildPlayerBackPath("type=movie&id=tt123&local=7", "/player"))
       .toBe("/episode?type=movie&id=tt123&fromPlayer=1");
   });
 

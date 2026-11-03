@@ -60,7 +60,8 @@ export function getSourceLogo(sourceName: string): string | null {
   return getAddonLogoBySourceName(sourceName);
 }
 
-export function getStreamAddonLogo(stream: { addonId?: string; addonName?: string }): string | null {
+export function getStreamAddonLogo(stream: { addonId?: string; addonName?: string; sourceLogo?: string }): string | null {
+  if (stream.sourceLogo && /^https?:\/\//i.test(stream.sourceLogo)) return stream.sourceLogo;
   try {
     const addons: any[] = useAddonStore.getState()?.addons ?? [];
     if (!addons.length) return null;

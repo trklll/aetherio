@@ -261,7 +261,12 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 8000) {
   }
 }
 
-export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | null, forcedSubtitleValue = ""): UseSubtitlesResult {
+export function useSubtitles(
+  query: StreamQuery | null,
+  stream?: MediaStream | null,
+  forcedSubtitleValue = "",
+  disabled = false,
+): UseSubtitlesResult {
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
   const playbackPreferences = usePlaybackPreferences();
   const originalLanguage = useOriginalLanguage(query, stream);
@@ -290,6 +295,12 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
     let cancelled = false;
 
     async function load() {
+      if (disabled) {
+        setSubtitles([]);
+        setLoading(false);
+        setReady(true);
+        return;
+      }
       if (!query || !videoId) {
         setSubtitles([]);
         setLoading(false);
@@ -409,6 +420,7 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
   }, [
     getEnabledAddons,
     forcedSubtitleUrl,
+    disabled,
     playbackPreferences.addonSubtitleLoadMode,
     playbackPreferences.preferredSubtitleLanguage,
     originalLanguage,
@@ -417,6 +429,7 @@ export function useSubtitles(query: StreamQuery | null, stream?: MediaStream | n
     query?.season,
     query?.episode,
     subtitleLookup,
+    stream?.id,
     videoId,
   ]);
 

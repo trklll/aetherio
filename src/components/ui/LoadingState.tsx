@@ -1,3 +1,5 @@
+import AppleSpinner from "./AppleSpinner";
+
 interface LoadingStateProps {
   label?: string;
   shellPreviewLoading?: boolean;
@@ -21,7 +23,7 @@ export default function LoadingState({ label = "Cargando", shellPreviewLoading =
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }} role="status" aria-live="polite">
-        <span className="aetherio-loading-spinner" aria-hidden="true" />
+        <AppleSpinner />
       </div>
     </div>
   );

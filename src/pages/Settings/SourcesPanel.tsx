@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import clsx from "clsx";
 import { ExternalLink, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import ToggleSwitch from "../../components/ui/ToggleSwitch";
 import {
   getSourcePreferences,
@@ -300,7 +301,7 @@ export default function SourcesPanel() {
           aria-label="Actualizar manifests"
           title="Actualizar manifests"
         >
-          <RefreshCw size={17} className={loading ? "gsap-spin" : undefined} />
+          {loading ? <AppleSpinner size={17} color="rgba(255,255,255,0.7)" /> : <RefreshCw size={17} />}
         </button>
       </header>
 
@@ -322,8 +323,8 @@ export default function SourcesPanel() {
               key={addon.id}
               title={addon.name}
               description={`${addon.scope === "profile" ? "Personal · " : addon.bundled ? "Global · Integrado · " : "Global · "}${(addon.manifest?.types ?? []).map((type: string) => type === "series" ? "Series" : type === "movie" ? "Películas" : type).join(" · ")} · v${addon.version}`}
-              checked={addon.enabled}
               logo={addon.logo ?? addon.manifest?.logo ?? undefined}
+              checked={addon.enabled}
               onChange={checked => checked ? enableAddon(addon.id) : disableAddon(addon.id)}
               action={(
                 <a

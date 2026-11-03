@@ -1,6 +1,17 @@
 import { create } from "zustand";
+import { HUB_ADDON_STATES_KEY, migrateLocalAddonDefaults, readHubAddonStates } from "./addonDefaultsMigration.ts";
+import type { AddonStreamNameFilter } from "../utils/addonStreamFilter.ts";
 import { getActiveProfileId } from "../utils/localProfiles.ts";
-import { ANIMES_MANIFEST } from "./animesManifest.ts";
+import { configuredSportsStreamsManifestUrl, normalizeSportsStreamsManifestUrl, SPORTS_STREAMS_ADDON_ID } from "../services/sportsStreamsConfig.ts";
+import {
+  fetchHubAddonManifest,
+  fetchProviderHubAddonDirectory,
+  PENGUPLAY_MANIFEST_URL,
+  readCachedProviderHubAddonDirectory,
+  resolveHubAddonManifestUrl,
+  type ProviderHubAddonDirectory,
+  type ProviderHubAddonEntry,
+} from "../services/providerHubAddonDirectory.ts";
 import {
   CNCVERSE_BRIDGE_ID,
   CNCVERSE_BRIDGE_LOGO,
@@ -21,6 +32,10 @@ export interface InstalledAddon {
   installedAt: number;
   version: string;
   bundled?: boolean;
+  /** Explicit provenance: manual installations must never be replaced by Hub sync. */
+  origin?: "user" | "provider-hub";
+  upstreamAddonId?: string;
+  streamNameFilter?: AddonStreamNameFilter;
   scope?: AddonScope;
   /**
    * Timeout de `stream` en ms. Los add-ons que agregan muchos upstreams por
@@ -65,24 +80,10 @@ interface AddonStore {
 
 const GLOBAL_ADDONS_STORAGE_KEY = "aetherio-addons";
 const TORRENTIO_ADDON_ID = ["com.stre", "mio.torrentio.addon"].join("");
-export const TORRENTIO_LATINO_MANIFEST_URL = "https://torrentio.strem.fun/language=latino/manifest.json";
-
-const CINEMETA_ADDON_ID = "com.linvo.cinemeta";
-const ANIMES_ADDON_ID = "com.animeflv.stremio.addon";
-const ANIMES_MANIFEST_URL =
-  "https://pigamer37.alwaysdata.net/onAirCatalogs=animeflv%2Canimeav1%2Chenaojara%2Ctioanime%2Canimejara%2Cjkanime/manifest.json";
-const CINEMETA_MANIFEST_URL = "https://v3-cinemeta.strem.io/manifest.json";
 const HDHUB_ADDON_ID = "com.stremio.HdHub";
-export const HDHUB_MANIFEST_URL = "https://hdhub.thevolecitor.qzz.io/eyJ0b3Jib3giOiJ1bnNldCIsInF1YWxpdGllcyI6IjIxNjBwLDEwODBwLDcyMHAiLCJzb3J0IjoiZGVzYyIsImNvbnRlbnQiOiJsYXRpbiIsImNhdGFsb2dzIjoiIn0/manifest.json";
-const STREVERSE_ADDON_ID = "com.stremverse.org";
-const REMOVED_ADDON_IDS = new Set([STREVERSE_ADDON_ID]);
 const PENGUPLAY_ADDON_ID = "com.penguplay";
-const AETHERIO_API_BASE = (import.meta.env.VITE_AETHERIO_API_URL as string | undefined)?.replace(/\/$/, "")
-  ?? "https://trkll.aetherio.workers.dev";
-export const PENGUPLAY_MANIFEST_URL = `${AETHERIO_API_BASE}/api/penguplay/manifest.json`;
-const PENGUPLAY_LOGO = "https://pengu.uk/penguplay-icon.png";
 const DEEPFLIX_ADDON_ID = "org.portal.free";
-export const DEEPFLIX_MANIFEST_URL = "https://mg.homelabx.qzz.io/manifest.json";
+export { PENGUPLAY_MANIFEST_URL };
 export const STREVERSE_MANIFEST_URL =
   "https://stremverse1.alwaysdata.net/1XY6xCsIwGIRfRW7O6NRNRRHERbtJKWn4SULTpOSPxSi-u7RVKG7H3cfdvZCeKLAvIcB9iIlR3HAIITXSOQjsolUtJQhsJbf0s7eS6StL8t4yBM4hhTiVjEB4WK8hcLnrJkNg01G0SvrVsjwrN1PHoFrKqASc9Ho6sT5B4NpLb9mMgZLzOU6RuoEiU-3sQDUN5NO4vwgi9U7mP9NYbZzVJjGq9wc/manifest.json";
 export const STREVERSE_SPORTS = [
@@ -97,185 +98,6 @@ export const STREVERSE_SPORTS = [
   "American Football",
   "Cycling",
 ];
-const CINEMETA_YEAR_OPTIONS = Array.from(
-  { length: 100 },
-  (_, index) => String(new Date().getUTCFullYear() - index),
-);
-
-const TORRENTIO_LATINO_ADDON: InstalledAddon = {
-  id: TORRENTIO_ADDON_ID,
-  name: "Torrentio",
-  description: "Torrentio configurado para priorizar resultados en español latino.",
-  logo: "https://torrentio.strem.fun/images/logo_v1.png",
-  url: TORRENTIO_LATINO_MANIFEST_URL,
-  manifest: {
-    id: TORRENTIO_ADDON_ID,
-    version: "0.0.15",
-    name: "Torrentio",
-    description: "Provides torrent streams from scraped torrent providers.",
-    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
-    resources: [{
-      name: "stream",
-      types: ["movie", "series", "anime"],
-      idPrefixes: ["tt", "kitsu"],
-    }],
-    types: ["movie", "series", "anime", "other"],
-    background: "https://torrentio.strem.fun/images/background_v1.jpg",
-    logo: "https://torrentio.strem.fun/images/logo_v1.png",
-    behaviorHints: { configurable: true, configurationRequired: false },
-  },
-  enabled: true,
-  installedAt: 0,
-  version: "0.0.15",
-  bundled: true,
-  scope: "global",
-};
-
-const CINEMETA_ADDON: InstalledAddon = {
-  id: CINEMETA_ADDON_ID,
-  name: "Cinemeta",
-  description: "Catálogos oficiales de películas y series.",
-  url: CINEMETA_MANIFEST_URL,
-  manifest: {
-    id: CINEMETA_ADDON_ID,
-    version: "3.0.14",
-    name: "Cinemeta",
-    description: "The official addon for movie and series catalogs",
-    resources: ["catalog", "meta"],
-    types: ["movie", "series"],
-    idPrefixes: ["tt"],
-    catalogs: [
-      { type: "movie", id: "top", name: "Popular" },
-      { type: "series", id: "top", name: "Popular" },
-      {
-        type: "movie",
-        id: "year",
-        name: "New",
-        extra: [{ name: "genre", options: CINEMETA_YEAR_OPTIONS, isRequired: true }],
-        extraRequired: ["genre"],
-      },
-      {
-        type: "series",
-        id: "year",
-        name: "New",
-        extra: [{ name: "genre", options: CINEMETA_YEAR_OPTIONS, isRequired: true }],
-        extraRequired: ["genre"],
-      },
-      { type: "movie", id: "imdbRating", name: "Featured" },
-      { type: "series", id: "imdbRating", name: "Featured" },
-    ],
-  },
-  enabled: true,
-  installedAt: 0,
-  version: "3.0.14",
-  bundled: true,
-  scope: "global",
-};
-
-const ANIMES_ADDON: InstalledAddon = {
-  id: ANIMES_ADDON_ID,
-  name: "AnimES",
-  description: "Catálogos y streams de AnimeFLV, AnimeAV1, Henaojara, TioAnime, AnimeJara y JKAnime.",
-  logo: "https://raw.githubusercontent.com/Pigamer37/animeflv-stremio-addon/refs/heads/main/views/AnimES.png",
-  url: ANIMES_MANIFEST_URL,
-  manifest: {
-    ...ANIMES_MANIFEST,
-    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
-  },
-  enabled: true,
-  installedAt: 0,
-  version: "1.4.2",
-  bundled: true,
-  scope: "global",
-};
-
-const HDHUB_ADDON: InstalledAddon = {
-  id: HDHUB_ADDON_ID,
-  name: "HdHub",
-  description: "Watch movies and series from HdHub.",
-  logo: "http://hdhub.thevolecitor.qzz.io/logo.png",
-  url: HDHUB_MANIFEST_URL,
-  manifest: {
-    id: HDHUB_ADDON_ID,
-    version: "1.0.7",
-    name: "HdHub",
-    description: "Watch movies and series from HdHub.",
-    resources: ["stream", "catalog"],
-    types: ["movie", "series", "HdHub"],
-    idPrefixes: ["tt", "tmdb:", "kitsu:"],
-    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
-    logo: "http://hdhub.thevolecitor.qzz.io/logo.png",
-    background: "http://hdhub.thevolecitor.qzz.io/logo.png",
-    behaviorHints: { configurable: true },
-  },
-  enabled: true,
-  installedAt: 0,
-  version: "1.0.7",
-  bundled: true,
-  scope: "global",
-};
-
-/**
- * PenguPlay: un solo endpoint que agrega ~15 proveedores (4KHDHub, MovieBox,
- * VAPlayer, Miruro, 2Peckle...) y filtra por calidad, audio y tamaño. Se
- * instala como bundled y sin listar en la interfaz: es infraestructura de
- * fuentes, no una opcion que el usuario deba elegir a mano.
- *
- * Su timeout por defecto (6 s) se queda corto cuando el proveedor elegido va
- * lento, asi que se sube sin llegar a los 55 s del CNCVerse Bridge, que consulta
- * una batalla de extensiones distintas.
- */
-const PENGUPLAY_ADDON: InstalledAddon = {
-  id: PENGUPLAY_ADDON_ID,
-  name: "PenguPlay",
-  description: "Agregador de proveedores con filtros de calidad, audio y tamaño.",
-  logo: PENGUPLAY_LOGO,
-  url: PENGUPLAY_MANIFEST_URL,
-  manifest: {
-    id: PENGUPLAY_ADDON_ID,
-    version: "1.4.0",
-    name: "PenguPlay",
-    description: "Stream movies and series in Stremio with configurable provider and quality filters.",
-    resources: [{ name: "stream", types: ["movie", "series"], idPrefixes: ["tt", "tmdb:", "tvdb:", "mal:", "kitsu:", "tvmaze:", "anilist:", "anidb:"] }],
-    types: ["movie", "series"],
-    idPrefixes: ["tt", "tmdb:", "tvdb:", "mal:", "kitsu:", "tvmaze:", "anilist:", "anidb:"],
-    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
-    logo: PENGUPLAY_LOGO,
-    behaviorHints: {},
-  },
-  enabled: true,
-  installedAt: 0,
-  version: "1.4.0",
-  bundled: true,
-  scope: "global",
-  hiddenInUi: true,
-  streamTimeoutMs: 20_000,
-  streamAttempts: 2,
-};
-
-const DEEPFLIX_ADDON: InstalledAddon = {
-  id: DEEPFLIX_ADDON_ID,
-  name: "DeepFlix",
-  description: "Portal de Peliculas y series en idioma Latino.",
-  url: DEEPFLIX_MANIFEST_URL,
-  manifest: {
-    id: DEEPFLIX_ADDON_ID,
-    version: "1.0.0",
-    name: "DeepFlix",
-    description: "Portal de Peliculas y series en idioma Latino",
-    resources: [{ name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] }],
-    types: ["movie", "series"],
-    idPrefixes: ["tt"],
-    catalogs: [], // Los add-ons bundled (excepto Cinemeta) no deben aportar catálogos.
-    behaviorHints: { p2p: false, configurable: false },
-  },
-  enabled: true,
-  installedAt: 0,
-  version: "1.0.0",
-  bundled: true,
-  scope: "global",
-};
-
 /**
  * CNCVerse Bridge: un add-on que expone ~70 extensiones CloudStream detras de
  * un endpoint. Se instala bundled pero APAGADO y sin URL hasta que el usuario
@@ -319,7 +141,8 @@ const CNCVERSE_BRIDGE_ADDON: InstalledAddon = {
   enabled: true,
   installedAt: 0,
   version: "1.0.0",
-  bundled: true,
+  bundled: false,
+  origin: "user",
   scope: "global",
   streamTimeoutMs: 55_000,
   streamAttempts: 1,
@@ -328,6 +151,9 @@ const CNCVERSE_BRIDGE_ADDON: InstalledAddon = {
 };
 
 function withBundledCncVerse(globalAddons: InstalledAddon[]) {
+  // Only a URL explicitly saved by the user can create this personal bridge.
+  const url = readCncVerseBridgeUrl();
+  if (!url) return globalAddons;
   const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
   const existing = merged.get(CNCVERSE_BRIDGE_ADDON.id);
   // La URL vive en su propia clave, no en la lista persistida: asi borrarla
@@ -335,7 +161,7 @@ function withBundledCncVerse(globalAddons: InstalledAddon[]) {
   merged.set(CNCVERSE_BRIDGE_ADDON.id, {
     ...existing,
     ...CNCVERSE_BRIDGE_ADDON,
-    url: readCncVerseBridgeUrl(),
+    url,
     enabled: existing?.enabled ?? true,
   });
   return [...merged.values()];
@@ -438,101 +264,104 @@ function mergeById(addons: InstalledAddon[]) {
   return [...merged.values()];
 }
 
-function withBundledTorrentio(globalAddons: InstalledAddon[]) {
-  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
-  const existing = merged.get(TORRENTIO_LATINO_ADDON.id);
-  merged.set(TORRENTIO_LATINO_ADDON.id, {
-    ...existing,
-    ...TORRENTIO_LATINO_ADDON,
-    enabled: existing?.enabled ?? true,
-  });
-  return [...merged.values()];
+function manifestForHubAddon(
+  entry: ProviderHubAddonEntry,
+  remoteManifest?: Record<string, unknown>,
+): Record<string, unknown> {
+  const source = { ...entry.manifestFallback, ...(remoteManifest ?? {}) };
+  const catalogs = entry.catalogPolicy === "empty"
+    ? []
+    : Array.isArray(source.catalogs)
+      ? source.catalogs
+      : [];
+  return {
+    ...source,
+    id: entry.id,
+    name: entry.name,
+    description: entry.description || source.description,
+    logo: entry.logo || source.logo,
+    catalogs,
+  };
 }
 
-function withBundledAnimes(globalAddons: InstalledAddon[]) {
-  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
-  const existing = merged.get(ANIMES_ADDON.id);
-  merged.set(ANIMES_ADDON.id, {
-    ...existing,
-    ...ANIMES_ADDON,
-    enabled: existing?.enabled ?? true,
-  });
-  return [...merged.values()];
-}
-
-function withBundledCinemeta(globalAddons: InstalledAddon[]) {
-  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
-  if (!merged.has(CINEMETA_ADDON_ID)) merged.set(CINEMETA_ADDON_ID, CINEMETA_ADDON);
-  return [...merged.values()];
-}
-
-function withBundledHdhub(globalAddons: InstalledAddon[]) {
-  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
-  const existing = merged.get(HDHUB_ADDON.id);
-  merged.set(HDHUB_ADDON.id, {
-    ...existing,
-    ...HDHUB_ADDON,
-    enabled: existing?.enabled ?? true,
-  });
-  return [...merged.values()];
-}
-
-function withBundledPenguPlay(globalAddons: InstalledAddon[]) {
-  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
-  const existing = merged.get(PENGUPLAY_ADDON.id);
-  merged.set(PENGUPLAY_ADDON.id, {
-    ...existing,
-    ...PENGUPLAY_ADDON,
-    enabled: existing?.enabled ?? true,
-  });
-  return [...merged.values()];
-}
-
-function withBundledDeepflix(globalAddons: InstalledAddon[]) {
-  const merged = new Map(globalAddons.map(addon => [addon.id, withScope(addon)]));
-  const existing = merged.get(DEEPFLIX_ADDON.id);
-  merged.set(DEEPFLIX_ADDON.id, {
-    ...existing,
-    ...DEEPFLIX_ADDON,
-    enabled: existing?.enabled ?? true,
-  });
-  return [...merged.values()];
+function installedHubAddon(
+  entry: ProviderHubAddonEntry,
+  existing?: InstalledAddon,
+  remoteManifest?: Record<string, unknown>,
+): InstalledAddon {
+  const manifest = manifestForHubAddon(entry, remoteManifest);
+  const canonicalUrl = resolveHubAddonManifestUrl(entry.manifestUrl);
+  const existingSportsUrl = entry.id === SPORTS_STREAMS_ADDON_ID
+    ? normalizeSportsStreamsManifestUrl(existing?.url)
+    : null;
+  const defaultSportsUrl = entry.id === SPORTS_STREAMS_ADDON_ID
+    ? normalizeSportsStreamsManifestUrl(canonicalUrl)
+    : null;
+  const url = entry.id === SPORTS_STREAMS_ADDON_ID
+    ? existingSportsUrl && existingSportsUrl !== defaultSportsUrl
+      ? existingSportsUrl
+      : configuredSportsStreamsManifestUrl()
+    : canonicalUrl;
+  return {
+    id: entry.id,
+    name: entry.name,
+    description: entry.description,
+    logo: entry.logo || (typeof manifest.logo === "string" ? manifest.logo : undefined),
+    url,
+    manifest,
+    enabled: existing?.enabled ?? readHubAddonStates()[entry.id] ?? entry.enabledByDefault,
+    installedAt: existing?.installedAt ?? 0,
+    version: typeof manifest.version === "string" ? manifest.version : "1.0.0",
+    bundled: true,
+    origin: "provider-hub",
+    scope: "global",
+    hiddenInUi: entry.hiddenInUi,
+    streamTimeoutMs: entry.streamTimeoutMs,
+    streamAttempts: entry.streamAttempts,
+    upstreamAddonId: entry.upstreamAddonId,
+    streamNameFilter: entry.streamNameFilter,
+  };
 }
 
 /**
- * Aplica, en orden, los add-ons que Aetherio trae de serie. La URL del
- * CNCVerse Bridge se relee aqui en cada pasada para que quitarla en Ajustes
- * surta efecto aunque la lista persistida fuera de fecha.
+ * The Hub is the only automatic source. No legacy bundled fallback or local
+ * seed may be reinstated when the Hub is empty/unreachable. Personal wins.
  */
-function withBundledAddons(globalAddons: InstalledAddon[]) {
-  const supportedAddons = globalAddons.filter(addon => !REMOVED_ADDON_IDS.has(addon.id));
-  const withAnimes = withBundledAnimes(supportedAddons);
-  const withTorrentio = withBundledTorrentio(withAnimes);
-  const withCinemeta = withBundledCinemeta(withTorrentio);
-  const withHdhub = withBundledHdhub(withCinemeta);
-  const withDeepflix = withBundledDeepflix(withHdhub);
-  const withPenguPlay = withBundledPenguPlay(withDeepflix);
-  return withBundledCncVerse(withPenguPlay);
+function withBundledAddons(
+  globalAddons: InstalledAddon[],
+  directory: ProviderHubAddonDirectory | null = readCachedProviderHubAddonDirectory(),
+) {
+  const userInstalled = globalAddons.filter(addon => !addon.bundled);
+  const hubBundled = directory
+    ? directory.addons.map(entry => installedHubAddon(
+      entry,
+      globalAddons.find(addon => addon.id === entry.id),
+    ))
+    : [];
+  return mergeById([...hubBundled, ...userInstalled]);
 }
 
-function loadAddonScopes() {
+function loadAddonScopes(directory: ProviderHubAddonDirectory | null = readCachedProviderHubAddonDirectory()) {
   if (typeof localStorage === "undefined") {
-    return [TORRENTIO_LATINO_ADDON, CINEMETA_ADDON, ANIMES_ADDON, HDHUB_ADDON, CNCVERSE_BRIDGE_ADDON, DEEPFLIX_ADDON, PENGUPLAY_ADDON];
+    return withBundledAddons([], directory);
   }
-  const storedGlobal = readPersistedAddons(GLOBAL_ADDONS_STORAGE_KEY).map(withScope);
-  const globalAddons = withBundledAddons(storedGlobal.filter(addon => addon.scope === "global"));
-  const hasRemovedGlobalAddons = storedGlobal.some(addon => REMOVED_ADDON_IDS.has(addon.id));
   const profileKey = activeProfileAddonsStorageKey();
+  migrateLocalAddonDefaults(profileKey ? [profileKey] : []);
+  const storedGlobal = readPersistedAddons(GLOBAL_ADDONS_STORAGE_KEY).map(withScope);
+  const globalAddons = withBundledAddons(
+    storedGlobal.filter(addon => addon.scope === "global"),
+    directory,
+  );
   if (!profileKey) {
-    if (hasRemovedGlobalAddons) writePersistedAddons(GLOBAL_ADDONS_STORAGE_KEY, globalAddons);
+    writePersistedAddons(GLOBAL_ADDONS_STORAGE_KEY, globalAddons);
     return globalAddons;
   }
 
   const storedProfile = readPersistedAddons(profileKey)
-    .map(withScope)
-    .filter(addon => addon.scope === "profile" && !REMOVED_ADDON_IDS.has(addon.id));
+    .filter(addon => !addon.bundled)
+    .map(addon => ({ ...addon, scope: "profile" as const }));
   const incorrectlyGlobalPersonal = storedGlobal.filter(
-    addon => addon.scope === "profile" && !REMOVED_ADDON_IDS.has(addon.id),
+    addon => addon.scope === "profile",
   );
   const profileAddons = mergeById([...incorrectlyGlobalPersonal, ...storedProfile]);
 
@@ -540,7 +369,7 @@ function loadAddonScopes() {
   // add-ons personales vuelven al perfil activo y se eliminan del ámbito global.
   writePersistedAddons(GLOBAL_ADDONS_STORAGE_KEY, globalAddons);
   writePersistedAddons(profileKey, profileAddons);
-  return [...globalAddons, ...profileAddons];
+  return mergeById([...globalAddons, ...profileAddons]);
 }
 
 function persistAddonScopes(addons: InstalledAddon[]) {
@@ -551,7 +380,15 @@ function persistAddonScopes(addons: InstalledAddon[]) {
   if (profileKey) {
     writePersistedAddons(profileKey, normalized.filter(addon => addon.scope === "profile"));
   }
-  return [...globalAddons, ...normalized.filter(addon => addon.scope === "profile")];
+  return mergeById([...globalAddons, ...normalized.filter(addon => addon.scope === "profile")]);
+}
+
+function updateAddonEnabled(addons: InstalledAddon[], id: string, enabled: boolean) {
+  const addon = addons.find(candidate => candidate.id === id);
+  if (addon?.origin === "provider-hub" && typeof localStorage !== "undefined") {
+    localStorage.setItem(HUB_ADDON_STATES_KEY, JSON.stringify({ ...readHubAddonStates(), [id]: enabled }));
+  }
+  return addons.map(addon => addon.id === id ? { ...addon, enabled } : addon);
 }
 
 export const useAddonStore = create<AddonStore>((set, get) => ({
@@ -559,16 +396,16 @@ export const useAddonStore = create<AddonStore>((set, get) => ({
   isInstalling: false,
   installError: null,
   addAddon: addon => set(state => ({
-    addons: persistAddonScopes([...state.addons.filter(item => item.id !== addon.id), withScope(addon)]),
+    addons: persistAddonScopes([...state.addons.filter(item => item.id !== addon.id), withScope({ ...addon, bundled: false, origin: "user" })]),
   })),
   removeAddon: id => set(state => ({
     addons: persistAddonScopes(state.addons.filter(addon => addon.id !== id || addon.bundled)),
   })),
   enableAddon: id => set(state => ({
-    addons: persistAddonScopes(state.addons.map(addon => addon.id === id ? { ...addon, enabled: true } : addon)),
+    addons: persistAddonScopes(updateAddonEnabled(state.addons, id, true)),
   })),
   disableAddon: id => set(state => ({
-    addons: persistAddonScopes(state.addons.map(addon => addon.id === id ? { ...addon, enabled: false } : addon)),
+    addons: persistAddonScopes(updateAddonEnabled(state.addons, id, false)),
   })),
   setInstalling: value => set({ isInstalling: value }),
   setInstallError: error => set({ installError: error }),
@@ -579,7 +416,8 @@ export const useAddonStore = create<AddonStore>((set, get) => ({
     // `withBundledCncVerse` es la unica que sabe como se combina con lo que
     // hubiera persistido, y asi Ajustes y la pagina de episodio no pueden
     // discrepar sobre si el bridge esta configurado.
-    const addons = persistAddonScopes(state.addons);
+    const current = state.addons.filter(addon => addon.id !== CNCVERSE_BRIDGE_ID || Boolean(normalized));
+    const addons = persistAddonScopes(withBundledCncVerse(current));
     return {
       addons,
       // Sin URL el add-on no se puede pedir, asi que quitar la URL lo apaga.
@@ -587,6 +425,71 @@ export const useAddonStore = create<AddonStore>((set, get) => ({
     };
   }),
 }));
+
+let addonDirectoryRefresh: Promise<void> | null = null;
+
+function publishAddonChanges(addons: InstalledAddon[]) {
+  useAddonStore.setState({
+    addons,
+    // Hooks subscribe to this selector; changing its identity notifies them
+    // when the remote directory or a fetched manifest hydrates the store.
+    getEnabledAddons: () => useAddonStore.getState().addons.filter(addon => addon.enabled),
+  });
+}
+
+export function refreshBundledAddonDirectory(): Promise<void> {
+  if (addonDirectoryRefresh) return addonDirectoryRefresh;
+  addonDirectoryRefresh = (async () => {
+    let directory: ProviderHubAddonDirectory;
+    try {
+      directory = await fetchProviderHubAddonDirectory();
+    } catch (error) {
+      // Old installs can still use their locally persisted defaults offline.
+      console.warn("[AETHERIO:ADDONS] No se pudo actualizar el directorio del Provider Hub", error);
+      return;
+    }
+
+    publishAddonChanges(loadAddonScopes(directory));
+
+    const pendingManifests = new Map<string, ReturnType<typeof fetchHubAddonManifest>>();
+    const manifests = await Promise.all(directory.addons.map(async entry => {
+      try {
+        const url = resolveHubAddonManifestUrl(entry.manifestUrl);
+        let pending = pendingManifests.get(url);
+        if (!pending) {
+          pending = fetchHubAddonManifest(entry);
+          pendingManifests.set(url, pending);
+        }
+        return [entry.id, await pending] as const;
+      } catch {
+        return [entry.id, null] as const;
+      }
+    }));
+    const manifestsById = new Map<string, Record<string, unknown>>();
+    for (const [id, manifest] of manifests) {
+      if (manifest) manifestsById.set(id, manifest);
+    }
+    if (!manifestsById.size) return;
+
+    const current = useAddonStore.getState().addons;
+    const updated = current.map(addon => {
+      const entry = directory.addons.find(candidate => candidate.id === addon.id);
+      const remoteManifest = manifestsById.get(addon.id);
+      return entry && remoteManifest && addon.bundled && addon.origin === "provider-hub"
+        ? installedHubAddon(entry, addon, remoteManifest)
+        : addon;
+    });
+    publishAddonChanges(updated);
+  })().finally(() => {
+    addonDirectoryRefresh = null;
+  });
+  return addonDirectoryRefresh;
+}
+
+if (typeof window !== "undefined") {
+  void refreshBundledAddonDirectory();
+  window.addEventListener("focus", () => { void refreshBundledAddonDirectory(); });
+}
 
 export function reloadAddonsForActiveProfile() {
   const addons = loadAddonScopes();

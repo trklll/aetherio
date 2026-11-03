@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
 import { gsap, tweenTo } from "../../utils/motion";
 
 interface PlayerSidePanelProps {
+  id?: string;
+  surfaceStyle?: CSSProperties;
   visible: boolean;
   title: string;
   subtitle?: string;
@@ -14,6 +16,8 @@ interface PlayerSidePanelProps {
 }
 
 export default function PlayerSidePanel({
+  id,
+  surfaceStyle,
   visible,
   title,
   subtitle,
@@ -143,6 +147,7 @@ export default function PlayerSidePanel({
 
   return (
     <aside
+      id={id}
       ref={panelRef}
       data-player-side-panel
       className={bigPicture
@@ -163,7 +168,7 @@ export default function PlayerSidePanel({
         aria-label={title}
         onKeyDown={stopPanelKeys}
         className="flex h-full flex-col overflow-hidden rounded-[28px] p-5 will-change-transform"
-        style={{ ...CONTEXT_GLASS_STYLE, willChange: "transform, opacity, filter", transform: "translateZ(0)" }}
+        style={{ ...CONTEXT_GLASS_STYLE, ...surfaceStyle, willChange: "transform, opacity, filter", transform: "translateZ(0)" }}
       >
         <header className="mb-4 flex shrink-0 items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">

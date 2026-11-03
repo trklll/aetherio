@@ -1,0 +1,12 @@
+# Solo pruebas locales. No usa el namespace ni los secretos de producción.
+name = "aetherio-provider-hub-e2e"
+main = "../src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[vars]
+ADMIN_TOKEN = "local-e2e-only-not-a-production-secret"
+
+[[kv_namespaces]]
+binding = "PROVIDERS"
+id = "00000000000000000000000000000000"

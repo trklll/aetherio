@@ -4,6 +4,7 @@ import { ArrowRight, Eye, EyeOff, HardDrive, LockKeyhole, Mail, UserRound } from
 import aetherioLogo from "../assets/aetheriologo.png";
 import aniListLogo from "../assets/logoauth/anilist_logo_icon_247617.png";
 import googleLogo from "../assets/logoauth/Google__G__logo.svg.png";
+import AppleSpinner from "../components/ui/AppleSpinner";
 import WindowControls from "../components/layout/WindowControls";
 import { gsap } from "../utils/motion";
 import {
@@ -309,7 +310,7 @@ export default function AuthPage({
             onMouseLeave={event => animateButton(event.currentTarget, false)}
           >
             <span>{busy ? "Conectando…" : mode === "login" ? "Entrar a Aetherio" : "Crear mi cuenta"}</span>
-            {!busy ? <ArrowRight size={19} /> : <i aria-hidden="true" />}
+            {!busy ? <ArrowRight size={19} /> : <AppleSpinner size={17} color="#111" />}
           </button>
         </form>
 

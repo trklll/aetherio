@@ -1,0 +1,538 @@
+/// <reference path="./anime-torrent-provider.d.ts" />
+
+class Provider {
+  private api = "https://api.animes.garden"
+
+  getSettings(): AnimeProviderSettings {
+    return {
+      canSmartSearch: true,
+      smartSearchFilters: ["batch", "episodeNumber", "resolution", "query", "bestReleases"],
+      supportsAdult: true,
+      type: "main",
+    }
+  }
+
+  async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
+    try {
+      const q = (opts.query || "").trim()
+      let resources: any[] = []
+
+      // BGM ID support: resolve the subject's titles (CN/JP) via the Bangumi
+      // API and search all of them, merging so nothing is missed
+      if (/^\d+$/.test(q)) {
+        const titles = await this.resolveBgmTitles(q)
+        if (titles.length) {
+          const seen = new Map<string, any>()
+          for (const t of titles) {
+            const data = await this.fetchResources({ search: t, tracker: "true" }, 50)
+            for (const r of data.resources || []) {
+              if (!this.isAnimeCategory(r)) continue
+              const key = r.href || r.id
+              if (!seen.has(key)) seen.set(key, r)
+            }
+          }
+          resources = Array.from(seen.values())
+        }
+      }
+
+      if (!resources.length) {
+        const data = await this.fetchResources({ search: q, tracker: "true" })
+        resources = (data.resources || []).filter((r: any) => this.isAnimeCategory(r))
+      }
+      return resources.map((r: any) => this.toAnimeTorrent(r))
+    } catch (e) {
+      console.error("[AnimeGarden] search error:", e)
+      return []
+    }
+  }
+
+  /** Resolve a Bangumi subject ID to title candidates via the Bangumi API */
+  private async resolveBgmTitles(bgmId: string): Promise<string[]> {
+    // Try the official API first, then the public mirror (some networks
+    // cannot reach api.bgm.tv)
+    const endpoints = [
+      "https://api.bgm.tv/v0/subjects/",
+      "https://api.bangumi.lol/v0/subjects/",
+    ]
+    for (const ep of endpoints) {
+      const url = ep + encodeURIComponent(bgmId)
+      try {
+        const r = await fetch(url, {
+          headers: {
+            "User-Agent": "seanime-extension/1.0 (https://github.com/Elisoar111/seanime-extensions)",
+            "Accept": "application/json",
+          },
+        })
+        if (!r || !r.ok) continue
+        const d = await r.json()
+        const out: string[] = []
+        if (d && d.name_cn) out.push(d.name_cn)
+        if (d && d.name && out.indexOf(d.name) === -1) out.push(d.name)
+        if (out.length) return out
+      } catch (_) {
+        /* try next endpoint */
+      }
+    }
+    return []
+  }
+
+  async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
+    const seen = new Map<string, any>()
+
+    // BGM ID query support: resolve the subject's titles and collect their
+    // resources first so smart search works with a Bangumi ID too
+    if (opts.query && /^\d+$/.test(opts.query.trim())) {
+      const titles = await this.resolveBgmTitles(opts.query.trim())
+      if (titles.length) {
+        for (const t of titles) {
+          await this.searchAndCollect(t, opts, seen)
+        }
+      }
+    }
+
+    // Strategy 1: title + episode number (most targeted)
+    const mainQuery = this.buildMainQuery(opts)
+    if (mainQuery) {
+      await this.searchAndCollect(mainQuery, opts, seen)
+    }
+
+    // Strategy 2: fallback via alternative titles
+    if (seen.size < 5) {
+      const altTitles = this.getAltTitles(opts)
+      for (const alt of altTitles) {
+        if (seen.size >= 20) break
+        await this.searchAndCollect(alt, opts, seen)
+      }
+    }
+
+    // Strategy 3: broad title-only search (catch-all)
+    if (seen.size < 3) {
+      const broadQuery = this.selectBestTitle(opts)
+      if (broadQuery && broadQuery !== mainQuery) {
+        await this.searchAndCollect(broadQuery, opts, seen, true)
+      }
+    }
+
+    let torrents = Array.from(seen.values()).map((r: any) =>
+      this.toAnimeTorrent(r)
+    )
+
+    // Parse metadata from titles
+    for (const t of torrents) {
+      const parsed = this.parseTitle(t.name)
+      if (t.episodeNumber === -1) t.episodeNumber = parsed.episodeNumber
+      if (!t.resolution) t.resolution = parsed.resolution
+      if (!t.isBatch) t.isBatch = parsed.isBatch
+      if (!t.isBestRelease) t.isBestRelease = parsed.isBestRelease
+      const range = this.parseEpisodeRange(t.name)
+      if (range) (t as any).episodeRange = range
+    }
+
+    // Apply episode filter
+    if (opts.episodeNumber > 0 && !opts.batch) {
+      // AnimeGarden titles of sequel seasons often use absolute numbering
+      // (e.g. "第26話" for episode 2 of a season with offset 24)
+      const offset = opts.media.absoluteSeasonOffset || 0
+      const exact = torrents.filter(
+        (t) =>
+          t.episodeNumber === opts.episodeNumber ||
+          (offset > 0 && t.episodeNumber === opts.episodeNumber + offset)
+      )
+      if (exact.length > 0) {
+        // Releases whose episode number could not be parsed (-1) are kept as
+        // candidates too — Seanime re-verifies by parsing the name
+        torrents = exact.concat(torrents.filter((t) => t.episodeNumber === -1))
+      } else {
+        // Fallback: multi-episode releases whose range covers the episode,
+        // or releases whose episode number could not be parsed (-1, Seanime
+        // re-verifies by parsing the name). Never return the whole series.
+        torrents = torrents.filter(
+          (t) => this.coversEpisode(t, opts.episodeNumber, offset) || t.episodeNumber === -1
+        )
+      }
+    }
+
+    // Apply batch filter
+    if (opts.batch) {
+      torrents = torrents.filter((t) => t.isBatch)
+    }
+
+    // Apply resolution filter
+    if (opts.resolution) {
+      const resNorm = opts.resolution.toLowerCase().replace(/p$/, "")
+      const matched = torrents.filter((t) => {
+        const tres = (t.resolution || "").toLowerCase().replace(/p$/, "")
+        return tres === resNorm
+      })
+      if (matched.length > 0) torrents = matched
+    }
+
+    // Apply best releases filter
+    if (opts.bestReleases) {
+      const best = torrents.filter((t) => t.isBestRelease)
+      if (best.length > 0) torrents = best
+    }
+
+    // Sort: best releases first, then by date descending
+    torrents.sort((a, b) => {
+      if (a.isBestRelease !== b.isBestRelease) {
+        return a.isBestRelease ? -1 : 1
+      }
+      return new Date(b.date).getTime() - new Date(a.date).getTime()
+    })
+
+    return torrents
+  }
+
+  async getTorrentInfoHash(torrent: AnimeTorrent): Promise<string> {
+    if (torrent.infoHash) return torrent.infoHash
+    if (torrent.magnetLink) {
+      const m = torrent.magnetLink.match(/btih:([A-Fa-f0-9]+)/)
+      if (m) return m[1]
+    }
+    return ""
+  }
+
+  async getTorrentMagnetLink(torrent: AnimeTorrent): Promise<string> {
+    if (torrent.magnetLink) return torrent.magnetLink
+    if (torrent.infoHash) {
+      return `magnet:?xt=urn:btih:${torrent.infoHash}`
+    }
+    return ""
+  }
+
+  async getLatest(): Promise<AnimeTorrent[]> {
+    const data = await this.fetchResources({ tracker: "true" }, 30)
+    return (data.resources || [])
+      .filter((r: any) => this.isAnimeCategory(r))
+      .slice(0, 50)
+      .map((r: any) => this.toAnimeTorrent(r))
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  //  Search strategies
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  private buildMainQuery(opts: AnimeSmartSearchOptions): string | null {
+    const title = this.selectBestTitle(opts)
+    if (!title) return null
+
+    let query = title
+
+    if (!opts.batch && opts.episodeNumber > 0) {
+      // zero-pad so "05" doesn't match every title containing "5"
+      query += ` ${opts.episodeNumber < 10 ? "0" + opts.episodeNumber : opts.episodeNumber}`
+    }
+
+    if (opts.resolution && opts.resolution !== "Any") {
+      query += ` ${opts.resolution.replace(/p$/, "")}`
+    }
+
+    return query
+  }
+
+  private getAltTitles(opts: AnimeSmartSearchOptions): string[] {
+    const titles: string[] = []
+    const added = new Set<string>()
+    const mainTitle = this.selectBestTitle(opts)
+
+    const tryAdd = (t: string) => {
+      if (t && !added.has(t)) {
+        added.add(t)
+        titles.push(t)
+      }
+    }
+
+    if (opts.media.romajiTitle && opts.media.romajiTitle !== mainTitle)
+      tryAdd(opts.media.romajiTitle)
+    if (opts.media.englishTitle && opts.media.englishTitle !== mainTitle)
+      tryAdd(opts.media.englishTitle)
+    if (opts.query && opts.query !== mainTitle) tryAdd(opts.query)
+    if (opts.media.synonyms?.length) {
+      for (const s of opts.media.synonyms) {
+        if (s !== mainTitle) tryAdd(s)
+      }
+    }
+
+    return titles
+  }
+
+  private selectBestTitle(opts: AnimeSmartSearchOptions): string {
+    if (opts.query) return opts.query
+    if (opts.media.romajiTitle) return opts.media.romajiTitle
+    if (opts.media.englishTitle) return opts.media.englishTitle
+    if (opts.media.synonyms?.length) return opts.media.synonyms[0]
+    return ""
+  }
+
+  private async searchAndCollect(
+    query: string,
+    opts: AnimeSmartSearchOptions,
+    seen: Map<string, any>,
+    broad: boolean = false
+  ): Promise<void> {
+    try {
+      const params: Record<string, string | number> = {
+        tracker: "true",
+      }
+
+      params.search = query
+
+      const data = await this.fetchResources(params, 50)
+      for (const r of data.resources || []) {
+        if (!this.isAnimeCategory(r)) continue
+        const key = r.href || r.id
+        if (!seen.has(key)) seen.set(key, r)
+      }
+    } catch (_) {
+      /* skip failed queries */
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  //  Title parsing
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  private parseTitle(title: string): {
+    episodeNumber: number
+    resolution: string
+    isBatch: boolean
+    isBestRelease: boolean
+  } {
+    const isBatch = this.detectBatch(title)
+    const resolution = this.parseResolution(title)
+    const episodeNumber = isBatch ? -1 : this.parseEpisodeNumber(title)
+    const isBestRelease = this.detectBestRelease(title)
+
+    return { episodeNumber, resolution, isBatch, isBestRelease }
+  }
+
+  private detectBatch(title: string): boolean {
+    const patterns = [
+      /\b(?:batch|全集|合集|Complete|完整|全話)\b/i,
+      /【\s*全\s*\d+\s*[話话]\s*】/,
+      /全\s*\d+\s*[話话]\s*(?:合集|収録|收录)/,
+      /[Vv]ol\.\d+-\d+/,
+      /\d+[\-~]\d+\s*(?:END|end|Fin|最終)/,
+      /\b(?:S\d+|[Ss]eason\s*\d+)\s*(?:Complete|全集|合集)/,
+      // bare multi-episode ranges like "01-12" or "05-06" (not years)
+      /\b\d{1,2}\s*[-~]\s*\d{1,2}\b/,
+    ]
+    if (patterns.some((p) => p.test(title))) return true
+    // Whole-series packs whose titles carry no episode number and no explicit
+    // marker (e.g. 拨雪寻春 full-season BDRips)
+    return this.looksLikeFullSeries(title)
+  }
+
+  /** Whether a release is a single-disc / standalone item (OAD, event, ...) */
+  private isSingleRelease(title: string): boolean {
+    return /OAD|OVA|OAV|SP\b|Special|Event|演唱会|Live|剧场版|Movie|Vol\.|Vol\s*\d|PV\b|CM\b|OST|特典|NCOP|NCED|Soundtrack|先行|预告|Trailer|Music/i.test(
+      title
+    )
+  }
+
+  /** Whole-series packs: no episode number, no standalone-release marker */
+  private looksLikeFullSeries(title: string): boolean {
+    if (this.isSingleRelease(title)) return false
+    if (/第\s*\d{1,4}\s*[集話话]/.test(title)) return false
+    if (/\b(?:EP|Ep|ep)[Pp]?\s*\d{1,3}\b/i.test(title)) return false
+    if (/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title)) return false
+    if (/\[\s*\d{1,3}\s*\]/.test(title)) return false
+    if (/[-–—]\s*\d{1,3}(?=\s*(?:\[|\())/.test(title)) return false
+    if (/\b\d{1,2}\s*[-~]\s*\d{1,2}\b/.test(title)) return false
+    return true
+  }
+
+  /** dmhy category: keep anime releases AND full-series packs ("合集") */
+  private isAnimeCategory(r: any): boolean {
+    const type = r.type || ""
+    return type === "动画" || /合集|全集|Complete/i.test(type)
+  }
+
+  /** Extract a multi-episode span like "01-12" / "05-06" from the title */
+  private parseEpisodeRange(title: string): [number, number] | null {
+    const m = title.match(/\b0*(\d{1,2})\s*[-~]\s*0*(\d{1,2})\b/)
+    if (!m) return null
+    const lo = parseInt(m[1], 10)
+    const hi = parseInt(m[2], 10)
+    if (lo <= 0 || hi <= 0 || lo === hi) return null
+    return lo < hi ? [lo, hi] : [hi, lo]
+  }
+
+  /** Whether a release's multi-episode span covers the requested episode */
+  private coversEpisode(t: AnimeTorrent, episodeNumber: number, offset: number): boolean {
+    const range = (t as any).episodeRange
+    if (!range) return false
+    const targets = [episodeNumber]
+    if (offset > 0) targets.push(episodeNumber + offset)
+    return targets.some((e) => e >= range[0] && e <= range[1])
+  }
+
+  private parseResolution(title: string): string {
+    if (/\b(?:4K|2160)\b/i.test(title)) return "2160p"
+    const resMatch = title.match(/\b(\d{3,4})\s*[pP]/)
+    if (resMatch) {
+      const val = parseInt(resMatch[1], 10)
+      if (val >= 360 && val <= 4320) return `${val}p`
+    }
+    if (/\b1080\b/.test(title)) return "1080p"
+    if (/\b720\b/.test(title)) return "720p"
+    if (/\b480\b/.test(title)) return "480p"
+    return ""
+  }
+
+  private parseEpisodeNumber(title: string): number {
+    // Japanese: 第05話, 第5話
+    const jpMatch = title.match(/第\s*(\d{1,4})\s*[話话]/)
+    if (jpMatch) {
+      const n = parseInt(jpMatch[1], 10)
+      if (n > 0 && n < 500) return n
+    }
+
+    // EP/Episode prefix: EP05, E05
+    const epMatch = title.match(/\b(?:EP|Ep|ep|E|e)\s*0*(\d{1,3})\b/)
+    if (epMatch) {
+      const n = parseInt(epMatch[1], 10)
+      if (n > 0 && n < 500) return n
+    }
+
+    // Multi-episode range must be checked BEFORE the dash rule:
+    // "01-24" would otherwise be parsed as episode 24 (the last number)
+    const rangeMatch = title.match(/\b0*(\d{1,2})\s*[\-~]\s*0*(\d{1,2})\b/)
+    if (rangeMatch) return -1
+
+    // Dash-separated: " - 05", "– 05"
+    const dashMatch = title.match(/[\-–—]\s*0*(\d{1,3})(?:\s|$|\]|\)|\[)/)
+    if (dashMatch) {
+      const n = parseInt(dashMatch[1], 10)
+      if (n > 0 && n < 200) return n
+    }
+
+    // Number before bracket: "05 [1080p]"
+    const bracketMatch = title.match(/\b0*(\d{1,3})(?=\s*[\[\(])/)
+    if (bracketMatch) {
+      const n = parseInt(bracketMatch[1], 10)
+      if (n > 0 && n < 200) return n
+    }
+
+    return -1
+  }
+
+  private detectBestRelease(title: string): boolean {
+    const highQuality =
+      /\b(?:BDRip|BluRay|Blu-ray|BD|WebRip|WEB-DL|WEB|WEBRip|HDRip|H265|HEVC|x265|10bit|Hi10P)\b/i
+    const lowQuality =
+      /\b(?:CAM|TS|TC|HDTS|HDTC|DVDScr|SCR|VCD|TVRip|VHSRip)\b/i
+
+    return highQuality.test(title) && !lowQuality.test(title)
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  //  API helper
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  private async fetchResources(
+    params: Record<string, string | number>,
+    pageSize: number = 50
+  ): Promise<any> {
+    // Fetch up to 4 pages so hot series with >50 releases aren't truncated;
+    // stop early when a page returns fewer items than the page size.
+    const all: any[] = []
+    const seenHref = new Set<string>()
+
+    for (let page = 1; page <= 4; page++) {
+      const sp = new URLSearchParams()
+      sp.set("pageSize", String(pageSize))
+      sp.set("page", String(page))
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null && v !== "") {
+          sp.set(k, String(v))
+        }
+      }
+      const url = `${this.api}/resources?${sp.toString()}`
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`AnimeGarden API: ${res.status}`)
+      const data = await res.json()
+      const resources = data.resources || []
+
+      let added = 0
+      for (const r of resources) {
+        const key = r.href || r.id
+        if (!seenHref.has(key)) {
+          seenHref.add(key)
+          all.push(r)
+          added++
+        }
+      }
+
+      if (resources.length < pageSize || added === 0) break
+    }
+
+    return { resources: all }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  //  Data mapping
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  private toAnimeTorrent(r: any): AnimeTorrent {
+    // Build magnet link with trackers
+    const trackerStr = typeof r.tracker === "string" ? r.tracker : ""
+    const magnetLink = trackerStr
+      ? r.magnet + trackerStr
+      : r.magnet
+
+    // Extract info hash from magnet link
+    let infoHash: string | undefined
+    if (magnetLink) {
+      const m = magnetLink.match(/btih:([A-Fa-f0-9]+)/)
+      if (m) infoHash = m[1]
+    }
+
+    // API stores size in KB, convert to bytes
+    const sizeBytes = r.size * 1024
+
+    let date = ""
+    if (r.createdAt) {
+      try { date = new Date(r.createdAt).toISOString() } catch (_) { /* ignore */ }
+    }
+
+    // dmhy category is authoritative for full-series packs: "合集" (and
+    // variants) marks whole-season/whole-series collections. As a fallback,
+    // whole-series packs whose titles carry no episode markers are detected
+    // from the title so they surface in search() results too.
+    const typeBatch = /合集|全集|Batch|Complete/i.test(r.type || "")
+    const titleBatch = this.looksLikeFullSeries(r.title || "")
+
+    return {
+      name: r.title,
+      date,
+      size: sizeBytes,
+      formattedSize: this.formatSize(sizeBytes),
+      seeders: 0,
+      leechers: 0,
+      downloadCount: 0,
+      link: r.href,
+      downloadUrl: magnetLink,
+      magnetLink,
+      infoHash,
+      resolution: "",
+      isBatch: typeBatch || titleBatch,
+      episodeNumber: -1,
+      isBestRelease: false,
+      confirmed: true,
+    }
+  }
+
+  private formatSize(bytes: number): string {
+    if (bytes <= 0) return ""
+    const units = ["B", "KB", "MB", "GB", "TB"]
+    const k = 1024
+    const i = Math.min(
+      Math.floor(Math.log(bytes) / Math.log(k)),
+      units.length - 1
+    )
+    const val = bytes / Math.pow(k, i)
+    return `${val.toFixed(i <= 1 ? 0 : 1)} ${units[i]}`
+  }
+}

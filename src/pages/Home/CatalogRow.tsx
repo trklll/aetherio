@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { BookmarkMinus, Check, ChevronRight, Image as ImageIcon } from "lucide-react";
+import { BookmarkMinus, Check, ChevronRight, Image as ImageIcon, Radio } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import type { HomePosterLayout } from "../../config/homePreferences";
@@ -17,10 +17,10 @@ import {
 } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import SpatialPosterImage from "../../components/SpatialPosterImage";
-import { isSpatialPosterUrl } from "../../config/spatialPosters";
+import { isSpatialPosterUrl, shouldShowTopMetaFallback, TOP_SPATIAL_POSTER_OVERRIDES } from "../../config/spatialPosters";
 import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { readHiddenMediaKeys } from "../../services/watchedVisibility";
-import { gsap, scrollByGsap, tweenTo } from "../../utils/motion";
+import { scrollByGsap, tweenTo } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
@@ -33,11 +33,10 @@ import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 425, height: 248 };
 const VERTICAL_CARD = { width: 217, height: 326 };
-const RANKED_CARD = { width: 277, height: 296 };
-const RANKED_DOUBLE_CARD = { width: 327, height: 296 };
-const RANKED_POSTER = { width: 197, height: 296, singleLeft: 80, doubleLeft: 130 };
+// Formato top (ranking): la card es EXACTAMENTE igual a las demás del Home
+// (mismo tamaño, frame, borde y animaciones); el numeral gris vive sobre su
+// esquina superior izquierda, estilo Top 10.
 const HORIZONTAL_GAP = 18;
-const RANKED_GAP = 10;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
 
@@ -90,6 +89,17 @@ function homeRailTitle(title: string, type: string, includeType = true) {
   return `${catalogTitle} - ${typeLabel}`;
 }
 
+function withoutSpatialRankingBadge(url?: string) {
+  if (!url || !isSpatialPosterUrl(url)) return url;
+  try {
+    const posterUrl = new URL(url);
+    posterUrl.searchParams.set("ranking", "0");
+    return posterUrl.toString();
+  } catch {
+    return url;
+  }
+}
+
 interface CatalogRowProps {
   row: CatalogRowData;
   posterLayout: HomePosterLayout;
@@ -101,9 +111,13 @@ interface CatalogRowProps {
   titleOverride?: string;
   persistHomeScroll?: boolean;
   onOpenPreview?: (request: ShellPreviewRequest) => void;
+  /** Alternate activation for live events, keeping Home's cards and navigation. */
+  onOpenItem?: (item: MediaItem) => void;
+  onChooseSources?: (item: MediaItem) => void;
+  showViewMore?: boolean;
 }
 
-function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true, onOpenPreview }: CatalogRowProps) {
+function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true, onOpenPreview, onOpenItem, onChooseSources, showViewMore: allowViewMore = true }: CatalogRowProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const rafRef = useRef<number | null>(null);
@@ -123,24 +137,26 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const nativeRow = row.addonId === "aetherio-starter" || row.addonId === "tmdb";
   const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type, !nativeRow), [nativeRow, row.name, row.type, titleOverride]);
   const ranked = useMemo(() => isTopFormatRow(row), [row]);
-  const maxCards = ranked ? 10 : 200;
+  const sportsRow = row.type === "live" || row.type === "sports-replay";
+  // Replays page within this virtualized row instead of the generic catalog.
+  const maxCards = ranked ? 10 : row.type === "sports-replay" ? row.items.length : 200;
   // Vistos fuera: los completados sin episodios nuevos no ocupan las rows
   // (el filtro va ANTES del slice para que la row se rellene con el resto).
   const hiddenMediaKeys = useMemo(() => readHiddenMediaKeys(), [watchedVersion]);
   const rowItems = useMemo(
     () => row.items
-      .filter(item => !hiddenMediaKeys.has(buildMediaKey(row.type, item.id)))
+      .filter(item => sportsRow || !hiddenMediaKeys.has(buildMediaKey(row.type, item.id)))
       .slice(0, maxCards),
-    [row.items, maxCards, hiddenMediaKeys, row.type],
+    [row.items, maxCards, hiddenMediaKeys, sportsRow, row.type],
   );
-  const showViewMore = rowItems.length > 0;
+  const showViewMore = allowViewMore && rowItems.length > 0;
   const rowKey = makeRowKey(row.addonId, row.catalogId, row.type);
-  const cardSize = ranked ? RANKED_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
+  const cardSize = ranked ? VERTICAL_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
   const viewMoreSize = Math.min(cardSize.width, cardSize.height, 160);
   const virtualWindow = useHorizontalVirtualWindow({
     itemCount: rowItems.length,
     itemWidth: cardSize.width,
-    gap: ranked ? RANKED_GAP : HORIZONTAL_GAP,
+    gap: HORIZONTAL_GAP,
     overscan: 4,
   });
   const visibleStart = ranked ? 0 : virtualWindow.start;
@@ -270,7 +286,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   }, []);
 
   const scroll = useCallback((dir: "left" | "right") => {
-    scrollByGsap(scrollRef.current, dir === "right" ? (cardSize.width + (ranked ? RANKED_GAP : HORIZONTAL_GAP)) * 3 : -(cardSize.width + (ranked ? RANKED_GAP : HORIZONTAL_GAP)) * 3);
+    scrollByGsap(scrollRef.current, dir === "right" ? (cardSize.width + HORIZONTAL_GAP) * 3 : -(cardSize.width + HORIZONTAL_GAP) * 3);
   }, [cardSize.width]);
 
   const { scrollRef } = virtualWindow;
@@ -284,7 +300,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   if (rowItems.length === 0) return null;
 
   return (
-    <section data-row-key={rowKey} data-row-count={rowItems.length + (showViewMore ? 1 : 0)} data-row-hovered={hovered ? "true" : undefined} style={{ paddingLeft: 0, paddingRight: 0, marginBottom: -24 }}>
+    <section data-row-key={rowKey} data-row-count={rowItems.length + (showViewMore ? 1 : 0)} data-row-hovered={hovered ? "true" : undefined} style={{ paddingLeft: 0, paddingRight: 0, marginBottom: row.type === "sports-replay" ? 0 : -24 }}>
       {!hideHeader ? (
         bigPicture ? (
           <div
@@ -379,7 +395,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 key={`${item.id}-${row.catalogId}-${idx}`}
                 data-row-card
                 data-item-index={idx}
-                data-detail-path={itemDetailPath}
+                data-detail-path={onOpenItem ? undefined : itemDetailPath}
                 onClickCapture={() => {
                   if (!persistHomeScroll) return;
                   const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
@@ -390,7 +406,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 }}
                 style={{
                   flex: "0 0 auto",
-                  marginRight: idx === rowItems.length - 1 ? 0 : ranked ? RANKED_GAP : HORIZONTAL_GAP,
+                  marginRight: idx === rowItems.length - 1 ? 0 : HORIZONTAL_GAP,
                 }}
               >
                 <CinematicCard
@@ -399,6 +415,8 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                   posterLayout={posterLayout}
                   watched={watchedMediaKeys.has(buildMediaKey(row.type, item.id))}
                   rank={ranked ? idx + 1 : undefined}
+                  onOpenItem={onOpenItem}
+                  onChooseSources={onChooseSources}
                   onOpenPreview={onOpenPreview ? request => {
                     const items = rowItems.map((rowItem, index) => {
                       const background = resolveDetailBackground(row.type, rowItem.id, rowItem.background);
@@ -427,7 +445,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                           const rail = scrollRef.current;
                           if (!rail?.isConnected) return;
                           // Virtualized cards must be brought back into the DOM before focus.
-                          rail.scrollTo({ left: index * (cardSize.width + (ranked ? RANKED_GAP : HORIZONTAL_GAP)), behavior: "instant" });
+                          rail.scrollTo({ left: index * (cardSize.width + HORIZONTAL_GAP), behavior: "instant" });
                           window.setTimeout(() => {
                             if (!rail.isConnected || isShellPreviewOpen()) return;
                             rail.querySelector<HTMLElement>(`[data-item-index="${index}"] [data-row-card]`)?.focus({ preventScroll: true });
@@ -531,13 +549,14 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   );
 }
 
-const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, watched, rank, onOpenPreview }: { item: MediaItem; type: string; posterLayout: HomePosterLayout; watched: boolean; rank?: number; onOpenPreview?: (request: ShellPreviewRequest) => void }) {
+const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, watched, rank, onOpenPreview, onOpenItem, onChooseSources }: { item: MediaItem; type: string; posterLayout: HomePosterLayout; watched: boolean; rank?: number; onOpenPreview?: (request: ShellPreviewRequest) => void; onOpenItem?: (item: MediaItem) => void; onChooseSources?: (item: MediaItem) => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const cardRef = useRef<HTMLDivElement>(null);
   // El horario de emisión ("Cada domingo") lo dibuja ahora SpatialPosters dentro
   // del propio póster, así que ya no hace falta calcularlo ni superponerlo acá.
-  const effectiveWatched = watched;
+  const sportsContent = type === "live" || type === "sports-replay";
+  const effectiveWatched = !sportsContent && watched;
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
@@ -555,24 +574,31 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const cardPoster = readHomeCardArtwork("poster", type, item.id, item.poster);
   // Override manual del usuario → no tocar. Solo se resuelve SpatialPosters en vertical.
   const hasCustomPoster = Boolean(readHomeCardArtwork("poster", type, item.id) || cardPoster && cardPoster !== item.poster);
-  // En formato top el número grande ya indica el puesto: pósters sin badges #Hoy.
-  const posterOverrides = ranked ? { rankingBadges: false } : undefined;
+  // SpatialPosters compone artwork, logo del título y badge de género/año;
+  // Aetherio conserva el número grande de ranking, no el badge del póster.
+  const posterOverrides = ranked ? TOP_SPATIAL_POSTER_OVERRIDES : undefined;
   const resolvedPoster = useSpatialPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides, item.originalPoster);
-  const verticalPoster = resolvedPoster.url ?? cardPoster;
+  const posterSource = resolvedPoster.url ?? cardPoster;
+  const verticalPoster = ranked ? withoutSpatialRankingBadge(posterSource) : posterSource;
   const fallbackPoster = item.originalPoster ?? resolvedPoster.original;
   const image = effectivePosterLayout === "vertical"
     ? verticalPoster ?? cardBackground ?? ""
     : cardBackground ?? cardPoster ?? "";
   const displayImage = effectivePosterLayout === "vertical" && resolvedPoster.pending
     ? ""
+    : sportsContent && posterFailed
+      ? fallbackPoster && fallbackPoster !== image ? fallbackPoster : ""
     : effectivePosterLayout === "vertical" && posterFailed && fallbackPoster
       ? fallbackPoster
       : image;
+  const topMeta = ranked && shouldShowTopMetaFallback(displayImage, resolvedPoster.pending)
+    ? [item.genres?.filter(Boolean).slice(0, 2).join(" · "), item.year ? String(item.year) : ""]
+      .filter(Boolean)
+      .join(" · ")
+    : "";
   const customLogo = sanitizeLogoUrl(readHomeCardArtwork("logo", type, item.id));
   const logo = customLogo || sanitizeLogoUrl(item.logo);
   const showLogo = Boolean(logo && !logoFailed);
-  const doubleDigitRank = ranked && rank >= 10;
-  const rankedPosterLeft = doubleDigitRank ? RANKED_POSTER.doubleLeft : RANKED_POSTER.singleLeft;
   // En picture la card es foco espacial con la misma animación del hover.
   const bigPicture = useBigPictureActive();
   // Al enfocar/pasar sobre la card se precalientan los bytes finales del
@@ -580,29 +606,15 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const warmArtwork = useCallback(() => {
     preloadArtwork(detailBackground);
   }, [detailBackground]);
-  const enterRanked = (target: HTMLDivElement) => {
-    tweenTo(target, { y: -4, zIndex: 5 });
-    const poster = target.querySelector<HTMLElement>("[data-ranked-poster]");
-    const artwork = target.querySelector<HTMLElement>("[data-card-artwork]");
-    const number = target.querySelector<HTMLElement>("[data-rank-number]");
-    gsap.set(poster, { boxShadow: "0 22px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.17)" });
-    tweenTo(artwork, { scale: 1.04 });
-    tweenTo(number, { x: -3 });
-  };
-  const leaveRanked = (target: HTMLDivElement) => {
-    tweenTo(target, { y: 0, zIndex: 1 });
-    const poster = target.querySelector<HTMLElement>("[data-ranked-poster]");
-    const artwork = target.querySelector<HTMLElement>("[data-card-artwork]");
-    const number = target.querySelector<HTMLElement>("[data-rank-number]");
-    gsap.set(poster, { boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)" });
-    tweenTo(artwork, { scale: 1 });
-    tweenTo(number, { x: 0 });
-  };
 
   const cardSize = ranked
-    ? doubleDigitRank ? RANKED_DOUBLE_CARD : RANKED_CARD
+    ? VERTICAL_CARD
     : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
   const openDetail = useCallback(() => {
+    if (onOpenItem) {
+      onOpenItem(item);
+      return;
+    }
     writeDetailMediaMeta({
       id: item.id,
       type,
@@ -621,13 +633,13 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     setSharedElementName(type, item.id);
     captureCardRect(cardRef.current);
     navigate(detailPath);
-  }, [detailBackground, item.description, item.id, item.logo, item.name, item.poster, item.year, location.pathname, navigate, onOpenPreview, type]);
+  }, [detailBackground, item, location.pathname, navigate, onOpenPreview, onOpenItem, type]);
 
   // En picture el anticlick no existe: A/Enter corto abre, mantenido (500ms)
   // abre las opciones tras pulsación larga.
   const longPress = useLongPressAction(bigPicture, {
     onActivate: openDetail,
-    onLongPress: () => setMenuOpen(true),
+    onLongPress: () => { if (!sportsContent) setMenuOpen(true); },
   });
 
   useEffect(() => {
@@ -652,7 +664,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   useEffect(() => {
     setPosterFailed(false);
     posterLoadedRef.current = false;
-  }, [item.poster, resolvedPoster.url]);
+  }, [item.poster, item.background, resolvedPoster.url]);
 
   // SpatialPosters genera pósters bajo demanda y a veces la petición se queda colgada
   // sin error: si en 15s no cargó, caer al póster original.
@@ -689,8 +701,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const openArtworkMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    setMenuOpen(true);
-  }, []);
+    if (!sportsContent) setMenuOpen(true);
+  }, [sportsContent]);
 
   const applyCardArtwork = useCallback((url: string) => {
     writeHomeCardArtwork(artworkMode, type, item.id, url);
@@ -798,116 +810,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
     </>
   );
 
-  if (ranked) {
-    return (
-      <div
-        ref={cardRef}
-        onClick={event => {
-          if ((event.target as HTMLElement).closest("[data-aetherio-context-menu]")) {
-            event.stopPropagation();
-            return;
-          }
-          openDetail();
-        }}
-        onContextMenu={openArtworkMenu}
-        aria-label={`${rank}. ${item.name}`}
-        data-row-card
-        data-long-press
-        tabIndex={bigPicture ? 0 : onOpenPreview ? -1 : undefined}
-        role={bigPicture ? "button" : undefined}
-        onKeyDown={bigPicture ? longPress.onKeyDown : undefined}
-        onKeyUp={bigPicture ? longPress.onKeyUp : undefined}
-        onFocus={bigPicture ? e => { warmArtwork(); enterRanked(e.currentTarget); } : undefined}
-        onBlur={bigPicture ? e => leaveRanked(e.currentTarget) : undefined}
-        style={{ position: "relative", zIndex: 1, flexShrink: 0, width: cardSize.width, height: cardSize.height, cursor: "pointer", willChange: "transform" }}
-        onMouseEnter={e => {
-          warmArtwork();
-          enterRanked(e.currentTarget);
-        }}
-        onMouseLeave={e => {
-          leaveRanked(e.currentTarget);
-        }}
-      >
-        <div
-          data-rank-number
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            left: 0,
-            bottom: 0,
-            width: rankedPosterLeft,
-            textAlign: "right",
-            fontFamily: "inherit",
-            fontSize: 207,
-            lineHeight: 0.86,
-            fontWeight: 800,
-            fontVariantNumeric: "tabular-nums",
-            fontFeatureSettings: "'tnum' 1",
-            letterSpacing: -5,
-            color: "rgba(10,12,16,0.92)",
-            WebkitTextStroke: "2px rgba(255,255,255,0.30)",
-            textShadow: "0 18px 36px rgba(0,0,0,0.72), 0 0 18px rgba(255,255,255,0.05)",
-            userSelect: "none",
-          }}
-        >
-          {rank}
-        </div>
-
-        <div
-          data-ranked-poster
-          className="media-card-frame"
-          style={{
-            position: "absolute",
-            left: rankedPosterLeft,
-            top: 0,
-            width: RANKED_POSTER.width,
-            height: RANKED_POSTER.height,
-            overflow: "hidden",
-            borderRadius: 12,
-            background: "rgba(28,28,30,0.94)",
-            boxShadow: "0 14px 34px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.10)",
-          }}
-        >
-          {effectiveWatched ? (
-            <div
-              style={{
-                position: "absolute",
-                top: 10,
-                right: 10,
-                zIndex: 2,
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-                border: "1px solid rgba(255,255,255,0.72)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(242,244,247,0.88))",
-                boxShadow: "0 10px 24px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.92)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
-            </div>
-          ) : null}
-{displayImage ? (
-            <SpatialPosterImage
-              data-card-artwork
-              ref={imgElRef}
-              src={displayImage}
-              alt={item.name}
-              decoding="async"
-              loading="lazy"
-              onLoad={() => { posterLoadedRef.current = true; }}
-              onError={() => { if (fallbackPoster) setPosterFailed(true); }}
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }}
-            />
-          ) : null}
-        </div>
-        {artworkControls}
-      </div>
-    );
-  }
-
   const [hovered, setHovered] = useState(false);
   const titleRef = useRef<HTMLDivElement>(null);
   const enterCard = (target: HTMLDivElement) => {
@@ -930,7 +832,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   }, [hovered]);
 
   return (
-    <div style={{ flexShrink: 0, width: cardSize.width }}>
+    <div style={{ flexShrink: 0, width: cardSize.width, position: onChooseSources ? "relative" : undefined }}>
       <div
         ref={cardRef}
         onClick={event => {
@@ -944,7 +846,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         data-row-card
         data-long-press
         className="media-card-frame"
-        aria-label={bigPicture ? item.name : undefined}
+        aria-label={bigPicture ? (ranked ? `${rank}. ${item.name}` : item.name) : undefined}
         tabIndex={bigPicture ? 0 : onOpenPreview ? -1 : undefined}
         role={bigPicture ? "button" : undefined}
         onKeyDown={bigPicture ? longPress.onKeyDown : undefined}
@@ -981,9 +883,58 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
           </div>
         ) : null}
-         {displayImage ? <SpatialPosterImage ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (effectivePosterLayout === "vertical" && fallbackPoster) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
+          {displayImage ? <SpatialPosterImage ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (sportsContent || (effectivePosterLayout === "vertical" && fallbackPoster)) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
-         {posterLayout !== "vertical" ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)" }}>
+          {ranked ? (
+            <div
+              data-rank-number
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                left: 16,
+                top: 7,
+                zIndex: 1,
+                fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif",
+                fontSize: 72,
+                lineHeight: 0.78,
+                fontWeight: 800,
+                letterSpacing: "-0.02em",
+                color: "#b7bdc6",
+                WebkitTextStroke: "1px rgba(15,18,24,0.34)",
+                textShadow: "0 2px 6px rgba(0,0,0,0.46), 0 10px 26px rgba(0,0,0,0.36)",
+                userSelect: "none",
+              }}
+            >
+              {rank}
+            </div>
+          ) : null}
+
+          {topMeta ? (
+            <div
+              data-top-card-meta
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 2,
+                padding: "30px 12px 11px",
+                background: "linear-gradient(transparent, rgba(0,0,0,0.82))",
+                color: "rgba(255,255,255,0.92)",
+                fontSize: 12,
+                lineHeight: 1.25,
+                fontWeight: 650,
+                letterSpacing: "0.015em",
+                textShadow: "0 1px 5px rgba(0,0,0,0.9)",
+                textAlign: "center",
+              }}
+            >
+              {topMeta}
+            </div>
+          ) : null}
+
+          {posterLayout !== "vertical" && !ranked ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)", background: sportsContent ? "linear-gradient(transparent, rgba(0,0,0,0.82))" : undefined }}>
+           {sportsContent && <span style={{ display: "block", paddingTop: 18, marginBottom: 5, color: "rgba(255,255,255,0.82)", fontSize: 12, fontWeight: 600 }}>{item.genres?.join(" · ")}{item.runtime ? ` · ${item.runtime}` : ""}</span>}
           {showLogo ? (
             <img src={logo} alt={item.name}
               decoding="async"
@@ -996,10 +947,12 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             </span>
           )}
         </div> : null}
-        {artworkControls}
+          {!sportsContent && artworkControls}
       </div>
 
-      {posterLayout === "vertical" && (
+      {onChooseSources && <button type="button" className="sports-card-sources" aria-label={`Elegir fuentes para ${item.name}`} onClick={event => { event.stopPropagation(); onChooseSources(item); }}><Radio size={16} aria-hidden="true" />Fuentes</button>}
+
+      {posterLayout === "vertical" && !ranked && (
         <div
           ref={titleRef}
           style={{

@@ -1,0 +1,627 @@
+/// <reference path="./anime-torrent-provider.d.ts" />
+/// <reference path="./core.d.ts" />
+
+class Provider {
+    constructor() {
+        this.baseUrl = $getUserPreference("baseUrl") || "https://mikanani.kas.pub";
+        this.searchEndpoint = "/RSS/Search?searchstr=";
+        this.latestEndpoint = "/RSS/Classic";
+
+        this._magnetRe = /magnet:\?xt=urn:btih:[a-fA-F0-9]+(?:&[a-zA-Z0-9%=$._*+\-:/]+)*/;
+        this._infoHashRe = /magnet:\?xt=urn:btih:([a-fA-F0-9]+)/;
+        this._itemRe = /<item>([\s\S]*?)<\/item>/gi;
+        this._linkRe = /<link>([\s\S]*?)<\/link>/i;
+        this._guidRe = /<guid[^>]*>([\s\S]*?)<\/guid>/i;
+        this._enclosureUrlRe = /<enclosure[^>]*url="([^"]+)"[^>]*>/i;
+        this._enclosureLengthRe = /<enclosure[^>]*length="([^"]+)"[^>]*>/i;
+        this._titleRe = /<title>([\s\S]*?)<\/title>/i;
+        this._pubDateRe = /<pubDate>([\s\S]*?)<\/pubDate>/i;
+    }
+
+    getSettings() {
+        return {
+            canSmartSearch: true,
+            smartSearchFilters: ["batch", "episodeNumber", "resolution", "query"],
+            supportsAdult: false,
+            type: "main"
+        };
+    }
+
+    async search(opts) {
+        console.log("[Mikan] search:", opts.query);
+        const q = String(opts.query || "").trim();
+
+        // BGM ID support: a pure-number query is a Bangumi subject ID.
+        // Resolve its titles (CN/JP) and search all of them, merging the
+        // results so nothing is missed.
+        if (/^\d+$/.test(q)) {
+            const titles = await this._resolveBgmTitles(q);
+            if (titles.length) {
+                console.log("[Mikan] bgm ID " + q + " -> " + titles.join(" | "));
+                const result = await this._searchByTitles(titles);
+                await this._populateMagnetLinks(result);
+                return result;
+            }
+            console.log("[Mikan] bgm ID " + q + ": title resolution failed, falling back to raw query");
+        }
+
+        const items = await this._fetchRSS(this.baseUrl + this.searchEndpoint + encodeURIComponent(q));
+        const result = items.map(item => this._toAnimeTorrent(item));
+        await this._populateMagnetLinks(result);
+        return result;
+    }
+
+    /** Resolve a Bangumi subject ID to title candidates via the Bangumi API */
+    async _resolveBgmTitles(bgmId) {
+        // Try the official API first, then the public mirror (some networks
+        // cannot reach api.bgm.tv)
+        const endpoints = [
+            "https://api.bgm.tv/v0/subjects/",
+            "https://api.bangumi.lol/v0/subjects/",
+        ];
+        for (let i = 0; i < endpoints.length; i++) {
+            const url = endpoints[i] + encodeURIComponent(String(bgmId));
+            try {
+                const r = await fetch(url, {
+                    headers: {
+                        "User-Agent": "seanime-extension/1.0 (https://github.com/Elisoar111/seanime-extensions)",
+                        "Accept": "application/json",
+                    }
+                });
+                if (!r || !r.ok) continue;
+                const d = await r.json();
+                const out = [];
+                if (d && d.name_cn) out.push(d.name_cn);
+                if (d && d.name && out.indexOf(d.name) === -1) out.push(d.name);
+                if (out.length) return out;
+            } catch (e) {
+                console.error("[Mikan] bgm title resolve error (" + endpoints[i] + "):", e);
+            }
+        }
+        return [];
+    }
+
+    /** Search every title candidate and merge + dedupe the results */
+    async _searchByTitles(titles) {
+        const seen = {};
+        const all = [];
+        for (let i = 0; i < titles.length; i++) {
+            const items = await this._searchByQuery(titles[i]);
+            for (let j = 0; j < items.length; j++) {
+                const it = items[j];
+                const key = it.downloadUrl || it.name;
+                if (!seen[key]) {
+                    seen[key] = true;
+                    all.push(it);
+                }
+            }
+        }
+        return all;
+    }
+
+    async smartSearch(opts) {
+        let queries = this._buildSmartSearchQueries(opts);
+
+        // BGM ID query support: resolve the subject's titles and add them to
+        // the query candidates so smart search also works with a Bangumi ID
+        if (opts.query && /^\d+$/.test(String(opts.query).trim())) {
+            const titles = await this._resolveBgmTitles(String(opts.query).trim());
+            for (let i = 0; i < titles.length; i++) {
+                if (queries.indexOf(titles[i]) === -1)
+                    queries.push(titles[i]);
+            }
+        }
+
+        console.log("[Mikan] smartSearch queries:", queries);
+
+        const resultsArr = await Promise.all(queries.map(q => this._searchByQuery(q)));
+
+        // Merge + deduplicate
+        const seen = {};
+        const unique = [];
+        for (let i = 0; i < resultsArr.length; i++) {
+            for (let j = 0; j < resultsArr[i].length; j++) {
+                const t = resultsArr[i][j];
+                const key = t.downloadUrl || t.name;
+                if (!seen[key]) {
+                    seen[key] = true;
+                    unique.push(t);
+                }
+            }
+        }
+        console.log("[Mikan] smartSearch total unique:", unique.length);
+
+        const isMovie = opts.media.format === "MOVIE" || opts.media.episodeCount === 1;
+        // Mikan titles of sequel seasons often use absolute numbering
+        // (e.g. "第26話" for episode 2 of a season with offset 24)
+        const offset = opts.media.absoluteSeasonOffset || 0;
+
+        let result;
+
+        if (isMovie) {
+            result = unique;
+        } else if (opts.batch) {
+            // batch mode: only releases flagged as multi-episode (includes
+            // whole-series packs whose titles carry no explicit markers)
+            result = unique.filter(t => t.isBatch);
+        } else if (opts.episodeNumber > 0) {
+            // Keep releases that contain the requested episode:
+            // exact match, absolute numbering (episode + season offset),
+            // multi-episode range, or a title match as fallback.
+            const matched = unique.filter(t =>
+                t.episodeNumber === opts.episodeNumber ||
+                (offset > 0 && t.episodeNumber === opts.episodeNumber + offset) ||
+                this._coversEpisode(t, opts.episodeNumber, offset) ||
+                this._matchEpisodeNumber(t.name, opts.episodeNumber)
+            );
+            // Releases whose episode number could not be parsed (-1) are kept
+            // as candidates too — they may be the requested episode, and
+            // Seanime re-verifies by parsing the name. Never return the whole
+            // series (wrong-episode risk).
+            result = matched.concat(
+                unique.filter(t => t.episodeNumber === -1)
+            );
+        } else {
+            result = unique;
+        }
+
+        result = this._applyResolution(result, opts.resolution);
+
+        if (opts.bestReleases && result.length > 1) {
+            const best = this._filterBestReleases(result);
+            if (best.length > 0) result = best;
+        }
+
+        await this._populateMagnetLinks(result);
+        return result;
+    }
+
+    async getTorrentMagnetLink(torrent) {
+        if (torrent.magnetLink) return torrent.magnetLink;
+
+        if (torrent.downloadUrl) {
+            try {
+                const magnet = await this._resolveMagnetFromTorrent(torrent.downloadUrl);
+                if (magnet && magnet.indexOf("magnet:") === 0) return magnet;
+            } catch (e) { /* fall through */ }
+        }
+
+        if (torrent.link) {
+            try {
+                const magnet = await this._resolveMagnetFromDetailPage(torrent.link);
+                if (magnet && magnet.indexOf("magnet:") === 0) return magnet;
+            } catch (e) { /* fall through */ }
+        }
+
+        return "";
+    }
+
+    async getTorrentInfoHash(torrent) {
+        if (torrent.infoHash) return torrent.infoHash;
+        const magnet = await this.getTorrentMagnetLink(torrent);
+        if (!magnet) return "";
+        const m = magnet.match(this._infoHashRe);
+        return m ? m[1].toLowerCase() : "";
+    }
+
+    async getLatest() {
+        const items = await this._fetchRSS(this.baseUrl + this.latestEndpoint);
+        const result = items.map(item => this._toAnimeTorrent(item));
+        await this._populateMagnetLinks(result);
+        return result;
+    }
+
+    // ── Magnet link resolution ───────────────────────────────────────
+
+    async _populateMagnetLinks(torrents) {
+        if (!torrents || torrents.length === 0) return;
+        const batchSize = 5;
+        for (let i = 0; i < torrents.length; i += batchSize) {
+            const batch = torrents.slice(i, i + batchSize);
+            await Promise.all(batch.map(async (t) => {
+                if (t.magnetLink || !t.downloadUrl) return;
+                try {
+                    const magnet = await this._resolveMagnetFromTorrent(t.downloadUrl);
+                    if (magnet && magnet.indexOf("magnet:") === 0) {
+                        t.magnetLink = magnet;
+                        const m = magnet.match(this._infoHashRe);
+                        if (m) t.infoHash = m[1].toLowerCase();
+                    }
+                } catch (e) { /* silent */ }
+            }));
+        }
+    }
+
+    async _resolveMagnetFromTorrent(url) {
+        const res = await fetch(url, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://mikanime.tv/"
+            }
+        });
+        if (!res.ok) return "";
+        const text = await res.text();
+        const magnet = $torrentUtils.getMagnetLinkFromTorrentData(text);
+        return magnet && typeof magnet === "string" ? magnet : "";
+    }
+
+    async _resolveMagnetFromDetailPage(link) {
+        const detailUrl = link.indexOf("http") === 0
+            ? link
+            : this.baseUrl + (link.indexOf("/") === 0 ? "" : "/") + link;
+        const res = await fetch(detailUrl, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://mikanime.tv/"
+            }
+        });
+        if (!res.ok) return "";
+        const html = await res.text();
+        const m = html.match(this._magnetRe);
+        return m ? m[0] : "";
+    }
+
+    // ── RSS fetching & parsing ───────────────────────────────────────
+
+    async _searchByQuery(query) {
+        if (!query || query.trim() === "") return [];
+        try {
+            const items = await this._fetchRSS(
+                this.baseUrl + this.searchEndpoint + encodeURIComponent(query)
+            );
+            return items.map(item => this._toAnimeTorrent(item));
+        } catch (e) {
+            return [];
+        }
+    }
+
+    async _fetchRSS(url) {
+        try {
+            const res = await fetch(url, {
+                headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://mikanime.tv/"
+                }
+            });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const xml = await res.text();
+            return this._parseRSS(xml);
+        } catch (err) {
+            console.error("[Mikan] RSS fetch error:", err);
+            return [];
+        }
+    }
+
+    _parseRSS(xml) {
+        const items = [];
+        let match;
+        while ((match = this._itemRe.exec(xml)) !== null) {
+            const xml2 = match[1];
+            let link = this._extract(xml2, this._linkRe);
+            if (!link) link = this._extract(xml2, this._guidRe);
+            items.push({
+                title: this._extract(xml2, this._titleRe),
+                link: link,
+                downloadUrl: this._extractAttr(xml2, this._enclosureUrlRe),
+                size: this._extractAttr(xml2, this._enclosureLengthRe) || "0",
+                pubDate: this._extract(xml2, this._pubDateRe),
+            });
+        }
+        return items;
+    }
+
+    _extract(xml, re) {
+        const m = xml.match(re);
+        return m ? this._stripCDATA(m[1]) : "";
+    }
+
+    _extractAttr(xml, re) {
+        const m = xml.match(re);
+        return m ? m[1].trim() : "";
+    }
+
+    _stripCDATA(s) {
+        return s.replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "").trim();
+    }
+
+    // ── Query building ───────────────────────────────────────────────
+
+    _buildSmartSearchQueries(opts) {
+        const queries = [];
+
+        if (opts.query && opts.query.trim()) {
+            queries.push(opts.query.trim());
+        }
+
+        const titles = [];
+        if (opts.media.romajiTitle) titles.push(opts.media.romajiTitle);
+        if (opts.media.englishTitle && titles.indexOf(opts.media.englishTitle) === -1) titles.push(opts.media.englishTitle);
+        if (opts.media.synonyms) {
+            for (let i = 0; i < opts.media.synonyms.length; i++) {
+                const s = opts.media.synonyms[i];
+                if (titles.indexOf(s) === -1) titles.push(s);
+            }
+        }
+
+        if (opts.batch) {
+            for (let i = 0; i < titles.length && queries.length < 5; i++) {
+                const bq = titles[i] + " 合集";
+                if (queries.indexOf(bq) === -1) queries.push(bq);
+                if (queries.length >= 5) break;
+                const fq = titles[i] + " 全集";
+                if (queries.indexOf(fq) === -1) queries.push(fq);
+            }
+        }
+
+        for (let i = 0; i < Math.min(titles.length, 1); i++) {
+            const clean = titles[i]
+                .replace(/[^a-zA-Z0-9\u4e00-\u9fa5\s]/g, "")
+                .replace(/\s+/g, " ")
+                .trim();
+            if (clean && queries.indexOf(clean) === -1 && queries.length < 5) {
+                queries.push(clean);
+            }
+        }
+
+        return queries.slice(0, 5);
+    }
+
+    _sanitizeTitle(t) {
+        return t
+            .replace(/-/g, " ")
+            .replace(/[^a-zA-Z0-9\u4e00-\u9fa5\s]/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+
+    _zeropad(v) {
+        const n = typeof v === "number" ? v : parseInt(v, 10);
+        return !isNaN(n) ? String(n).padStart(2, "0") : String(v);
+    }
+
+    _isBatchName(name) {
+        if (/合集|全集|Batch|Complete/i.test(name)) return true;
+        if (/S\d{1,2}E\d{1,3}\s*(?:~|-|–|—)\s*E\d{1,3}/i.test(name)) return true;
+        if (/\b(?:0\d|1\d|2[0-4])\s*(?:~|～|-)\s*(?:0\d|1\d|2[0-4])\b/i.test(name)) return true;
+        // "第1-22话" / "第01-22集" full-series ranges
+        if (/第\s*\d{1,3}\s*[-~～—]\s*\d{1,3}\s*[集話话]/i.test(name)) return true;
+        // "全9卷" whole-series BD volume sets
+        if (/全\s*\d{1,2}\s*卷/i.test(name)) return true;
+        // "S2" / "Season 2" markers — but NOT "S2 - 05", "S2][06]" or "S2E05"
+        // (single episodes); "S2 合集" (no episode digits) stays a batch
+        if (/\bS\d{1,2}\b(?!\s*[-–—]?\s*[\]\[Ex]*\d)/i.test(name)) return true;
+        if (/Season\s+\d{1,2}/i.test(name)) return true;
+        if (/第\d+季/.test(name)) return true;
+        if (/\b(?:Box\s*Set|Boxset|Collection)\b/i.test(name)) return true;
+        return false;
+    }
+
+    /**
+     * Whether a release is a single-disc / standalone item that must NOT be
+     * treated as a whole-series batch even though it has no episode number.
+     */
+    _isSingleRelease(name) {
+        return /OAD|OVA|OAV|SP\b|Special|Event|演唱会|Live|剧场版|Movie|Vol\.|Vol\s*\d|PV\b|CM\b|OST|特典|NCOP|NCED|Soundtrack|先行|预告|Trailer|Music/i.test(name);
+    }
+
+    /**
+     * Whole-series packs whose titles carry NO episode number and NO explicit
+     * "合集/全集" marker — e.g. "[❀拨雪寻春❀] 四月是你的谎言 / ... [BDRip]
+     * [HEVC-10bit 1080p][简繁日内封][Rev.] [29.8GB]". A single episode always
+     * has a number ("[05]", "- 05 [", "第05话"), so its absence plus no
+     * standalone marker means the release spans the whole series.
+     */
+    _isFullSeriesPack(name) {
+        if (this._isSingleRelease(name)) return false;
+        if (this._isBatchName(name)) return false;
+        if (/第\s*\d{1,4}\s*[集話话]/i.test(name)) return false;
+        if (/\b(?:EP|Ep|ep)[Pp]?\s*\d{1,3}\b/i.test(name)) return false;
+        if (/\bS\d{1,2}\s*E\d{1,3}\b/i.test(name)) return false;
+        if (/\[\s*\d{1,3}\s*\]/.test(name)) return false;
+        if (/[-–—]\s*\d{1,3}(?=\s*(?:\[|\())/.test(name)) return false;
+        if (/\b\d{1,2}\s*[-~～]\s*\d{1,2}\b/.test(name)) return false;
+        return true;
+    }
+
+    /**
+     * Whether a multi-episode release (habari parsed 2+ episode numbers)
+     * covers the requested episode, in relative or absolute numbering.
+     */
+    _coversEpisode(t, epNum, offset) {
+        if (!t.episodeRange) return false;
+        const targets = [epNum];
+        if (offset > 0) targets.push(epNum + offset);
+        for (let i = 0; i < targets.length; i++) {
+            if (targets[i] >= t.episodeRange[0] && targets[i] <= t.episodeRange[1]) return true;
+        }
+        return false;
+    }
+
+    _matchEpisodeNumber(title, epNum) {
+        const padded = epNum < 10 ? "0" + epNum : String(epNum);
+        return new RegExp(
+            "\\[" + padded + "\\]|第0?" + epNum + "[集話话]|[Ee][Pp]?" + padded + "\\b|[-–—]\\s*0?" + epNum + "(?=\\s*(?:\\[|\\()|$)"
+        ).test(title);
+    }
+
+    // ── Torrent object construction ──────────────────────────────────
+
+    _toAnimeTorrent(item) {
+        const t = {
+            name: item.title || "",
+            date: "",
+            size: parseInt(item.size, 10) || 0,
+            formattedSize: this._bytesToHuman(parseInt(item.size, 10) || 0),
+            seeders: -1, leechers: -1, downloadCount: 0,
+            link: item.link || "",
+            downloadUrl: item.downloadUrl || "",
+            magnetLink: undefined, infoHash: undefined,
+            resolution: "", isBatch: false, episodeNumber: -1, releaseGroup: "",
+            episodeRange: undefined,
+            subtitleTerms: "", audioTerms: "",
+            isBestRelease: false, confirmed: true
+        };
+
+        if (item.pubDate) {
+            try {
+                t.date = new Date(item.pubDate).toISOString();
+            } catch (e) { /* ignore */ }
+        }
+
+        let p = null;
+        try {
+            p = $habari.parse(t.name);
+
+            if (p.video_resolution) t.resolution = p.video_resolution;
+            if (p.release_group) t.releaseGroup = p.release_group;
+
+            if (p.episode_number && p.episode_number.length === 1) {
+                const ep = parseInt(p.episode_number[0]);
+                if (!isNaN(ep)) t.episodeNumber = ep;
+            } else if (p.episode_number && p.episode_number.length > 1) {
+                // multi-episode release (e.g. "01-12"): keep the span so the
+                // episode filter can match any episode inside it
+                const nums = [];
+                for (let i = 0; i < p.episode_number.length; i++) {
+                    const n = parseInt(p.episode_number[i], 10);
+                    if (!isNaN(n)) nums.push(n);
+                }
+                if (nums.length > 0) {
+                    t.episodeRange = [Math.min.apply(null, nums), Math.max.apply(null, nums)];
+                }
+            }
+
+            if (p.subtitle_terms && p.subtitle_terms.length > 0) {
+                t.subtitleTerms = p.subtitle_terms.join(", ");
+            } else {
+                t.subtitleTerms = this._detectSubtitles(t.name);
+            }
+
+            if (p.audio_terms && p.audio_terms.length > 0) {
+                t.audioTerms = p.audio_terms.join(", ");
+            } else {
+                t.audioTerms = this._detectAudio(t.name);
+            }
+        } catch (e) {
+            t.subtitleTerms = this._detectSubtitles(t.name);
+            t.audioTerms = this._detectAudio(t.name);
+        }
+
+        // Write back batch detection so Seanime can tell singles from batches.
+        // Also flag whole-series packs whose titles carry no explicit markers
+        // (e.g. 拨雪寻春 full-season BDRips) so they show up in batch mode.
+        if (this._isBatchName(t.name) || this._isFullSeriesPack(t.name)) {
+            t.isBatch = true;
+            t.episodeNumber = -1;
+        }
+
+        return t;
+    }
+
+    // ── Subtitle / Audio detection ───────────────────────────────────
+
+    _detectSubtitles(name) {
+        const found = [];
+        const subMap = {
+            "简繁内封": "Chi (简繁)",
+            "简体内封": "Chi (简)",
+            "繁体内封": "Chi (繁)",
+            "Multi-Sub": "Multi",
+            "简日内封": "Chi+Jpn",
+            "日英内封": "Jpn+Eng",
+        };
+        for (const [keyword, label] of Object.entries(subMap)) {
+            if (name.indexOf(keyword) !== -1 && found.indexOf(label) === -1) found.push(label);
+        }
+        const subTags = name.match(/\b(CHS|CHT|BIG5|GB|JP|JPN|ENG|Multi-Sub|MultiSub)\b/g);
+        if (subTags) {
+            for (const tag of subTags) {
+                if (found.indexOf(tag) === -1) found.push(tag);
+            }
+        }
+        return found.join(", ");
+    }
+
+    _detectAudio(name) {
+        const found = [];
+        if (/\bDual-Audio\b|\bDual Audio\b|\b双语\b/i.test(name)) {
+            found.push("Dual-Audio");
+        }
+        const audioTags = name.match(/\b(JP|JPN|ENG|CHN|CHI)\b/g);
+        if (audioTags) {
+            for (const tag of audioTags) {
+                if (found.indexOf(tag) === -1) found.push(tag);
+            }
+        }
+        return found.join(", ");
+    }
+
+    // ── Filtering ────────────────────────────────────────────────────
+
+    _applyResolution(torrents, resolution) {
+        if (!resolution || resolution === "Any") return torrents;
+        const want = resolution.toLowerCase();
+        const matched = [];
+        for (let i = 0; i < torrents.length; i++) {
+            const res = (torrents[i].resolution || "").toLowerCase();
+            if (res && res.indexOf(want) !== -1) {
+                matched.push(torrents[i]);
+            }
+        }
+        return matched.length > 0 ? matched : torrents;
+    }
+
+    _filterBestReleases(torrents) {
+        if (torrents.length <= 1) return torrents;
+
+        let maxSeeders = 0;
+        let hasSeeders = false;
+        for (let i = 0; i < torrents.length; i++) {
+            if (torrents[i].seeders > 0) {
+                hasSeeders = true;
+                if (torrents[i].seeders > maxSeeders) {
+                    maxSeeders = torrents[i].seeders;
+                }
+            }
+        }
+
+        // Mikan RSS has no seeder counts — fall back to keeping the highest
+        // resolution releases so bestReleases still does something useful
+        if (!hasSeeders) {
+            const rank = { "2160": 4, "1080": 3, "720": 2, "480": 1 };
+            let bestRank = 0;
+            for (let i = 0; i < torrents.length; i++) {
+                const m = (torrents[i].resolution || "").match(/(\d{3,4})[pP]?/);
+                const r = m ? (rank[m[1]] || 0) : 0;
+                if (r > bestRank) bestRank = r;
+            }
+            if (bestRank === 0) return torrents;
+            const result = [];
+            for (let i = 0; i < torrents.length; i++) {
+                const m = (torrents[i].resolution || "").match(/(\d{3,4})[pP]?/);
+                const r = m ? (rank[m[1]] || 0) : 0;
+                if (r === bestRank) result.push(torrents[i]);
+            }
+            return result;
+        }
+
+        const threshold = Math.max(maxSeeders * 0.5, 10);
+        const result = [];
+        for (let i = 0; i < torrents.length; i++) {
+            if (torrents[i].seeders >= threshold) {
+                result.push(torrents[i]);
+            }
+        }
+        return result;
+    }
+
+    // ── Utilities ────────────────────────────────────────────────────
+
+    _bytesToHuman(bytes) {
+        if (!bytes || bytes === 0) return "";
+        const k = 1024;
+        const sizes = ["Bytes", "KiB", "MiB", "GiB", "TiB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+    }
+}

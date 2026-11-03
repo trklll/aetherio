@@ -26,7 +26,8 @@ function preferences(overrides: Partial<HomePreferences> = {}): HomePreferences 
     posterLayout: "horizontal",
     catalogOrder: [],
     hiddenCatalogKeys: [],
-    allowTmdbArtworkFallback: false,
+  allowTmdbArtworkFallback: false,
+  playStreamingPlatformIntros: true,
     ...overrides,
   };
 }
@@ -55,6 +56,93 @@ describe("applyHomeCatalogPreferences", () => {
     );
 
     expect(result.map(item => item.addonId)).toEqual(["anime", "movies"]);
+  });
+
+  it("places the unconfigured 90s anime rail after upcoming even with an older saved order", () => {
+    const upcoming = row("aetherio-starter", "anime", 4, "Próximos animes a estrenar", "jikan.upcoming");
+    const laterAnime = row("addon", "anime", 5, "Otra fila", "other-anime");
+    const nineties = {
+      ...row("aetherio-jikan", "anime", 4.5, "Los mejores animes de los 90's", "jikan.best_anime_90s"),
+      presentation: "cinematic" as const,
+    };
+
+    const result = applyHomeCatalogPreferences(
+      [upcoming, laterAnime, nineties],
+      preferences({ catalogOrder: [catalogPreferenceKey(upcoming), catalogPreferenceKey(laterAnime)] }),
+    );
+
+    expect(result).toEqual([upcoming, nineties, laterAnime]);
+  });
+
+  it("keeps the 90s anime rail where the user explicitly placed it", () => {
+    const upcoming = row("aetherio-starter", "anime", 4, "Próximos animes a estrenar", "jikan.upcoming");
+    const laterAnime = row("addon", "anime", 5, "Otra fila", "other-anime");
+    const nineties = {
+      ...row("aetherio-jikan", "anime", 4.5, "Los mejores animes de los 90's", "jikan.best_anime_90s"),
+      presentation: "cinematic" as const,
+    };
+
+    const result = applyHomeCatalogPreferences(
+      [upcoming, nineties, laterAnime],
+      preferences({ catalogOrder: [catalogPreferenceKey(laterAnime), catalogPreferenceKey(upcoming), catalogPreferenceKey(nineties)] }),
+    );
+
+    expect(result).toEqual([laterAnime, upcoming, nineties]);
+  });
+
+  it("places the 2000s and 2010s anime rails under their matching rows by default", () => {
+    const popular = row("aetherio-jikan", "anime", 7, "Fenómenos populares", "jikan.most_popular");
+    const topRated = row("aetherio-anilist", "anime", 9, "Los animes mejor valorados", "mal.top_rated_anime");
+    const twoThousands = {
+      ...row("aetherio-jikan", "anime", 7.5, "Los mejores animes de los 2000", "jikan.best_anime_2000s"),
+      presentation: "cinematic" as const,
+    };
+    const twentyTens = {
+      ...row("aetherio-jikan", "anime", 9.5, "Los mejores animes de los 2010", "jikan.best_anime_2010s"),
+      presentation: "cinematic" as const,
+    };
+
+    const result = applyHomeCatalogPreferences(
+      [popular, topRated, twoThousands, twentyTens],
+      preferences(),
+    );
+
+    expect(result.map(item => item.catalogId)).toEqual([
+      "jikan.most_popular",
+      "jikan.best_anime_2000s",
+      "mal.top_rated_anime",
+      "jikan.best_anime_2010s",
+    ]);
+  });
+
+  it("keeps the new decade rails at an explicitly saved position", () => {
+    const popular = row("aetherio-jikan", "anime", 7, "Fenómenos populares", "jikan.most_popular");
+    const topRated = row("aetherio-anilist", "anime", 9, "Los animes mejor valorados", "mal.top_rated_anime");
+    const twoThousands = {
+      ...row("aetherio-jikan", "anime", 7.5, "Los mejores animes de los 2000", "jikan.best_anime_2000s"),
+      presentation: "cinematic" as const,
+    };
+    const twentyTens = {
+      ...row("aetherio-jikan", "anime", 9.5, "Los mejores animes de los 2010", "jikan.best_anime_2010s"),
+      presentation: "cinematic" as const,
+    };
+
+    const result = applyHomeCatalogPreferences(
+      [popular, topRated, twoThousands, twentyTens],
+      preferences({ catalogOrder: [
+        catalogPreferenceKey(twentyTens),
+        catalogPreferenceKey(popular),
+        catalogPreferenceKey(twoThousands),
+        catalogPreferenceKey(topRated),
+      ] }),
+    );
+
+    expect(result.map(item => item.catalogId)).toEqual([
+      "jikan.best_anime_2010s",
+      "jikan.most_popular",
+      "jikan.best_anime_2000s",
+      "mal.top_rated_anime",
+    ]);
   });
 
   it("prioritizes the selected orientation without hiding other catalogs", () => {

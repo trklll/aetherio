@@ -1,0 +1,254 @@
+/// <reference path="./online-streaming-provider.d.ts" />
+
+class Provider {
+  base = $getUserPreference("domain");
+
+  getSettings(): Settings {
+    return {
+      episodeServers: ["AniPM (Hard)", "AniPM (Soft)", "Crunchyroll", "Beta"],
+      supportsDub: true,
+    };
+  }
+
+  async search(query: SearchOptions): Promise<SearchResult[]> {
+    const res = await fetch(`${this.base}/api/anime/search?q=${encodeURIComponent(query.query)}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "Referer": `${this.base}/`,
+        "Accept": "application/json",
+      },
+    });
+    if (!res.ok) throw new Error(`ani.pm search HTTP ${res.status}`);
+    const j = await res.json();
+
+    const seen: { [k: string]: boolean } = {};
+    const results: SearchResult[] = [];
+
+    for (const it of j.items || []) {
+      const path = it.source === "settlar" ? "anime" : "ani"
+      const route = it.routeId || (it.slug && it.id ? `${it.slug}-${it.id}` : "");
+      if (!route || seen[route]) continue;
+      seen[route] = true;
+      results.push({
+        id: `${route}|${query.media.id}|${query.dub ? "dub" : "sub"}|${it.source}`,
+        title: it.title || it.native || route,
+        url: `${this.base}/${path}/${route}`,
+        subOrDub: query.dub ? "dub" : "sub",
+      });
+    }
+    return results;
+  }
+
+  async findEpisodes(id: string): Promise<EpisodeDetails[]> {
+    const [route, aniID, lang, source] = id.split("|");
+    const wantDub = lang === "dub";
+    const path = source === "settlar" ? "series" : "ani"
+
+    const res = await fetch(`${this.base}/api/anime/${path}/${encodeURIComponent(route)}?routes=e4`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "Referer": `${this.base}/`,
+        "Accept": "application/json",
+      },
+    });
+    if (!res.ok) throw new Error(`ani.pm series HTTP ${res.status}`);
+    const s = await res.json();
+
+    const sid = s.id || s.sid || route;
+
+    const episodes: EpisodeDetails[] = [];
+    for (const ep of s.episodes || []) {
+      if (ep.number === undefined || ep.number === null) continue;
+      const number = Number(ep.number);
+      if (isNaN(number)) continue;
+
+      if (wantDub && !ep.dub) continue;
+      if (!wantDub && ep.sub === false) continue;
+
+      const title = (ep.title || "").trim();
+      const defaultName = `Episode ${ep.number}`;
+
+      episodes.push({
+        id: `${sid}|${aniID}|${ep.number}|${source}|${lang}`,
+        number,
+        title: title && title !== defaultName ? title : defaultName,
+        url: `${this.base}/anime/${s.routeId || route}`,
+      });
+    }
+
+    episodes.sort((a, b) => a.number - b.number);
+    return episodes;
+  }
+  
+  async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
+    const [sid, aniID, ep, source, lang] = episode.id.split("|")
+  
+    const SERVER_SUFFIX: { [server: string]: string } = {
+      "AniPM (Soft)": "",
+      "AniPM (Hard)": "hard",
+      "Crunchyroll": "cr",
+    }
+  
+    const channel = lang + SERVER_SUFFIX[_server]
+  
+    let videoURL = ""
+    let subtitles: VideoSubtitle[] = []
+    let headers: Record<string, string> = {
+      "Referer": "https://embed.settlar.io/",
+      "Origin": "https://embed.settlar.io",
+    }
+  
+    if (_server === "Beta") {
+      const jsonRes = await fetch(`${this.base}/api/anime/beta-server/${aniID}`).then(r => r.json())
+      if (!jsonRes.available) return
+    
+      const match = jsonRes.path.match(/^\/watch\/(.+)-(\d+)$/)
+      if (!match) return
+      const [, title, showId] = match
+      const showSlug = `${showId}-${title}`
+      const episodeCode = `E${String(ep).padStart(4, "0")}`
+    
+      const masterUrl = `${jsonRes.origin}/hls/${showSlug}/${episodeCode}/master.m3u8`
+    
+      headers = {
+        "Referer": `${jsonRes.origin}${jsonRes.path}/${ep}?lang=${lang}&embed=ani`,
+        "Origin": jsonRes.origin,
+      }
+      videoURL = masterUrl
+    
+      const masterRes = await fetch(masterUrl, { headers })
+      if (!masterRes.ok) throw new Error(`beta master playlist HTTP ${masterRes.status}`)
+      const lines = (await masterRes.text()).split("\n").map(l => l.trim())
+    
+      const subEntries = lines
+        .filter(l => l.startsWith("#EXT-X-MEDIA:") && l.includes("TYPE=SUBTITLES"))
+        .map(l => parseHlsAttrs(l.slice(l.indexOf(":") + 1)))
+        .filter(a => a.URI)
+
+      let template: { dir: string; vtt: string } | null = null
+
+      for (const [i, a] of subEntries.entries()) {
+        const dir = a.URI.split("/")[0]
+        let vttUrl: string | null = null
+
+        if (!template) {
+          try {
+            vttUrl = await resolveSubtitleVtt(resolveHlsUrl(masterUrl, a.URI), headers)
+          } catch (e) {
+            console.log("beta subtitle failed:", e)
+          }
+          if (vttUrl) template = { dir, vtt: vttUrl }
+        } else {
+          vttUrl = template.vtt.replace(`/${template.dir}/`, `/${dir}/`)
+        }
+
+        if (!vttUrl) continue
+        subtitles.push({
+          id: a.LANGUAGE ? `${a.LANGUAGE}-${i}` : String(i),
+          url: vttUrl,
+          language: a.NAME || a.LANGUAGE || "Unknown",
+          isDefault: a.DEFAULT === "YES",
+        })
+      }
+    }
+    else {
+      const bootRes = await fetch(
+        `${this.base}/api/anime/playback-bootstrap/${source}/${encodeURIComponent(sid)}` +
+          `?ep=${encodeURIComponent(ep)}&lang=${lang}`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+            "Referer": `${this.base}/`,
+            "Accept": "application/json",
+          },
+        }
+      )
+      if (!bootRes.ok) throw new Error(`ani.pm bootstrap HTTP ${bootRes.status}`)
+      const boot = await bootRes.json()
+      if (!boot.settlarSelection) throw new Error(`ani.pm: no ${lang} stream for episode ${ep}`)
+  
+      const sessRes = await fetch(
+        `${this.base}/api/anime/settlar/session?selection=${encodeURIComponent(boot.settlarSelection)}` +
+          `&provider=anipm&ep=${encodeURIComponent(ep)}&channel=${channel}&telemetry=0`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+            "Referer": `${this.base}/`,
+            "Accept": "application/json",
+          },
+        }
+      )
+      if (!sessRes.ok) throw new Error(`ani.pm session HTTP ${sessRes.status}`)
+      const sess = await sessRes.json()
+      if (!sess.embedUrl) throw new Error("ani.pm: no embed URL returned")
+  
+      const t = (sess.embedUrl.match(/[?&]t=([^&#]+)/) || [])[1]
+      if (!t) throw new Error("ani.pm: embed token missing")
+      const host =
+        (sess.embedUrl.match(/^(https?:\/\/[^/]+)/) || [])[1] || "https://embed.settlar.io"
+  
+      const embedRes = await fetch(`${host}/api/embed/session?t=${t}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+          "Accept": "application/json",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Referer": sess.embedUrl,
+          "Sec-Fetch-Site": "same-origin",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Dest": "empty",
+        },
+      })
+      if (!embedRes.ok) throw new Error(`ani.pm player refused the session (HTTP ${embedRes.status})`)
+      const data = await embedRes.json()
+      if (!data.source) throw new Error("ani.pm: no source in player session")
+      videoURL = data.source
+  
+      subtitles = (data.subtitles || [])
+        .filter((s: any) => s && s.url)
+        .sort((a: any, b: any) => (b.default ? 1 : 0) - (a.default ? 1 : 0))
+        .map((s: any, i: number) => ({
+          id: String(s.srclang || s.label || i),
+          url: s.url,
+          language: s.label || s.srclang || "Unknown",
+          isDefault: i === 0,
+        }))
+    }
+  
+    return {
+      server: _server,
+      headers,
+      videoSources: [
+        {
+          url: videoURL,
+          type: "m3u8",
+          quality: "auto",
+          subtitles,
+        },
+      ],
+    }
+  }
+}
+
+// Each subtitle index.m3u8 is a one-segment VOD playlist. Its segment is the .vtt file.
+async function resolveSubtitleVtt(playlistUrl: string, headers: Record<string, string>): Promise<string | null> {
+  const res = await fetch(playlistUrl, { headers })
+  if (!res.ok) return null
+  const lines = (await res.text()).split("\n").map(l => l.trim())
+  const segment = lines.find(l => l && !l.startsWith("#"))
+  return segment ? resolveHlsUrl(playlistUrl, segment) : null
+}
+
+// Parses HLS attribute lists like: TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",URI="sub-eng/index.m3u8"
+function parseHlsAttrs(line: string): Record<string, string> {
+  const attrs: Record<string, string> = {}
+  const re = /([A-Z0-9-]+)=("[^"]*"|[^,]*)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line))) attrs[m[1]] = m[2].replace(/^"|"$/g, "")
+  return attrs
+}
+
+// Resolves a relative URI against the URL of the playlist that references it
+function resolveHlsUrl(base: string, rel: string): string {
+  if (/^https?:\/\//.test(rel)) return rel
+  return base.slice(0, base.lastIndexOf("/") + 1) + rel
+}

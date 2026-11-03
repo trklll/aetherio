@@ -32,7 +32,8 @@
   background: linear-gradient(
     to right,
     rgba(255, 255, 255, 0.94) 0 var(--player-progress),
-    rgba(255, 255, 255, 0.28) var(--player-progress) 100%
+    rgba(255, 255, 255, 0.58) var(--player-progress) var(--player-buffered),
+    rgba(255, 255, 255, 0.24) var(--player-buffered) 100%
   );
 }
 
@@ -51,7 +52,11 @@
   height: 3px;
   border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.28);
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.58) 0 var(--player-buffered),
+    rgba(255, 255, 255, 0.24) var(--player-buffered) 100%
+  );
 }
 
 .player-timeline::-moz-range-progress {
@@ -281,32 +286,23 @@ html.aetherio-android-tv .bp-player-controls .spatial-focus{
 }
 
 /* ---------------------------------------------------------------------------
-   Boton "Saltar intro / outro / resumen" en Big Picture.
-   Referencia: reproductor de TV con pastilla blanca de tinta negra, sin icono,
-   esquinas redondeadas (no un circulo) y aire lateral generoso. Medidas y
-   decision en artifacts/player-skip/ANALYSIS.md.
-
-   El alto manda sobre todo lo demas: el padding lateral y el radio se derivan
-   de el con clamp() para que la pastilla conserve la proporcion en cualquier
-   resolucion en vez de deformarse como haria con padding fijo. La posicion
-   (right/bottom) la fija el componente, no aqui: el `right` replica el padding
-   de la barra para que el extremo derecho coincida con el de la linea de tiempo.
-
-   Escala reducida un 15% respecto a la medicion de la referencia (y aire lateral
-   de 1.02x a 0.85x del alto): en pantalla la pastilla pesaba mas de lo que
-   aporta. El cuerpo de texto baja en la misma proporcion para no descuadrar la
-   relacion fuente/alto, que es la que fija la lectura a distancia.
-*/
+   Pastilla compartida para saltar intro/outro y continuar al episodio siguiente.
+   La referencia es blanca, de tinta negra y sin iconos. Un ancho fijo relativo
+   al alto iguala las tres acciones; el espacio interior está dimensionado para
+   la etiqueta más larga en español. Posición y alineación siguen perteneciendo
+   a cada componente.
+ */
 .bp-skip-button{
   --bp-skip-height:clamp(52px, 5.4vh, 72px);
   height:var(--bp-skip-height);
-  padding-inline:calc(var(--bp-skip-height) * 0.85);
+  width:min(calc(var(--bp-skip-height) * 4), calc(100vw - 112px));
+  padding-inline:calc(var(--bp-skip-height) * 0.25);
   border-radius:calc(var(--bp-skip-height) * 0.3);
-  font-size:clamp(18px, 2.3vh, 26px);
+  font-size:clamp(16px, 2vh, 24px);
   font-weight:800;
   letter-spacing:-0.01em;
-  background-color:#f6f6f7;
-  color:#111;
+  background-color:#fff;
+  color:#000;
   border:0;
   box-shadow:0 18px 48px rgba(0,0,0,0.45);
 }
@@ -322,6 +318,68 @@ html.aetherio-android-tv .bp-player-controls .spatial-focus{
   border-color:transparent !important;
   box-shadow:0 0 0 3px rgba(255,255,255,0.6), 0 22px 56px rgba(0,0,0,0.5) !important;
   transform:scale(1.04);
+}
+.player-next-prompt__play[data-countdown-active="true"]:focus,
+.player-next-prompt__play[data-countdown-active="true"]:focus-visible{
+  /* El anillo conserva el foco de mando; solo el relleno progresa con el timer. */
+  background-color:#99999b !important;
+}
+.player-next-prompt{
+  position:absolute;
+  z-index:41;
+  right:clamp(28px, 6.4vw, 132px);
+  bottom:clamp(160px, 23vh, 280px);
+  display:flex;
+  align-items:center;
+  gap:32px;
+  max-width:calc(100vw - 56px);
+  --bp-skip-height:clamp(52px,5.4vh,72px);
+}
+.player-next-prompt__play{
+  position:relative;
+  overflow:hidden;
+  width:max-content;
+  max-width:calc(100vw - var(--bp-skip-height) - 80px);
+  min-width:max-content;
+  flex:0 0 auto;
+  padding-inline:clamp(18px, 1.4vw, 24px);
+  background:#99999b;
+  cursor:pointer;
+}
+.player-next-prompt__play:not([data-countdown-active="true"]){background:#fff;}
+.player-next-prompt__progress{
+  position:absolute;
+  inset:-1px;
+  transform-origin:left center;
+  will-change:transform;
+  background:#fff;
+  pointer-events:none;
+}
+.player-next-prompt__content{position:relative;display:flex;align-items:center;gap:12px;white-space:nowrap;}
+.player-next-prompt__content svg{width:1.1em;height:1.1em;flex-shrink:0;}
+.player-next-prompt__cancel{
+  display:grid;
+  place-items:center;
+  flex-shrink:0;
+  width:var(--bp-skip-height);
+  height:var(--bp-skip-height);
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:50%;
+  background:rgba(64,64,68,.88);
+  color:#fff;
+  box-shadow:0 12px 32px rgba(0,0,0,.35);
+  cursor:pointer;
+}
+.player-next-prompt__cancel svg{width:54%;height:54%;}
+.player-next-prompt__cancel:focus-visible,.player-next-prompt__cancel:focus{
+  outline:3px solid #fff;
+  outline-offset:4px;
+  background:#f6f6f7;
+  color:#111;
+}
+@media(max-width:600px){
+  .player-next-prompt{max-width:calc(100vw - 56px);gap:24px;}
+  .player-next-prompt__play{padding-inline:14px;font-size:clamp(14px,2vh,18px);}
 }
 /* Velo �nico de foco de los paneles flotantes del reproductor Big Picture
    (portal fuera de la barra). React mantiene [data-bp-focus="true"] solo en
@@ -577,6 +635,15 @@ html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
   height:clamp(46px,3.1vw,58px);
   color:rgba(255,255,255,0.88) !important;
 }
+.bp-player-controls .bp-bar-actions button[data-player-source-toggle]{
+  width:auto;
+  min-width:108px;
+  gap:8px;
+  padding-inline:16px;
+}
+.bp-player-controls .bp-bar-actions button[data-player-source-toggle] > svg{
+  flex-shrink:0;
+}
 .bp-player-controls[data-player-controls-variant="tv-legacy"] .bp-bar-actions button{
   background-color:rgba(16,18,22,0.30) !important;
   backdrop-filter:var(--lg-filter-md);
@@ -708,7 +775,8 @@ html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
   background:linear-gradient(
     to right,
     rgba(255,255,255,0.98) 0 var(--player-progress),
-    rgba(255,255,255,0.34) var(--player-progress) 100%
+    rgba(255,255,255,0.62) var(--player-progress) var(--player-buffered),
+    rgba(255,255,255,0.24) var(--player-buffered) 100%
   );
 }
 .bp-player-controls .player-timeline{
@@ -722,7 +790,8 @@ html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
   background:linear-gradient(
     to right,
     rgba(255,255,255,0.94) 0 var(--player-progress),
-    rgba(255,255,255,0.26) var(--player-progress) 100%
+    rgba(255,255,255,0.58) var(--player-progress) var(--player-buffered),
+    rgba(255,255,255,0.24) var(--player-buffered) 100%
   );
 }
 .bp-player-controls .player-timeline::-webkit-slider-thumb{
@@ -742,7 +811,11 @@ html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
   box-shadow:none;
 }
 .bp-player-controls .player-timeline::-moz-range-track{
-  background:rgba(255,255,255,0.26);
+  background:linear-gradient(
+    to right,
+    rgba(255,255,255,0.58) 0 var(--player-buffered),
+    rgba(255,255,255,0.24) var(--player-buffered) 100%
+  );
 }
 .bp-player-controls .player-timeline::-moz-range-progress{
   background:rgba(255,255,255,0.94);
@@ -906,6 +979,14 @@ html.aetherio-android-tv .scroll-row{
   border-radius:999px;
   --lg-clip:inset(0 round 999px);
 }
+.upnext-tv-action:focus,
+.upnext-tv-action:focus-visible{
+  outline:3px solid rgba(255,255,255,.98);
+  outline-offset:5px;
+  transform:scale(1.045);
+  box-shadow:0 18px 46px rgba(0,0,0,.55),0 2px 12px rgba(255,255,255,.12);
+  z-index:1;
+}
 /* Chromium no aplica el border-radius al resultado de backdrop-filter:url(#frosted-*)
    (los filtros SVG de refracción): el vidrio queda pintado hasta las esquinas
    cuadradas aunque la caja y overflow sean redondeados. `clip-path` recorta el
@@ -1014,17 +1095,39 @@ html.aetherio-android-tv .scroll-row{
   pointer-events:none;
 }
 
-.aetherio-loading-spinner{
-  display:block;
-  width:46px;
-  height:46px;
-  border:3px solid rgba(255,255,255,0.18);
-  border-top-color:rgba(255,255,255,0.9);
-  border-radius:50%;
-  animation:aetherio-loading-spin 1.05s linear infinite;
+.aetherio-petal-spinner {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--aetherio-spinner-size);
+  height: var(--aetherio-spinner-size);
+  overflow: clip;
+  color: var(--aetherio-spinner-color, #fff);
+  animation: aetherio-petal-spinner-rotate 1.05s linear infinite;
 }
-@keyframes aetherio-loading-spin{to{transform:rotate(360deg);}}
-@media (prefers-reduced-motion:reduce){.aetherio-loading-spinner{animation:none;}}
+.aetherio-petal-spinner__petal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--aetherio-spinner-size) * 0.10345);
+  height: calc(var(--aetherio-spinner-size) * 0.3);
+  margin-top: calc(var(--aetherio-spinner-size) * -0.15);
+  margin-left: calc(var(--aetherio-spinner-size) * -0.051725);
+  border-radius: 999px;
+  background: currentColor;
+}
+.aetherio-petal-spinner__petal:nth-child(1) { transform: rotate(90deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(2) { transform: rotate(45deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(3) { transform: translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(4) { transform: rotate(-45deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(5) { transform: rotate(-90deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(6) { transform: rotate(-135deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(7) { transform: rotate(-180deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+.aetherio-petal-spinner__petal:nth-child(8) { transform: rotate(-225deg) translateY(calc(var(--aetherio-spinner-size) * -0.30862)); }
+@keyframes aetherio-petal-spinner-rotate { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .aetherio-petal-spinner { animation: none; }
+}
 .scroll-row{
   display:flex;gap:12px;
   overflow-x:auto;overflow-y:visible;

@@ -1,0 +1,81 @@
+==== M2 center LS-fit from 16 cap tips
+ref: inner-tips fit center=(319.50,319.50) R=92.106 | outer-tips fit center=(319.50,319.50) R=266.997
+ref: adopted center=(319.50,319.50) Rcaps=(92.106 inner / 266.997 outer)
+ref implied r0=92.11 (refimg/clone/spec: 92.0/92.0/92.8) r1=267.00 (267.0/266.0/266.8) rmid=179.55 (179.5/179.0/179.8)
+--- per-petal (distancias desde centro adoptado)
+pet | r0     | r1     | L      | rmid   | resid_r0 | resid_r1 | tang_r0 | tang_r1
+  E |  92.00 | 267.00 | 175.00 | 179.50 |   -0.11  |   +0.00  |  +0.00 |  +0.00
+ NE |  92.21 | 266.99 | 174.78 | 179.60 |   +0.11  |   -0.00  |  +0.00 |  +0.00
+  N |  92.00 | 267.00 | 175.00 | 179.50 |   -0.11  |   +0.00  |  +0.00 |  +0.00
+ NW |  92.21 | 266.99 | 174.78 | 179.60 |   +0.11  |   -0.00  |  -0.00 |  +0.00
+  W |  92.00 | 267.00 | 175.00 | 179.50 |   -0.11  |   +0.00  |  -0.00 |  -0.00
+ SW |  92.21 | 266.99 | 174.78 | 179.60 |   +0.11  |   -0.00  |  -0.00 |  -0.00
+  S |  92.00 | 267.00 | 175.00 | 179.50 |   -0.11  |   +0.00  |  -0.00 |  -0.00
+ SE |  92.21 | 266.99 | 174.78 | 179.60 |   +0.11  |   -0.00  |  -0.00 |  -0.00
+  tang in-tip range=[-0.00..0.00] out-tip range=[-0.00..0.00]
+--- cap circle fit (R esperado 30.45 para ambos caps)
+  E IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(123.35,0.00)
+  E OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(235.65,0.00)
+  NE IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(87.65,-87.65)
+  NE OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(166.35,-166.35)
+  N IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(-0.00,-123.35)
+  N OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(-0.00,-235.65)
+  NW IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(-87.65,-87.65)
+  NW OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(-166.35,-166.35)
+  W IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(-123.35,0.00)
+  W OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(-235.65,0.00)
+  SW IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(-87.65,87.65)
+  SW OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(-166.35,166.35)
+  S IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(-0.00,123.35)
+  S OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(-0.00,235.65)
+  SE IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(87.65,87.65)
+  SE OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(166.35,166.35)
+ring r=180 petals=8
+   #0 exp=  0.0 meas=45.00 dev=+45.00 span=19.00
+   #1 exp= 45.0 meas=89.82 dev=+44.82 span=19.50
+   #2 exp= 90.0 meas=135.00 dev=+45.00 span=19.00
+   #3 exp=135.0 meas=180.00 dev=+45.00 span=19.00
+   #4 exp=180.0 meas=225.00 dev=+45.00 span=19.00
+   #5 exp=225.0 meas=270.15 dev=+45.15 span=19.25
+   #6 exp=270.0 meas=315.00 dev=+45.00 span=19.00
+   #7 exp=315.0 meas=359.82 dev=+44.82 span=19.50
+ren: inner-tips fit center=(320.08,320.49) R=92.047 | outer-tips fit center=(319.97,320.53) R=265.919
+ren: adopted center=(320.02,320.51) Rcaps=(92.047 inner / 265.919 outer)
+ren implied r0=92.05 (refimg/clone/spec: 92.0/92.0/92.8) r1=265.92 (267.0/266.0/266.8) rmid=178.98 (179.5/179.0/179.8)
+--- per-petal (distancias desde centro adoptado)
+pet | r0     | r1     | L      | rmid   | resid_r0 | resid_r1 | tang_r0 | tang_r1
+  E |  92.13 | 265.79 | 173.65 | 178.96 |   +0.09  |   -0.13  |  -1.01 |  -1.01
+ NE |  92.11 | 265.88 | 173.77 | 178.99 |   +0.06  |   -0.04  |  -1.08 |  -1.08
+  N |  92.04 | 265.98 | 173.94 | 179.01 |   -0.01  |   +0.06  |  -0.52 |  -0.52
+ NW |  91.96 | 265.89 | 173.93 | 178.93 |   -0.09  |   -0.03  |  +0.34 |  +0.34
+  W |  92.12 | 265.96 | 173.84 | 179.04 |   +0.07  |   +0.04  |  +1.01 |  +1.01
+ SW |  91.94 | 265.96 | 174.03 | 178.95 |   -0.11  |   +0.05  |  +1.08 |  +1.08
+  S |  91.99 | 265.99 | 174.00 | 178.99 |   -0.05  |   +0.07  |  +0.52 |  +0.52
+ SE |  92.09 | 265.90 | 173.81 | 178.99 |   +0.04  |   -0.02  |  -0.34 |  -0.34
+  tang in-tip range=[-1.08..1.08] out-tip range=[-1.08..1.08]
+--- cap circle fit (R esperado 30.45 para ambos caps)
+  E IN : center Rdist=123.58 (exp 123.25/122.5) Rcap=31.58   dist_center=(123.58,0.49)
+  E OUT: center Rdist=234.35 (exp 236.35/235.75) Rcap=31.60   dist_center=(234.35,0.48)
+  NE IN : center Rdist=123.30 (exp 123.25/122.5) Rcap=31.30   dist_center=(87.53,-86.84)
+  NE OUT: center Rdist=234.55 (exp 236.35/235.75) Rcap=31.42   dist_center=(166.16,-165.55)
+  N IN : center Rdist=122.03 (exp 123.25/122.5) Rcap=29.96   dist_center=(-0.53,-122.03)
+  N OUT: center Rdist=236.11 (exp 236.35/235.75) Rcap=29.85   dist_center=(-0.53,-236.10)
+  NW IN : center Rdist=123.27 (exp 123.25/122.5) Rcap=31.31   dist_center=(-86.79,-87.54)
+  NW OUT: center Rdist=234.53 (exp 236.35/235.75) Rcap=31.45   dist_center=(-165.47,-166.21)
+  W IN : center Rdist=123.27 (exp 123.25/122.5) Rcap=31.26   dist_center=(-123.27,-0.58)
+  W OUT: center Rdist=234.84 (exp 236.35/235.75) Rcap=31.22   dist_center=(-234.83,-0.57)
+  SW IN : center Rdist=122.95 (exp 123.25/122.5) Rcap=31.01   dist_center=(-87.23,86.65)
+  SW OUT: center Rdist=234.48 (exp 236.35/235.75) Rcap=31.52   dist_center=(-166.18,165.42)
+  S IN : center Rdist=122.77 (exp 123.25/122.5) Rcap=30.91   dist_center=(-0.52,122.77)
+  S OUT: center Rdist=234.94 (exp 236.35/235.75) Rcap=31.14   dist_center=(-0.53,234.94)
+  SE IN : center Rdist=123.90 (exp 123.25/122.5) Rcap=31.84   dist_center=(87.35,87.86)
+  SE OUT: center Rdist=234.80 (exp 236.35/235.75) Rcap=31.20   dist_center=(165.60,166.46)
+ring r=180 petals=8
+   #0 exp=  0.0 meas=44.86 dev=+44.86 span=19.75
+   #1 exp= 45.0 meas=90.16 dev=+45.16 span=19.25
+   #2 exp= 90.0 meas=134.85 dev=+44.85 span=19.75
+   #3 exp=135.0 meas=179.85 dev=+44.85 span=19.75
+   #4 exp=180.0 meas=224.85 dev=+44.85 span=19.75
+   #5 exp=225.0 meas=269.78 dev=+44.78 span=19.50
+   #6 exp=270.0 meas=314.87 dev=+44.87 span=19.25
+   #7 exp=315.0 meas=359.82 dev=+44.82 span=20.00

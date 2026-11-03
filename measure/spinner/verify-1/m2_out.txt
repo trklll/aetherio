@@ -1,0 +1,37 @@
+==== M2 center LS-fit from 16 cap tips
+ref: inner-tips fit center=(319.50,319.50) R=92.106 | outer-tips fit center=(319.50,319.50) R=266.997
+ref: adopted center=(319.50,319.50) Rcaps=(92.106 inner / 266.997 outer)
+ref implied r0=122.56 (refimg/clone/spec: 92.0/92.0/92.8) r1=297.45 (267.0/266.0/266.8) rmid=210.00 (179.5/179.0/179.8)
+--- per-petal (distancias desde centro adoptado)
+pet | r0     | r1     | L      | rmid   | resid_r0 | resid_r1 | tang_r0 | tang_r1
+  E |  92.00 | 267.00 | 175.00 | 179.50 |  -30.56  |  -30.45  |  +0.00 |  +0.00
+ NE |  92.21 | 266.99 | 174.78 | 179.60 |  -30.34  |  -30.45  |  +0.00 |  +0.00
+  N |  92.00 | 267.00 | 175.00 | 179.50 |  -30.56  |  -30.45  |  +0.00 |  +0.00
+ NW |  92.21 | 266.99 | 174.78 | 179.60 |  -30.34  |  -30.45  |  -0.00 |  +0.00
+  W |  92.00 | 267.00 | 175.00 | 179.50 |  -30.56  |  -30.45  |  -0.00 |  -0.00
+ SW |  92.21 | 266.99 | 174.78 | 179.60 |  -30.34  |  -30.45  |  -0.00 |  -0.00
+  S |  92.00 | 267.00 | 175.00 | 179.50 |  -30.56  |  -30.45  |  -0.00 |  -0.00
+ SE |  92.21 | 266.99 | 174.78 | 179.60 |  -30.34  |  -30.45  |  -0.00 |  -0.00
+  tang in-tip range=[-0.00..0.00] out-tip range=[-0.00..0.00]
+--- cap circle fit (R esperado 30.45 para ambos caps)
+  E IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(123.35,0.00)
+  E OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(235.65,0.00)
+  NE IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(87.65,-87.65)
+  NE OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(166.35,-166.35)
+  N IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(-0.00,-123.35)
+  N OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(-0.00,-235.65)
+  NW IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(-87.65,-87.65)
+  NW OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(-166.35,-166.35)
+  W IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(-123.35,0.00)
+  W OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(-235.65,0.00)
+  SW IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(-87.65,87.65)
+  SW OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(-166.35,166.35)
+  S IN : center Rdist=123.35 (exp 123.25/122.5) Rcap=31.13   dist_center=(-0.00,123.35)
+  S OUT: center Rdist=235.65 (exp 236.35/235.75) Rcap=31.13   dist_center=(-0.00,235.65)
+  SE IN : center Rdist=123.95 (exp 123.25/122.5) Rcap=31.72   dist_center=(87.65,87.65)
+  SE OUT: center Rdist=235.25 (exp 236.35/235.75) Rcap=31.73   dist_center=(166.35,166.35)
+Traceback (most recent call last):
+  File "C:\Users\Administrator\Documents\Projects\aetherio\measure\spinner\verify-1\m2_ring.py", line 125, in <module>
+    if on2[j]:
+       ~~~^^^
+IndexError: index 2880 is out of bounds for axis 0 with size 2880

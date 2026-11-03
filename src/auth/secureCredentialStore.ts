@@ -3,7 +3,6 @@ import { invokeCommand, isTauriRuntime } from "../runtime/platform";
 export type SecureCredentialKey =
   | "account-session"
   | "anilist-access-token"
-  | "seekr-api-key"
   // Cache persistente de posters en Cloudflare R2. Da lectura y escritura sobre
   // el bucket, asi que va al almacen de credenciales y no al binario.
   | "r2-account-id"

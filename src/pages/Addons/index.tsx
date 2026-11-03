@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { listableAddons, useAddonStore } from "../../store/addonStore";
-import { Puzzle, Plus, Trash2, ToggleLeft, ToggleRight, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { Puzzle, Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp } from "lucide-react";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import PageContainer from "../../components/layout/PageContainer";
+import HubScriptSources from "./HubScriptSources.tsx";
 
 export default function AddonsPage() {
   const [url, setUrl]         = useState("");
@@ -113,7 +115,7 @@ export default function AddonsPage() {
             className="flex items-center gap-2 px-5 py-3 bg-accent hover:bg-accent-dark text-white font-semibold rounded-card gsap-transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isInstalling
-              ? <Loader2 size={16} className="gsap-spin" />
+              ? <AppleSpinner size={16} />
               : <Plus size={16} />}
             {isInstalling ? "Instalando..." : "Instalar"}
           </button>
@@ -188,6 +190,7 @@ export default function AddonsPage() {
                     onClick={() => addon.enabled ? disableAddon(addon.id) : enableAddon(addon.id)}
                     className={`gsap-transition ${addon.enabled ? "text-accent" : "text-text-muted"}`}
                     title={addon.enabled ? "Desactivar" : "Activar"}
+                    aria-label={`${addon.enabled ? "Desactivar" : "Activar"} ${addon.name}`}
                   >
                     {addon.enabled ? <ToggleRight size={26} /> : <ToggleLeft size={26} />}
                   </button>
@@ -206,6 +209,7 @@ export default function AddonsPage() {
           </div>
         )}
       </div>
+      <HubScriptSources />
     </PageContainer>
   );
 }

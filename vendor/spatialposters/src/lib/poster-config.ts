@@ -23,12 +23,17 @@ export function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max)
 }
 
+/** Master badge flags on a direct poster URL are explicit render choices, even without a mapping or config token. */
+export function hasExplicitBadgeOverrides(searchParams: URLSearchParams): boolean {
+  return searchParams.has("badges") || searchParams.has("ranking")
+}
+
 export interface PosterRenderConfigInput {
   searchParams: URLSearchParams
   mapping: Mapping | null
   configOverride: PictoriumUserConfig | null
   sd: ServerDefaults
-  /** true se la richiesta fornisce poster/mapping espliciti (query o mapping salvato) */
+  /** true if poster, mapping, config token, or master badge flags explicitly configure this render */
   hasQuery: boolean
   showBadges: boolean
   rankingBadges: boolean

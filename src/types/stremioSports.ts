@@ -52,6 +52,7 @@ export interface StremioMeta {
   releaseInfo?: string;
   released?: string;
   genres?: string[];
+  category?: string;
   /** abused por los addons de deportes para local/visitante. */
   cast?: string[];
   behaviorHints?: Record<string, unknown>;
@@ -111,10 +112,22 @@ export async function fetchCatalogMetas(
   const query = Object.entries(extras ?? {})
     .filter(([, value]) => Boolean(value))
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("/");
+    .join("&");
   const url = `${base.replace(/\/+$/, "")}/catalog/${encodeURIComponent(type)}/${encodeURIComponent(catalogId)}${query ? `/${query}` : ""}.json`;
-  const payload = await fetchJson<{ metas?: StremioMeta[] }>(url);
-  return Array.isArray(payload?.metas) ? payload.metas.filter(meta => meta?.id) : [];
+  const localNuvio = /^http:\/\/127\.0\.0\.1:7310(?:\/|$)/.test(base) && catalogId.startsWith("nuvio_sports_");
+  for (let attempt = 0; attempt <= 6; attempt++) {
+    const payload = await fetchJson<{ metas?: StremioMeta[] }>(url);
+    const metas = Array.isArray(payload?.metas) ? payload.metas.filter(meta => meta?.id) : [];
+    if (metas.length || !localNuvio || attempt === 6) return metas;
+    // HTTP readiness precedes the first provider sync. Only retry that cold
+    // local sync; a complete/failed sync or a remote empty catalog is final.
+    const health = await fetchJson<{ sync?: { state?: string; lastCompletedAt?: string | null } }>(
+      "http://127.0.0.1:7310/api/provider-health", 1500,
+    );
+    if (health?.sync?.state !== "running" || health.sync.lastCompletedAt) return [];
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+  return [];
 }
 
 export async function fetchStreams(
@@ -125,6 +138,12 @@ export async function fetchStreams(
   const url = `${base.replace(/\/+$/, "")}/stream/${encodeURIComponent(type)}/${encodeURIComponent(id)}.json`;
   const payload = await fetchJson<{ streams?: StremioStream[] }>(url);
   return Array.isArray(payload?.streams) ? payload.streams : [];
+}
+
+export async function fetchMeta(base: string, type: string, id: string): Promise<StremioMeta | null> {
+  const url = `${base.replace(/\/+$/, "")}/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}.json`;
+  const payload = await fetchJson<{ meta?: StremioMeta }>(url);
+  return payload?.meta?.id === id ? payload.meta : null;
 }
 
 /**
@@ -359,13 +378,15 @@ export function humanizeSport(raw: string | undefined): string {
 /** El catalogo `sports_today` de Sports Streams no trae ISO: solo texto. */
 const TEXT_DATE_RE = /^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})(?:\s*[·\-]\s*(\d{1,2}):(\d{2})\s*UTC)?$/;
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const ENGLISH_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 export function parseTextDate(raw: string | undefined): string | null {
   const value = String(raw ?? "").trim();
   if (!value) return null;
   const match = TEXT_DATE_RE.exec(value);
   if (!match) return null;
-  const monthIndex = MONTHS.indexOf(match[2].slice(0, 3).toLowerCase());
+  const month = match[2].slice(0, 3).toLowerCase();
+  const monthIndex = Math.max(MONTHS.indexOf(month), ENGLISH_MONTHS.indexOf(month));
   if (monthIndex < 0) return null;
   const [, day, , year, hour, minute] = match;
   const stamp = Date.UTC(
@@ -375,7 +396,10 @@ export function parseTextDate(raw: string | undefined): string | null {
     Number(hour ?? 0),
     Number(minute ?? 0),
   );
-  return Number.isFinite(stamp) ? new Date(stamp).toISOString() : null;
+  const date = new Date(stamp);
+  return Number.isFinite(stamp) && date.getUTCFullYear() === Number(year) && date.getUTCMonth() === monthIndex
+    && date.getUTCDate() === Number(day) && date.getUTCHours() === Number(hour ?? 0) && date.getUTCMinutes() === Number(minute ?? 0)
+    ? date.toISOString() : null;
 }
 
 /** "LIVE" (o variantes) marca que el evento esta en curso. */

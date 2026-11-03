@@ -1,0 +1,458 @@
+/// <reference path="./anime-torrent-provider.d.ts" />
+
+// DKB & Weeblets (dkb.lowpolyfire.com) torrent provider for Seanime.
+// DKB releases use TVDB numbering ("S05E03", "S6 - BATCH"), so smart search maps
+// AniList episodes to TVDB season/episode through api.ani.zip. Seasons that ani.zip
+// does not know yet are mapped by anchoring on the DKB release dates.
+
+const DKB_BASE = "https://dkb.lowpolyfire.com"
+const DAY = 24 * 3600 * 1000
+
+type DkbKind = "episode" | "batch" | "movie" | "special"
+
+type DkbRelease = {
+    kind: DkbKind
+    season: number
+    episode: number
+    showTitle: string
+    name: string
+    date: string
+    seeders: number
+    leechers: number
+    sizeText: string
+    size: number
+    torrentUrl: string
+    magnet: string
+    infoHash: string
+}
+
+type TvdbEpisode = { season: number, episode: number, airdate: string }
+
+type MediaMapping = {
+    // AniList episode number -> TVDB season/episode
+    episodes: { [ep: number]: TvdbEpisode }
+    seasons: number[]
+    titles: string[]
+}
+
+let showTitlesCache: { at: number, titles: string[] } | null = null
+const mappingCache: { [id: number]: MediaMapping } = {}
+
+function decodeEntities(s: string): string {
+    return s
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, "\"")
+        .replace(/&#0?39;/g, "'")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+}
+
+function pick(s: string, re: RegExp): string {
+    const m = s.match(re)
+    return m ? m[1].trim() : ""
+}
+
+function norm(s: string): string {
+    let out = (s || "").toLowerCase().replace(/×/g, "x")
+    try {
+        out = out.normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    } catch (e) {}
+    return out.replace(/[^a-z0-9]+/g, " ").trim()
+}
+
+function pad2(n: number): string {
+    return n < 10 ? "0" + n : String(n)
+}
+
+function parseSize(text: string): number {
+    const m = text.match(/([\d.]+)\s*([KMGT]?i?B)/i)
+    if (!m) return 0
+    const units: { [u: string]: number } = { b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1048576, gib: 1073741824, tib: 1099511627776 }
+    return Math.round(parseFloat(m[1]) * (units[m[2].toLowerCase()] || 1))
+}
+
+function parseResolution(name: string): string {
+    const m = name.match(/\b(2160|1080|720|540|480)p\b/i)
+    return m ? m[1] + "p" : ""
+}
+
+function parseReleases(html: string): DkbRelease[] {
+    const out: DkbRelease[] = []
+    for (const block of html.split("<div class=\"release_container").slice(1)) {
+        const label = pick(block, /class="episode">([^<]*)</).toUpperCase()
+        const showTitle = decodeEntities(pick(block, /class="title">\s*<a[^>]*>([^<]*)</))
+        const magnet = decodeEntities(pick(block, /href="(magnet:[^"]+)"/))
+        const infoHash = pick(magnet, /btih:([a-fA-F0-9]{40})/).toLowerCase()
+        if (!magnet || !infoHash) continue
+
+        const dn = pick(magnet, /[?&]dn=([^&]*)/)
+        let name = ""
+        try {
+            name = dn ? decodeURIComponent(dn.replace(/\+/g, " ")) : ""
+        } catch (e) {}
+        if (!name) name = `[DKB] ${showTitle} - ${label}`
+
+        let kind: DkbKind = "episode"
+        let season = -1
+        let episode = -1
+        let m: RegExpMatchArray | null
+        if ((m = label.match(/^S(\d+)E(\d+)/))) {
+            season = parseInt(m[1])
+            episode = parseInt(m[2])
+            if (season === 0) kind = "special"
+        } else if ((m = label.match(/^S(\d+)\s*-\s*BATCH/))) {
+            kind = "batch"
+            season = parseInt(m[1])
+        } else if (label.indexOf("MOVIE") !== -1) {
+            kind = "movie"
+        } else if ((m = name.match(/\bS(\d+)E(\d+)\b/i))) {
+            season = parseInt(m[1])
+            episode = parseInt(m[2])
+            kind = season === 0 ? "special" : "episode"
+        } else if (/batch/i.test(name)) {
+            kind = "batch"
+            season = parseInt(pick(name, /Season\s*(\d+)/i)) || -1
+        } else {
+            kind = "movie"
+        }
+
+        const date = pick(block, /class="date">([^<]*)</)
+        const sizeText = pick(block, /class="size">[\s\S]*?class="value">([^<]*)</)
+        out.push({
+            kind,
+            season,
+            episode,
+            showTitle,
+            name,
+            date: /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(date) ? date.replace(" ", "T") + ":00Z" : date,
+            seeders: parseInt(pick(block, /class="seeders">[\s\S]*?class="value">(\d+)/)) || 0,
+            leechers: parseInt(pick(block, /class="leechers">[\s\S]*?class="value">(\d+)/)) || 0,
+            sizeText,
+            size: parseSize(sizeText),
+            torrentUrl: decodeEntities(pick(block, /href="(https?:\/\/[^"]+\.torrent)"/)),
+            magnet,
+            infoHash,
+        })
+    }
+    return out
+}
+
+// DKB returns at most 75 releases per query; the search matches words of show titles and release names.
+async function fetchReleases(query: string, filter = ""): Promise<DkbRelease[]> {
+    const url = `${DKB_BASE}/index/releases?query=${encodeURIComponent(query)}${filter}`
+    const res = await fetch(url, { headers: { "HX-Request": "true" } })
+    if (!res.ok) throw new Error(`DKB request failed: ${res.status}`)
+    return parseReleases(await res.text())
+}
+
+async function fetchAll(queries: string[], filter = ""): Promise<DkbRelease[]> {
+    const lists = await Promise.all(queries.map(q => fetchReleases(q, filter)))
+    const seen: { [h: string]: boolean } = {}
+    const out: DkbRelease[] = []
+    for (const l of lists) {
+        for (const r of l) {
+            if (seen[r.infoHash]) continue
+            seen[r.infoHash] = true
+            out.push(r)
+        }
+    }
+    return out
+}
+
+async function getShowTitles(): Promise<string[]> {
+    if (showTitlesCache && Date.now() - showTitlesCache.at < 6 * 3600 * 1000) return showTitlesCache.titles
+    try {
+        const html = await (await fetch(`${DKB_BASE}/`)).text()
+        const raw = pick(html, /var shows_titles = (\[[\s\S]*?\]);?\s*<\/script>/)
+        const titles = JSON.parse(raw.replace(/\\'/g, "'")) as string[]
+        showTitlesCache = { at: Date.now(), titles }
+        return titles
+    } catch (e) {
+        return showTitlesCache ? showTitlesCache.titles : []
+    }
+}
+
+// Season number written in an AniList title ("2nd Season", "Season 3", "Boku no Hero Academia 7", "VI").
+function titleSeason(title: string): number {
+    const t = (title || "").toLowerCase().replace(/\s+(?:part|cour)\s*\d+\s*$/, "")
+    let m: RegExpMatchArray | null
+    if ((m = t.match(/(\d+)(?:st|nd|rd|th)\s+season/))) return parseInt(m[1])
+    if ((m = t.match(/season\s*(\d+)/))) return parseInt(m[1])
+    if ((m = t.match(/\s(\d{1,2})$/))) return parseInt(m[1])
+    const roman: { [r: string]: number } = { ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8 }
+    if ((m = t.match(/\s(ii|iii|iv|v|vi|vii|viii)$/))) return roman[m[1]]
+    return 1
+}
+
+// Title without season/part markers ("Sousou no Frieren 2nd Season" -> "Sousou no Frieren").
+function baseTitle(title: string): string {
+    return (title || "")
+        .replace(/\(?\b\d+(?:st|nd|rd|th)\s+season\b\)?/gi, "")
+        .replace(/\b(?:season|part|cour)\s*\d+\b/gi, "")
+        .replace(/\s+(?:ii|iii|iv|v|vi|vii|viii|\d{1,2})\s*$/i, "")
+        .replace(/[\s:\-–]+$/, "")
+        .trim()
+}
+
+function mediaTitles(media: Media, extra: string[]): string[] {
+    const all = [media.romajiTitle, media.englishTitle, ...(media.synonyms || []), ...extra]
+    const out: string[] = []
+    for (const t of all) {
+        if (t && /[a-z]/i.test(t) && out.indexOf(t) === -1) out.push(t)
+    }
+    return out
+}
+
+async function getMapping(media: Media): Promise<MediaMapping> {
+    if (mappingCache[media.id]) return mappingCache[media.id]
+    const mapping: MediaMapping = { episodes: {}, seasons: [], titles: [] }
+    try {
+        const res = await fetch(`https://api.ani.zip/mappings?anilist_id=${media.id}`)
+        if (res.ok) {
+            const data = await res.json() as any
+            for (const key of Object.keys(data.titles || {})) {
+                const t = data.titles[key]
+                if (typeof t === "string" && /[a-z]/i.test(t)) mapping.titles.push(t)
+            }
+            const eps = data.episodes || {}
+            for (const key of Object.keys(eps)) {
+                if (!/^\d+$/.test(key)) continue
+                const e = eps[key]
+                if (typeof e.seasonNumber !== "number" || typeof e.episodeNumber !== "number") continue
+                mapping.episodes[parseInt(key)] = { season: e.seasonNumber, episode: e.episodeNumber, airdate: e.airdate || e.airDate || "" }
+                if (mapping.seasons.indexOf(e.seasonNumber) === -1) mapping.seasons.push(e.seasonNumber)
+            }
+        }
+    } catch (e) {}
+    mappingCache[media.id] = mapping
+    return mapping
+}
+
+// Two titles name the same show: equal, one extends the other, or equal without season markers.
+// Spaces are ignored too, romanizations differ ("Bouken-roku"/"Boukenroku", "Ira Nakattan"/"Iranakatta n").
+function related(a: string, b: string): number {
+    const x = norm(a)
+    const y = norm(b)
+    if (!x || !y) return 0
+    if (x === y) return 1000
+    const squash = (s: string) => s.replace(/ /g, "")
+    if (squash(x) === squash(y)) return 900
+    const long = (s: string) => s.length >= 6 || s.indexOf(" ") !== -1
+    if (y.startsWith(x + " ") && long(x)) return 100 + x.length
+    const bx = norm(baseTitle(a))
+    const by = norm(baseTitle(b))
+    if (bx && long(bx) && squash(bx) === squash(by)) return 500
+    if (squash(x).length >= 10 && squash(y).startsWith(squash(x))) return 100 + x.length
+    if (x.startsWith(y + " ") && long(y)) return 10
+    return 0
+}
+
+// DKB show titles that belong to the media, best first.
+function matchShowTitles(showTitles: string[], titles: string[]): string[] {
+    const scored: { title: string, score: number }[] = []
+    for (const showTitle of showTitles) {
+        let score = 0
+        for (const t of titles) score = Math.max(score, related(showTitle, t))
+        if (score > 0) scored.push({ title: showTitle, score })
+    }
+    scored.sort((a, b) => b.score - a.score)
+    const strong = scored.filter(x => x.score >= 100)
+    return (strong.length ? strong : scored).slice(0, 3).map(x => x.title)
+}
+
+// The DKB show a release belongs to: an exact title match, else the longest show title it starts with.
+function ownerOf(release: DkbRelease, showTitles: string[]): string {
+    const r = norm(release.showTitle)
+    let best = ""
+    let bestLen = -1
+    for (const t of showTitles) {
+        const s = norm(t)
+        if (s === r) return t
+        if (r.startsWith(s + " ") && s.length > bestLen) {
+            best = t
+            bestLen = s.length
+        }
+    }
+    return best || release.showTitle
+}
+
+function tokenOverlap(a: string, b: string[]): number {
+    const words = norm(a).split(" ").filter(w => w.length > 1 && !/^(movie|the|no|dkb|\d+)$/.test(w))
+    if (!words.length) return 0
+    const pool = " " + b.map(norm).join(" ") + " "
+    return words.filter(w => pool.indexOf(" " + w + " ") !== -1).length / words.length
+}
+
+function time(s: string): number {
+    const t = Date.parse(s)
+    return isNaN(t) ? 0 : t
+}
+
+// A weekly release comes out shortly after the episode aired (catches other shows with the same S/E label).
+function airsMatch(r: DkbRelease, airdate: string): boolean {
+    if (!airdate || !/\bweekly\b/i.test(r.name)) return true
+    const d = time(r.date) - time(airdate)
+    return d > -3 * DAY && d < 180 * DAY
+}
+
+function nyaaLink(torrentUrl: string): string {
+    const id = pick(torrentUrl, /nyaa\.si\/download\/(\d+)/)
+    return id ? `https://nyaa.si/view/${id}` : torrentUrl
+}
+
+function toTorrent(r: DkbRelease, episodeNumber: number, confirmed: boolean): AnimeTorrent {
+    return {
+        name: r.name,
+        date: r.date,
+        size: r.size,
+        formattedSize: r.sizeText,
+        seeders: r.seeders,
+        leechers: r.leechers,
+        downloadCount: 0,
+        link: nyaaLink(r.torrentUrl),
+        downloadUrl: r.torrentUrl,
+        magnetLink: r.magnet,
+        infoHash: r.infoHash,
+        resolution: parseResolution(r.name),
+        isBatch: r.kind === "batch",
+        episodeNumber,
+        releaseGroup: "DKB",
+        isBestRelease: false,
+        confirmed,
+    }
+}
+
+function plainTorrents(releases: DkbRelease[]): AnimeTorrent[] {
+    return releases.map(r => toTorrent(r, r.kind === "episode" || r.kind === "special" ? r.episode : -1, false))
+}
+
+class Provider {
+    getSettings(): AnimeProviderSettings {
+        return {
+            canSmartSearch: true,
+            smartSearchFilters: ["batch", "episodeNumber", "resolution", "query"],
+            supportsAdult: false,
+            type: "main",
+        }
+    }
+
+    async getLatest(): Promise<AnimeTorrent[]> {
+        return plainTorrents(await fetchReleases(""))
+    }
+
+    async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
+        return plainTorrents(await fetchReleases(opts.query || ""))
+    }
+
+    async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
+        const media = opts.media
+        const isMovie = media.format === "MOVIE"
+        const [showTitles, mapping] = await Promise.all([getShowTitles(), getMapping(media)])
+        const titles = mediaTitles(media, mapping.titles)
+
+        const customQuery = (opts.query || "").trim()
+        const matched = matchShowTitles(showTitles, titles)
+        let queries: string[]
+        if (customQuery) {
+            queries = [customQuery]
+        } else {
+            queries = matched.slice()
+            const own = baseTitle((media.romajiTitle || media.englishTitle || "").split(/:\s| - /)[0])
+            if (own && !queries.some(q => norm(q) === norm(own))) queries.push(own)
+        }
+        if (!queries.length) return []
+
+        const belongs = (r: DkbRelease) => !!customQuery
+            || matched.indexOf(ownerOf(r, showTitles)) !== -1
+            || titles.some(t => related(r.showTitle, t) >= 100)
+        const resolutionOk = (r: DkbRelease) => !opts.resolution || !parseResolution(r.name)
+            || parseInt(parseResolution(r.name)) === parseInt(opts.resolution)
+
+        if (isMovie) {
+            const releases = await fetchAll(queries, "&m=1")
+            return releases
+                .filter(r => belongs(r) && resolutionOk(r) && r.kind === "movie" && tokenOverlap(r.showTitle, titles) >= 0.6)
+                .map(r => toTorrent(r, 1, true))
+        }
+
+        const fallbackSeason = titleSeason(media.romajiTitle || media.englishTitle || "")
+        const seasons = mapping.seasons.length ? mapping.seasons : [fallbackSeason]
+
+        if (opts.batch) {
+            const releases = await fetchAll(queries, "&b=1")
+            return releases
+                .filter(r => belongs(r) && resolutionOk(r) && r.kind === "batch" && seasons.indexOf(r.season) !== -1)
+                .map(r => toTorrent(r, -1, false))
+        }
+
+        // Episode known to ani.zip: ask DKB for that exact label
+        const known = opts.episodeNumber > 0 ? mapping.episodes[opts.episodeNumber] : undefined
+        if (known) {
+            const releases = (await fetchAll(queries.map(q => `${q} S${pad2(known.season)}E${pad2(known.episode)}`)))
+                .filter(r => belongs(r) && resolutionOk(r) && r.season === known.season && r.episode === known.episode && airsMatch(r, known.airdate))
+            if (releases.length) return releases.map(r => toTorrent(r, opts.episodeNumber, true))
+        }
+
+        // Map DKB labels of whole seasons -> AniList episodes
+        const reverse: { [key: string]: number } = {}
+        const offsets: { [season: number]: number } = {}
+        for (const ep of Object.keys(mapping.episodes)) {
+            const p = mapping.episodes[parseInt(ep)]
+            reverse[p.season + "x" + p.episode] = parseInt(ep)
+            // ani.zip may only know the first episodes of an airing season: extrapolate from the last one
+            offsets[p.season] = p.episode - parseInt(ep)
+        }
+        const lastKey = Object.keys(mapping.episodes).map(k => parseInt(k)).sort((a, b) => b - a)[0]
+        const lastSeason = lastKey ? mapping.episodes[lastKey].season : fallbackSeason
+        const wanted = opts.episodeNumber > 0 ? [lastSeason] : seasons.slice(0, 3)
+        const episodeOk = (ep: number) => ep >= 1 && !(media.episodeCount > 0 && ep > media.episodeCount)
+            && !(opts.episodeNumber > 0 && ep !== opts.episodeNumber)
+
+        const out: AnimeTorrent[] = []
+        const fetched = await Promise.all(wanted.map(s => fetchAll(queries.map(q => `${q} S${pad2(s)}`))))
+        wanted.forEach((season, i) => {
+            const offset = offsets[season]
+            if (offset === undefined) return
+            for (const r of fetched[i]) {
+                if (!belongs(r) || !resolutionOk(r) || r.kind !== "episode" || r.season !== season) continue
+                const mapped = reverse[r.season + "x" + r.episode]
+                const ep = mapped || r.episode - offset
+                if (!episodeOk(ep)) continue
+                if (mapped && !airsMatch(r, mapping.episodes[mapped].airdate)) continue
+                out.push(toTorrent(r, ep, !!mapped))
+            }
+        })
+        if (out.length) return out
+
+        // Unknown to ani.zip (brand new season, split cour) or DKB numbers differently than TVDB:
+        // DKB's first weekly release after the start date is episode 1.
+        const sd = media.startDate
+        if (!sd || !sd.year || !sd.month || !sd.day) return []
+        const start = Date.UTC(sd.year, sd.month - 1, sd.day)
+        const pool = (await fetchAll(queries.concat(queries.map(q => `${q} S${pad2(fallbackSeason)}`))))
+            .filter(r => belongs(r) && r.kind === "episode" && r.season > 0)
+        const firstAfter = pool
+            .filter(r => time(r.date) >= start - 2 * DAY)
+            .sort((a, b) => time(a.date) - time(b.date))[0]
+        if (!firstAfter || time(firstAfter.date) - start > 30 * DAY) return []
+        const season = firstAfter.season
+        const offset = Math.min(...pool.filter(r => r.season === season && time(r.date) >= start - 2 * DAY).map(r => r.episode)) - 1
+        for (const r of pool) {
+            if (r.season !== season || !resolutionOk(r)) continue
+            const ep = r.episode - offset
+            if (!episodeOk(ep)) continue
+            const air = mapping.episodes[ep] ? mapping.episodes[ep].airdate : ""
+            if (!airsMatch(r, air)) continue
+            out.push(toTorrent(r, ep, false))
+        }
+        return out
+    }
+
+    async getTorrentInfoHash(torrent: AnimeTorrent): Promise<string> {
+        return torrent.infoHash || pick(torrent.magnetLink || "", /btih:([a-fA-F0-9]{40})/).toLowerCase()
+    }
+
+    async getTorrentMagnetLink(torrent: AnimeTorrent): Promise<string> {
+        return torrent.magnetLink || ""
+    }
+}

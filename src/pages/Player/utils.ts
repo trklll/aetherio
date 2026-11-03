@@ -292,8 +292,8 @@ export function buildQuery(params: URLSearchParams): StreamQuery | null {
   const type = params.get("type");
   const id = params.get("id");
   if (!type || !id) return null;
-  const season = Number(params.get("season"));
-  const episode = Number(params.get("ep"));
+  const season = params.get("season")?.trim() ? Number(params.get("season")) : Number.NaN;
+  const episode = params.get("ep")?.trim() ? Number(params.get("ep")) : Number.NaN;
   return {
     type,
     id,

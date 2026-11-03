@@ -4,10 +4,14 @@ import { useScrapedStreams } from "../../hooks/useScrapedStreams.ts";
 import type { MediaStream, StreamQuery } from "../../types/stream";
 import { isPlayableMediaStream } from "../../utils/playableMedia.ts";
 import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking.ts";
+import { readCachedLiveSnapshot } from "../../services/liveSportsService.ts";
+import { attachIptvSources, iptvChannelEvent } from "../../services/iptvSports.ts";
+import { liveEventToMediaStreams } from "../../types/liveSports.ts";
 
 interface SourceResolverProps {
   query: StreamQuery;
   searchName: string;
+  currentStream?: MediaStream;
   onResolved: (streams: MediaStream[]) => void;
 }
 
@@ -23,7 +27,27 @@ interface SourceResolverProps {
  * cuesta nada en el arranque: `useStreams` y `useScrapedStreams` ya cachean sus
  * resultados, de modo que normalmente responde de inmediato.
  */
-export default function SourceResolver({ query, searchName, onResolved }: SourceResolverProps) {
+export default function SourceResolver(props: SourceResolverProps) {
+  // Live identities are not VOD IDs: never ask movie scrapers for a match/channel.
+  return props.query.type === "live" ? <LiveSourcesResolver {...props} /> : <VodSourcesResolver {...props} />;
+}
+
+function LiveSourcesResolver({ query, currentStream, onResolved }: SourceResolverProps) {
+  const resolve = useRef(onResolved);
+  resolve.current = onResolved;
+  useEffect(() => {
+    const snapshot = readCachedLiveSnapshot();
+    const event = snapshot?.events.find(event => event.id === query.id)
+      ?? snapshot?.channels.map(iptvChannelEvent).find(channel => channel.id === query.id);
+    const sources = event ? liveEventToMediaStreams(attachIptvSources([event], snapshot?.channels ?? [])[0]) : [];
+    const expiry = currentStream?.behaviorHints?.liveSourceExpiresAt;
+    if (currentStream && !(typeof expiry === "string" && Date.parse(expiry) <= Date.now()) && !sources.some(source => source.id === currentStream.id)) sources.push(currentStream);
+    resolve.current(sources);
+  }, [query.id, currentStream]);
+  return null;
+}
+
+function VodSourcesResolver({ query, searchName, onResolved }: SourceResolverProps) {
   const { streams, loading } = useStreams(query);
   const { streams: scrapedStreams, loading: scrapedLoading } = useScrapedStreams(query, searchName);
   const doneRef = useRef(false);

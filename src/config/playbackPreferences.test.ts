@@ -59,6 +59,22 @@ describe("defaults de seleccion de stream (instalacion limpia / nuevos usuarios)
     expect(prefs.sourceSelectionMode).toBe("first");
     expect(prefs.reuseLastLink).toBe(false);
   });
+
+  it("la recuperación automática de fuentes está desactivada por defecto, también en perfiles existentes", () => {
+    expect(DEFAULT_PLAYBACK_PREFERENCES.automaticSourceRecovery).toBe(false);
+    expect(getPlaybackPreferences().automaticSourceRecovery).toBe(false);
+    mockStorage({
+      [PLAYBACK_PREFERENCES_STORAGE_KEY]: JSON.stringify({ firstAudioLanguage: "eng", sourceSelectionMode: "first" }),
+    });
+    expect(getPlaybackPreferences().automaticSourceRecovery).toBe(false);
+  });
+
+  it("conserva una elección explícita de recuperación automática", () => {
+    mockStorage({
+      [PLAYBACK_PREFERENCES_STORAGE_KEY]: JSON.stringify({ automaticSourceRecovery: true }),
+    });
+    expect(getPlaybackPreferences().automaticSourceRecovery).toBe(true);
+  });
 });
 
 describe("Auto Sync automatico", () => {

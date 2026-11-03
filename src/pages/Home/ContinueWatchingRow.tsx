@@ -7,15 +7,23 @@ import ContextMenu from "../../components/ui/ContextMenu";
 import { useHorizontalVirtualWindow } from "../../hooks/useHorizontalVirtualWindow";
 import {
   CONTINUE_WATCHING_EVENT,
+  buildContinueWatchingKey,
+  classifyContinueWatchingEntryKind,
   formatResumeTime,
   getContinueWatchingRows,
   markContinueWatchingEntryAsWatched,
   progressPercent,
+  readWatchedHistoryEntries,
   removeContinueWatchingEntry,
   saveNextEpisodePrompt,
   updateContinueWatchingEntryArtwork,
   type ContinueWatchingEntry,
 } from "../../utils/continueWatching";
+import {
+  findNextAiredEpisodePrompt,
+  getEpisodeAvailabilityPresentation,
+  getRecentEpisodeHistorySources,
+} from "../../utils/continueWatchingEpisodes";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import {
   HOME_CARD_ARTWORK_CHANGED_EVENT,
@@ -34,34 +42,57 @@ import CardArtworkPicker from "./CardArtworkPicker";
 const IMG = "https://image.tmdb.org/t/p";
 const CARD_W = 425;
 const CARD_H = 248;
-const GAP = 18;
+// El foco escala la card un 5%; este margen extra evita que toque la vecina.
+const GAP = 28;
 const ROW_SHADOW_TOP_GUTTER = 17;
 const ROW_SHADOW_BOTTOM_GUTTER = 42;
+const EPISODE_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const EPISODE_SCAN_COOLDOWN_MS = 30 * 60 * 1000;
 
 export default function ContinueWatchingRow() {
   const navigate = useNavigate();
   const artworkRequestsRef = useRef<Set<string>>(new Set());
   const artworkRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const artworkRetryTimersRef = useRef<Map<string, number>>(new Map());
+  const episodeScanLastAttemptRef = useRef<Map<string, number>>(new Map());
+  const episodeScanInFlightRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
   const showLeftRef = useRef(false);
   const showRightRef = useRef(false);
   const [items, setItems] = useState<ContinueWatchingEntry[]>(() => getContinueWatchingRows());
+  const [episodeScanRevision, setEpisodeScanRevision] = useState(0);
+  const [availableEpisodeBadges, setAvailableEpisodeBadges] = useState<Record<string, string>>({});
   const [removingKeys, setRemovingKeys] = useState<Set<string>>(() => new Set());
   const [hovered, setHovered] = useState(false);
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
   const leftArrowRef = useRef<HTMLDivElement>(null);
   const rightArrowRef = useRef<HTMLDivElement>(null);
+  const activeMediaKeys = useMemo(
+    () => new Set(items.filter(isEpisodeProgressEntry).map(entry => entry.mediaKey)),
+    [items],
+  );
+  const displayItems = useMemo(
+    () => items.filter(entry => !isStandaloneEpisodePrompt(entry) || !activeMediaKeys.has(entry.mediaKey)),
+    [activeMediaKeys, items],
+  );
   const virtualWindow = useHorizontalVirtualWindow({
-    itemCount: items.length,
+    itemCount: displayItems.length,
     itemWidth: CARD_W,
     gap: GAP,
     overscan: 4,
   });
   const visibleItems = useMemo(
-    () => items.slice(virtualWindow.start, virtualWindow.end),
-    [items, virtualWindow.end, virtualWindow.start],
+    () => displayItems.slice(virtualWindow.start, virtualWindow.end),
+    [displayItems, virtualWindow.end, virtualWindow.start],
+  );
+  const episodeScanSignature = useMemo(
+    () => items
+      .filter(entry => isEpisodeProgressEntry(entry) || isUnstartedNextEpisodePrompt(entry))
+      .map(entry => entry.key)
+      .sort()
+      .join("|"),
+    [items],
   );
   const { scrollRef } = virtualWindow;
 
@@ -80,6 +111,82 @@ export default function ContinueWatchingRow() {
       window.removeEventListener("focus", refresh);
     };
   }, []);
+
+  useEffect(() => {
+    const requestEpisodeScan = () => {
+      if (document.visibilityState === "visible") {
+        setEpisodeScanRevision(revision => revision + 1);
+      }
+    };
+    window.addEventListener("focus", requestEpisodeScan);
+    document.addEventListener("visibilitychange", requestEpisodeScan);
+    const interval = window.setInterval(requestEpisodeScan, EPISODE_SCAN_INTERVAL_MS);
+    return () => {
+      window.removeEventListener("focus", requestEpisodeScan);
+      document.removeEventListener("visibilitychange", requestEpisodeScan);
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshNewEpisodePrompts() {
+      const visibleEntries = getContinueWatchingRows();
+      const activeEntries = visibleEntries.filter(isEpisodeProgressEntry);
+      const activeMediaKeys = new Set(activeEntries.map(entry => entry.mediaKey));
+      const visibleMediaKeys = new Set(visibleEntries.map(entry => entry.mediaKey));
+      const historyEntries = getRecentEpisodeHistorySources(readWatchedHistoryEntries(), Date.now())
+        .filter(entry => !visibleMediaKeys.has(entry.mediaKey));
+      const entries = [
+        ...activeEntries,
+        ...visibleEntries.filter(entry => isUnstartedNextEpisodePrompt(entry) && !activeMediaKeys.has(entry.mediaKey)),
+        ...historyEntries,
+      ].slice(0, 12);
+      for (const entry of entries) {
+        if (cancelled) return;
+        if (episodeScanInFlightRef.current.has(entry.key)) continue;
+        const now = Date.now();
+        const lastAttempt = episodeScanLastAttemptRef.current.get(entry.key) ?? 0;
+        if (now - lastAttempt < EPISODE_SCAN_COOLDOWN_MS) continue;
+
+        episodeScanLastAttemptRef.current.set(entry.key, now);
+        episodeScanInFlightRef.current.add(entry.key);
+        try {
+          if (isUnstartedNextEpisodePrompt(entry)) {
+            await promoteReleasedEpisodePrompt(entry);
+          } else {
+            const nextEpisode = await createNextEpisodePromptFromEntry(entry, { savePrompt: entry.completed });
+            if (isEpisodeProgressEntry(entry)) {
+              const presentation = nextEpisode
+                ? getEpisodeAvailabilityPresentation(nextEpisode, entry.completed)
+                : null;
+              setAvailableEpisodeBadges(current => {
+                const badgeLabel = presentation?.badgeLabel;
+                if (current[entry.key] === badgeLabel) return current;
+                const next = { ...current };
+                if (badgeLabel) next[entry.key] = badgeLabel;
+                else delete next[entry.key];
+                return next;
+              });
+            }
+          }
+        } catch (error) {
+          console.warn("[AETHERIO:CONTINUE:EPISODES] availability check failed", {
+            key: entry.key,
+            error: String(error),
+          });
+        } finally {
+          episodeScanInFlightRef.current.delete(entry.key);
+        }
+      }
+    }
+
+    void refreshNewEpisodePrompts();
+    return () => {
+      cancelled = true;
+    };
+  }, [episodeScanRevision, episodeScanSignature]);
 
   useEffect(() => {
     return () => {
@@ -231,9 +338,9 @@ export default function ContinueWatchingRow() {
         rafRef.current = null;
       }
     };
-  }, [items.length]);
+  }, [displayItems.length]);
 
-  if (!items.length) return null;
+  if (!displayItems.length) return null;
 
   function applyArrowState(nextLeft: boolean, nextRight: boolean) {
     if (showLeftRef.current !== nextLeft) {
@@ -321,7 +428,7 @@ export default function ContinueWatchingRow() {
   }
 
   return (
-    <section data-row-key="continue-watching" data-row-count={items.length} data-row-hovered={hovered ? "true" : undefined} style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 0, marginBottom: -24 }}>
+    <section data-row-key="continue-watching" data-row-count={displayItems.length} data-row-hovered={hovered ? "true" : undefined} style={{ paddingLeft: 0, paddingRight: 0, paddingTop: 0, marginBottom: -24 }}>
       <div data-row-header style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: "var(--app-gutter-x)", paddingRight: "var(--app-gutter-x)" }}>
         <span className="home-row-title" style={{ fontSize: 20, fontWeight: 700 }}>Continuar viendo</span>
       </div>
@@ -389,9 +496,10 @@ export default function ContinueWatchingRow() {
           {visibleItems.map((entry, offset) => {
             const index = virtualWindow.start + offset;
             return (
-              <div key={entry.key} data-row-card data-item-index={index} style={{ flex: "0 0 auto", marginRight: index === items.length - 1 ? 0 : GAP }}>
+              <div key={entry.key} data-row-card data-item-index={index} style={{ flex: "0 0 auto", marginRight: index === displayItems.length - 1 ? 0 : GAP }}>
                 <ContinueCard
                   entry={entry}
+                  availableEpisodeBadge={availableEpisodeBadges[entry.key]}
                   removing={removingKeys.has(entry.key)}
                   onClick={() => { void resume(entry); }}
                   onRemove={() => removeWithAnimation(entry)}
@@ -527,7 +635,10 @@ async function resolveTmdbId(entry: ContinueWatchingEntry, tmdbType: "movie" | "
   return undefined;
 }
 
-async function createNextEpisodePromptFromEntry(entry: ContinueWatchingEntry | null | undefined) {
+async function createNextEpisodePromptFromEntry(
+  entry: ContinueWatchingEntry | null | undefined,
+  { savePrompt = true }: { savePrompt?: boolean } = {},
+) {
   if (!entry || entry.type === "movie" || !entry.season || !entry.episode) return null;
   const tmdbId = await resolveTmdbId(entry, "tv");
   if (!tmdbId) return null;
@@ -543,43 +654,51 @@ async function createNextEpisodePromptFromEntry(entry: ContinueWatchingEntry | n
   for (const seasonNumber of seasonNumbers) {
     const season = await tmdbFetch<{ episodes?: Array<{ episode_number?: number; name?: string; still_path?: string; air_date?: string; runtime?: number }> }>(`/tv/${tmdbId}/season/${seasonNumber}`, { params: { language: "es-ES" } });
     if (!season) continue;
-    const episodes = (season?.episodes ?? [])
-      .map((episode: any) => ({
-        number: Number(episode?.episode_number),
-        name: typeof episode?.name === "string" ? episode.name : undefined,
-        stillPath: typeof episode?.still_path === "string" ? episode.still_path : undefined,
-        airDate: typeof episode?.air_date === "string" ? episode.air_date : undefined,
-        runtime: Number(episode?.runtime),
-      }))
-      .filter((episode: { number: number }) => Number.isFinite(episode.number) && episode.number > 0)
-      .sort((a: { number: number }, b: { number: number }) => a.number - b.number);
-
-    for (const episode of episodes) {
-      if (seasonNumber === entry.season && episode.number <= entry.episode) continue;
-      if (!episode.airDate) continue;
-      const airAt = parseTmdbAirDate(episode.airDate);
-      if (!airAt) continue;
-      if (airAt && airAt > today) continue;
-      const nextQuery = {
-        type: entry.type,
-        id: entry.id,
+    const candidate = findNextAiredEpisodePrompt({
+      watchedSeason: entry.season,
+      watchedEpisode: entry.episode,
+      watchedAt: entry.updatedAt,
+      now: today,
+      seasons: [{
         season: seasonNumber,
-        episode: episode.number,
-      } as const;
+        episodes: (season.episodes ?? []).map((episode: any) => ({
+          episode: Number(episode?.episode_number),
+          name: typeof episode?.name === "string" ? episode.name : undefined,
+          stillPath: typeof episode?.still_path === "string" ? episode.still_path : undefined,
+          airDate: typeof episode?.air_date === "string" ? episode.air_date : undefined,
+          runtime: Number(episode?.runtime),
+        })),
+      }],
+    });
+    if (!candidate) continue;
+
+    const nextQuery = {
+      type: entry.type,
+      id: entry.id,
+      season: candidate.season,
+      episode: candidate.episode,
+    } as const;
+    const nextKey = buildContinueWatchingKey(nextQuery);
+    const existing = getContinueWatchingRows().find(item => item.key === nextKey);
+    const existingHasProgress = Boolean(existing && (existing.entryKind === "resume" || progressPercent(existing) > 0));
+    if (savePrompt && !existingHasProgress && existing?.entryKind !== candidate.entryKind) {
+      const still = tmdbImage(candidate.stillPath, "original");
       saveNextEpisodePrompt({
         query: nextQuery,
         name: entry.name,
         logo: entry.logo,
-        background: tmdbImage(episode.stillPath, "original"),
-        episodeStill: tmdbImage(episode.stillPath, "original"),
+        background: still,
+        episodeStill: still,
         poster: entry.poster,
-        episodeName: episode.name,
-        runtimeSeconds: Number.isFinite(episode.runtime) && episode.runtime > 0 ? episode.runtime * 60 : undefined,
-        entryKind: seasonNumber > entry.season ? "new" : "next",
+        episodeName: candidate.episodeName,
+        runtimeSeconds: typeof candidate.runtime === "number" && Number.isFinite(candidate.runtime) && candidate.runtime > 0
+          ? candidate.runtime * 60
+          : undefined,
+        entryKind: candidate.entryKind,
         source: "local",
       });
-      return { query: nextQuery, episodeName: episode.name };
     }
+    return { ...candidate, query: nextQuery };
   }
   return null;
 }
@@ -602,6 +721,69 @@ function parseTmdbAirDate(value: string | undefined) {
   if (Number.isFinite(local)) return local;
   const utc = Date.parse(`${value}T00:00:00Z`);
   return Number.isFinite(utc) ? utc : 0;
+}
+
+async function promoteReleasedEpisodePrompt(entry: ContinueWatchingEntry) {
+  if (entry.type === "movie" || typeof entry.season !== "number" || !entry.episode) return;
+  const tmdbId = await resolveTmdbId(entry, "tv").catch(() => undefined);
+  if (!tmdbId) return;
+  const episode = await tmdbFetch<{ air_date?: string }>(
+    `/tv/${tmdbId}/season/${entry.season}/episode/${entry.episode}`,
+    { params: { language: "es-ES" } },
+  ).catch(() => null);
+  const releaseAt = parseTmdbAirDate(episode?.air_date);
+  if (!releaseAt) return;
+
+  const entryKind = classifyContinueWatchingEntryKind({
+    nextSeason: entry.season,
+    watchedSeason: entry.season,
+    releaseAt,
+    watchedAt: entry.updatedAt,
+  });
+  if (entryKind !== "new") return;
+
+  const current = getContinueWatchingRows().find(item => item.key === entry.key);
+  if (!current || current.entryKind !== "next" || progressPercent(current) > 0) return;
+  saveNextEpisodePrompt({
+    query: { type: entry.type, id: entry.id, season: entry.season, episode: entry.episode },
+    name: entry.name,
+    logo: entry.logo,
+    background: entry.background,
+    poster: entry.poster,
+    episodeStill: entry.episodeStill,
+    episodeName: entry.episodeName,
+    runtimeSeconds: entry.duration,
+    entryKind: "new",
+    source: entry.source,
+  });
+}
+
+function isEpisodeProgressEntry(entry: ContinueWatchingEntry) {
+  return entry.type !== "movie"
+    && !entry.completed
+    && typeof entry.season === "number"
+    && entry.season > 0
+    && typeof entry.episode === "number"
+    && entry.episode > 0
+    && progressPercent(entry) > 0;
+}
+
+function isUnstartedNextEpisodePrompt(entry: ContinueWatchingEntry) {
+  return entry.type !== "movie"
+    && !entry.completed
+    && entry.entryKind === "next"
+    && typeof entry.season === "number"
+    && entry.season > 0
+    && typeof entry.episode === "number"
+    && entry.episode > 0
+    && progressPercent(entry) === 0;
+}
+
+function isStandaloneEpisodePrompt(entry: ContinueWatchingEntry) {
+  return entry.type !== "movie"
+    && !entry.completed
+    && (entry.entryKind === "next" || entry.entryKind === "new" || entry.entryKind === "new-season")
+    && progressPercent(entry) === 0;
 }
 
 async function searchTmdbIdByTitle(title: string, tmdbType: "movie" | "tv") {
@@ -790,31 +972,28 @@ const badgeBaseStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  height: 29,
   boxSizing: "border-box",
-  padding: "0 10px",
-  borderRadius: 8,
-  backdropFilter: "var(--lg-filter-sm)",
-  WebkitBackdropFilter: "var(--lg-filter-sm)",
+  height: 36,
+  padding: "0 18px",
+  borderRadius: 11,
+  fontSize: 14,
+  fontWeight: 800,
+  letterSpacing: "-0.01em",
   width: "max-content",
   maxWidth: "calc(100% - 28px)",
-  fontSize: 12,
-  fontWeight: 400,
-  fontFamily: "Inter, system-ui, sans-serif",
-  lineHeight: 1.1,
-  letterSpacing: 0,
   whiteSpace: "nowrap",
-  textTransform: "none",
 };
 
 const ContinueCard = memo(function ContinueCard({
   entry,
+  availableEpisodeBadge,
   removing,
   onClick,
   onRemove,
   onCommitRemove,
 }: {
   entry: ContinueWatchingEntry;
+  availableEpisodeBadge?: string;
   removing: boolean;
   onClick: () => void;
   onRemove: () => void;
@@ -829,13 +1008,13 @@ const ContinueCard = memo(function ContinueCard({
   const image = artworkCandidates.find(url => !failedArtworkUrls.has(url)) ?? "";
   const artwork = { image };
   const logo = artwork.image ? sanitizeLogoUrl(entry.logo) : undefined;
-  const badgeLabel = entry.entryKind === "new-season"
+  const badgeLabel = availableEpisodeBadge || (progressPercent(entry) === 0 && (entry.entryKind === "new-season"
     ? "Nueva temporada"
     : entry.entryKind === "new"
       ? "Nuevo episodio"
       : entry.entryKind === "next"
         ? "Siguiente episodio"
-        : "";
+        : ""));
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
@@ -993,12 +1172,9 @@ const ContinueCard = memo(function ContinueCard({
       />}
       {badgeLabel && (
         <div
+          className="bp-skip-button"
           style={{
             ...badgeBaseStyle,
-            background: "rgba(72,76,84,0.86)",
-            border: "1px solid rgba(255,255,255,0.26)",
-            boxShadow: "0 5px 16px rgba(0,0,0,0.24)",
-            color: "rgba(255,255,255,0.94)",
           }}
         >
           {badgeLabel}

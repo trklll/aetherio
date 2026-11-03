@@ -53,7 +53,13 @@ const MODE_LABELS: Record<string, { label: string; description: string }> = {
   },
 };
 
-const MODES = Object.keys(MODE_LABELS);
+const COMPOSED_MODES = ["mode-a", "mode-b", "mode-c", "mode-aa", "mode-bb", "mode-ca"];
+const STANDALONE_CNN_MODES = [
+  "cnn-2x-medium",
+  "cnn-2x-very-large",
+  "denoise-cnn-2x-very-large",
+  "cnn-2x-ultra-large",
+];
 
 const ANIME4K_PROFILE_OPTIONS: VideoEnhancementOption[] = [
   {
@@ -62,12 +68,17 @@ const ANIME4K_PROFILE_OPTIONS: VideoEnhancementOption[] = [
     description: "Renderizado original de MPV.",
   },
   ...(["fast", "hq"] as const).flatMap(quality =>
-    MODES.map(mode => ({
+    COMPOSED_MODES.map(mode => ({
       value: `${quality}:${mode}`,
       label: `Anime4K · ${MODE_LABELS[mode].label} · ${quality === "fast" ? "Rápido" : "Alta calidad"}`,
       description: MODE_LABELS[mode].description,
     })),
   ),
+  ...STANDALONE_CNN_MODES.map(mode => ({
+    value: `fast:${mode}`,
+    label: `Anime4K · ${MODE_LABELS[mode].label}`,
+    description: MODE_LABELS[mode].description,
+  })),
 ];
 
 export const VIDEO_ENHANCEMENT_OPTIONS: VideoEnhancementOption[] = [
@@ -99,23 +110,30 @@ export const VIDEO_ENHANCEMENT_OPTIONS: VideoEnhancementOption[] = [
   },
 ];
 
+const LEGACY_STANDALONE_HQ_PROFILES: Record<string, string> = Object.fromEntries(
+  STANDALONE_CNN_MODES.map(mode => [`hq:${mode}`, `fast:${mode}`]),
+);
+
+export function normalizeVideoEnhancementProfile(profile: string) {
+  const candidate = LEGACY_STANDALONE_HQ_PROFILES[profile] ?? profile;
+  return VIDEO_ENHANCEMENT_OPTIONS.some(option => option.value === candidate)
+    ? candidate
+    : VIDEO_ENHANCEMENT_DISABLED;
+}
+
 export function readVideoEnhancementProfile() {
   try {
     const saved = localStorage.getItem(VIDEO_ENHANCEMENT_STORAGE_KEY)
       ?? localStorage.getItem(LEGACY_ANIME4K_STORAGE_KEY)
       ?? VIDEO_ENHANCEMENT_DISABLED;
-    return VIDEO_ENHANCEMENT_OPTIONS.some(option => option.value === saved)
-      ? saved
-      : VIDEO_ENHANCEMENT_DISABLED;
+    return normalizeVideoEnhancementProfile(saved);
   } catch {
     return VIDEO_ENHANCEMENT_DISABLED;
   }
 }
 
 export function saveVideoEnhancementProfile(profile: string) {
-  const normalized = VIDEO_ENHANCEMENT_OPTIONS.some(option => option.value === profile)
-    ? profile
-    : VIDEO_ENHANCEMENT_DISABLED;
+  const normalized = normalizeVideoEnhancementProfile(profile);
   try {
     localStorage.setItem(VIDEO_ENHANCEMENT_STORAGE_KEY, normalized);
   } catch {

@@ -1,23 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import {
   BookOpen,
   Camera,
   CircleCheck,
   Compass,
-  Drama,
   Film,
   Gem,
   Globe,
   Heart,
   History,
-  Laugh,
   Music,
-  Orbit,
   Palette,
   Rocket,
-  Sparkle,
-  Sparkles,
   Star,
   Tag,
   Trophy,
@@ -25,14 +19,18 @@ import {
 } from "lucide-react";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import { ANILIST_LIBRARY_CHANGED_EVENT, readAniListLibrary } from "../../integrations/aniList";
-import { buildDetailPath } from "../../utils/bigPictureDetail";
+import { useAddonStore } from "../../store/addonStore";
+import { enrichLibraryGenres } from "../../services/libraryGenreEnrichment";
+import { buildLibraryGenreOptions, getMediaGenreKeys } from "../../services/tmdbGenres";
 import {
   CONTINUE_WATCHING_EVENT,
   readPlaybackStateEntries,
 } from "../../utils/continueWatching";
 import { LIBRARY_CHANGED_EVENT, readSavedLibrary } from "../../utils/library";
-import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
-import { buildLibraryItems, getLibraryPoster, type LibraryItem } from "../Library/libraryLogic";
+import { getScopedStorageKey } from "../../utils/localProfiles";
+import { buildDiscoverCatalogs, buildLibraryItems, type LibraryItem } from "../Library/libraryLogic";
+import BigPictureLibraryCard from "./BigPictureLibraryCard";
+import BigPictureLibraryDiscover from "./BigPictureLibraryDiscover";
 import "./BigPictureLibrary.css";
 
 /** Un icono de la navegación: de lucide (forwardRef) o propio (función normal). */
@@ -59,6 +57,7 @@ type NavIcon = ComponentType<{ size?: number; className?: string }>;
  */
 export default function BigPictureLibrary() {
   const [version, setVersion] = useState(0);
+  const addons = useAddonStore(state => state.addons);
 
   useEffect(() => {
     const refresh = () => setVersion(value => value + 1);
@@ -85,14 +84,80 @@ export default function BigPictureLibrary() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
 
-  const rows = useMemo(() => buildLibraryRows(items), [items]);
-  const [activeKey, setActiveKey] = useState<string>(() => TOP_ROWS[0].key);
+  const [genreItems, setGenreItems] = useState(items);
+  const [genreEnrichmentReady, setGenreEnrichmentReady] = useState(false);
+  const genreItemsSourceRef = useRef(items);
+  useEffect(() => {
+    let active = true;
+    setGenreEnrichmentReady(false);
+    setGenreItems(items);
+    void enrichLibraryGenres(items.map(item => item.media)).then(media => {
+      if (!active) return;
+      const enriched = new Map(media.map(item => [`${normalizeType(item.type)}:${item.id}`, item]));
+      setGenreItems(items.map(item => ({
+        ...item,
+        media: enriched.get(`${normalizeType(item.media.type)}:${item.media.id}`) ?? item.media,
+      })));
+      genreItemsSourceRef.current = items;
+      setGenreEnrichmentReady(true);
+    }).catch(() => {
+      if (active) {
+        genreItemsSourceRef.current = items;
+        setGenreEnrichmentReady(true);
+      }
+    });
+    return () => { active = false; };
+  }, [items]);
+
+  const rows = useMemo(() => buildLibraryRows(genreItems), [genreItems]);
+  const catalogs = useMemo(() => buildDiscoverCatalogs(addons), [addons]);
+  const [activeKey, setActiveKey] = useState<string>(readActiveSection);
+  useEffect(() => {
+    try {
+      localStorage.setItem(getScopedStorageKey(ACTIVE_SECTION_KEY), activeKey);
+    } catch {
+      // La selección es una comodidad, no bloquea la navegación.
+    }
+  }, [activeKey]);
+
+  useEffect(() => {
+    if (!genreEnrichmentReady || genreItemsSourceRef.current !== items) return;
+    if (rows.some(row => row.key === activeKey)) return;
+    setActiveKey("recent");
+  }, [activeKey, genreEnrichmentReady, items, rows]);
+
+  useEffect(() => {
+    let raw = "";
+    try {
+      raw = sessionStorage.getItem(RETURN_FOCUS_KEY) ?? "";
+      sessionStorage.removeItem(RETURN_FOCUS_KEY);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    let restore: { section?: string; scrollTop?: number; itemKey?: string };
+    try { restore = JSON.parse(raw); } catch { return; }
+    if (restore.section) setActiveKey(restore.section);
+    const timer = window.setTimeout(() => {
+      const shell = document.querySelector<HTMLElement>("[data-aetherio-big-picture] [data-aetherio-scroll-shell]");
+      if (shell && typeof restore.scrollTop === "number") {
+        shell.scrollTo({ top: restore.scrollTop, behavior: "instant" as ScrollBehavior });
+      }
+      if (restore.itemKey) {
+        Array.from(document.querySelectorAll<HTMLButtonElement>("[data-library-media-key]"))
+          .find(button => button.dataset.libraryMediaKey === restore.itemKey)
+          ?.focus({ preventScroll: true });
+      }
+    }, 140);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const activeRow = rows.find(row => row.key === activeKey) ?? rows[0];
+  const isDiscoverActive = activeRow?.filter.kind === "discover";
   const visible = useMemo(() => {
-    if (!activeRow) return [];
-    return items.filter(item => matchesRow(item, activeRow.filter)).sort(sortAddedDesc);
-  }, [activeRow, items]);
+    if (!activeRow || isDiscoverActive) return [];
+    return genreItems.filter(item => matchesRow(item, activeRow.filter)).sort(sortAddedDesc);
+  }, [activeRow, genreItems, isDiscoverActive]);
 
   return (
     <div className="bp-library" data-bp-library>
@@ -100,10 +165,18 @@ export default function BigPictureLibrary() {
       <div className="bp-library__body">
         <LibraryNav rows={rows} activeKey={activeRow?.key ?? ""} onSelect={setActiveKey} />
         <div className="bp-library__results">
-          {visible.length ? (
+          {isDiscoverActive ? (
+            <BigPictureLibraryDiscover catalogs={catalogs} />
+          ) : visible.length ? (
             <div className="bp-library__grid">
               {visible.map((item, index) => (
-                <LibraryCard key={item.key} item={item} index={index} />
+                <BigPictureLibraryCard
+                  key={item.key}
+                  item={item.media}
+                  itemKey={item.key}
+                  index={index}
+                  onBeforeOpen={() => saveLibraryReturn(activeRow?.key ?? "recent", item.key)}
+                />
               ))}
             </div>
           ) : (
@@ -140,7 +213,11 @@ type LibraryFilter =
   | { kind: "all" }
   | { kind: "type"; type: string }
   | { kind: "list"; listKey: string }
-  | { kind: "genre"; aliases: readonly string[] };
+  | { kind: "discover" }
+  | { kind: "genre"; key: string };
+
+const ACTIVE_SECTION_KEY = "aetherio-big-picture-library-section-v1";
+const RETURN_FOCUS_KEY = "aetherio-big-picture-library-return-v1";
 
 const TOP_ROWS: readonly LibraryRow[] = [
   { key: "recent", label: "Añadidos recientemente", Icon: History, filter: { kind: "all" } },
@@ -150,105 +227,40 @@ const TOP_ROWS: readonly LibraryRow[] = [
   // glifo que el rail: una sola forma de decir "biblioteca" en toda la app.
   { key: "saved", label: "Mi lista", Icon: LibraryIcon, filter: { kind: "list", listKey: "saved" } },
   { key: "activity", label: "Ya vistos", Icon: CircleCheck, filter: { kind: "list", listKey: "activity" } },
-];
-
-/**
- * Los cinco géneros canónicos de la referencia.
- *
- * Los alias cubren las dos formas de escribir el mismo género que circulan en la
- * app: español (TMDB — `libraryLogic.ts` ya define "Acción y aventura",
- * "Ciencia ficción y fantasía", etc.) e inglés (addons y fichas guardadas que
- * traen la etiqueta cruda: "Action", "Sci-Fi", "Fantasy").
- *
- * OJO con el motivo: NO es AniList la que aporta los géneros.
- * `buildLibraryItems` fija `genres: ["Anime"]` para toda entrada de AniList
- * (libraryLogic.ts:145), así que sus etiquetas no son las que se ven aquí.
- */
-const CANONICAL_GENRES: ReadonlyArray<{ label: string; Icon: NavIcon; aliases: readonly string[] }> = [
-  {
-    label: "Acción y aventura",
-    Icon: Sparkles,
-    aliases: ["Acción y aventura", "Acción", "Aventura", "Action", "Adventure"],
-  },
-  { label: "Comedia", Icon: Laugh, aliases: ["Comedia", "Comedy"] },
-  { label: "Drama", Icon: Drama, aliases: ["Drama"] },
-  { label: "Animación", Icon: Sparkle, aliases: ["Animación", "Animation"] },
-  {
-    label: "Ciencia ficción y fantasía",
-    Icon: Orbit,
-    aliases: [
-      "Ciencia ficción y fantasía",
-      "Ciencia ficción",
-      "Fantasía",
-      "Sci-Fi",
-      "Sci-Fi & Fantasy",
-      "Fantasy",
-    ],
-  },
+  { key: "discover", label: "Descubrir", Icon: Compass, filter: { kind: "discover" } },
 ];
 
 const LEADING_ARTICLE = /^(the|an|a|el|la|los|las|un|una)\s+/i;
 
 function buildLibraryRows(items: LibraryItem[]): LibraryRow[] {
   const rows: LibraryRow[] = [...TOP_ROWS];
-
-  for (const genre of CANONICAL_GENRES) {
-    rows.push({
-      key: `genre:${normalizeGenre(genre.label)}`,
-      label: genre.label,
-      Icon: genre.Icon,
-      filter: { kind: "genre", aliases: genre.aliases },
-    });
-  }
-
-  // Géneros extra: cualquiera presente en la biblioteca que ningún canónico
-  // cubre ya, para que no quede nada fuera de alcance de la navegación.
-  const covered = new Set(CANONICAL_GENRES.flatMap(genre => genre.aliases.map(normalizeGenre)));
-  const extras = new Map<string, string>();
-  for (const item of items) {
-    for (const raw of item.media.genres ?? []) {
-      const label = raw.trim();
-      if (!label) continue;
-      const key = normalizeGenre(label);
-      if (key && !covered.has(key) && !extras.has(key)) extras.set(key, label);
-    }
-  }
-
-  // Un extra no puede repetir un icono de las filas de arriba ("Familia" cayendo
-  // en Film se leía como la misma fila que "Películas") ni repetir uno de otro
-  // extra ("Misterio" y "Suspenso" salían ambos con Palette y parecían un error
-  // de render). Barrido con ocupación desde el índice del hash, no módulo: con
-  // más extras que huecos el módulo reintroducía las colisiones (con 14,
-  // Policial y Thriller salían los dos con Trophy).
-  const taken = new Set<NavIcon>([
-    ...TOP_ROWS.map(row => row.Icon),
-    ...CANONICAL_GENRES.map(genre => genre.Icon),
-  ]);
+  const options = buildLibraryGenreOptions(items.map(item => item.media));
+  const taken = new Set<NavIcon>(TOP_ROWS.map(row => row.Icon));
   const pool = EXTRA_GENRE_ICONS.filter(Icon => !taken.has(Icon));
   const used = new Set<NavIcon>();
-  const ordered = [...extras].sort((a, b) => titleKey(a[1]).localeCompare(titleKey(b[1]), "es"));
 
-  for (const [key, label] of ordered) {
-    const start = extraGenreIndex(label, pool.length);
-    let Icon = pool[start];
-    if (used.has(Icon)) Icon = pool.find(candidate => !used.has(candidate)) ?? Icon;
+  for (const option of options) {
+    const start = extraGenreIndex(option.label, pool.length);
+    let Icon = pool[start] ?? Tag;
+    for (let offset = 0; offset < pool.length; offset += 1) {
+      const candidate = pool[(start + offset) % pool.length];
+      if (!used.has(candidate)) {
+        Icon = candidate;
+        break;
+      }
+    }
     used.add(Icon);
     rows.push({
-      key: `genre:${key}`,
-      label,
+      key: `genre:${option.key}`,
+      label: option.label,
       Icon,
-      filter: { kind: "genre", aliases: [label] },
+      filter: { kind: "genre", key: option.key },
     });
   }
   return rows;
 }
 
-/**
- * Los géneros extra no tienen icono diseñado —no hay referencia para ellos— así
- * que se reparten dentro de un pool de glifos neutros, en orden alfabético y
- * sin repetir uno ya usado. El hash del nombre sólo fija el punto de partida,
- * para que dos bibliotecas distintas no repartan el pool de otra forma.
- */
+/** Pool de iconos neutros, asignados de forma determinista por género. */
 const EXTRA_GENRE_ICONS: readonly NavIcon[] = [
   Tag, Star, Heart, Music, Camera, BookOpen, Palette, Globe, Trophy, Rocket, Gem, Compass,
 ];
@@ -385,14 +397,14 @@ function matchesRow(item: LibraryItem, filter: LibraryFilter): boolean {
   switch (filter.kind) {
     case "all":
       return true;
+    case "discover":
+      return false;
     case "type":
       return normalizeType(item.media.type) === filter.type;
     case "list":
       return item.listKey === filter.listKey;
-    case "genre": {
-      const wanted = new Set(filter.aliases.map(normalizeGenre));
-      return (item.media.genres ?? []).some(genre => wanted.has(normalizeGenre(genre)));
-    }
+    case "genre":
+      return getMediaGenreKeys(item.media).includes(filter.key);
   }
 }
 
@@ -405,66 +417,29 @@ function normalizeType(type: string) {
   return normalized === "tv" || normalized === "show" || normalized === "anime" ? "series" : normalized;
 }
 
-function normalizeGenre(value: string) {
-  return value.trim().toLocaleLowerCase("es");
-}
-
 function titleKey(value: string) {
   return value.trim().replace(LEADING_ARTICLE, "").toLocaleLowerCase("es");
 }
 
-/* ─── Card de póster ────────────────────────────────────────────────────── */
+/* ─── Persistencia de sección y regreso del detalle ─────────────────────── */
 
-function LibraryCard({ item, index }: { item: LibraryItem; index: number }) {
-  const navigate = useNavigate();
-  const media = item.media;
-  const type = normalizeType(media.type);
-  const [failed, setFailed] = useState(false);
-  const poster = getLibraryPoster(media);
+function readActiveSection() {
+  try {
+    return localStorage.getItem(getScopedStorageKey(ACTIVE_SECTION_KEY)) || TOP_ROWS[0].key;
+  } catch {
+    return TOP_ROWS[0].key;
+  }
+}
 
-  useEffect(() => {
-    setFailed(false);
-  }, [poster]);
-
-  const openDetail = useCallback(() => {
-    writeDetailMediaMeta({
-      id: media.id,
-      type,
-      name: media.name,
-      poster,
-      background: media.background,
-      logo: media.logo,
-      description: media.description,
-      year: media.year,
-    });
-    navigate(buildDetailPath(type, media.id, undefined, "/big-picture"));
-  }, [media, navigate, type]);
-
-  return (
-    <div
-      className="bp-library__cell"
-      style={{ ["--bp-library-i" as string]: Math.min(index, 11) }}
-    >
-      <button
-        type="button"
-        className="bp-library__poster"
-        aria-label={`${media.name}${media.year ? `, ${media.year}` : ""}`}
-        title={media.name}
-        onClick={openDetail}
-      >
-        {poster && !failed ? (
-          <img
-            src={poster}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            draggable={false}
-            onError={() => setFailed(true)}
-          />
-        ) : (
-          <span className="bp-library__fallback">{media.name}</span>
-        )}
-      </button>
-    </div>
-  );
+function saveLibraryReturn(section: string, itemKey: string) {
+  try {
+    const shell = document.querySelector<HTMLElement>("[data-aetherio-big-picture] [data-aetherio-scroll-shell]");
+    sessionStorage.setItem(RETURN_FOCUS_KEY, JSON.stringify({
+      section,
+      itemKey,
+      scrollTop: shell?.scrollTop ?? 0,
+    }));
+  } catch {
+    // El detalle sigue abriéndose si el almacenamiento de sesión está lleno.
+  }
 }

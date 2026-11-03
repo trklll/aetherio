@@ -6,8 +6,12 @@ import {
   getContinueWatchingRows,
   mergeContinueWatchingEntries,
   readContinueWatchingEntries,
+  readWatchedHistoryEntries,
   saveNextEpisodePrompt,
   saveContinueWatchingProgress,
+  tryMarkMediaAsWatched,
+  trySaveContinueWatchingProgress,
+  tryUpdateContinueWatchingSelection,
 } from "./continueWatching";
 
 function createStorage(): Storage {
@@ -132,6 +136,69 @@ describe("continue watching artwork", () => {
       episodeName: "Siguiente episodio",
       entryKind: "next",
     }]);
+  });
+});
+
+describe("observable continue-watching persistence", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("window", { dispatchEvent: vi.fn() });
+    vi.stubGlobal("CustomEvent", class {
+      type: string;
+      detail: unknown;
+      constructor(type: string, init?: { detail?: unknown }) {
+        this.type = type;
+        this.detail = init?.detail;
+      }
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns a revision for a persisted progress write while keeping the legacy entry result", () => {
+    const result = trySaveContinueWatchingProgress(baseInput);
+    expect(result).toMatchObject({ ok: true, revision: expect.any(Number) });
+    expect(saveContinueWatchingProgress({ ...baseInput, currentTime: 40 })).toMatchObject({ currentTime: 40 });
+  });
+
+  it("provides observable results for selection and watched-state writes", () => {
+    saveContinueWatchingProgress(baseInput);
+    expect(tryUpdateContinueWatchingSelection(baseInput.query, { selectedAudio: "2" }).ok).toBe(true);
+    expect(tryMarkMediaAsWatched({ type: "movie", id: "tmdb:900", name: "Película" }).ok).toBe(true);
+    expect(readWatchedHistoryEntries().some(entry => entry.id === "tmdb:900")).toBe(true);
+  });
+
+  it("journals completion writes across continue-watching and watched-history keys", async () => {
+    const values = new Map<string, string>();
+    let failHistory = true;
+    const storage: Storage = {
+      get length() { return values.size; },
+      clear: () => values.clear(),
+      getItem: key => values.get(key) ?? null,
+      key: index => Array.from(values.keys())[index] ?? null,
+      removeItem: key => { values.delete(key); },
+      setItem: (key, value) => {
+        if (failHistory && key === "aetherio-watched-history-v1") {
+          failHistory = false;
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+        values.set(key, String(value));
+      },
+    };
+    vi.stubGlobal("localStorage", storage);
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    const events = await import("../domain/experienceStorage");
+    events.resetExperienceStorageForTests();
+
+    const result = trySaveContinueWatchingProgress({ ...baseInput, currentTime: baseInput.duration });
+    expect(result).toMatchObject({ ok: false, code: "storage-unavailable" });
+    expect(dispatchEvent.mock.calls.map(([event]) => event.type)).not.toContain(CONTINUE_WATCHING_EVENT);
+
+    const recovered = events.recoverExperienceJournal();
+    expect(recovered.ok).toBe(true);
+    expect(JSON.parse(values.get("aetherio-continue-watching-v1") ?? "[]")).toEqual([]);
+    expect(JSON.parse(values.get("aetherio-watched-history-v1") ?? "[]")).toHaveLength(1);
   });
 });
 

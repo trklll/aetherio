@@ -11,8 +11,10 @@ import {
   isSpatialPostersConfigured,
   normalizeInstanceUrl,
   setPosterCacheUrl,
+  shouldShowTopMetaFallback,
   spatialPosterSignature,
   spatialPosterType,
+  TOP_SPATIAL_POSTER_OVERRIDES,
   usesDefaultInstance,
   type SpatialPosterSettings,
 } from "./spatialPosters";
@@ -224,7 +226,30 @@ describe("buildSpatialPosterUrl", () => {
     const withOverride = paramsOf(buildSpatialPosterUrl(1, "movie", BASE, { rankingBadges: false }));
     expect(withOverride.get("ranking")).toBe("0");
     const withOverrideOn = paramsOf(buildSpatialPosterUrl(1, "movie", { ...BASE, rankingBadges: false }, { rankingBadges: true }));
-    expect(withOverrideOn.get("ranking")).toBeNull();
+    expect(withOverrideOn.get("ranking")).toBe("1");
+  });
+
+  it("configura SpatialPosters TOP con género/año sí y ranking, puntuación, calidad y red no", () => {
+    const p = paramsOf(buildSpatialPosterUrl(1, "tv", {
+      ...BASE,
+      globalBadges: true,
+      rankingBadges: true,
+      badgeGenre: true,
+      badgeYear: true,
+      badgeRating: true,
+      qualityBadges: true,
+      manualQuality: "4K",
+      networkLogo: true,
+    }, TOP_SPATIAL_POSTER_OVERRIDES));
+
+    expect(p.get("badges")).toBe("1");
+    expect(p.get("ranking")).toBe("0");
+    expect(p.get("bg")).toBe("1");
+    expect(p.get("by")).toBe("1");
+    expect(p.get("br")).toBe("0");
+    expect(p.get("mq")).toBe("");
+    expect(p.get("mf")).toBe("");
+    expect(p.get("netLogo")).toBe("0");
   });
 
   it("emite estilo, calidad, ribbon y blur", () => {
@@ -264,6 +289,14 @@ describe("buildSpatialPosterUrl", () => {
   it("devuelve undefined sin instancia o sin ID TMDB", () => {
     expect(buildSpatialPosterUrl(1, "movie", { ...BASE, instanceUrl: "" })).toBeUndefined();
     expect(buildSpatialPosterUrl(0, "movie", BASE)).toBeUndefined();
+  });
+});
+
+describe("shouldShowTopMetaFallback", () => {
+  it("deja que SpatialPosters pinte género/año y conserva el overlay para artwork fallback", () => {
+    expect(shouldShowTopMetaFallback("http://localhost:3000/api/poster/movie/1", false)).toBe(false);
+    expect(shouldShowTopMetaFallback("https://image.tmdb.org/t/p/w500/poster.jpg", false)).toBe(true);
+    expect(shouldShowTopMetaFallback("https://image.tmdb.org/t/p/w500/poster.jpg", true)).toBe(false);
   });
 });
 

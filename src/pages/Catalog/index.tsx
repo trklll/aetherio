@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import PageContainer from "../../components/layout/PageContainer";
 import { tmdbFetch } from "../../config/apiKeys";
+import { getStreamingPlatformCatalogRequest } from "../../services/streamingPlatforms";
 import { useAddonStore } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
 import SpatialPosterImage from "../../components/SpatialPosterImage";
@@ -295,36 +296,64 @@ export default function CatalogPage({ bigPicture = false }: { bigPicture?: boole
         collected = [];
 
         if (addonId === "tmdb" || addonId === "aetherio-starter") {
-          const tmdbCatalog = tmdbCatalogParams(catalogId);
-          if (!tmdbCatalog) {
-            setError("No se encontró el catálogo.");
-            setLoading(false);
-            return;
-          }
-          const variants = [
-            { path: tmdbCatalog.path, params: tmdbCatalog.params },
-            ...(tmdbCatalog.fallbacks ?? []).map(fb => ({ path: fb.path ?? tmdbCatalog.path, params: fb.params })),
-          ];
-          for (let page = 1; collected.length < MAX_ITEMS; page += 1) {
-            let added = 0;
-            let lastResults: any[] = [];
-            for (const variant of variants) {
-              const data = await tmdbFetch<any>(variant.path, {
-                params: { language: "es-ES", page: String(page), region: "PE", ...variant.params },
-              });
-              const results = Array.isArray(data?.results) ? data.results : [];
-              lastResults = results;
-              for (const result of results) {
-                const item = normalizeTmdbCatalogItem(result, tmdbCatalog.type);
-                if (!item || seen.has(item.id)) continue;
-                seen.add(item.id);
-                collected.push(item);
-                added += 1;
-              }
-              if (results.length) break;
+          const collectionMatch = addonId === "tmdb" ? catalogId.match(/^tmdb\.collection\.(\d+)$/) : null;
+          if (collectionMatch) {
+            const collection = await tmdbFetch<any>(`/collection/${collectionMatch[1]}`, {
+              params: { language: "es-ES" },
+            });
+            const parts = Array.isArray(collection?.parts) ? [...collection.parts] : [];
+            parts.sort((a, b) => {
+              const dateOrder = String(a?.release_date || "9999").localeCompare(String(b?.release_date || "9999"));
+              return dateOrder || Number(b?.vote_average ?? 0) - Number(a?.vote_average ?? 0);
+            });
+            for (const part of parts) {
+              const item = normalizeTmdbCatalogItem(part, "movie");
+              if (!item || seen.has(item.id)) continue;
+              seen.add(item.id);
+              collected.push(item);
             }
             if (!cancelled) setItems([...collected]);
-            if (lastResults.length < PAGE_LIMIT || added === 0) break;
+          } else {
+            const platformCatalog = getStreamingPlatformCatalogRequest(catalogId);
+            const nativeCatalog = tmdbCatalogParams(catalogId);
+            const tmdbCatalog = platformCatalog
+              ? {
+                path: platformCatalog.path,
+                type: platformCatalog.type,
+                params: platformCatalog.variants[0].params,
+                fallbacks: platformCatalog.variants.slice(1).map(variant => ({ path: platformCatalog.path, params: variant.params })),
+              }
+              : nativeCatalog;
+            if (!tmdbCatalog) {
+              setError("No se encontró el catálogo.");
+              setLoading(false);
+              return;
+            }
+            const variants = [
+              { path: tmdbCatalog.path, params: tmdbCatalog.params },
+              ...(tmdbCatalog.fallbacks ?? []).map(fb => ({ path: fb.path ?? tmdbCatalog.path, params: fb.params })),
+            ];
+            for (let page = 1; collected.length < MAX_ITEMS; page += 1) {
+              let added = 0;
+              let lastResults: any[] = [];
+              for (const variant of variants) {
+                const data = await tmdbFetch<any>(variant.path, {
+                  params: { language: "es-ES", page: String(page), region: "PE", ...variant.params },
+                });
+                const results = Array.isArray(data?.results) ? data.results : [];
+                lastResults = results;
+                for (const result of results) {
+                  const item = normalizeTmdbCatalogItem(result, tmdbCatalog.type);
+                  if (!item || seen.has(item.id)) continue;
+                  seen.add(item.id);
+                  collected.push(item);
+                  added += 1;
+                }
+                if (results.length) break;
+              }
+              if (!cancelled) setItems([...collected]);
+              if (lastResults.length < PAGE_LIMIT || added === 0) break;
+            }
           }
         } else if (addon) {
           const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
