@@ -87,6 +87,20 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
     expect(hints).toBeLessThan(16);
   });
 
+  test(`${mode}: la rueda usa scroll nativo sin una animación JavaScript bloqueante`, async ({ page }) => {
+    await openFullHome(page, route);
+    const prevented = await page.locator(".media-card-frame").first().evaluate(element => {
+      const wheel = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
+      element.dispatchEvent(wheel);
+      return wheel.defaultPrevented;
+    });
+    expect(prevented).toBe(false);
+    await page.mouse.move(900, 500);
+    await page.mouse.wheel(0, 480);
+    await expect.poll(() => page.locator("[data-aetherio-scroll-shell]").first()
+      .evaluate(element => element.scrollTop)).toBeGreaterThan(200);
+  });
+
   test(`${mode}: desplaza un Home completo y conserva hover y navegación horizontal`, async ({ page }) => {
     await openFullHome(page, route);
     console.log(`[home-scroll:${mode}] ${JSON.stringify(await measureScroll(page))}`);
