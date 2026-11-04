@@ -498,7 +498,6 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
     backdropFilter: viewMoreFocused ? "var(--lg-filter-md)" : "none",
     WebkitBackdropFilter: viewMoreFocused ? "var(--lg-filter-md)" : "none",
                 transition: "background 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
-                willChange: "transform",
               }}
             >
               <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Ver más</span>
@@ -812,6 +811,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
 
   const [hovered, setHovered] = useState(false);
   const titleRef = useRef<HTMLDivElement>(null);
+  // GSAP promotes active transforms; idle cards must not reserve hundreds of
+  // offscreen compositor layers with permanent will-change hints.
   const enterCard = (target: HTMLDivElement) => {
     setHovered(true);
     tweenTo(target, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
@@ -853,7 +854,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         onKeyUp={bigPicture ? longPress.onKeyUp : undefined}
         onFocus={bigPicture ? e => { warmArtwork(); enterCard(e.currentTarget); } : undefined}
         onBlur={bigPicture ? e => leaveCard(e.currentTarget) : undefined}
-        style={{ position: "relative", zIndex: 1, width: cardSize.width, height: cardSize.height, borderRadius: 12, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", border: "1px solid rgba(225,230,238,0.10)", willChange: "transform" }}
+        style={{ position: "relative", zIndex: 1, width: cardSize.width, height: cardSize.height, borderRadius: 12, overflow: "hidden", cursor: "pointer", background: "#1c1c1e", border: "1px solid rgba(225,230,238,0.10)" }}
         onMouseEnter={e => {
           warmArtwork();
           enterCard(e.currentTarget);
