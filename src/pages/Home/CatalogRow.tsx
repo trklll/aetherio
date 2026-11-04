@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { BookmarkMinus, Check, ChevronRight, Image as ImageIcon, Radio } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
@@ -131,6 +131,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
   const [watchedVersion, setWatchedVersion] = useState(0);
+  const pendingWatchedFocusIndexRef = useRef<number | null>(null);
   const [viewMoreFocused, setViewMoreFocused] = useState(false);
   // En picture los heads no son seleccionables (como en el TV nativo).
   const bigPicture = useBigPictureActive();
@@ -172,6 +173,23 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
       .filter(entry => entry.completed)
       .map(entry => entry.mediaKey),
   ), [watchedVersion]);
+  const rememberWatchedFocusPosition = useCallback((card: HTMLElement | null) => {
+    if (!card) return;
+    const cards = Array.from(document.querySelectorAll<HTMLElement>(".media-card-frame"));
+    const index = cards.indexOf(card);
+    if (index >= 0) pendingWatchedFocusIndexRef.current = index;
+  }, []);
+
+  useLayoutEffect(() => {
+    const index = pendingWatchedFocusIndexRef.current;
+    if (index === null) return;
+    pendingWatchedFocusIndexRef.current = null;
+
+    const cards = Array.from(document.querySelectorAll<HTMLElement>(".media-card-frame"));
+    const target = cards[Math.min(index, cards.length - 1)];
+    target?.focus({ preventScroll: true });
+  }, [rowItems]);
+
   const openCatalog = useCallback(() => {
     try {
       const params = new URLSearchParams({
@@ -415,6 +433,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                   posterLayout={posterLayout}
                   watched={watchedMediaKeys.has(buildMediaKey(row.type, item.id))}
                   rank={ranked ? idx + 1 : undefined}
+                  onMarkWatched={rememberWatchedFocusPosition}
                   onOpenItem={onOpenItem}
                   onChooseSources={onChooseSources}
                   onOpenPreview={onOpenPreview ? request => {
@@ -548,7 +567,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   );
 }
 
-const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, watched, rank, onOpenPreview, onOpenItem, onChooseSources }: { item: MediaItem; type: string; posterLayout: HomePosterLayout; watched: boolean; rank?: number; onOpenPreview?: (request: ShellPreviewRequest) => void; onOpenItem?: (item: MediaItem) => void; onChooseSources?: (item: MediaItem) => void }) {
+const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, watched, rank, onMarkWatched, onOpenPreview, onOpenItem, onChooseSources }: { item: MediaItem; type: string; posterLayout: HomePosterLayout; watched: boolean; rank?: number; onMarkWatched?: (card: HTMLElement | null) => void; onOpenPreview?: (request: ShellPreviewRequest) => void; onOpenItem?: (item: MediaItem) => void; onChooseSources?: (item: MediaItem) => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -763,6 +782,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             label: "Marcar como visto",
             icon: <Check size={15} />,
             onSelect: () => {
+              onMarkWatched?.(cardRef.current);
               markMediaAsWatched({
                 type,
                 id: item.id,
@@ -848,7 +868,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
         data-long-press
         className="media-card-frame"
         aria-label={bigPicture ? (ranked ? `${rank}. ${item.name}` : item.name) : undefined}
-        tabIndex={bigPicture ? 0 : onOpenPreview ? -1 : undefined}
+        tabIndex={bigPicture ? 0 : -1}
         role={bigPicture ? "button" : undefined}
         onKeyDown={bigPicture ? longPress.onKeyDown : undefined}
         onKeyUp={bigPicture ? longPress.onKeyUp : undefined}

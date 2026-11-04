@@ -34,6 +34,7 @@ import {
   type IdentityFingerprint,
 } from "./crypto";
 import { pickHealthyServer, getPartyServers, probePartyServer } from "./servers";
+import { PartyClock } from "./sync";
 
 export type PartyStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 
@@ -89,7 +90,9 @@ interface PartyContextValue {
    */
   closeRoom: () => void;
   setDisplayName: (name: string) => void;
-  sendControl: (kind: "play" | "pause" | "seek", position: number) => void;
+  sendControl: (kind: "play" | "pause" | "seek", position: number, rate?: number) => void;
+  /** Reloj servidor estimado por RTT, compartido por todos los miembros. */
+  serverNow: () => number;
   sendMedia: (media: PartyMedia) => void;
   sendStream: (offer: PartyStreamOffer) => void;
   sendPresence: (buffering: boolean) => void;
@@ -170,6 +173,8 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   // Pongs pendientes (detección de degradado).
   const pingsSentRef = useRef(0);
   const pongsGotRef = useRef(0);
+  const pingSentAtRef = useRef(0);
+  const partyClockRef = useRef(new PartyClock());
   const degradedNotifiedRef = useRef(false);
   // Sellos `at` aceptados por peer (anti-replay) + avisos transitorios.
   const freshRef = useRef<Record<string, number>>({});
@@ -291,6 +296,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     nameRef.current = name;
     baseRef.current = base;
     degradedNotifiedRef.current = false;
+    partyClockRef.current.reset();
     lastSentPresenceRef.current = null;
     setRoomCode(code);
     setRoomServer(base);
@@ -308,6 +314,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     socketRef.current = socket;
 
     const sendPing = () => {
+      pingSentAtRef.current = Date.now();
       pingsSentRef.current += 1;
       // 2 pings sin pong = degradado (el servidor filtra o va mal).
       if (pingsSentRef.current - pongsGotRef.current >= 3 && !degradedNotifiedRef.current) {
@@ -422,10 +429,10 @@ export function PartyProvider({ children }: { children: ReactNode }) {
           if ("enc" in msg && typeof msg.enc === "string") {
             const key = roomKeyRef.current;
             if (!key || !acceptFreshEvent(freshRef.current, msg.from, msg.at)) break;
-            void decryptRoomJson<{ kind?: unknown; position?: unknown }>(key, msg.enc)
-              .then(data => {
-                if (data && (data.kind === "play" || data.kind === "pause" || data.kind === "seek") && Number.isFinite(data.position)) {
-                  setLastControl({ kind: data.kind, position: Math.max(0, Number(data.position)), from: msg.from, at: msg.at });
+              void decryptRoomJson<{ kind?: unknown; position?: unknown; rate?: unknown }>(key, msg.enc)
+                .then(data => {
+                  if (data && (data.kind === "play" || data.kind === "pause" || data.kind === "seek") && Number.isFinite(data.position)) {
+                  setLastControl({ kind: data.kind, position: Math.max(0, Number(data.position)), seq: msg.seq, rate: Number.isFinite(data.rate) ? Number(data.rate) : 1, from: msg.from, at: msg.at });
                 }
               })
               .catch(() => {
@@ -435,7 +442,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
             if (roomKeyRef.current) break;
             if (!acceptFreshEvent(freshRef.current, msg.from, msg.at)) break;
             if ((msg.kind === "play" || msg.kind === "pause" || msg.kind === "seek") && Number.isFinite(msg.position)) {
-              setLastControl({ kind: msg.kind, position: Math.max(0, Number(msg.position)), from: msg.from, at: msg.at });
+              setLastControl({ kind: msg.kind, position: Math.max(0, Number(msg.position)), seq: msg.seq, rate: msg.rate, from: msg.from, at: msg.at });
             }
           }
           break;
@@ -513,6 +520,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
           break;
         case "pong":
           pongsGotRef.current = pingsSentRef.current;
+          partyClockRef.current.addSample(msg.serverTime, pingSentAtRef.current, Date.now());
           break;
       }
     };
@@ -812,16 +820,17 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     migrateRoom,
     retryConnection,
     setDisplayName,
-    sendControl: (kind, position) => {
+    sendControl: (kind, position, rate = 1) => {
       const key = roomKeyRef.current;
       if (!key) {
-        send({ t: "control", kind, position });
+        send({ t: "control", kind, position, rate });
         return;
       }
-      void encryptRoomJson(key, { kind, position })
+      void encryptRoomJson(key, { kind, position, rate })
         .then(enc => send({ t: "control", enc }))
         .catch(() => setError("No se pudo cifrar el control."));
     },
+    serverNow: () => partyClockRef.current.now(),
     sendMedia: (next) => {
       const key = roomKeyRef.current;
       if (!key) {

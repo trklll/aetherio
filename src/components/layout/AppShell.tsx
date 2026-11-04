@@ -17,6 +17,33 @@ import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn";
 import ProfileBackdrop from "../profile/ProfileBackdrop";
 import { getActiveProfile, LOCAL_PROFILES_CHANGED_EVENT } from "../../utils/localProfiles";
 
+interface RouteFocusSnapshot {
+  card: HTMLElement;
+  rowKey: string | null;
+  itemIndex: string | null;
+  platformId: string | null;
+  vertical: number;
+  horizontal: number | null;
+}
+
+function resolveRouteFocusTarget(snapshot: RouteFocusSnapshot) {
+  if (snapshot.card.isConnected) return snapshot.card;
+  if (!snapshot.rowKey) return null;
+  const row = Array.from(document.querySelectorAll<HTMLElement>("[data-row-key]"))
+    .find(element => element.dataset.rowKey === snapshot.rowKey);
+  if (!row) return null;
+  if (snapshot.platformId) {
+    return Array.from(row.querySelectorAll<HTMLElement>("[data-platform-id]"))
+      .find(element => element.dataset.platformId === snapshot.platformId) ?? null;
+  }
+  if (snapshot.itemIndex === null) return null;
+  const holder = Array.from(row.querySelectorAll<HTMLElement>("[data-item-index]"))
+    .find(element => element.dataset.itemIndex === snapshot.itemIndex);
+  return holder?.matches(".media-card-frame")
+    ? holder
+    : holder?.querySelector<HTMLElement>(".media-card-frame") ?? null;
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const navigate = useNavigate();
@@ -29,9 +56,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const hideNav = isPlayer || isEpisodePage;
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
+  const focusedCardsRef = useRef(new Map<string, RouteFocusSnapshot>());
   const routeHistoryRef = useRef(new Map<number, string>());
   const activeScrollKeyRef = useRef(makeScrollKey(loc.pathname, loc.search));
   const pendingScrollRafRef = useRef<number | null>(null);
+  const restoringFocusRef = useRef(false);
   const backChromeRef = useRef<HTMLDivElement>(null);
   const actionChromeRef = useRef<HTMLDivElement>(null);
   const partyChromeRef = useRef<HTMLDivElement>(null);
@@ -255,11 +284,59 @@ export default function AppShell({ children }: { children: ReactNode }) {
     const shell = scrollRef.current;
     if (!shell) return;
     const onScroll = () => {
-      scrollPositionsRef.current.set(activeScrollKeyRef.current, shell.scrollTop);
+      const routeKey = activeScrollKeyRef.current;
+      const vertical = shell.scrollTop;
+      scrollPositionsRef.current.set(routeKey, vertical);
+
+      const activeElement = document.activeElement;
+      if (!(activeElement instanceof HTMLElement)) return;
+      const card = activeElement.closest<HTMLElement>(".media-card-frame, .streaming-platform-card");
+      const snapshot = focusedCardsRef.current.get(routeKey);
+      if (!card || snapshot?.card !== card) return;
+
+      const row = card.closest<HTMLElement>("[data-row-key]");
+      focusedCardsRef.current.set(routeKey, {
+        ...snapshot,
+        vertical,
+        horizontal: row?.querySelector<HTMLElement>("[data-row-scroller]")?.scrollLeft ?? snapshot.horizontal,
+      });
     };
-    shell.addEventListener("scroll", onScroll, { passive: true });
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     onScroll();
-    return () => shell.removeEventListener("scroll", onScroll);
+    return () => document.removeEventListener("scroll", onScroll, true);
+  }, []);
+
+  useEffect(() => {
+    const rememberCard = (target: EventTarget | null) => {
+      if (restoringFocusRef.current) return;
+      if (!(target instanceof HTMLElement)) return;
+      const card = target.closest<HTMLElement>(".media-card-frame, .streaming-platform-card");
+      if (!card || !scrollRef.current?.contains(card)) return;
+      const row = card.closest<HTMLElement>("[data-row-key]");
+      const item = card.closest<HTMLElement>("[data-item-index]");
+      const vertical = scrollRef.current.scrollTop;
+      const horizontal = row?.querySelector<HTMLElement>("[data-row-scroller]")?.scrollLeft ?? null;
+      const routeKey = activeScrollKeyRef.current;
+      scrollPositionsRef.current.set(routeKey, vertical);
+      focusedCardsRef.current.set(routeKey, {
+        card,
+        rowKey: row?.dataset.rowKey ?? null,
+        itemIndex: item?.dataset.itemIndex ?? null,
+        platformId: card.dataset.platformId ?? null,
+        vertical,
+        horizontal,
+      });
+    };
+    const onFocusIn = (event: FocusEvent) => rememberCard(event.target);
+    const onClickCapture = (event: MouseEvent) => rememberCard(event.target);
+    document.addEventListener("focusin", onFocusIn);
+    // Pointer activation doesn't focus a div consistently across browsers;
+    // capture the chosen card before its click navigates to Detail.
+    document.addEventListener("click", onClickCapture, true);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("click", onClickCapture, true);
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -277,8 +354,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     // La posicion de la page saliente ya esta guardada por el listener de scroll
     // de arriba: aqui ya estaria recortada a 0.
     stopInertialScroll(shell);
+    const focusedCard = focusedCardsRef.current.get(nextKey);
     const homeScroll = loc.pathname === "/home" ? getHomeScroll()?.vertical : undefined;
-    const nextScroll = scrollPositionsRef.current.get(nextKey) ?? homeScroll ?? 0;
+    const nextScroll = focusedCard?.vertical ?? scrollPositionsRef.current.get(nextKey) ?? homeScroll ?? 0;
     activeScrollKeyRef.current = nextKey;
 
     if (pendingScrollRafRef.current !== null) {
@@ -286,15 +364,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
       pendingScrollRafRef.current = null;
     }
     shell.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
-
+    if (focusedCard?.rowKey && focusedCard.horizontal !== null) {
+      const row = Array.from(document.querySelectorAll<HTMLElement>("[data-row-key]"))
+        .find(element => element.dataset.rowKey === focusedCard.rowKey);
+      row?.querySelector<HTMLElement>("[data-row-scroller]")?.scrollTo({
+        left: focusedCard.horizontal,
+        behavior: "instant" as ScrollBehavior,
+      });
+    }
     // Volver a una page que carga su contenido de forma asincrona (buscador,
     // catalogos, home) arrive con el contenedor casi sin alto: el scrollTo de
     // arriba lo recorta a 0 y la posicion se pierde. Se reintenta en frames
     // siguientes hasta que el destino sea alcanzable, y se corta en cuanto el
     // usuario toca la rueda para no pelear con el scroll manual.
-    if (nextScroll > 0) {
+    if (nextScroll > 0 || focusedCard) {
       let lastApplied = shell.scrollTop;
       let attempts = 0;
+      let focusRestored = false;
+      let focusScrollGraceFrames = 0;
       const tick = () => {
         const current = scrollRef.current;
         if (!current || activeScrollKeyRef.current !== nextKey) {
@@ -303,13 +390,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
         }
         attempts += 1;
         // Scroll manual: se respeta y se abandona el reintento.
-        if (Math.abs(current.scrollTop - lastApplied) > 1) {
+        const wasMoved = Math.abs(current.scrollTop - lastApplied) > 1;
+        if (wasMoved && focusScrollGraceFrames === 0) {
           pendingScrollRafRef.current = null;
           return;
         }
         current.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
         lastApplied = current.scrollTop;
-        if (Math.abs(current.scrollTop - nextScroll) <= 1 || attempts > 60) {
+
+        if (!focusRestored && focusedCard) {
+          const target = resolveRouteFocusTarget(focusedCard);
+          if (target) {
+            restoringFocusRef.current = true;
+            target.focus({ preventScroll: true });
+            restoringFocusRef.current = false;
+            // Some embedded browsers still scroll the outer shell on programmatic
+            // focus, even with preventScroll. Reapply the saved position afterward.
+            current.scrollTo({ top: nextScroll, behavior: "instant" as ScrollBehavior });
+            lastApplied = current.scrollTop;
+            scrollPositionsRef.current.set(nextKey, current.scrollTop);
+            focusedCardsRef.current.set(nextKey, { ...focusedCard, vertical: current.scrollTop });
+            focusRestored = true;
+            // Native focus can enqueue its own scroll after focus() returns.
+            // Keep restoring for a few frames so that delayed adjustment cannot
+            // replace the saved route position; afterward user scroll wins.
+            focusScrollGraceFrames = 4;
+          }
+        } else if (focusScrollGraceFrames > 0) {
+          focusScrollGraceFrames -= 1;
+        }
+
+        const positionRestored = Math.abs(current.scrollTop - nextScroll) <= 1;
+        const focusSettled = focusRestored || !focusedCard;
+        if ((positionRestored && focusSettled && focusScrollGraceFrames === 0) || attempts > 60) {
           pendingScrollRafRef.current = null;
           return;
         }

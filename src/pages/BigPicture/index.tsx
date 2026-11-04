@@ -343,6 +343,9 @@ export default function BigPicturePage() {
     // Con el modal de salida abierto, B lo cierra a él; no actuar encima.
     if (exitConfirmOpen) return;
     if (isShellPreviewOpen()) return;
+    // Las acciones dirigidas a window se entregan por orden de registro;
+    // el selector consume B, pero este listener exterior puede recibirlo antes.
+    if (document.querySelector("[data-library-tv-picker]")) return;
     // Popup de sinopsis del detail (sin X): B lo cierra a él; no retroceder.
     if (document.querySelector("[data-aetherio-synopsis-popup]")) return;
     // Reproductor: siempre a la page de Episodie (picker de fuentes) del mismo

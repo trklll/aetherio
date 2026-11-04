@@ -1,11 +1,16 @@
 ﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Compass, Film, RefreshCw, Tv } from "lucide-react";
 import AppleSpinner from "../../components/ui/AppleSpinner";
 import { appleEase, gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import PageContainer from "../../components/layout/PageContainer";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { buildDetailPath } from "../../utils/bigPictureDetail";
+import LibrarySelector from "./LibrarySelector";
+import { clearLibraryReturn, readLibraryReturn, saveLibraryReturn, type DiscoverReturnState } from "./libraryTvState";
+import "./Library.css";
+import { GAMEPAD_ACTION_EVENT, type GamepadActionDetail } from "../../hooks/useGamepad";
 import {
   ANILIST_LIBRARY_CHANGED_EVENT,
   readAniListLibrary,
@@ -69,13 +74,52 @@ function useGridEntrance(containerRef: React.RefObject<HTMLElement | null>, deps
   }, deps);
 }
 
-export default function LibraryPage() {
+export default function LibraryPage({ bigPicture = false }: { bigPicture?: boolean }) {
   const addons = useAddonStore(state => state.addons);
-  const [tab, setTab] = useState<LibraryTab>("library");
+  const [returnState] = useState(() => bigPicture ? readLibraryReturn() : null);
+  const [tab, setTab] = useState<LibraryTab>(returnState?.tab ?? "library");
+  const rootRef = useRef<HTMLDivElement>(null);
   const [version, setVersion] = useState(0);
   const [filters, setFilters] = useState<LibraryFilters>(readLibraryFilters);
   const [aniListSyncing, setAniListSyncing] = useState(false);
   const [aniListError, setAniListError] = useState("");
+
+  useEffect(() => {
+    if (!bigPicture) return;
+    clearLibraryReturn();
+    let frame = 0;
+    let attempts = 0;
+    const restoreFocus = () => {
+      const root = rootRef.current;
+      const card = returnState && Array.from(root?.querySelectorAll<HTMLButtonElement>("[data-library-media-key]") ?? [])
+        .find(button => button.dataset.libraryMediaKey === returnState.itemKey);
+      if (card) {
+        card.focus({ preventScroll: true });
+        if (document.activeElement === card && returnState) {
+          const shell = root?.closest<HTMLElement>("[data-aetherio-scroll-shell]");
+          shell?.scrollTo({ top: returnState.scrollTop, behavior: "instant" as ScrollBehavior });
+          return;
+        }
+      }
+      if (returnState && attempts++ < 150) frame = requestAnimationFrame(restoreFocus);
+    };
+    frame = requestAnimationFrame(restoreFocus);
+    return () => cancelAnimationFrame(frame);
+  }, [bigPicture, returnState]);
+
+  useEffect(() => {
+    if (!bigPicture) return;
+    const onGamepadAction = (event: Event) => {
+      const id = (event as CustomEvent<GamepadActionDetail>).detail?.id;
+      if (id !== "lb" && id !== "rb") return;
+      event.preventDefault();
+      const next: LibraryTab = id === "lb" ? "library" : "discover";
+      if (next === tab) return;
+      setTab(next);
+    };
+    window.addEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+    return () => window.removeEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
+  }, [bigPicture, tab]);
 
   useEffect(() => {
     const refresh = () => setVersion(value => value + 1);
@@ -137,17 +181,17 @@ export default function LibraryPage() {
   }, [tab]);
 
   return (
-    <div className="home-page-scale min-h-screen">
+    <div ref={rootRef} className={`home-page-scale min-h-screen${bigPicture ? " library-page--tv" : ""}`} data-bp-library={bigPicture || undefined}>
       <PageContainer className="min-h-full pb-10 pt-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
           <div>
             <h1 className="text-[clamp(2.35rem,4.8vw,4.8rem)] font-black leading-none text-white">{tab === "library" ? "Mi biblioteca" : "Descubrir"}</h1>
           </div>
-          <div className="liquid-glass inline-flex rounded-2xl p-1" style={{ transform: "translateZ(0)" }}>
-            <TabButton active={tab === "library"} icon={<LibraryIcon size={17} />} onClick={() => setTab("library")}>
+          <div className="liquid-glass inline-flex rounded-2xl p-1" data-spatial-ignore style={{ transform: "translateZ(0)" }}>
+            <TabButton bigPicture={bigPicture} tab="library" active={tab === "library"} icon={<LibraryIcon size={17} />} onClick={() => setTab("library")}>
               Mi biblioteca
             </TabButton>
-            <TabButton active={tab === "discover"} icon={<Compass size={17} />} onClick={() => setTab("discover")}>
+            <TabButton bigPicture={bigPicture} tab="discover" active={tab === "discover"} icon={<Compass size={17} />} onClick={() => setTab("discover")}>
               Descubrir
             </TabButton>
           </div>
@@ -189,6 +233,7 @@ export default function LibraryPage() {
                     types={filtered.types}
                     genres={filtered.genres}
                     onChange={updateFilter}
+                    bigPicture={bigPicture}
                   />
                   {filtered.items.length ? (
                     <div
@@ -202,7 +247,8 @@ export default function LibraryPage() {
                       }}
                     >
                       {filtered.items.map(item => (
-                        <LibraryGridCard key={item.key} item={item.media} />
+                        <LibraryGridCard key={item.key} item={item.media} itemKey={item.key} bigPicture={bigPicture}
+                          onBeforeOpen={() => { if (bigPicture) saveLibraryReturn({ tab, itemKey: item.key }); }} />
                       ))}
                     </div>
                   ) : (
@@ -214,7 +260,7 @@ export default function LibraryPage() {
               )}
             </>
           ) : (
-            <DiscoverLibrary catalogs={buildDiscoverCatalogs(addons)} />
+            <DiscoverLibrary catalogs={buildDiscoverCatalogs(addons)} bigPicture={bigPicture} initialState={returnState?.discover} />
           )}
         </div>
       </PageContainer>
@@ -224,22 +270,28 @@ export default function LibraryPage() {
 
 function DiscoverLibrary({
   catalogs,
+  bigPicture = false,
+  initialState,
 }: {
   catalogs: DiscoverCatalog[];
+  bigPicture?: boolean;
+  initialState?: DiscoverReturnState;
 }) {
   const stored = useMemo(readDiscoverSelection, []);
   const availableTypes = useMemo(() => Array.from(new Set(catalogs.map(catalog => catalog.type))), [catalogs]);
   const [type, setType] = useState(() => stored.type);
   const [catalogKey, setCatalogKey] = useState(() => stored.catalogKey);
   const [genre, setGenre] = useState(() => stored.genre);
-  const [items, setItems] = useState<MediaItem[]>([]);
-  const [visibleCount, setVisibleCount] = useState(DISCOVER_VISIBLE_BATCH);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  const [items, setItems] = useState<MediaItem[]>(initialState?.items ?? []);
+  const [visibleCount, setVisibleCount] = useState(initialState?.visibleCount ?? DISCOVER_VISIBLE_BATCH);
+  const [page, setPage] = useState(initialState?.page ?? 1);
+  const [hasMore, setHasMore] = useState(initialState?.hasMore ?? true);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
-  const loadedSelectionRef = useRef<string | null>(null);
+  const loadedSelectionRef = useRef<string | null>(initialState?.selectionKey ?? null);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const selectionRef = useRef("");
   const discoverGridRef = useRef<HTMLDivElement>(null);
   useGridEntrance(discoverGridRef, [items, visibleCount]);
 
@@ -251,9 +303,14 @@ function DiscoverLibrary({
   const selectedCatalog = catalogsForType.find(catalog => catalog.key === catalogKey) ?? catalogsForType[0];
   const selectedGenre = selectedCatalog?.genres.includes(genre) ? genre : "";
   const selectionKey = `${selectedType}|${selectedCatalog?.key ?? ""}|${selectedGenre}`;
+  selectionRef.current = selectionKey;
+
+  useEffect(() => () => loadMoreAbortRef.current?.abort(), []);
 
   useEffect(() => {
     if (loadedSelectionRef.current === selectionKey) return;
+    loadMoreAbortRef.current?.abort();
+    setLoadingMore(false);
     if (!selectedCatalog) {
       setItems([]);
       setLoading(false);
@@ -274,12 +331,13 @@ function DiscoverLibrary({
     setHasMore(true);
     void fetchDiscoverPage(selectedCatalog, 1, selectedGenre, controller.signal)
       .then(result => {
+        if (controller.signal.aborted) return;
         setItems(mergeUniqueMedia([], result.items).items);
         setHasMore(result.hasMore);
         loadedSelectionRef.current = selectionKey;
       })
       .catch(error => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (controller.signal.aborted) return;
         setError(error instanceof Error ? error.message : "No se pudo cargar este catálogo.");
         setHasMore(false);
       })
@@ -295,21 +353,29 @@ function DiscoverLibrary({
       return;
     }
     if (!selectedCatalog || !hasMore || loadingMore) return;
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
+    const requestSelection = selectionKey;
     setLoadingMore(true);
     setError("");
     try {
       const nextPage = page + 1;
-      const result = await fetchDiscoverPage(selectedCatalog, nextPage, selectedGenre);
+      const result = await fetchDiscoverPage(selectedCatalog, nextPage, selectedGenre, controller.signal);
+      if (controller.signal.aborted || selectionRef.current !== requestSelection) return;
       const merged = mergeUniqueMedia(items, result.items);
       setItems(merged.items);
       setVisibleCount(count => count + DISCOVER_VISIBLE_BATCH);
       setPage(nextPage);
       setHasMore(result.hasMore && merged.added > 0);
     } catch (error) {
+      if (controller.signal.aborted || selectionRef.current !== requestSelection) return;
       setError(error instanceof Error ? error.message : "No se pudo cargar la siguiente página.");
       setHasMore(false);
     } finally {
-      setLoadingMore(false);
+      if (loadMoreAbortRef.current === controller) {
+        loadMoreAbortRef.current = null;
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -323,7 +389,8 @@ function DiscoverLibrary({
   return (
     <div className="flex flex-col gap-9">
       <div className="liquid-glass flex flex-wrap items-end gap-3 rounded-2xl px-5 py-4">
-        <Selector
+        <LibrarySelector
+          bigPicture={bigPicture}
           label="Tipo"
           value={selectedType}
           options={availableTypes.map(value => ({ value, label: typeLabel(value) }))}
@@ -333,7 +400,8 @@ function DiscoverLibrary({
             setGenre("");
           }}
         />
-        <Selector
+        <LibrarySelector
+          bigPicture={bigPicture}
           label="Catálogo"
           value={selectedCatalog?.key ?? ""}
           options={catalogsForType.map(value => ({ value: value.key, label: `${value.catalogName} · ${value.addonName}` }))}
@@ -343,7 +411,8 @@ function DiscoverLibrary({
           }}
         />
         {selectedCatalog?.genres.length ? (
-          <Selector
+          <LibrarySelector
+            bigPicture={bigPicture}
             label="Género"
             value={selectedGenre}
             options={[
@@ -367,7 +436,12 @@ function DiscoverLibrary({
               justifyContent: "center",
             }}
           >
-            {visibleItems.map(item => <LibraryGridCard key={`${item.type}:${item.id}`} item={item} />)}
+            {visibleItems.map(item => <LibraryGridCard key={`${item.type}:${item.id}`} item={item} bigPicture={bigPicture}
+              itemKey={`${item.type}:${item.id}`}
+              onBeforeOpen={() => {
+                if (bigPicture) saveLibraryReturn({ tab: "discover", itemKey: `${item.type}:${item.id}`,
+                  discover: { selectionKey, items, visibleCount, page, hasMore } });
+              }} />)}
           </div>
           {(visibleCount < items.length || hasMore) ? (
             <div className="flex justify-center">
@@ -400,21 +474,24 @@ function LibrarySelectors({
   types,
   genres,
   onChange,
+  bigPicture = false,
 }: {
   filters: LibraryFilters;
   lists: FacetOption[];
   types: FacetOption[];
   genres: FacetOption[];
   onChange: <K extends keyof LibraryFilters>(key: K, value: LibraryFilters[K]) => void;
+  bigPicture?: boolean;
 }) {
   return (
     <div className="liquid-glass flex flex-wrap items-end gap-3 rounded-2xl px-5 py-4">
-      <Selector label="Lista" value={filters.list} options={facetOptions(lists)} onChange={value => onChange("list", value)} />
-      <Selector label="Tipo" value={filters.type} options={facetOptions(types)} onChange={value => onChange("type", value)} />
+      <LibrarySelector bigPicture={bigPicture} label="Lista" value={filters.list} options={facetOptions(lists)} onChange={value => onChange("list", value)} />
+      <LibrarySelector bigPicture={bigPicture} label="Tipo" value={filters.type} options={facetOptions(types)} onChange={value => onChange("type", value)} />
       {genres.length > 1 ? (
-        <Selector label="Género" value={filters.genre} options={facetOptions(genres)} onChange={value => onChange("genre", value)} />
+        <LibrarySelector bigPicture={bigPicture} label="Género" value={filters.genre} options={facetOptions(genres)} onChange={value => onChange("genre", value)} />
       ) : null}
-      <Selector
+      <LibrarySelector
+        bigPicture={bigPicture}
         label="Orden"
         value={filters.sort}
         options={[
@@ -426,31 +503,6 @@ function LibrarySelectors({
         onChange={value => onChange("sort", value as LibraryFilters["sort"])}
       />
     </div>
-  );
-}
-
-function Selector({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="flex min-w-[150px] flex-1 flex-col gap-1.5">
-      <span className="text-sm font-black text-white">{label}</span>
-      <select
-        value={options.some(option => option.value === value) ? value : options[0]?.value ?? ""}
-        onChange={event => onChange(event.target.value)}
-        className="h-10 rounded-xl border border-white/10 bg-black/30 pl-3 pr-8 text-sm font-bold text-white outline-none"
-      >
-        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-    </label>
   );
 }
 
@@ -477,11 +529,11 @@ function AniListSyncBanner({
             : "Conecta AniList para importar y mantener tu lista.")}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => void onConnect()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="gsap-transition inline-flex h-10 items-center rounded-full border border-white/12 px-4 text-xs font-black text-white disabled:opacity-55">
+      <div className="library-anilist-actions flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => void onConnect()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="inline-flex h-10 items-center rounded-full border border-white/12 px-4 text-xs font-black text-white disabled:opacity-55">
           Conectar cuenta
         </button>
-        <button type="button" onClick={() => void onSync()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="gsap-transition inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-xs font-black text-black disabled:opacity-55">
+        <button type="button" onClick={() => void onSync()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="inline-flex h-10 items-center gap-2 rounded-full border border-transparent bg-white px-4 text-xs font-black text-black disabled:opacity-55">
           {syncing ? <AppleSpinner size={15} color="#111" /> : <RefreshCw size={15} />}
           {syncing ? "Sincronizando…" : "Sincronizar ahora"}
         </button>
@@ -490,10 +542,17 @@ function AniListSyncBanner({
   );
 }
 
-function TabButton({ active, icon, children, onClick }: { active: boolean; icon: React.ReactNode; children: React.ReactNode; onClick: () => void }) {
+function TabButton({ active, icon, children, onClick, bigPicture = false, tab }: {
+  active: boolean; icon: React.ReactNode; children: React.ReactNode; onClick: () => void; bigPicture?: boolean; tab: LibraryTab;
+}) {
   return (
-    <button
+      <button
       type="button"
+      data-library-tab={tab}
+      role={bigPicture ? "tab" : undefined}
+      aria-selected={bigPicture ? active : undefined}
+      aria-pressed={bigPicture ? undefined : active}
+      tabIndex={bigPicture ? -1 : undefined}
       onClick={onClick}
       onPointerDown={event => {
         if (event.button !== 0) return;
@@ -584,12 +643,21 @@ function EmptyFilteredLibrary() {
   );
 }
 
-function LibraryGridCard({ item }: { item: MediaItem }) {
+function LibraryGridCard({ item, itemKey, bigPicture = false, onBeforeOpen }: {
+  item: MediaItem;
+  itemKey?: string;
+  bigPicture?: boolean;
+  onBeforeOpen?: () => void;
+}) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [failed, setFailed] = useState(false);
   const image = getLibraryPoster(item) ?? "";
   const type = item.type ?? "series";
+  useEffect(() => setFailed(false), [image]);
 
   const openDetail = () => {
+    onBeforeOpen?.();
     writeDetailMediaMeta({
       id: item.id,
       type,
@@ -600,7 +668,7 @@ function LibraryGridCard({ item }: { item: MediaItem }) {
       description: item.description,
       year: item.year,
     });
-    navigate(`/detail/${encodeURIComponent(type)}/${encodeURIComponent(item.id)}`);
+    navigate(buildDetailPath(type, item.id, undefined, location.pathname));
   };
 
   return (
@@ -608,9 +676,13 @@ function LibraryGridCard({ item }: { item: MediaItem }) {
       <button
         type="button"
         className="media-card-frame"
+        aria-label={item.name}
+        data-library-media-key={itemKey}
         onClick={openDetail}
         onMouseEnter={event => tweenTo(event.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32)}
         onMouseLeave={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
+        onFocus={event => { if (bigPicture) tweenTo(event.currentTarget, { scale: 1.05, y: -3, zIndex: 5 }, 0.32); }}
+        onBlur={event => { if (bigPicture) tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32); }}
         onPointerDown={event => {
           if (event.button !== 0) return;
           tweenTo(event.currentTarget, { scale: 0.95, y: 0 });
@@ -619,9 +691,9 @@ function LibraryGridCard({ item }: { item: MediaItem }) {
         onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32)}
         style={{ position: "relative", width: 197, height: 296, borderRadius: 10, overflow: "hidden", background: "#1c1c1e", border: "none", padding: 0, cursor: "pointer", textAlign: "left", boxShadow: "0 0 0 rgba(0,0,0,0)", willChange: "transform" }}
       >
-        {image ? (
-          <img src={image} alt={item.name} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : null}
+        {image && !failed ? (
+          <img src={image} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : <span className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-white/70">{item.name}</span>}
       </button>
       <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
         {item.name}

@@ -20,6 +20,11 @@ export interface ShellPreviewRequest extends ShellPreviewItem {
   initialIndex?: number;
 }
 
+export function resolveShellPreviewInitialIndex(request: ShellPreviewRequest) {
+  const count = request.items?.length || 1;
+  return Math.max(0, Math.min(request.initialIndex ?? 0, count - 1));
+}
+
 // SearchDetailOverlay.kt uses a 960 x 540 logical TV viewport. Keep this
 // density fixed while the embedded viewport resizes, rather than scaling it.
 export function shellPreviewBounds(width: number, height: number) {

@@ -155,6 +155,7 @@ export class PartyRoom implements DurableObject {
   private media: PartyMedia | { enc: string } | null = null;
   /** Sala de espera: el anfitrión retiene el inicio hasta dar "Empezar". */
   private lobbyWaiting = false;
+  private controlSeq = 0;
   private isProtected = false;
   private probe = "";
   /** Gracia del anfitrión: clientId esperado + cuándo se fue + timer vivo. */
@@ -182,6 +183,7 @@ export class PartyRoom implements DurableObject {
     this.ownerClientId = (await this.state.storage.get<string>("ownerClientId")) ?? null;
     this.ownerLeftAt = (await this.state.storage.get<number>("ownerLeftAt")) ?? null;
     this.lobbyWaiting = (await this.state.storage.get<boolean>("lobbyWaiting")) ?? false;
+    this.controlSeq = (await this.state.storage.get<number>("controlSeq")) ?? 0;
   }
 
   /** Entrada única con memoria fiable: hidrata + aplica gracia + resucita hibernados. */
@@ -408,14 +410,17 @@ export class PartyRoom implements DurableObject {
       case "control": {        // Variante cifrada (salas protegidas): el servidor no la puede leer
         // ni forjar; solo la sella y reenvía. Variante clásica validada.
         const enc = typeof msg.enc === "string" ? msg.enc.slice(0, MAX_ENC_LEN) : "";
+        const seq = ++this.controlSeq;
+        void this.state.storage.put("controlSeq", seq);
         if (enc) {
-          this.broadcast({ t: "control", enc, from: peer.id, at: now });
+          this.broadcast({ t: "control", enc, seq, from: peer.id, at: now });
           break;
         }
         if (msg.kind !== "play" && msg.kind !== "pause" && msg.kind !== "seek") return;
         if (!Number.isFinite(msg.position) || (msg.position as number) < 0) return;
         // El servidor solo sella tiempo: el cliente aplica last-writer-wins con `at`.
-        this.broadcast({ t: "control", kind: msg.kind, position: msg.position, from: peer.id, at: now });
+        const rate = Number.isFinite(msg.rate) ? Math.min(3, Math.max(0.25, Number(msg.rate))) : 1;
+        this.broadcast({ t: "control", kind: msg.kind, position: msg.position, seq, rate, from: peer.id, at: now });
         break;
       }
       case "media": {

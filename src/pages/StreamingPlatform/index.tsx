@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, Volume2 } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import CatalogRow from "../Home/CatalogRow";
+import { prewarmSpatialPosterRows } from "../../hooks/useCatalogs";
 import { useHomePreferences } from "../../config/homePreferences";
 import {
   fetchStreamingPlatformCollections,
@@ -14,9 +15,11 @@ import {
 import type { CatalogRowData } from "../../types/ui";
 import { shouldPlayPlatformIntroForEntry } from "../../services/streamingPlatformIntroHistory";
 import StreamingCollectionsRow from "./StreamingCollectionsRow";
+import CrunchyrollTrending from "./CrunchyrollTrending";
 import "./index.css";
 
 const PLATFORM_ROWS_CACHE_TTL = 15 * 60 * 1000;
+const PLATFORM_POSTER_PREWARM_LIMIT = 12;
 const INTRO_EXIT_DURATION_MS = 420;
 const REDUCED_INTRO_EXIT_DURATION_MS = 180;
 const platformRowsCache = new Map<string, { rows: CatalogRowData[]; collections: StreamingPlatformCollection[]; storedAt: number }>();
@@ -105,6 +108,19 @@ export default function StreamingPlatformPage({ bigPicture = false }: { bigPictu
 
     return () => { cancelled = true; };
   }, [platform?.id, retry]);
+
+  useEffect(() => {
+    if (!rows.length || preferences.posterLayout !== "vertical") return;
+
+    // La fila virtualizada solo monta las cards cercanas al viewport. Calienta
+    // esas primeras cards en la caché persistente de SpatialPosters sin frenar
+    // el render; las siguientes se cachean cuando entran en la fila visible.
+    const initialRows = rows.map(row => ({
+      ...row,
+      items: row.items.slice(0, PLATFORM_POSTER_PREWARM_LIMIT),
+    }));
+    void prewarmSpatialPosterRows(initialRows).catch(() => undefined);
+  }, [preferences.posterLayout, rows]);
 
   useEffect(() => {
     if (introExitTimerRef.current !== null) {
@@ -280,6 +296,7 @@ export default function StreamingPlatformPage({ bigPicture = false }: { bigPictu
         </header>
 
         <section className="streaming-platform-catalog" aria-label={`Catálogo de ${platform.name}`}>
+          {platform.id === "crunchyroll" ? <CrunchyrollTrending /> : null}
           {loading ? (
             <div className="streaming-platform-state" role="status">Cargando películas y series…</div>
           ) : rows.length ? (

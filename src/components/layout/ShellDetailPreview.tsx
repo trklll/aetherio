@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { dispatchGamepadAction, GAMEPAD_ACTION_EVENT, type GamepadActionId } from "../../hooks/useGamepad.ts";
 import { installSpatialNavigation, exitDetailContentZone } from "../../navigation/spatialNav";
@@ -13,6 +13,7 @@ import {
   shellPreviewBounds,
   wrapDelta,
   SHELL_PREVIEW_MESSAGE_SOURCE,
+  resolveShellPreviewInitialIndex,
   withShellPreviewQuery,
   type ShellPreviewRequest,
 } from "../../utils/shellPreview";
@@ -104,7 +105,7 @@ function hasOverlayAboveShell(): boolean {
 export default function ShellDetailPreview({ request, dismissed = false, onClose, onNavigate }: ShellDetailPreviewProps) {
   const items = request.items?.length ? request.items : [request];
   const count = items.length;
-  const initialIndex = Math.max(0, Math.min(request.initialIndex ?? 0, count - 1));
+  const initialIndex = resolveShellPreviewInitialIndex(request);
   // Posición sin techo en el carrusel: el carrusel es infinito, así que `pos`
   // solo crece (o baja) sin limite y `index` es su resto. Cada ficha se coloca
   // en el hueco que le toca respecto a `pos`, medido por el lado más corto
@@ -120,18 +121,37 @@ export default function ShellDetailPreview({ request, dismissed = false, onClose
   const [revealed, setRevealed] = useState(false);
   const [ready, setReady] = useState(false);
   const [readyIndices, setReadyIndices] = useState<Set<number>>(() => new Set());
+  const readyIndicesRef = useRef(readyIndices);
+  readyIndicesRef.current = readyIndices;
   const [mountedIndices, setMountedIndices] = useState<Set<number>>(() => new Set([initialIndex]));
   const [artworkByIndex, setArtworkByIndex] = useState<Map<number, string>>(() => new Map());
   const [loadedArtworkKeys, setLoadedArtworkKeys] = useState<Set<string>>(() => new Set());
   const [revealedPreviewKeys, setRevealedPreviewKeys] = useState<Set<string>>(() => new Set());
   const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const compact = shellPreviewBounds(viewport.width, viewport.height);
-  const [source] = useState(() => {
+  const [source, setSource] = useState(() => {
     const rect = request.cardElement?.getBoundingClientRect();
     return rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : compact;
   });
   const surfaceRef = useRef<HTMLDivElement>(null);
   const iframeRefs = useRef<Map<number, HTMLIFrameElement>>(new Map());
+  useLayoutEffect(() => {
+    // Home conserva montada la shell para reutilizar el cache de los iframes.
+    // Al reabrir la misma fila, la key no cambia: sincroniza la ficha activa y
+    // el origen del morph con el nuevo click en vez de conservar el anterior.
+    const nextIndex = resolveShellPreviewInitialIndex(request);
+    const rect = request.cardElement?.getBoundingClientRect();
+    setSource(rect
+      ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+      : shellPreviewBounds(window.innerWidth, window.innerHeight));
+    setPos(nextIndex);
+    setReady(iframeRefs.current.has(nextIndex) && readyIndicesRef.current.has(nextIndex));
+    setMountedIndices(current => current.has(nextIndex) ? current : new Set(current).add(nextIndex));
+    setStage("morphing");
+    setOpened(false);
+    setActive(false);
+    setRevealed(false);
+  }, [request]);
   const restoreFocusRef = useRef(true);
   const selectedRef = useRef(items[index]);
   selectedRef.current = items[index];
@@ -417,8 +437,6 @@ useEffect(() => {
   // una sola vez y siempre leen el estado vigente (sin cierres obsoletos).
   const shellStateRef = useRef({ index, stage, active, count });
   shellStateRef.current = { index, stage, active, count };
-  const shellReadyRef = useRef(readyIndices);
-  shellReadyRef.current = readyIndices;
   const posRef = useRef(pos);
   posRef.current = pos;
   const expandRef = useRef(expand);
@@ -572,7 +590,7 @@ useEffect(() => {
               return refreshed;
             });
           }
-          setReady(frameStillMounted && shellReadyRef.current.has(nextIndex));
+          setReady(frameStillMounted && readyIndicesRef.current.has(nextIndex));
           setMountedIndices(current => current.has(nextIndex) ? current : new Set(current).add(nextIndex));
           setPos(next);
           restartBeatRef.current();

@@ -1,0 +1,50 @@
+{
+  "metrics": [
+    {
+      "name": "desktop",
+      "sectionTop": 488.4000244140625,
+      "sectionWidth": 1920.0001220703125,
+      "headerBottom": 459.6000061035156,
+      "coverWidth": 249.9937744140625,
+      "coverHeight": 333.3187255859375,
+      "gap": 15.993736267089844,
+      "cards": 20,
+      "documentWidth": 1920
+    },
+    {
+      "name": "small",
+      "sectionTop": 454.8000183105469,
+      "sectionWidth": 390.0000305175781,
+      "headerBottom": 433.20001220703125,
+      "coverWidth": 199.9875030517578,
+      "coverHeight": 266.64373779296875,
+      "gap": 15.993749618530273,
+      "cards": 20,
+      "documentWidth": 390
+    },
+    {
+      "name": "big-picture",
+      "sectionTop": 354,
+      "sectionWidth": 1920.0001220703125,
+      "headerBottom": 332.4000244140625,
+      "coverWidth": 249.9937744140625,
+      "coverHeight": 333.31878662109375,
+      "gap": 15.993736267089844,
+      "cards": 20,
+      "documentWidth": 1920
+    }
+  ],
+  "errors": [
+    "Cannot read properties of undefined (reading 'unregisterListener')"
+  ],
+  "failedRequests": [
+    {
+      "url": "https://trkll.aetherio.workers.dev/api/jikan/top/anime?limit=1",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://trkll.aetherio.workers.dev/api/jikan/top/anime?limit=1",
+      "error": "net::ERR_ABORTED"
+    }
+  ]
+}

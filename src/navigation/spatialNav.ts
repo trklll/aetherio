@@ -442,6 +442,16 @@ function moveRowAware(active: HTMLElement, dir: SpatialDir, current: SpatialRect
     return focusRowIndex(currentRow, sibling, dir, fast);
   }
   if ((dir === "up" || dir === "down") && currentRow) {
+    // A platform page has a hero above its first catalog row, not another
+    // focusable row. Up from that row must reveal the hero even when focus
+    // cannot move to a previous card (e.g. the first Crunchyroll row).
+    if (dir === "up" && firstStreamingPlatformRowScrollTop(active) !== null) {
+      const shell = active.closest<HTMLElement>("[data-aetherio-scroll-shell]");
+      if (shell) {
+        if (shell.scrollTop > 2) tweenVerticalScroll(shell, 0, fast);
+        return true;
+      }
+    }
     const target = neighborRow(currentRow, dir);
     if (!target) return false; // primera/última row: geométrico (hero) o nada
     // La row destino devuelve el foco donde se quedó la última vez; solo si
@@ -797,6 +807,15 @@ function isFirstSearchGridRow(el: HTMLElement): boolean {
   return first === el || first.offsetTop === el.offsetTop;
 }
 
+function isFirstLibraryGridRow(el: HTMLElement): boolean {
+  const library = el.closest<HTMLElement>("[data-bp-library]");
+  const card = el.closest<HTMLElement>("[data-library-media-key]");
+  const first = library?.querySelector<HTMLElement>("[data-library-media-key]");
+  const currentCell = card?.closest<HTMLElement>("[data-grid-entrance]");
+  const firstCell = first?.closest<HTMLElement>("[data-grid-entrance]");
+  return Boolean(currentCell && firstCell && Math.abs(currentCell.offsetTop - firstCell.offsetTop) < 2);
+}
+
 function fastBringIntoView(el: HTMLElement, dir: SpatialDir) {
   const rowScroller = el.closest<HTMLElement>("[data-row-scroller]");
   if (rowScroller) followHorizontalFocus(rowScroller, el, true);
@@ -827,6 +846,18 @@ function fastBringIntoView(el: HTMLElement, dir: SpatialDir) {
   // todo, caer al cálculo del ancla de abajo volvería a cortarlo (el objetivo
   // sería positivo porque la card está más abajo que el ancla).
   if (isFirstSearchGridRow(el)) {
+    if (shell.scrollTop > 2) tweenVerticalScroll(shell, 0, true);
+    return;
+  }
+
+  // La biblioteca usa una cuadrícula sin data-row-card. Al volver desde sus
+  // pósters a los filtros/cabecera, alinear el control a 24px recorta el título
+  // de la página. Esa zona superior es el inicio de la superficie: volver al 0.
+  if (dir === "up" && el.closest("[data-bp-library]") && !el.closest("[data-library-media-key]")) {
+    if (shell.scrollTop > 2) tweenVerticalScroll(shell, 0, true);
+    return;
+  }
+  if (dir === "up" && isFirstLibraryGridRow(el)) {
     if (shell.scrollTop > 2) tweenVerticalScroll(shell, 0, true);
     return;
   }
@@ -867,6 +898,16 @@ function bringIntoView(el: HTMLElement, dir: SpatialDir, fast = false) {
   // Suave como la app normal (el anclaje de rows se mantiene); instantáneo
   // solo con reduced-motion.
   const behavior: ScrollBehavior = prefersReducedMotion() ? "auto" : "smooth";
+  if (dir === "up" && el.closest("[data-bp-library]") && !el.closest("[data-library-media-key]")) {
+    const shell = el.closest<HTMLElement>("[data-aetherio-scroll-shell]");
+    if (shell) shell.scrollTo({ top: 0, behavior });
+    return;
+  }
+  if (dir === "up" && isFirstLibraryGridRow(el)) {
+    const shell = el.closest<HTMLElement>("[data-aetherio-scroll-shell]");
+    if (shell) shell.scrollTo({ top: 0, behavior });
+    return;
+  }
   if (el.closest("[data-hero-panel]")) {
     const shell = el.closest<HTMLElement>("[data-aetherio-scroll-shell]");
     if (shell) {

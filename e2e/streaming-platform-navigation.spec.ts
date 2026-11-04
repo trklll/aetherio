@@ -186,3 +186,97 @@ test("Big Picture restores the source platform card, scroll, blur and navigation
   await page.keyboard.press("ArrowRight");
   await expect(page.locator(`.streaming-platform-card[data-platform-id="${nextPlatformId}"]`)).toBeFocused();
 });
+
+test("marking a platform title watched transfers focus to a remaining card", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.addInitScript(() => {
+    const profileId = "streaming-mark-watched-focus-e2e";
+    localStorage.setItem("aetherio-local-mode-v1", "1");
+    localStorage.setItem("aetherio-local-profiles-v1", JSON.stringify([
+      { id: profileId, name: "Test", createdAt: 1, updatedAt: 1 },
+    ]));
+    localStorage.setItem("aetherio-active-profile-id", profileId);
+    sessionStorage.setItem("aetherio.streaming-platform-intros.v1", JSON.stringify(["apple-tv-plus"]));
+  });
+  await page.route("**/api/tmdb/**", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      results: [
+        { id: 424242, title: "Película para marcar", name: "Serie de prueba", poster_path: "/poster.jpg", backdrop_path: "/backdrop.jpg", vote_average: 8, vote_count: 500, genre_ids: [18], original_language: "es" },
+        { id: 424243, title: "Siguiente película", name: "Siguiente serie", poster_path: "/poster-2.jpg", backdrop_path: "/backdrop-2.jpg", vote_average: 7, vote_count: 400, genre_ids: [18], original_language: "es" },
+      ],
+      total_pages: 1,
+    }),
+  }));
+
+  await page.goto("/platform/apple-tv-plus", { waitUntil: "domcontentloaded" });
+  const firstCard = page.locator(".media-card-frame").first();
+  await expect(firstCard).toBeVisible();
+  await firstCard.evaluate(element => element.setAttribute("data-mark-watched-focus-target", "true"));
+  await firstCard.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Marcar como visto", exact: true }).click();
+
+  await expect(page.locator('[data-mark-watched-focus-target="true"]')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.matches(".media-card-frame") ?? false)).toBe(true);
+});
+
+test("streaming platform restores the exact row and card after returning from detail", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.addInitScript(() => {
+    const profileId = "streaming-detail-focus-e2e";
+    localStorage.setItem("aetherio-local-mode-v1", "1");
+    localStorage.setItem("aetherio-local-profiles-v1", JSON.stringify([
+      { id: profileId, name: "Test", createdAt: 1, updatedAt: 1 },
+    ]));
+    localStorage.setItem("aetherio-active-profile-id", profileId);
+    sessionStorage.setItem("aetherio.streaming-platform-intros.v1", JSON.stringify(["apple-tv-plus"]));
+  });
+  const results = Array.from({ length: 20 }, (_, index) => ({
+    id: 424242 + index,
+    title: `Película ${index + 1}`,
+    name: `Serie ${index + 1}`,
+    poster_path: `/poster-${index + 1}.jpg`,
+    backdrop_path: `/backdrop-${index + 1}.jpg`,
+    overview: "Contenido de prueba para restaurar el foco.",
+    release_date: "2024-01-01",
+    first_air_date: "2024-01-01",
+    vote_average: 8.5 - index / 10,
+    vote_count: 500,
+    genre_ids: [18],
+    original_language: "es",
+  }));
+  await page.route("**/api/tmdb/**", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ results, total_pages: 1 }),
+  }));
+
+  await page.goto("/platform/apple-tv-plus", { waitUntil: "domcontentloaded" });
+  const row = page.locator('[data-row-key="tmdb/streaming.apple-tv-plus.series.popular/series"]');
+  const shell = page.locator("[data-aetherio-scroll-shell]");
+  const scroller = row.locator("[data-row-scroller]");
+  const card = row.locator('[data-item-index="3"] .media-card-frame');
+  await expect(card).toBeVisible();
+  await row.evaluate(element => {
+    const scrollShell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    if (!scrollShell) throw new Error("Platform scroll shell not found");
+    scrollShell.scrollTop = element.getBoundingClientRect().top - scrollShell.getBoundingClientRect().top;
+  });
+  await card.scrollIntoViewIfNeeded();
+  await card.focus();
+  const savedPosition = await shell.evaluate(element => (element as HTMLElement).scrollTop);
+  const savedHorizontal = await scroller.evaluate(element => (element as HTMLElement).scrollLeft);
+
+  // Playwright's locator.click() auto-scrolls the target to its own preferred
+  // alignment; dispatch the card activation directly so the assertion compares
+  // the app's saved selection position, not that automation adjustment.
+  await card.evaluate(element => (element as HTMLElement).click());
+  await expect(page).toHaveURL(/\/detail\//);
+  await page.goBack();
+
+  await expect(row).toBeVisible();
+  await expect(card).toBeFocused();
+  await expect.poll(() => shell.evaluate(element => (element as HTMLElement).scrollTop)).toBe(savedPosition);
+  await expect.poll(() => scroller.evaluate(element => (element as HTMLElement).scrollLeft)).toBe(savedHorizontal);
+});

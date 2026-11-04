@@ -1546,7 +1546,7 @@ export async function warmHomeStartup(
     : undefined;
 
   await Promise.allSettled([
-    prewarmHomePosters(readyRows, posterProgress, postersDeadline),
+    prewarmSpatialPosterRows(readyRows, posterProgress, postersDeadline),
     preloadImageUrls(backgroundUrls),
   ]);
 
@@ -1727,12 +1727,13 @@ const SPLASH_POSTER_POLL_MS = 750;
 const PREWARM_TIMEOUT_MS = Math.round(SPLASH_POSTER_BUDGET_MS * 0.6);
 
 /**
- * Calienta el poster final de todos los medios de las filas cargadas.
+ * Calienta el póster final de los medios de las filas recibidas.
  *
- * Devuelve cuantos quedaron sin póster de SpatialPosters, para que la pantalla
- * de carga sepa si puede pasar a Home o si todavia le falta algo.
+ * Home pasa todas sus filas y usa el resultado para su pantalla de carga; las
+ * páginas de plataforma pasan solo las primeras cards de cada fila y lo hacen
+ * en segundo plano.
  */
-async function prewarmHomePosters(
+export async function prewarmSpatialPosterRows(
   rows: CatalogRowData[],
   onProgress?: (done: number, total: number) => void,
   deadlineAt = Date.now() + PREWARM_TIMEOUT_MS,

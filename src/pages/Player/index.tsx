@@ -82,6 +82,7 @@ import { liveRetryDelay, LIVE_LOAD_FAILURE_TIMEOUT_MS, LIVE_FIRST_FRAME_TIMEOUT_
 import { useSkipIntro } from "./useSkipIntro";
 import { isEpisodeReleased, shouldShowMovieRecommendation, shouldShowNextEpisodeCard } from "./nextEpisodeRules";
 import { useParty } from "../../party/PartyContext";
+import { getPartyCorrection } from "../../party/sync";
 import { partyMediaKey, type PartyStreamEvent } from "../../party/protocol";
 import { buildShareableOffer, describeUnshareableReason, partyOfferToMediaStream } from "../../party/streamShare";
 import { appleEase, gsap } from "../../utils/motion";
@@ -381,6 +382,8 @@ export default function PlayerPage() {
   const partyLastSentMediaKeyRef = useRef("");
   const partyJustFollowedKeyRef = useRef("");
   const partyLastAppliedControlAtRef = useRef(0);
+  const partySyncNudgeRef = useRef<number | null>(null);
+  const partyLastPublishedRateRef = useRef(selectedSpeed);
   const partyLastSeekTimeRef = useRef<number | null>(null);
   const partyConnectedAtRef = useRef(0);
   // ---- Party mismo-stream: puntero compartido (URL/magnet del grupo) ----
@@ -2874,6 +2877,7 @@ const {
   sendLobby: partySendLobby,
   isOwner: partyIsOwner,
   sendControl: partySendControl,
+  serverNow: partyServerNow,
   sendMedia: partySendMedia,
   sendStream: partySendStream,
   sendPresence: partySendPresence,
@@ -3351,6 +3355,14 @@ function partyCanBroadcast(): boolean {
   return true;
 }
 
+// Compartir el cambio de velocidad como nuevo snapshot, no como acción suelta.
+useEffect(() => {
+  const previous = partyLastPublishedRateRef.current;
+  partyLastPublishedRateRef.current = selectedSpeed;
+  if (previous === selectedSpeed || !partyCanBroadcast()) return;
+  partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current), Number(selectedSpeed) || 1);
+}, [selectedSpeed, playing, partyStatus, playbackStarted, partySendControl]);
+
 // Al salir/cambiar de sala se olvida el stream compartido anterior.
 useEffect(() => {
   if (partyStatus !== "idle") return;
@@ -3432,7 +3444,7 @@ useEffect(() => {
   // propio resume hasta el próximo control del anfitrión (o nunca, si está
   // en pausa). En lobby no: ahí manda la secuencia de arranque.
   if (!partyLobbyRef.current) {
-    partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current));
+    partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current), Number(selectedSpeed) || 1);
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [partyPeers, partyIsOwner, partyStatus, stream, isTrailerStream, partyQueryKey, partyRoomKey, playing]);
@@ -3574,7 +3586,7 @@ useEffect(() => {
   if (was === playing) return;
   if (!partyCanBroadcast()) return;
   if (currentTimeRef.current < 2) return;
-  partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current));
+  partySendControl(playing ? "play" : "pause", Math.max(0, currentTimeRef.current), Number(selectedSpeed) || 1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [playing, partyStatus, playbackStarted, isTrailerStream]);
 
@@ -3586,7 +3598,7 @@ useEffect(() => {
   if (previous == null) return;
   if (!partyCanBroadcast()) return;
   if (Math.abs(currentTime - previous) > PARTY_SEEK_JUMP_S) {
-    partySendControl("seek", Math.max(0, currentTime));
+    partySendControl("seek", Math.max(0, currentTime), Number(selectedSpeed) || 1);
   }
 }, [currentTime, partyStatus, playbackStarted, isTrailerStream, partySendControl, partyLastRemoteAt]);
 
@@ -3616,13 +3628,14 @@ useEffect(() => {
   // Al dar play, el emisor siguió avanzando durante el tránsito del mensaje:
   // compensar con el tiempo transcurrido desde el sello del servidor.
   // En pausa/seek la posición es exacta y no se compensa.
-  const transitS = event.kind === "play" && Number.isFinite(event.at) ? Math.max(0, (Date.now() - event.at) / 1000) : 0;
+  const transitS = event.kind === "play" && Number.isFinite(event.at) ? Math.max(0, (partyServerNow() - event.at) / 1000) : 0;
   const position = Math.max(0, event.position + transitS);
   if (event.kind === "seek") {
     seek(position);
     return;
   }
   const wantPlaying = event.kind === "play";
+  void sendMpvCommand(["set_property", "speed", event.rate]);
   if (wantPlaying !== playing) {
     if (Math.abs(currentTimeRef.current - position) > PARTY_DRIFT_TOLERANCE_S) seek(position);
     togglePlay();
@@ -3630,7 +3643,45 @@ useEffect(() => {
     seek(position);
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [partyLastControl, partyStatus, partyLobby, partySelfId, partyRoomKey, partyQueryKey, playbackStarted, isTrailerStream, showUpNext, playing, partyPeers, partyNotify]);
+}, [partyLastControl, partyStatus, partyLobby, partySelfId, partyRoomKey, partyQueryKey, playbackStarted, isTrailerStream, showUpNext, playing, partyPeers, partyNotify, partyServerNow]);
+
+// Motor de corrección continua: corrige el desfase con el reloj del servidor,
+// usa seeks solo para errores grandes y un nudge temporal de velocidad para
+// errores pequeños. No actúa mientras se carga, se busca o el lobby está activo.
+useEffect(() => {
+  if (partyStatus !== "connected" || !partyLastControl || isTrailerStream) {
+    if (partySyncNudgeRef.current !== null) {
+      partySyncNudgeRef.current = null;
+      void sendMpvCommand(["set_property", "speed", Number(selectedSpeed) || 1]);
+    }
+    return;
+  }
+  const interval = window.setInterval(() => {
+    const event = partyLastControl;
+    if (!event || event.kind !== "play" || !playing || !playbackStarted || partyLobby
+      || isTrailerStream || showUpNext || timelinePreviewTime !== null || mpvPausedForCache || stalledPlayback) return;
+    const correction = getPartyCorrection(
+      currentTimeRef.current,
+      { seq: event.seq, memberId: event.from, paused: false, position: event.position, rate: event.rate, at: event.at },
+      partyServerNow(),
+      partySyncNudgeRef.current !== null,
+    );
+    if (correction.type === "seek") {
+      partySyncNudgeRef.current = null;
+      void sendMpvCommand(["set_property", "speed", event.rate]);
+      seek(correction.position);
+    } else if (correction.type === "nudge") {
+      if (partySyncNudgeRef.current !== correction.rate) {
+        partySyncNudgeRef.current = correction.rate;
+        void sendMpvCommand(["set_property", "speed", correction.rate]);
+      }
+    } else if (partySyncNudgeRef.current !== null) {
+      partySyncNudgeRef.current = null;
+      void sendMpvCommand(["set_property", "speed", event.rate]);
+    }
+  }, 500);
+  return () => window.clearInterval(interval);
+}, [partyStatus, partyLastControl, partyLobby, playbackStarted, isTrailerStream, showUpNext, playing, timelinePreviewTime, mpvPausedForCache, stalledPlayback, selectedSpeed, partyServerNow]);
 
 // ---- Party lobby (sala de espera): retener en pausa al inicio y precargar ----
 function partyLobbyReady(): boolean {
@@ -3724,7 +3775,7 @@ function startPartyPlayback() {
     }
   }
   playPartyFromStart();
-  partySendControl("play", 0);
+  partySendControl("play", 0, Number(selectedSpeed) || 1);
 }
 
 // Reaccionar a "started": el anfitrión ya arrancó en su click (from propio).

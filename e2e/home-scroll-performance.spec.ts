@@ -77,6 +77,40 @@ async function measureScroll(page: Page) {
   });
 }
 
+test("Home keeps keyboard focus on a card after marking a title watched", async ({ page }) => {
+  await openFullHome(page, "/home");
+  const firstCard = page.locator(".media-card-frame").first();
+  await firstCard.evaluate(element => element.setAttribute("data-mark-watched-focus-target", "true"));
+  await firstCard.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Marcar como visto", exact: true }).click();
+
+  await expect(page.locator('[data-mark-watched-focus-target="true"]')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.matches(".media-card-frame") ?? false)).toBe(true);
+});
+
+test("Home restores the exact row and card after returning from its detail", async ({ page }) => {
+  await openFullHome(page, "/home");
+  const row = page.locator('[data-row-key="aetherio-starter/scroll-perf-9/movie"]');
+  const shell = page.locator("[data-aetherio-scroll-shell]");
+  const card = row.locator('[data-item-index="3"] .media-card-frame');
+  await row.evaluate(element => {
+    const scrollShell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
+    if (!scrollShell) throw new Error("Home scroll shell not found");
+    scrollShell.scrollTop = element.getBoundingClientRect().top - scrollShell.getBoundingClientRect().top;
+  });
+  await card.scrollIntoViewIfNeeded();
+  await card.focus();
+  const savedPosition = await shell.evaluate(element => (element as HTMLElement).scrollTop);
+
+  await card.click();
+  await expect(page).toHaveURL(/\/detail\/movie\//);
+  await page.goBack();
+
+  await expect(row).toBeVisible();
+  await expect(card).toBeFocused();
+  await expect.poll(() => shell.evaluate(element => (element as HTMLElement).scrollTop)).toBe(savedPosition);
+});
+
 for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
   test(`${mode}: no mantiene cientos de capas de animación en tarjetas inactivas`, async ({ page }) => {
     await openFullHome(page, route);

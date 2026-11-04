@@ -78,7 +78,7 @@ interface AniListMedia {
   id: number;
   idMal: number | null;
   title: { romaji: string; english: string | null };
-  coverImage: { large: string | null } | null;
+  coverImage: { large: string | null; extraLarge?: string | null } | null;
   bannerImage: string | null;
   description: string | null;
   averageScore: number | null;
@@ -86,6 +86,13 @@ interface AniListMedia {
   season: string | null;
   seasonYear: number | null;
   startDate: { year: number | null } | null;
+  status?: string | null;
+}
+
+export interface TrendingAnimeItem extends MediaItem {
+  season?: string;
+  seasonYear?: number;
+  isAiring: boolean;
 }
 
 interface AniListPage {
@@ -251,6 +258,33 @@ export async function fetchAnilistDiscover({
     { page, genre: genre || null, sort: [sort] },
   );
   return (result?.data?.Page?.media ?? []).map(mediaToItem);
+}
+
+/** Seanime-style discovery, sharing the client's request queue and 429 cooldown. */
+export async function fetchAnilistTrendingAnime(genre?: string): Promise<TrendingAnimeItem[]> {
+  const result = await anilistQuery<AniListPage>(
+    `query AetherioTrendingAnime($genre: String) {
+      Page(page: 1, perPage: 20) {
+        media(type: ANIME, genre: $genre, sort: TRENDING_DESC, isAdult: false) {
+          ${MEDIA_FIELDS}
+          coverImage { extraLarge }
+          status
+        }
+      }
+    }`,
+    { genre: genre || null },
+  );
+  const media = result?.data?.Page?.media;
+  if (!Array.isArray(media)) throw new Error("No pudimos cargar las tendencias de AniList.");
+
+  return media.map(entry => ({
+    ...mediaToItem(entry),
+    poster: entry.coverImage?.extraLarge ?? entry.coverImage?.large ?? undefined,
+    background: entry.bannerImage ?? entry.coverImage?.extraLarge ?? entry.coverImage?.large ?? undefined,
+    season: entry.season ?? undefined,
+    seasonYear: entry.seasonYear ?? undefined,
+    isAiring: entry.status === "RELEASING",
+  }));
 }
 
 export async function fetchAnilistMostFavorites(): Promise<MediaItem[]> {

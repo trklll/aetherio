@@ -32,6 +32,9 @@ export interface PartyChatMessage {
 export interface PartyControlEvent {
   kind: PartyControlKind;
   position: number;
+  /** Server-assigned ordering for the authoritative playback snapshot. */
+  seq: number;
+  rate: number;
   from: string;
   at: number;
 }
@@ -86,8 +89,8 @@ export type PartyServerMessage =
   | { t: "peer-joined"; peer: PartyPeer }
   | { t: "peer-left"; peerId: string }
   | { t: "owner-changed"; peerId: string }
-  | { t: "control"; kind: PartyControlKind; position: number; from: string; at: number }
-  | { t: "control"; enc: string; from: string; at: number }
+  | { t: "control"; kind: PartyControlKind; position: number; seq: number; rate: number; from: string; at: number }
+  | { t: "control"; enc: string; seq: number; from: string; at: number }
   | { t: "media"; media: PartyMediaPayload; from: string; at: number }
   | { t: "stream"; offer: PartyStreamPayload; from: string; at: number }
   | { t: "presence"; from: string; name: string; buffering: boolean; at: number }
@@ -100,7 +103,7 @@ export type PartyServerMessage =
 
 export type PartyClientMessage =
   | { t: "hello"; name: string; clientId: string; identity?: string }
-  | { t: "control"; kind: PartyControlKind; position: number }
+  | { t: "control"; kind: PartyControlKind; position: number; rate?: number }
   | { t: "control"; enc: string }
   | { t: "media"; media: PartyMediaPayload }
   | { t: "stream"; offer: PartyStreamPayload }

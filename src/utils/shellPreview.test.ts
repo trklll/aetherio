@@ -4,6 +4,7 @@ import {
   isShellPreviewMessage,
   withShellPreviewQuery,
   shellPreviewBounds,
+  resolveShellPreviewInitialIndex,
   isShellPreviewBootstrap,
   wrapDelta,
 } from "./shellPreview";
@@ -59,6 +60,18 @@ describe("shell preview protocol", () => {
     expect(wrapDelta(0, 0, 1)).toBe(0);
     expect(wrapDelta(3, 3, 4)).toBe(0);
     expect(wrapDelta(0, 0, 0)).toBe(0);
+  });
+
+  it("uses the selected card from each request when reopening the same carousel", () => {
+    const items = Array.from({ length: 5 }, (_, index) => ({
+      detailPath: `/big-picture/detail/movie/${index + 1}`,
+      title: `Movie ${index + 1}`,
+      cardElement: null,
+    }));
+
+    expect(resolveShellPreviewInitialIndex({ ...items[1], items, initialIndex: 1 })).toBe(1);
+    expect(resolveShellPreviewInitialIndex({ ...items[4], items, initialIndex: 4 })).toBe(4);
+    expect(resolveShellPreviewInitialIndex({ ...items[4], items, initialIndex: 99 })).toBe(4);
   });
 
   it("rejects malformed or external navigation messages", () => {
