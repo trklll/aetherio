@@ -236,6 +236,7 @@ export default function PlayerPage() {
   const upNextShownKeyRef = useRef("");
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
+  const playbackProgressReadyRef = useRef(false);
   const lastProgressTimeRef = useRef(0);
   const lastProgressAtRef = useRef(0);
   const lastContinueSaveAtRef = useRef(0);
@@ -647,7 +648,7 @@ export default function PlayerPage() {
   }, [query]);
 
   const hasMpvError = !isLeavingPlayer && (mpvBundled === false || mpvStatus?.startsWith("MPV no"));
-  const nativeSurfaceVisible = !isIframeStream && Boolean(stream && playbackStarted && !hasMpvError);
+  const nativeSurfaceVisible = !isIframeStream && Boolean(stream && mpvReadyForCommands && mpvFileLoaded && playbackStarted && !hasMpvError);
 const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
 
   const currentEpisode = query?.season && query?.episode
@@ -893,7 +894,9 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
     onPlaybackFailure: failure => {
       if (!leavingPlayerRef.current && isLiveStream) setLiveFailure(failure);
     },
-    enabled: !isIframeStream,
+    // Until open_mpv resolves, its cached snapshot can still belong to the
+    // stopped core. Do not expose that frame or save it under the new title.
+    enabled: Boolean(stream) && mpvReadyForCommands && !isIframeStream,
   });
 
   useEffect(() => {
@@ -1213,11 +1216,11 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
 
   useEffect(() => {
     // Un seek de reanudación también cambia `time-pos`, pero todavía no implica
-    // que haya empezado a reproducirse. Mantén la barrera activa hasta confirmar
-    // el seek para que el arranque normal pueda soltar la pausa al final.
-    if (currentTime > 0.05 && resumeSeekSettledRef.current) {
-      startupGateActiveRef.current = false;
-      startupGatePausedRef.current = false;
+    // que haya empezado a reproducirse. Tampoco lo implica el primer PTS de un
+    // archivo cargado en pausa: solo la barrera de arranque puede soltarla.
+    if (currentTime > 0.05 && mpvReadyForCommands && mpvFileLoaded && playing
+      && resumeSeekReady && !startupGateActiveRef.current) {
+      playbackProgressReadyRef.current = true;
       setPlaybackStarted(true);
       window.performance?.mark?.("player:first_frame");
       setMpvStatus(prev => (
@@ -1226,7 +1229,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
           : prev
       ));
     }
-  }, [currentTime]);
+  }, [currentTime, mpvFileLoaded, mpvReadyForCommands, playing, resumeSeekReady]);
 
   useEffect(() => {
     if (!mpvFileLoaded) return;
@@ -1958,6 +1961,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
 
     mpvLaunchKeyRef.current = launchKey;
     mpvRecoveryKeyRef.current = "";
+    playbackProgressReadyRef.current = false;
     launchStartedAtRef.current = Date.now();
     lastProgressTimeRef.current = 0;
     lastProgressAtRef.current = Date.now();
@@ -2575,7 +2579,7 @@ function saveUpcomingEpisodePrompt() {
 }
 
 function saveCurrentProgressNow(reason: string) {
-  if (!query || !stream || isTrailerStream || isLiveStream) return null;
+  if (!query || !stream || isTrailerStream || isLiveStream || !playbackProgressReadyRef.current) return null;
   const current = Math.max(currentTimeRef.current, currentTime);
   const totalDuration = Math.max(durationRef.current, duration);
   if (!current || current < 5) return null;
@@ -2661,7 +2665,7 @@ useEffect(() => () => {
 }, [isTrailerStream, query?.episode, query?.id, query?.season, query?.type, stream?.id]);
 
 useEffect(() => {
-  if (!query || !stream || isTrailerStream || isLiveStream) return;
+  if (!query || !stream || isTrailerStream || isLiveStream || !playbackProgressReadyRef.current) return;
   if (!currentTime || currentTime < 5) return;
   const pendingResume = !resumeSeekSettledRef.current && resumeSeekTargetRef.current >= 12;
   if (pendingResume && currentTime < Math.max(12, resumeSeekTargetRef.current - 2)) {
