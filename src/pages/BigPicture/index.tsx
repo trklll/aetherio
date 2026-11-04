@@ -196,13 +196,12 @@ export default function BigPicturePage() {
   // reproducción.
   useHiddenCursor("gamepad", { idleMs: 2500 });
 
-  // Home uses compositor-native wheel/trackpad scrolling, as in normal mode.
-  // Other pages keep their existing inertia; spatial navigation owns its tweens.
+  // Mismo scroll con inercia de la app normal (rueda del ratón).
   useEffect(() => {
     const shell = scrollRef.current;
-    if (!shell || !isSubPage) return;
+    if (!shell) return;
     return installInertialScroll(shell);
-  }, [isSubPage]);
+  }, []);
 
   // Al entrar al detalle, ajustes, addons, player, persona o entidad, el
   // scroll exterior queda arriba: el scroll real lo lleva el shell interior

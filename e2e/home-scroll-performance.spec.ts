@@ -87,14 +87,14 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
     expect(hints).toBeLessThan(16);
   });
 
-  test(`${mode}: la rueda usa scroll nativo sin una animación JavaScript bloqueante`, async ({ page }) => {
+  test(`${mode}: la rueda conserva el desplazamiento con inercia`, async ({ page }) => {
     await openFullHome(page, route);
     const prevented = await page.locator(".media-card-frame").first().evaluate(element => {
       const wheel = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
       element.dispatchEvent(wheel);
       return wheel.defaultPrevented;
     });
-    expect(prevented).toBe(false);
+    expect(prevented).toBe(true);
     // Use a real visible card, not a viewport coordinate that may still be
     // covered by Big Picture's entrance layer or floating navigation.
     await page.locator(".media-card-frame").first().hover();
