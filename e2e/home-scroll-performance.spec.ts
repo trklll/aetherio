@@ -95,10 +95,13 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
       return wheel.defaultPrevented;
     });
     expect(prevented).toBe(false);
-    await page.mouse.move(900, 500);
+    // Use a real visible card, not a viewport coordinate that may still be
+    // covered by Big Picture's entrance layer or floating navigation.
+    await page.locator(".media-card-frame").first().hover();
+    const shell = page.locator("[data-aetherio-scroll-shell]").first();
+    const before = await shell.evaluate(element => element.scrollTop);
     await page.mouse.wheel(0, 480);
-    await expect.poll(() => page.locator("[data-aetherio-scroll-shell]").first()
-      .evaluate(element => element.scrollTop)).toBeGreaterThan(200);
+    await expect.poll(() => shell.evaluate(element => element.scrollTop)).toBeGreaterThan(before + 200);
   });
 
   test(`${mode}: desplaza un Home completo y conserva hover y navegación horizontal`, async ({ page }) => {

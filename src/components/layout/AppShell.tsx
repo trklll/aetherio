@@ -21,6 +21,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const navigate = useNavigate();
   const [profileAvatar, setProfileAvatar] = useState(() => getActiveProfile()?.avatarDataUrl ?? null);
+  const isHome = loc.pathname === "/home" || loc.pathname === "/";
   const isPlayer = loc.pathname === "/player";
   const isEpisodePage = loc.pathname === "/episode" || loc.pathname === "/streams";
   const isDetailPage = loc.pathname.startsWith("/detail/");
@@ -325,9 +326,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const shell = scrollRef.current;
-    if (!shell || isPlayer || isEpisodePage) return;
+    // The long Home must keep compositor-native wheel/trackpad scrolling, even
+    // while cards are loading or React is busy. Keyboard/gamepad motion is separate.
+    if (!shell || isHome || isPlayer || isEpisodePage) return;
     return installInertialScroll(shell);
-  }, [isEpisodePage, isPlayer, navigationScrollKey]);
+  }, [isEpisodePage, isHome, isPlayer, navigationScrollKey]);
 
   useEffect(() => {
     if (!isPlayer) {
