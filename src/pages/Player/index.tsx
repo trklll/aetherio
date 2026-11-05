@@ -1909,6 +1909,24 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
     }
   }
 
+  function releasePointerControlFocus(event: MouseEvent<HTMLDivElement>) {
+    // Clicks from a mouse should activate a control without leaving its
+    // controller-style selected state behind. Keyboard/gamepad activation has
+    // detail=0 and keeps focus for spatial navigation.
+    if (event.detail <= 0) return;
+    const target = event.target as HTMLElement | null;
+    const clickedControl = target?.closest<HTMLButtonElement>(
+      "button[data-player-control-glass], button[data-player-skip], button[data-post-play-action]",
+    );
+    if (!clickedControl) return;
+
+    window.requestAnimationFrame(() => {
+      const focused = document.activeElement;
+      if (!(focused instanceof HTMLElement)) return;
+      if (focused === clickedControl || clickedControl.contains(focused)) focused.blur();
+    });
+  }
+
   function startHoldToAccelerate(event: PointerEvent<HTMLDivElement>) {
     if (showUpNext) return;
     // Mantener pulsado acelera: no despierta la barra (el OSD de play/pausa
@@ -4212,6 +4230,7 @@ if (!stream) {
       onPointerUp={stopHoldToAccelerate}
       onPointerCancel={stopHoldToAccelerate}
       onPointerLeave={stopHoldToAccelerate}
+      onClickCapture={releasePointerControlFocus}
       onClick={handleScreenClick}
     >
       {showPrePlaybackBackdrop ? (
