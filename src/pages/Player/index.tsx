@@ -4347,7 +4347,9 @@ if (!stream) {
           data-player-interactive
           data-player-skip
           type="button"
-          className="bp-skip-button absolute z-40 flex items-center justify-center whitespace-nowrap gsap-transition"
+          // The controls' transparent metadata area overlaps this button. Keep
+          // it above their z-40 layer so the visible button receives clicks.
+          className="bp-skip-button absolute z-50 flex items-center justify-center whitespace-nowrap gsap-transition"
           style={isBigPicturePlayer
             ? {
               // `right` = el padding lateral de la barra, para que el extremo
