@@ -3114,9 +3114,12 @@ usePlayerGamepad({
 const activeSkipKey = activeSkipSegment && postPlayAction === "skip"
   ? `${activeSkipSegment.id}:${activeSkipSegment.start}:${activeSkipSegment.end}`
   : "";
+// Opening a menu unmounts the button. Measure its new node when it reappears,
+// even if the segment and the control bar visibility have not changed.
 useLayoutEffect(() => {
   if (
     !isBigPicturePlayer
+    || !floatingActionsVisible
     || !activeSkipKey
     || !playbackPreferences.skipSegmentsEnabled
     || !mpvReadyForCommands
@@ -3146,7 +3149,7 @@ useLayoutEffect(() => {
     observer?.disconnect();
     window.removeEventListener("resize", syncPosition);
   };
-}, [activeSkipKey, controlsActive, isBigPicturePlayer, playbackPreferences.skipSegmentsEnabled, mpvReadyForCommands, playbackStarted]);
+}, [activeSkipKey, controlsActive, floatingActionsVisible, isBigPicturePlayer, playbackPreferences.skipSegmentsEnabled, mpvReadyForCommands, playbackStarted]);
 useEffect(() => {
   if (!isBigPicturePlayer) return;
   if (!activeSkipKey || !playbackPreferences.skipSegmentsEnabled) return;
