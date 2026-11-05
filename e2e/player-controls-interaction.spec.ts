@@ -63,16 +63,44 @@ async function openPlayer(page: Page, position = 120) {
 test("PC: cerrar cada menú con ratón restaura el vidrio, sin acumular botones blancos", async ({ page }) => {
   await openPlayer(page);
   const restingBackground = await page.locator("[data-player-playpause]").evaluate(node => getComputedStyle(node).backgroundColor);
-  for (const menuId of ["subtitles", "audio", "speed", "video-enhancements"]) {
-    const button = page.locator(`[data-menu-id='${menuId}'] > button`);
+  for (const selector of ["[data-player-source-toggle]", ...["subtitles", "audio", "speed", "video-enhancements"].map(id => `[data-menu-id='${id}'] > button`)]) {
+    const button = page.locator(selector);
     await button.click();
     await expect(button).toHaveAttribute("aria-expanded", "true");
     await page.mouse.click(640, 220);
     await expect(button).toHaveAttribute("aria-expanded", "false");
     await expect(button).not.toHaveAttribute("data-bar-active", "true");
     await expect(button).toHaveCSS("background-color", restingBackground, { timeout: 2000 });
+    expect(await button.evaluate(node => (node as HTMLElement).style.backgroundColor)).toBe("");
   }
   await page.screenshot({ path: "artifacts/player-controls/menus-closed.png" });
+});
+
+test("PC: el ratón no quita el foco al rango de volumen ni el teclado pierde su selección", async ({ page }) => {
+  await openPlayer(page);
+  const volume = page.locator("[data-player-volume]");
+  await volume.click();
+  await expect(volume).toBeFocused();
+  const speed = page.locator("[data-menu-id='speed'] > button");
+  await speed.focus();
+  await expect(speed).toHaveAttribute("data-bar-active", "true");
+  await expect(speed).toHaveCSS("background-color", "rgba(255, 255, 255, 0.94)");
+  await page.keyboard.press("Enter");
+  await expect(speed).toHaveAttribute("aria-expanded", "true");
+});
+
+test("PC: saltar no queda encima de los menús tras cargar los metadatos y cerrarlos", async ({ page }) => {
+  await openPlayer(page);
+  await expect(page.locator(".bp-title")).toHaveText("Episodio 2");
+  const speed = page.locator("[data-menu-id='speed'] > button");
+  await speed.click();
+  await page.mouse.click(640, 220);
+  await expect(speed).toHaveAttribute("aria-expanded", "false");
+  await page.mouse.move(640, 600);
+  await expect.poll(() => page.locator("[data-player-skip]").evaluate(node => {
+    const actions = document.querySelector(".bp-bar-actions")!;
+    return actions.getBoundingClientRect().top - node.getBoundingClientRect().bottom;
+  })).toBeGreaterThanOrEqual(12);
 });
 
 test("PC: un clic real en Saltar intro llega al botón y envía el salto a MPV", async ({ page }) => {
