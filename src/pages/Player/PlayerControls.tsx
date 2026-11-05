@@ -779,7 +779,9 @@ useEffect(() => {
         })
         .filter(box => box.right > box.left && box.bottom > box.top);
       const playerControlSurfaces = bigPicture && player
-        ? Array.from(player.querySelectorAll<HTMLElement>("[data-player-control-glass], [data-player-skip]"))
+        // Skip pills are opaque white, not glass. Giving them a native mask
+        // leaves a blurred silhouette when the action disappears or moves.
+        ? Array.from(player.querySelectorAll<HTMLElement>("[data-player-control-glass]"))
           .filter(element => !element.parentElement?.closest("[data-player-control-glass]"))
           .map(element => {
             const box = element.getBoundingClientRect();
