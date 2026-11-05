@@ -108,14 +108,17 @@ test("PC: saltar no queda encima de los menús tras cargar los metadatos y cerra
 
 test("PC: un clic real en Saltar intro llega al botón y envía el salto a MPV", async ({ page }) => {
   await openPlayer(page);
+  await expect(page.locator(".bp-title")).toHaveText("Episodio 2");
   const skip = page.getByRole("button", { name: "Saltar intro", exact: true });
   await expect(skip).toBeVisible();
+  await page.mouse.move(640, 600);
+  await expect(page.locator("[data-player-controls-glass]").locator("..")).toHaveCSS("opacity", "1");
   // Inspeccionar el hit-test real evita aprobar una acción tapada por la barra.
   await expect.poll(() => skip.evaluate(node => {
     const rect = node.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    return hit === node || node.contains(hit);
-  })).toBe(true);
+    return hit === node || node.contains(hit) ? "skip" : hit?.outerHTML.slice(0, 300);
+  })).toBe("skip");
   const before = await page.evaluate(() => (window as any).__controlTest.calls.length);
   await skip.click();
   await expect.poll(() => page.evaluate(before => (window as any).__controlTest.calls.slice(before)
