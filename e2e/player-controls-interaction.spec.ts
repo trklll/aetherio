@@ -73,6 +73,10 @@ test("PC: cerrar cada menú con ratón restaura el vidrio, sin acumular botones 
     await expect(button).toHaveCSS("background-color", restingBackground, { timeout: 2000 });
     expect(await button.evaluate(node => (node as HTMLElement).style.backgroundColor)).toBe("");
   }
+  await expect.poll(() => page.locator("[data-player-skip]").evaluate(node => {
+    const actions = document.querySelector(".bp-bar-actions")!;
+    return actions.getBoundingClientRect().top - node.getBoundingClientRect().bottom;
+  }), { timeout: 2000 }).toBeGreaterThanOrEqual(12);
   await page.screenshot({ path: "artifacts/player-controls/menus-closed.png" });
 });
 
@@ -96,11 +100,10 @@ test("PC: saltar no queda encima de los menús tras cargar los metadatos y cerra
   await speed.click();
   await page.mouse.click(640, 220);
   await expect(speed).toHaveAttribute("aria-expanded", "false");
-  await page.mouse.move(640, 600);
   await expect.poll(() => page.locator("[data-player-skip]").evaluate(node => {
     const actions = document.querySelector(".bp-bar-actions")!;
     return actions.getBoundingClientRect().top - node.getBoundingClientRect().bottom;
-  })).toBeGreaterThanOrEqual(12);
+  }), { timeout: 2000 }).toBeGreaterThanOrEqual(12);
 });
 
 test("PC: un clic real en Saltar intro llega al botón y envía el salto a MPV", async ({ page }) => {
