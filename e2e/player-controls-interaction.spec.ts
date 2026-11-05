@@ -134,3 +134,29 @@ test("PC: Siguiente episodio responde al clic real sin depender de la cuenta atr
   await expect(page).toHaveURL(/\/detail\/series\//, { timeout: 20_000 });
   await expect.poll(() => page.evaluate(() => (window.history.state as any)?.usr?.episodeRequest?.ep)).toBe(3);
 });
+
+test("PC: Saltar intro opaco no deja una máscara de blur nativa", async ({ page }) => {
+  await openPlayer(page);
+  await expect(page.locator(".bp-title")).toHaveText("Episodio 2");
+  await page.mouse.move(640, 600);
+  const skip = page.getByRole("button", { name: "Saltar intro", exact: true });
+  await expect(skip).toBeVisible();
+  await expect(page.locator("[data-player-controls-glass]").locator("..")).toHaveCSS("opacity", "1");
+  const center = await skip.evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    return { x: (rect.left + rect.width / 2) * scale, y: (rect.top + rect.height / 2) * scale };
+  });
+  const masksAtSkip = () => page.evaluate(center => {
+    const update = (window as any).__controlTest.calls.filter((call: any) => call.cmd === "set_mpv_controls_blur").at(-1);
+    if (!update?.args?.enabled || !update.args.controlSurfaces?.length) return null;
+    return update.args.controlSurfaces.filter((box: any) =>
+      box.left <= center.x && box.right >= center.x && box.top <= center.y && box.bottom >= center.y).length;
+  }, center);
+  // Los controles de vidrio sí conservan sus máscaras; la pastilla blanca no
+  // necesita desenfocar el vídeo ni debe dejar una silueta al desaparecer.
+  await expect.poll(masksAtSkip).toBe(0);
+  await skip.click();
+  await expect(skip).toHaveCount(0);
+  await expect.poll(masksAtSkip).toBe(0);
+});
