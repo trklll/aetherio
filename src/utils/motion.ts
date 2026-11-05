@@ -321,6 +321,10 @@ const ignoredClassMutations = new WeakMap<Element, number>();
 const restingStyles = new WeakMap<HTMLElement, ReturnType<typeof snapshotStyles>>();
 const hoverProps = ["opacity", "color", "backgroundColor", "borderColor", "boxShadow", "transform", "filter"] as const;
 const hoverClearProps = hoverProps.join(",");
+// Player controls own their press tweens and derive paint from live focus/menu
+// attributes. Copying a computed selected color into an inline tween freezes
+// that color after the attributes change (or a press interrupts its cleanup).
+const playerControlStateSelector = "[data-player-control-glass], [data-player-skip]";
 
 /**
  * Installs the single animation runtime used by the React/Tauri UI.
@@ -430,7 +434,7 @@ function initializeElement(element: Element) {
   if (!(element instanceof HTMLElement) || initialized.has(element)) return;
   initialized.add(element);
 
-  if (element.matches(hoverSelector)) installHoverTween(element);
+  if (element.matches(hoverSelector) && !element.matches(playerControlStateSelector)) installHoverTween(element);
   if (prefersReducedMotion()) return;
 
   if (element.classList.contains("skeleton")) {
@@ -541,7 +545,7 @@ function installHoverTween(element: HTMLElement) {
 }
 
 function animateClassChange(element: HTMLElement, oldClassName: string) {
-  if (prefersReducedMotion()) return;
+  if (prefersReducedMotion() || element.matches(playerControlStateSelector)) return;
   const nextClassName = element.className;
   const to = snapshotStyles(element);
   ignoredClassMutations.set(element, (ignoredClassMutations.get(element) ?? 0) + 2);
