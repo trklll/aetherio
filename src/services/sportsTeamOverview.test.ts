@@ -1,66 +1,106 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
-import { findEspnTeam, parseStandings, parseRoster, parseFixtures, parseLineup, loadTeamOverview } from "./sportsTeamOverview";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { findFotmobTeam, parseStandings, parseRoster, parseFixtures, parseLineup, parseHonours } from "./sportsTeamOverview";
+import { fotmobTeamFixture } from "./__fixtures__/fotmobTeam";
 
-afterEach(() => vi.unstubAllGlobals());
-describe("team data adapters", () => {
-  it("matches exact aliases only and refuses ambiguous clubs", () => {
+vi.mock("../runtime/platform", () => ({ isTauriRuntime: () => false, invokeCommand: vi.fn() }));
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+const alianza = { id: "club:alianza-lima", kind: "club", sport: "futbol", name: "Alianza Lima", countryId: "per" } as const;
+
+describe("FotMob team adapters", () => {
+  it("resolves exact unique team aliases, not players, women or ambiguous names", () => {
     const entity = { name: "Alianza Lima", aliases: ["Alianza"] };
-    expect(findEspnTeam([{ id: "1", displayName: "Alianza Lima" }, { id: "2", displayName: "Alianza Atlético" }], entity)?.id).toBe("1");
-    expect(findEspnTeam([{ id: "1", displayName: "Manchester City Women" }], { name: "Manchester City" })).toBeUndefined();
-    expect(findEspnTeam([{ id: "1", name: "Alianza" }, { id: "2", name: "Alianza" }], entity)).toBeUndefined();
+    expect(findFotmobTeam([{ suggestions: [{ type: "team", id: "6398", name: "Alianza Lima" }, { type: "team", id: "6", name: "Alianza Atlético" }] }], entity)).toBe("6398");
+    expect(findFotmobTeam([{ suggestions: [{ type: "player", id: "1", name: "Alianza" }, { type: "team", id: "2", name: "Alianza Women" }] }], entity)).toBeUndefined();
+    expect(findFotmobTeam([{ suggestions: [{ type: "team", id: "1", name: "Alianza" }, { type: "team", id: "2", name: "Alianza" }] }], entity)).toBeUndefined();
+    expect(findFotmobTeam(null, entity)).toBeUndefined();
   });
-  it("keeps standings groups, real rank, zero points and missing values distinct", () => {
-    const groups = parseStandings({ children: [{ name: "Apertura", standings: { entries: [{ team: { id: "1", displayName: "Alianza" }, stats: [{ name: "rank", value: 3 }, { name: "points", value: 0 }] }] } }] });
-    expect(groups[0].name).toBe("Apertura");
-    expect(groups[0].rows[0]).toMatchObject({ rank: "3", points: "0", played: undefined });
+  it("keeps annual, Apertura and Clausura as separate tables, annual first", () => {
+    const d = fotmobTeamFixture();
+    const groups = parseStandings(d);
+    expect(groups.map(group => group.name)).toEqual(["Acumulada · Liga 1", "Clausura", "Apertura"]);
+    expect(groups[0].rows[0]).toMatchObject({ rank: "1", points: "68", played: "32", goalsFor: "53", goalsAgainst: "23" });
     expect(parseStandings({})).toEqual([]);
   });
-  it("reads flat and grouped squads without inventing photos or goals", () => {
-    expect(parseRoster({ athletes: [{ items: [{ id: "1", displayName: "Jugador", jersey: "9", position: { abbreviation: "F" } }] }] })[0]).toMatchObject({ name: "Jugador", jersey: "9", photo: undefined, goals: undefined });
-    expect(parseRoster({ athletes: [{ id: "2", displayName: "Otro", headshot: { href: "https://a.espncdn.com/photo.png" } }] })[0].photo).toContain("https:");
+  it("does not synthesize rank or turn a missing statistic into zero", () => {
+    const groups = parseStandings({ table: [{ data: { table: { all: [{ id: 1, name: "Club", pts: 0 }] } } }] });
+    expect(groups[0].rows[0]).toMatchObject({ rank: undefined, points: "0", played: undefined });
   });
-  it("sorts results and handles both score representations", () => {
-    const fixtures = parseFixtures({ events: [{ id: "2", date: "2026-10-02", competitions: [{ status: { type: { completed: true } }, competitors: [{ homeAway: "home", team: { displayName: "A" }, score: { displayValue: "0" } }, { homeAway: "away", team: { displayName: "B" }, score: "2" }] }] }, { id: "1", date: "2026-10-01" }] });
-    expect(fixtures[1]).toMatchObject({ home: "A", away: "B", score: "0 – 2", completed: true });
+  it("excludes coaches and does not mistake placeholder roster goals for real statistics", () => {
+    const players = parseRoster(fotmobTeamFixture());
+    expect(players).toHaveLength(2);
+    expect(players[0]).toMatchObject({ name: "Jugador de prueba", jersey: "9", goals: undefined, position: "Delantero" });
+    expect(players[0].photo).toBe("https://images.fotmob.com/image_resources/playerimages/1.png");
+    expect(parseRoster(null)).toEqual([]);
   });
-  it("only takes the requested team's published starters", () => {
-    const lineup = parseLineup({ rosters: [{ team: { id: "9" }, formation: "4-3-3", roster: [{ starter: true, athlete: { id: "1", displayName: "Titular" } }, { starter: false, athlete: { id: "2", displayName: "Suplente" } }] }] }, "9");
-    expect(lineup?.players.map(player => player.name)).toEqual(["Titular"]);
-    expect(parseLineup({ rosters: [] }, "9")).toBeUndefined();
+  it("uses the published match score and keeps future scores empty", () => {
+    const fixtures = parseFixtures(fotmobTeamFixture());
+    expect(fixtures[0]).toMatchObject({ home: "Alianza Lima", away: "Rival", score: "2 – 0", completed: true });
+    expect(fixtures[1].score).toBeUndefined();
+    expect(parseFixtures({})).toEqual([]);
   });
-  it("does not request football data for basketball or unsupported teams", async () => {
-    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
-    const result = await loadTeamOverview({ id: "club:test", kind: "club", sport: "baloncesto", name: "Test" });
-    expect(result.supported).toBe(false);
+  it("only associates a published lineup with its own team and exact match", () => {
+    const d = fotmobTeamFixture();
+    expect(parseLineup(d, "6398")?.match?.id).toBe("100");
+    expect(parseLineup(d, "other")).toBeUndefined();
+    d.overview.lastLineupStats.lastMatch.matchId = 999;
+    expect(parseLineup(d, "6398")?.match).toBeUndefined();
+  });
+  it("marks provider honours as partial and excludes runner-up-only competitions", () => {
+    const honours = parseHonours(fotmobTeamFixture());
+    expect(honours?.partial).toBe(true);
+    expect(honours?.competitions).toEqual([{ name: "Copa de prueba", count: 1, seasons: "2020" }]);
+    expect(parseHonours({ history: { trophyList: [] } })).toBeUndefined();
+  });
+});
+
+describe("FotMob loader without ESPN", () => {
+  async function loader() { vi.resetModules(); return (await import("./sportsTeamOverview")).loadTeamOverview; }
+  it("loads real-shaped team data, full scorer stats and keeps cache timestamps truthful", async () => {
+    const fetch = vi.fn(async (url: string) => {
+      expect(url).not.toMatch(/espn/i);
+      if (url.includes("/goals.json")) return new Response(JSON.stringify({ TopLists: [{ StatList: [{ ParticiantId: 1, TeamId: 6398, StatValue: 12 }, { ParticiantId: 2, TeamId: 6398, StatValue: 0 }, { ParticiantId: 1, TeamId: 200, StatValue: 99 }] }] }));
+      return new Response(JSON.stringify(fotmobTeamFixture()));
+    });
+    vi.stubGlobal("fetch", fetch);
+    const load = await loader();
+    const result = await load(alianza);
+    expect(result).toMatchObject({ supported: true, provider: "FotMob", teamId: "6398", season: "2026" });
+    expect(result.squad.map(player => player.goals)).toEqual(["12", "0"]);
+    const cached = await load(alianza);
+    expect(cached.fetchedAt).toBe(result.fetchedAt);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await load(alianza, { refresh: true });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+  it("keeps tables and lineup when detailed statistics are offline", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("goals.json") ? new Response("", { status: 503 }) : new Response(JSON.stringify(fotmobTeamFixture()))));
+    const result = await (await loader())(alianza);
+    expect(result.standings).toHaveLength(3);
+    expect(result.squad[0].goals).toBe("7"); // explicitly published top-three value
+    expect(result.squad[1].goals).toBeUndefined();
+    expect(result.unavailable).toContain("estadísticas completas");
+  });
+  it("does not silently load a different club or send basketball to football", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(fotmobTeamFixture(1, "Otro club"))));
+    vi.stubGlobal("fetch", fetch);
+    const load = await loader();
+    await expect(load(alianza)).rejects.toThrow(/identidad/i);
+    fetch.mockClear();
+    expect((await load({ ...alianza, sport: "baloncesto" })).supported).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
-  it("loads partial sections, merges next fixtures and chooses the newest result for lineup", async () => {
-    const fetched: string[] = [];
-    const event = (id: string, date: string) => ({ id, date, competitions: [{ status: { type: { completed: true } } }] });
+  it("uses exact search for teams outside the verified MVP IDs", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      fetched.push(url);
-      let data: unknown = {};
-      if (url.includes("teams?")) data = { sports: [{ leagues: [{ teams: [{ team: { id: "9", displayName: "Club Test" } }] }] }] };
-      else if (url.endsWith("standings")) return new Response("", { status: 503 });
-      else if (url.endsWith("/roster")) data = { athletes: [{ id: "1", displayName: "Titular", statistics: { splits: { categories: [{ stats: [{ name: "totalGoals", value: 0 }] }] } } }], season: { displayName: "2026" } };
-      else if (url.endsWith("/schedule")) data = { events: [event("new", "2026-11-01"), event("old", "2026-10-01")] };
-      else if (url.includes("summary?")) data = { rosters: [{ team: { id: "9" }, roster: [{ starter: true, athlete: { id: "1", displayName: "Titular" } }] }] };
-      else data = { team: { nextEvent: [{ id: "next", date: "2026-12-01" }] } };
-      return new Response(JSON.stringify(data));
+      if (url.includes("search/suggest")) return new Response(JSON.stringify([{ suggestions: [{ type: "team", id: 777, name: "Otro equipo" }] }]));
+      return new Response(JSON.stringify(fotmobTeamFixture(777, "Otro equipo")));
     }));
-    const entity = { id: "club:test", kind: "club", sport: "futbol", name: "Club Test", countryId: "per" } as const;
-    const result = await loadTeamOverview(entity);
-    expect(result).toMatchObject({ supported: true, teamId: "9", season: "2026", unavailable: ["clasificación"] });
-    expect(result.squad[0].goals).toBe("0");
-    expect(result.fixtures.map(event => event.id)).toEqual(["old", "new", "next"]);
-    expect(result.lineup?.match?.id).toBe("new");
-    expect(fetched.some(url => url.endsWith("summary?event=new"))).toBe(true);
-    fetched.length = 0;
-    await loadTeamOverview(entity);
-    expect(fetched).toHaveLength(1); // only the failed table is retried
+    expect((await (await loader())({ ...alianza, id: "club:other", name: "Otro equipo" })).teamId).toBe("777");
   });
-  it("does not silently match a different club in a supported country", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ sports: [{ leagues: [{ teams: [{ team: { id: "1", name: "Other" } }] }] }] }))));
-    expect((await loadTeamOverview({ id: "club:none", kind: "club", sport: "futbol", name: "Unknown", countryId: "arg" })).supported).toBe(false);
+  it("does not follow provider-supplied statistics URLs to arbitrary hosts", async () => {
+    const d = fotmobTeamFixture(); d.stats.players[0].fetchAllUrl = "https://evil.test/private";
+    const fetch = vi.fn(async () => new Response(JSON.stringify(d))); vi.stubGlobal("fetch", fetch);
+    const result = await (await loader())(alianza);
+    expect(result.standings).toHaveLength(3);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
