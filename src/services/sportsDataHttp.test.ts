@@ -29,3 +29,12 @@ it("HTTP errors are not cached and can be retried without a hidden fallback", as
   expect(await sportsDataJson("https://www.fotmob.com/api/data/teams?id=986")).toEqual({ ok: true });
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+it("identifies the native app honestly so FotMob does not reject an anonymous client", async () => {
+  const { sportsDataJson } = await import("./sportsDataHttp");
+  runtime.isTauriRuntime.mockReturnValue(true);
+  runtime.invokeCommand.mockImplementation(async (_command, args) => {
+    const identified = args.request.headers["User-Agent"] === "Aetherio/0.9.4 (local sports MVP)";
+    return { status: identified ? 200 : 403, bodyBase64: Buffer.from('{"ok":true}').toString("base64") };
+  });
+  await expect(sportsDataJson("https://www.fotmob.com/api/data/teams?id=985", { refresh: true })).resolves.toEqual({ ok: true });
+});
