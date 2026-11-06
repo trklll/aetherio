@@ -1,4 +1,4 @@
-﻿import { defineConfig } from "vite";
+﻿import { defineConfig, type ProxyOptions } from "vite";
 import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
@@ -39,5 +39,18 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
+    // Local browser MVP only. Desktop uses the existing native HTTP bridge.
+    // Fixed destinations, never a caller-provided proxy URL or paid service.
+    proxy: Object.fromEntries([
+      ["fotmob-stats", "https://data.fotmob.com", ""],
+      ["fotmob", "https://www.fotmob.com", "/api/data"],
+      ["wikidata", "https://www.wikidata.org", ""],
+    ].map(([name, target, prefix]) => [`/api/sports-data/${name}`, {
+      target, changeOrigin: true, timeout: 18_000, proxyTimeout: 15_000,
+      rewrite: (url: string) => url.replace(`/api/sports-data/${name}`, prefix),
+      configure: proxy => {
+        proxy.on("proxyReq", request => { request.removeHeader("cookie"); request.removeHeader("authorization"); });
+      },
+    } satisfies ProxyOptions])),
   },
 }));

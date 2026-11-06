@@ -28,6 +28,7 @@ Aplicación existente con React 19, TypeScript, Vite, Tauri 2, reproductor mpv, 
 - Reutilizar primero las piezas existentes. Recordar preferencias y ocultar vistos ya tienen implementación parcial; no presentarlas como capacidades totalmente ausentes.
 - Los estados locales, AniList, Trakt y la futura sincronización completa de Aetherio deben distinguirse. No afirmar sincronización de cuenta sin confirmación real del servidor.
 - El usuario autoriza fijar reglas y valores iniciales en el plan para un ejecutor literal. Solo los bloqueos externos reales quedan pendientes.
+- Deportes: datos siempre sin servicios de pago ni pruebas temporales. MVP local con FotMob como fuente principal, sin consultas a ESPN; Wikidata como complemento opcional. No prometer continuidad de endpoints no oficiales ni permisos de redistribución no concedidos. Priorizar datos e integración antes de rediseñar el frontend (confirmado el 6 de noviembre de 2026).
 
 ## Evidence on Hand
 

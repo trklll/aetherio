@@ -4,7 +4,7 @@ import { fotmobTeamFixture } from "./__fixtures__/fotmobTeam";
 
 vi.mock("../runtime/platform", () => ({ isTauriRuntime: () => false, invokeCommand: vi.fn() }));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-const alianza = { id: "club:alianza-lima", kind: "club", sport: "futbol", name: "Alianza Lima", countryId: "per" } as const;
+const alianza = { id: "club:fl-alianza-lima", kind: "club", sport: "futbol", name: "Alianza Lima", countryId: "per" } as const;
 
 describe("FotMob team adapters", () => {
   it("resolves exact unique team aliases, not players, women or ambiguous names", () => {
@@ -28,7 +28,8 @@ describe("FotMob team adapters", () => {
   it("excludes coaches and does not mistake placeholder roster goals for real statistics", () => {
     const players = parseRoster(fotmobTeamFixture());
     expect(players).toHaveLength(2);
-    expect(players[0]).toMatchObject({ name: "Jugador de prueba", jersey: "9", goals: undefined, position: "Delantero" });
+    expect(players[0]).toMatchObject({ name: "Jugador de prueba", jersey: "9", position: "Delantero" });
+    expect(players[0].goals).toBeUndefined();
     expect(players[0].photo).toBe("https://images.fotmob.com/image_resources/playerimages/1.png");
     expect(parseRoster(null)).toEqual([]);
   });

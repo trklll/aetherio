@@ -1,7 +1,7 @@
 /** Editorial data, separate from ESPN. Never interpret missing coverage as zero titles.
  * Men's first-team totals transcribed from the official trophy room on 2026-11-06.
  */
-export interface TeamHonours { source: string; checkedAt: string; competitions: { name: string; count: number; seasons: string }[] }
+export interface TeamHonours { source: string; checkedAt: string; partial?: boolean; competitions: { name: string; count: number; seasons: string }[] }
 export const TEAM_HONOURS: Record<string, TeamHonours> = {
   "club:man-utd": {
     source: "https://www.manutd.com/en/history/trophy-room", checkedAt: "2026-11-06",

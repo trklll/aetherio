@@ -5,6 +5,7 @@ import { SPORTS_COUNTRY_BY_ID, SPORTS_ENTITY_BY_ID } from "../../data/sports/cat
 import { resolveInsignia, initialsOf } from "../../data/sports/insignia";
 import { TEAM_HONOURS } from "../../data/sports/teamHonours";
 import { loadTeamOverview, type TeamOverview, type TeamPlayer, type TeamFixture } from "../../services/sportsTeamOverview";
+import { loadTeamClubFacts, type TeamClubFacts } from "../../services/sportsTeamFacts";
 import { LOCAL_PROFILES_CHANGED_EVENT } from "../../utils/localProfiles";
 import { useLiveEvents } from "../../hooks/useLiveEvents";
 import { resolveEvents, canonicalEventIsPlayable } from "../../data/sports/identity";
@@ -24,7 +25,7 @@ function PlayerPhoto({ player }: { player: TeamPlayer }) {
 }
 function Fixtures({ fixtures }: { fixtures: TeamFixture[] }) {
   return fixtures.length ? <ul className="team-page__fixtures">{fixtures.map(match => <li key={match.id}>
-    <span>{dateLabel(match.date, match.timeValid)}<small>{match.completed ? "Finalizado" : match.live ? "En directo" : match.timeValid ? "Próximamente" : "Horario por confirmar"}</small></span>
+    <span>{dateLabel(match.date, match.timeValid)}<small>{match.cancelled ? "Cancelado" : match.completed ? "Finalizado" : match.live ? "En directo" : match.timeValid ? "Próximamente" : "Horario por confirmar"}</small></span>
     <strong>{match.home && match.away ? `${match.home} — ${match.away}` : match.name}</strong><b>{match.score ?? "—"}</b>
   </li>)}</ul> : <p className="team-page__empty">No hay partidos publicados para esta competición.</p>;
 }
@@ -34,6 +35,7 @@ export default function SportsTeamPage() {
   const navigate = useNavigate();
   const entity = SPORTS_ENTITY_BY_ID.get(teamId ?? "");
   const [data, setData] = useState<TeamOverview>();
+  const [facts, setFacts] = useState<TeamClubFacts>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -45,9 +47,17 @@ export default function SportsTeamPage() {
     let current = true;
     setLoading(true); setError(false); setData(undefined);
     if (!entity) { setLoading(false); return; }
-    void loadTeamOverview(entity).then(value => { if (current) setData(value); }).catch(() => { if (current) setError(true); }).finally(() => { if (current) setLoading(false); });
+    void loadTeamOverview(entity, { refresh: attempt > 0 }).then(value => { if (current) setData(value); }).catch(() => { if (current) setError(true); }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, [entity, attempt]);
+  useEffect(() => {
+    let current = true;
+    setFacts(undefined);
+    if (entity?.sport === "futbol") {
+      void loadTeamClubFacts(entity.id).then(value => { if (current) setFacts(value); }).catch(() => { /* Optional: never block FotMob data. */ });
+    }
+    return () => { current = false; };
+  }, [entity]);
   useEffect(() => { setSection("Clasificación"); backRef.current?.focus({ preventScroll: true }); }, [teamId]);
   useEffect(() => {
     const close = () => navigate("/big-picture/sports", { replace: true });
@@ -57,7 +67,7 @@ export default function SportsTeamPage() {
   if (!entity || !["club", "national-team"].includes(entity.kind)) return <main className="team-page"><button onClick={() => navigate("/big-picture/sports")}>Volver a Deportes</button><h1>Equipo no encontrado</h1></main>;
   const crest = resolveInsignia({ entityId: entity.id, name: entity.name, size: 128 }).src;
   const competition = SPORTS_ENTITY_BY_ID.get(entity.competitionId ?? "");
-  const honours = TEAM_HONOURS[entity.id];
+  const honours = TEAM_HONOURS[entity.id] ?? data?.honours;
   const ownStanding = data?.standings.flatMap(group => group.rows).find(row => row.id === data.teamId);
   const upcoming = data?.fixtures.filter(match => !match.completed) ?? [];
   const results = data?.fixtures.filter(match => match.completed).reverse() ?? [];
@@ -75,9 +85,9 @@ export default function SportsTeamPage() {
     <nav className="team-page__nav" aria-label="Información del equipo" data-spatial-grid>{SECTIONS.map(name => <button key={name} aria-current={section === name ? "page" : undefined} onClick={() => setSection(name)}>{name}</button>)}</nav>
     <section className="team-page__content" aria-labelledby="team-section-title" aria-busy={loading}>
       <h2 id="team-section-title">{section}</h2>
-      {loading && section !== "Títulos" ? <p className="team-page__empty" role="status">Consultando datos del equipo en ESPN…</p> : section === "Títulos" ? <>
-        {honours ? <><p className="team-page__note">Primer equipo masculino · Registro verificado el {dateLabel(honours.checkedAt)}. No se actualiza automáticamente.</p><div className="team-page__table-scroll" tabIndex={0} role="region" aria-label="Palmarés"><table><thead><tr><th>Competición</th><th>Títulos</th><th>Temporadas</th></tr></thead><tbody>{honours.competitions.map(trophy => <tr key={trophy.name}><th scope="row">{trophy.name}</th><td><strong>{trophy.count}</strong></td><td className="team-page__seasons">{trophy.seasons}</td></tr>)}</tbody></table></div><p className="team-page__note">Fuente: {honours.source}</p></> : <p className="team-page__empty">Palmarés pendiente de verificación para este equipo. ESPN no proporciona un historial de títulos; no se muestra un total sin una fuente comprobada.</p>}
-      </> : error ? <p className="team-page__empty" role="alert">No pudimos conectar con ESPN. Comprueba la conexión y pulsa «Reintentar datos».</p> : !data?.supported ? <p className="team-page__empty">No hay cobertura verificada en ESPN para este equipo. Tus favoritos y las emisiones siguen disponibles.</p> : <>
+      {loading && (section !== "Títulos" || !honours) ? <p className="team-page__empty" role="status">Consultando datos del equipo en FotMob…</p> : section === "Títulos" ? <>
+        {honours ? <><p className="team-page__note">{honours.partial ? "Registro parcial de FotMob: puede omitir títulos históricos. No equivale al palmarés completo del club." : `Primer equipo masculino · Registro verificado el ${dateLabel(honours.checkedAt)}. No se actualiza automáticamente.`}</p><div className="team-page__table-scroll" tabIndex={0} role="region" aria-label="Palmarés"><table><thead><tr><th>Competición</th><th>Títulos</th><th>Temporadas</th></tr></thead><tbody>{honours.competitions.map(trophy => <tr key={trophy.name}><th scope="row">{trophy.name}</th><td><strong>{trophy.count}</strong></td><td className="team-page__seasons">{trophy.seasons}</td></tr>)}</tbody></table></div><p className="team-page__note">Fuente: {honours.source}</p></> : <p className="team-page__empty">No hay un palmarés publicado para este equipo en los datos disponibles. Eso no significa que tenga cero títulos.</p>}
+      </> : error ? <p className="team-page__empty" role="alert">No pudimos cargar los datos de FotMob. Comprueba la conexión y pulsa «Reintentar datos».</p> : !data?.supported ? <p className="team-page__empty">No hay una coincidencia verificada en FotMob para este equipo. Tus favoritos y las emisiones siguen disponibles.</p> : <>
         {!!data.unavailable.length && <p className="team-page__note" role="status">No se pudieron cargar: {data.unavailable.join(", ")}. Puedes reintentar sin salir del equipo.</p>}
         {section === "Clasificación" && (data.standings.length ? data.standings.map((group, index) => <div key={`${group.name}-${index}`} className="team-page__group"><h3>{group.name}</h3><p className="team-page__note">{group.season}</p><div className="team-page__table-scroll" tabIndex={0} role="region" aria-label={`Tabla ${group.name}`}><table><thead><tr>{["Pos.", "Equipo", "PJ", "G", "E", "P", "GF", "GC", "DG", "Pts"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{group.rows.map(row => <tr key={row.id} className={row.id === data.teamId ? "team-page__own" : undefined} aria-current={row.id === data.teamId ? "true" : undefined}><td>{row.rank ?? "—"}</td><th scope="row">{row.name}{row.id === data.teamId && <span className="team-page__sr"> · Tu equipo</span>}</th>{[row.played, row.wins, row.draws, row.losses, row.goalsFor, row.goalsAgainst, row.difference, row.points].map((value, i) => <td key={i}>{value ?? "—"}</td>)}</tr>)}</tbody></table></div></div>) : <p className="team-page__empty">La fuente no ha publicado una clasificación para esta competición.</p>)}
         {section === "Alineación" && (data.lineup ? <><p className="team-page__note">{data.lineup.match?.live ? "Alineación del partido en directo" : "Última alineación publicada"} · {dateLabel(data.lineup.match?.date)} · {data.lineup.match?.name}</p>{data.lineup.formation && <h3>Sistema {data.lineup.formation}</h3>}<ol className="team-page__players">{data.lineup.players.map(player => <li key={player.id}><PlayerPhoto player={data.squad.find(member => member.id === player.id) ?? player} /><span><strong>{player.name}</strong><small>Dorsal {player.jersey ?? "—"} · {player.position ?? "Posición no informada"}</small></span></li>)}</ol><p className="team-page__note">Esta alineación no confirma los titulares del próximo partido.</p></> : <p className="team-page__empty">No hay una alineación publicada para el último partido disponible.</p>)}
@@ -85,6 +95,10 @@ export default function SportsTeamPage() {
         {section === "Partidos" && <><h3>Próximos partidos</h3><Fixtures fixtures={upcoming} /><h3>Resultados</h3><Fixtures fixtures={results} /></>}
       </>}
     </section>
-    {data?.supported && <footer className="team-page__note">Datos: ESPN (API no oficial) · Consultados {dateLabel(new Date(data.fetchedAt).toISOString(), true)}. La cobertura depende del club y la competición.</footer>}
+    {(data?.venue || facts) && <aside className="team-page__note" aria-label="Datos del club">
+      {(data?.venue || facts?.stadium) && <p>Estadio: {data?.venue ?? facts?.stadium}{data?.city ? ` · ${data.city}` : ""}</p>}
+      {facts && <p>Complemento Wikidata ({facts.wikidataId}){facts.website ? ` · Web del club: ${facts.website}` : ""}. Datos sin verificación editorial. Fuente: {facts.source}</p>}
+    </aside>}
+    {data?.supported && <footer className="team-page__note">Datos: FotMob (acceso no oficial, MVP local) · Consultados {dateLabel(new Date(data.fetchedAt).toISOString(), true)}. La cobertura depende del club y la competición.</footer>}
   </main>;
 }
