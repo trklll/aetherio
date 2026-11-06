@@ -34,4 +34,33 @@ describe("team data adapters", () => {
     expect(result.supported).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
+  it("loads partial sections, merges next fixtures and chooses the newest result for lineup", async () => {
+    const fetched: string[] = [];
+    const event = (id: string, date: string) => ({ id, date, competitions: [{ status: { type: { completed: true } } }] });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      fetched.push(url);
+      let data: unknown = {};
+      if (url.includes("teams?")) data = { sports: [{ leagues: [{ teams: [{ team: { id: "9", displayName: "Club Test" } }] }] }] };
+      else if (url.endsWith("standings")) return new Response("", { status: 503 });
+      else if (url.endsWith("/roster")) data = { athletes: [{ id: "1", displayName: "Titular", statistics: { splits: { categories: [{ stats: [{ name: "totalGoals", value: 0 }] }] } } }], season: { displayName: "2026" } };
+      else if (url.endsWith("/schedule")) data = { events: [event("new", "2026-11-01"), event("old", "2026-10-01")] };
+      else if (url.includes("summary?")) data = { rosters: [{ team: { id: "9" }, roster: [{ starter: true, athlete: { id: "1", displayName: "Titular" } }] }] };
+      else data = { team: { nextEvent: [{ id: "next", date: "2026-12-01" }] } };
+      return new Response(JSON.stringify(data));
+    }));
+    const entity = { id: "club:test", kind: "club", sport: "futbol", name: "Club Test", countryId: "per" } as const;
+    const result = await loadTeamOverview(entity);
+    expect(result).toMatchObject({ supported: true, teamId: "9", season: "2026", unavailable: ["clasificación"] });
+    expect(result.squad[0].goals).toBe("0");
+    expect(result.fixtures.map(event => event.id)).toEqual(["old", "new", "next"]);
+    expect(result.lineup?.match?.id).toBe("new");
+    expect(fetched.some(url => url.endsWith("summary?event=new"))).toBe(true);
+    fetched.length = 0;
+    await loadTeamOverview(entity);
+    expect(fetched).toHaveLength(1); // only the failed table is retried
+  });
+  it("does not silently match a different club in a supported country", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ sports: [{ leagues: [{ teams: [{ team: { id: "1", name: "Other" } }] }] }] }))));
+    expect((await loadTeamOverview({ id: "club:none", kind: "club", sport: "futbol", name: "Unknown", countryId: "arg" })).supported).toBe(false);
+  });
 });
