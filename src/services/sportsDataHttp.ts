@@ -36,8 +36,9 @@ async function requestJson(url: string): Promise<unknown> {
       if (isTauriRuntime()) {
         // Reuse the desktop HTTP bridge: browser CORS must not decide whether
         // the installed MVP works. No paid service, credentials or bot bypass.
+        // FotMob rejects the anonymous native client (403); identify our app honestly.
         const response = await invokeCommand<{ status: number; bodyBase64: string; url?: string }>("provider_http_request", {
-          request: { url, method: "GET", headers: { Accept: "application/json" } },
+          request: { url, method: "GET", headers: { Accept: "application/json", "User-Agent": "Aetherio/0.9.4 (local sports MVP)" } },
         });
         if (!response || response.status < 200 || response.status >= 300) throw new Error(`Datos deportivos HTTP ${response?.status ?? "sin respuesta"}`);
         if (response.url) sportsDataProxyPath(response.url);

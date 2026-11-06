@@ -1,0 +1,35 @@
+{
+  "native": true,
+  "endpoint": "http://127.0.0.1:9232",
+  "checkedAt": "2026-11-06T12:36:19.350Z",
+  "teams": [
+    {
+      "id": "club:man-city",
+      "name": "Manchester City",
+      "ok": true,
+      "starters": 11,
+      "rosterRows": 26
+    },
+    {
+      "id": "club:man-utd",
+      "name": "Manchester United",
+      "ok": true,
+      "starters": 11,
+      "rosterRows": 31
+    },
+    {
+      "id": "club:fl-alianza-lima",
+      "name": "Alianza Lima",
+      "ok": true,
+      "starters": 11,
+      "rosterRows": 32
+    },
+    {
+      "id": "club:fl-atletico-grau",
+      "name": "Atlético Grau",
+      "ok": true,
+      "starters": 11,
+      "rosterRows": 29
+    }
+  ]
+}

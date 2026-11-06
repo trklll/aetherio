@@ -44,3 +44,26 @@ npx playwright test e2e/sports-team-page.spec.ts --grep "MVP con datos reales" -
 ```
 
 La prueba en vivo requiere conexión y depende del proveedor. Recorre clasificación, once titular, plantilla con fotografías y títulos. Las capturas se guardan en `.impeccable/review/sports-team-page/live-*.png`. No se ejecuta en CI de forma predeterminada para evitar convertir disponibilidad externa en un fallo del código.
+
+### Comprobación en Tauri real (6 de noviembre de 2026)
+
+La primera comprobación de navegador no detectó un fallo del transporte nativo: FotMob/CloudFront devolvía **403 Request blocked** al cliente sin `User-Agent`. Se reprodujo dentro de la instancia real de Aetherio. La misma petición nativa con `User-Agent: Aetherio/0.9.4 (local sports MVP)` devolvió **200 JSON**. Esta identificación de la aplicación no suplanta un navegador ni resuelve desafíos, utiliza cookies de navegador o introduce proxies de evasión.
+
+La cabecera queda en el transporte deportivo de escritorio. No requiere modificar Rust. El test de regresión falló con 403 antes del cambio y pasó después; los 18 tests de los tres servicios y TypeScript también pasaron.
+
+Para repetir la comprobación nativa, salir por completo de Aetherio y arrancar desde PowerShell:
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-address=127.0.0.1 --remote-debugging-port=9232"
+npm run tauri dev
+```
+
+Con el perfil ya abierto y la página de equipo visible, desde otra terminal:
+
+```powershell
+node scripts/check-sports-tauri.mjs http://127.0.0.1:9232
+```
+
+El script conecta al WebView2 existente, exige el puente Tauri y la ventana `main`, no simula IPC ni datos y no modifica perfiles o favoritos. Recorre los cuatro clubes, verifica clasificación, once titular, más de 20 filas de plantilla, una foto cargada, partidos y palmarés con sus advertencias. Restaura la página y pestaña originales sin cerrar la aplicación. Los cuatro clubes pasaron en la instancia real; el informe es `tauri-verification.json` y las capturas son `tauri-club-*.png`, en el directorio de revisión de la página.
+
+El puerto es únicamente de diagnóstico local: cerrar esa sesión de desarrollo y arrancar normalmente al terminar para no dejarlo habilitado. Esta verificación no concede derechos de redistribución ni garantiza disponibilidad futura del proveedor.
