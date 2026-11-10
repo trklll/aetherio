@@ -28,7 +28,6 @@ import HomePage from "../Home/index.tsx";
 import BigPictureBackdrop from "./BigPictureBackdrop.tsx";
 import BigPictureHero from "./BigPictureHero.tsx";
 import BigPictureRail from "./BigPictureRail.tsx";
-import SportsRail from "../Sports/SportsRail.tsx";
 import BigPictureSearch from "./BigPictureSearch.tsx";
 import BigPictureParty from "./BigPictureParty.tsx";
 import BigPictureGenre from "./BigPictureGenre.tsx";
@@ -47,7 +46,14 @@ const StreamingPlatformPage = lazy(() => import("../StreamingPlatform/index.tsx"
 const BigPictureSettings = lazy(() => import("./BigPictureSettings.tsx"));
 const BigPictureAddons = lazy(() => import("./BigPictureAddons.tsx"));
 // Sports is available for iteration in `tauri dev`, not in release builds.
-const SportsApp = import.meta.env.DEV ? lazy(() => import("../Sports/SportsApp.tsx")) : null;
+const SPORTS_APP_MODULE = "/src/pages/Sports/SportsApp.tsx";
+const SPORTS_RAIL_MODULE = "/src/pages/Sports/SportsRail.tsx";
+const SportsApp = import.meta.env.DEV
+  ? lazy(() => import(/* @vite-ignore */ SPORTS_APP_MODULE))
+  : null;
+const SportsRail = import.meta.env.DEV
+  ? lazy(() => import(/* @vite-ignore */ SPORTS_RAIL_MODULE))
+  : null;
 
 // Episodie es sección del Detail (un solo fondo): las rutas /big-picture/episode
 // y /big-picture/streams redirigen al Detail con la sección abierta.
@@ -416,7 +422,7 @@ export default function BigPicturePage() {
       {!isSubPage && (
         <BigPictureBackdrop items={heroItems} scrollRef={scrollRef} onActiveItem={handleActiveItem} animateEntrance={isEntrance} contentVisible={heroContentVisible} />
       )}
-      {!isPlayer && !isEpisode && (isSports && SportsApp ? <SportsRail /> : <BigPictureRail
+      {!isPlayer && !isEpisode && (isSports && SportsApp && SportsRail ? <Suspense fallback={null}><SportsRail /></Suspense> : <BigPictureRail
         onNavigate={route => route === "/big-picture/sports" ? enterSportsMode(navigate, location.pathname) : navigate(route)}
       />)}
       {exitConfirmOpen && (

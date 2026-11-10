@@ -19,7 +19,6 @@ import {
   type ShellPreviewItem,
 } from "../../utils/shellPreview";
 import BigPictureRail from "../../pages/BigPicture/BigPictureRail.tsx";
-import SportsRail from "../../pages/Sports/SportsRail.tsx";
 import "../../pages/BigPicture/BigPicture.css";
 import "../../pages/BigPicture/ShellDetailPreview.css";
 
@@ -27,7 +26,14 @@ const DetailPage = lazy(() => import("../../pages/Detail"));
 const DetailSectionPage = lazy(() => import("../../pages/Detail/DetailSectionPage"));
 const PersonPage = lazy(() => import("../../pages/Person"));
 const EntityPage = lazy(() => import("../../pages/Entity"));
-const SportsMatchPage = lazy(() => import("../../pages/Sports/SportsMatchPage"));
+const SPORTS_RAIL_MODULE = "/src/pages/Sports/SportsRail.tsx";
+const SPORTS_MATCH_PAGE_MODULE = "/src/pages/Sports/SportsMatchPage.tsx";
+const SportsRail = import.meta.env.DEV
+  ? lazy(() => import(/* @vite-ignore */ SPORTS_RAIL_MODULE))
+  : null;
+const SportsMatchPage = import.meta.env.DEV
+  ? lazy(() => import(/* @vite-ignore */ SPORTS_MATCH_PAGE_MODULE))
+  : null;
 
 interface ShellDetailPreviewProps {
   request: ShellPreviewRequest;
@@ -912,7 +918,7 @@ export function ShellPreviewApp() {
           <Route path="/big-picture/detail/:type/:id/:section" element={<DetailSectionPage />} />
           <Route path="/big-picture/person/:id" element={<PersonPage />} />
           <Route path="/big-picture/entity/:kind/:id" element={<EntityPage />} />
-          <Route path="/big-picture/sports/match/:matchId" element={<SportsMatchPage onShellPreviewLoading={signalDetailLoading} onShellPreviewReady={signalDetailReady} shellActive={active} shellAnimated={previewMotion} shellExternalFlag={externalFlag} />} />
+          {SportsMatchPage && <Route path="/big-picture/sports/match/:matchId" element={<SportsMatchPage onShellPreviewLoading={signalDetailLoading} onShellPreviewReady={signalDetailReady} shellActive={active} shellAnimated={previewMotion} shellExternalFlag={externalFlag} />} />}
           <Route path="*" element={<div className="shell-preview-app__fallback" />} />
         </Routes>
       </Suspense>
@@ -925,7 +931,9 @@ export function ShellPreviewApp() {
          navegación interna (detail/person/entity) no existe en este documento,
          así que al pulsar otro destino el <Routes> cae en "*" y el mensaje
          `navigate` (L434) hace que el parent entregue a la app real. */}
-      {active && (location.pathname.startsWith("/big-picture/sports/") ? <SportsRail /> : <BigPictureRail />)}
+      {active && (location.pathname.startsWith("/big-picture/sports/") && SportsRail
+        ? <Suspense fallback={<div className="shell-preview-app__fallback" />}><SportsRail /></Suspense>
+        : <BigPictureRail />)}
     </div>
   );
 }
