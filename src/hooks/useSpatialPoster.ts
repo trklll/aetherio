@@ -48,6 +48,7 @@ export function useSpatialPoster(
   disabled = false,
   overrides?: SpatialPosterOverrides,
   fallbackPoster?: string,
+  active = true,
 ): ResolvedPoster {
   const settings = useSpatialPosterSettings();
   // La firma NO lleva sufijo de ranking: el override ya vive en la URL
@@ -67,11 +68,11 @@ export function useSpatialPoster(
   const knownUp = instanceUrl ? getKnownSpatialAvailability(instanceUrl) : null;
   const [up, setUp] = useState<boolean | null>(null);
   useEffect(() => {
-    if (!instanceUrl || knownUp !== null) return;
+    if (!active || !instanceUrl || knownUp !== null) return;
     let cancelled = false;
     void probeSpatialInstance(instanceUrl).then(ok => { if (!cancelled) setUp(ok); });
     return () => { cancelled = true; };
-  }, [instanceUrl, knownUp]);
+  }, [active, instanceUrl, knownUp]);
   // Mientras no se sepa, se usa el póster de TMDB. Ser pesimista a propósito:
   // si la instancia está caída así no sale ni una petición fallida hacia un
   // puerto muerto, en vez de pintar 300 URLs rotas y que cada onError las
@@ -89,13 +90,13 @@ export function useSpatialPoster(
   const fallback = fallbackPoster ?? (isSpatialPosterUrl(basePosterUrl) ? undefined : basePosterUrl);
 
   useEffect(() => {
-    if (!targetUrl || !isSpatial || readyTarget || failedTarget || verification?.url === targetUrl) return;
+    if (!active || !targetUrl || !isSpatial || readyTarget || failedTarget || verification?.url === targetUrl) return;
     let cancelled = false;
     void preloadPosterArtwork(targetUrl, settings, signature).then(result => {
       if (!cancelled) setVerification({ url: targetUrl, ok: Boolean(result) });
     });
     return () => { cancelled = true; };
-  }, [failedTarget, isSpatial, readyTarget, settings, signature, targetUrl, verification?.url]);
+  }, [active, failedTarget, isSpatial, readyTarget, settings, signature, targetUrl, verification?.url]);
 
   if (!enabled || !tmdbId || !usable || !isSpatial) {
     return { url: basePosterUrl, original: undefined, pending: false };

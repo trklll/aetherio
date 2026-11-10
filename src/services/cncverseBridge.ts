@@ -15,6 +15,13 @@ export const CNCVERSE_BRIDGE_ID = "com.cncverse.stremiobridge.aetherio";
 export const CNCVERSE_BRIDGE_LOGO =
   "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Bridge/refs/heads/main/logo.png";
 export const CNCVERSE_BRIDGE_URL_KEY = "aetherio-cncverse-bridge-url";
+export const CNCVERSE_TV_ADDON_ID = "com.cncverse.stremiobridge.p1hym8x62am7m";
+export const CNCVERSE_TV_IPTV_PROVIDER_ID = "cncverse-tv-iptv";
+export const CNCVERSE_TV_SOURCE_ID = "cncverse-tv";
+
+export function isCncVerseTvAddon(addon: { id?: unknown } | null | undefined): boolean {
+  return addon?.id === CNCVERSE_TV_ADDON_ID;
+}
 
 /** Catalogos `tv` con eventos en directo. Todos comparten el mismo `base`. */
 export const CNCVERSE_LIVE_CATALOGS = [
@@ -250,6 +257,15 @@ export interface CncVersePayload {
   id?: string;
   title?: string;
   category?: string;
+  groupTitle?: string;
+  logo?: string;
+  country?: string;
+  language?: string;
+  userAgent?: string | null;
+  referer?: string | null;
+  url?: string;
+  key?: string | null;
+  keyid?: string | null;
   /** Epoch en ms (solo StreamedSports). */
   date?: number;
   popular?: boolean;
@@ -460,9 +476,9 @@ export function cncVerseMetaToEvent(meta: StremioMeta, now = Date.now()): LiveEv
   const isHot = String(info?.isHot ?? "") === "1";
 
   let status: LiveEvent["status"] = "upcoming";
-  if (isHot) status = "live";
-  else if (Number.isFinite(endMs) && endMs <= now) status = "ended";
-  else if (!Number.isFinite(startMs) || startMs <= now) status = "live";
+  if (Number.isFinite(endMs) && endMs <= now) status = "ended";
+  else if (Number.isFinite(startMs) && startMs > now) status = "upcoming";
+  else if (isHot || !Number.isFinite(startMs) || startMs <= now) status = "live";
 
   // El deporte no viene limpio: el bridge pone el genero del catalogo, que
   // mezcla deportes con competicion. Se separa en deporte + competicion para

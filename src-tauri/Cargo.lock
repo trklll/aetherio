@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aetherio"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -46,6 +46,7 @@ dependencies = [
  "libloading 0.8.9",
  "librqbit",
  "parking_lot",
+ "quick-xml 0.37.5",
  "regex",
  "reqwest 0.12.28",
  "scraper",

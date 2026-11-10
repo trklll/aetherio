@@ -45,4 +45,20 @@ describe("IPTV transport boundaries", () => {
       expect(await probeIptvSource(source)).toBe(false);
     }
   });
+  it("checks directly playable MP4, WebM and Ogg channels instead of treating them as HLS", async () => {
+    const mp4 = new Uint8Array(16); mp4.set(new TextEncoder().encode("ftyp"), 4);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(mp4)));
+    expect(await probeIptvSource({ id: "mp4", label: "MP4", url: "https://cdn.example/live.mp4" })).toBe(true);
+
+    const webm = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(webm)));
+    expect(await probeIptvSource({ id: "webm", label: "WebM", url: "https://cdn.example/live.webm" })).toBe(true);
+
+    const ogg = new TextEncoder().encode("OggS\0\0\0\0");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(ogg)));
+    expect(await probeIptvSource({ id: "ogg", label: "Ogg", url: "https://cdn.example/live.ogg" })).toBe(true);
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>not a video</html>")));
+    expect(await probeIptvSource({ id: "bad", label: "Bad MP4", url: "https://cdn.example/bad.mp4" })).toBe(false);
+  });
 });

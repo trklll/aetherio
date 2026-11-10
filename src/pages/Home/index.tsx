@@ -237,7 +237,7 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
     if (row.presentation === "cinematic") {
       return <CinematicRow key={key} row={row} restoreScrollLeft={restoreScrollLeft} onOpenPreview={openPreview} />;
     }
-    return <CatalogRow key={key} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={restoreScrollLeft} onOpenPreview={openPreview} />;
+    return <CatalogRow key={key} row={row} posterLayout={homePreferences.posterLayout} restoreScrollLeft={restoreScrollLeft} onOpenPreview={openPreview} deferOffscreenRendering />;
   };
 
   const movieSeriesGenreAnchorIndex = useMemo(() => {
@@ -282,7 +282,7 @@ export default function HomePage({ heroSlot, onContentVisibleChange }: { heroSlo
   };
 
   return (
-      <div ref={pageRef} className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
+      <div ref={pageRef} data-home-page={isBigPicture ? "tv" : "normal"} className="home-page-scale relative flex min-h-full flex-col" style={{ marginTop: "calc(-1 * var(--app-shell-nav-height))", paddingTop: "var(--app-shell-nav-height)" }}>
         {!typeFilter && (heroSlot
           ? heroSlot(homeInfoVisible)
           : <HomeHero items={heroItems} contentVisible={homeInfoVisible} animateEntrance={isEntrance} />)}

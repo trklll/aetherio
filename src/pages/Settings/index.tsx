@@ -25,6 +25,7 @@ import {
 import PageContainer from "../../components/layout/PageContainer";
 import AppleSpinner from "../../components/ui/AppleSpinner";
 import ProfileAvatar from "../../components/profile/ProfileAvatar";
+import { saveDownloadsEnabled, useDownloadsEnabled } from "../../config/downloadPreferences";
 import SourcesPanel from "./SourcesPanel";
 import ToggleSwitch from "../../components/ui/ToggleSwitch";
 import aetherioLogo from "../../assets/aetheriologo.png";
@@ -129,6 +130,7 @@ const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
 export default function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const downloadsEnabled = useDownloadsEnabled();
   const addons = useAddonStore(state => state.addons);
   const { rows: catalogRows, loading: catalogLoading } = useHomeCatalogs(addons);
   const homePreferences = useHomePreferences();
@@ -219,6 +221,11 @@ export default function SettingsPage() {
       savePlaybackPreferences(next);
       return next;
     });
+  }
+
+  function updateDownloadsEnabled(enabled: boolean) {
+    saveDownloadsEnabled(enabled);
+    setSaved(current => ({ ...current, playback: true }));
   }
 
   function updateMdbList(patch: Partial<MdbListSettings>, persist = true) {
@@ -441,7 +448,13 @@ export default function SettingsPage() {
           {activeTab === "sources" ? <SourcesPanel /> : null}
 
           {activeTab === "playback" ? (
-            <PlaybackPanel playback={playback} onPlaybackChange={updatePlayback} saved={saved.playback} />
+            <PlaybackPanel
+              playback={playback}
+              onPlaybackChange={updatePlayback}
+              downloadsEnabled={downloadsEnabled}
+              onDownloadsEnabledChange={updateDownloadsEnabled}
+              saved={saved.playback}
+            />
           ) : null}
 
           {activeTab === "about" ? <AboutPanel /> : null}
@@ -1335,10 +1348,14 @@ function AddonsPanel({ installedCount, enabledCount, onOpenAddons }: { installed
 function PlaybackPanel({
   playback,
   onPlaybackChange,
+  downloadsEnabled,
+  onDownloadsEnabledChange,
   saved,
 }: {
   playback: PlaybackPreferences;
   onPlaybackChange: <Value extends PlaybackPreferences[keyof PlaybackPreferences]>(name: keyof PlaybackPreferences, value: Value) => void;
+  downloadsEnabled: boolean;
+  onDownloadsEnabledChange: (enabled: boolean) => void;
   saved: boolean;
 }) {
   return (
@@ -1368,6 +1385,15 @@ function PlaybackPanel({
               { value: "3", label: "3x" },
             ]}
             onChange={value => onPlaybackChange("holdToAccelerateSpeed", Number(value))}
+          />
+        </PillBlock>
+
+        <PillBlock title="DESCARGAS SIN CONEXIÓN">
+          <ToggleRow
+            title="Permitir descargas"
+            description="Activa los botones de descarga y el acceso a tus archivos sin conexión en esta app."
+            checked={downloadsEnabled}
+            onChange={onDownloadsEnabledChange}
           />
         </PillBlock>
 

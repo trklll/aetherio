@@ -16,6 +16,7 @@ import {
   resolvePlaybackTrackSelection,
 } from "../../domain/playbackSelection.ts";
 import type { MediaStream, StreamQuery } from "../../types/stream";
+import type { SportsMatchArtwork } from "../../types/sportsMatch.ts";
 import type { SubtitleSource } from "../../types/subtitle";
 import {
   buildContinueWatchingKey,
@@ -74,13 +75,14 @@ import { useControlsVisibility } from "./useControlsVisibility";
 import { useHiddenCursor } from "../../hooks/useHiddenCursor";
 import { useEpisodeMetadata, usePlayerLogos } from "./usePlayerMetadata";
 import { usePlayerKeyboardShortcuts } from "./usePlayerKeyboardShortcuts";
+import { getRelativeSeekTarget } from "./playerSeek.ts";
 import { usePlayerGamepad } from "./usePlayerGamepad";
 import { followHorizontalFocus } from "../../navigation/spatialNav.ts";
 import { useMpvStatus } from "./useMpvStatus";
 import { useLivePlayback } from "./useLivePlayback";
 import { liveRetryDelay, LIVE_LOAD_FAILURE_TIMEOUT_MS, LIVE_FIRST_FRAME_TIMEOUT_MS, LIVE_STALL_TIMEOUT_MS, type PlaybackFailure } from "./liveRecovery.ts";
 import { useSkipIntro } from "./useSkipIntro";
-import { isEpisodeReleased, shouldShowMovieRecommendation, shouldShowNextEpisodeCard } from "./nextEpisodeRules";
+import { getEpisodeNavigationTarget, isEpisodeReleased, shouldShowMovieRecommendation, shouldShowNextEpisodeCard } from "./nextEpisodeRules";
 import { useParty } from "../../party/PartyContext";
 import { getPartyCorrection } from "../../party/sync";
 import { partyMediaKey, type PartyStreamEvent } from "../../party/protocol";
@@ -295,6 +297,7 @@ export default function PlayerPage() {
   const [selectedMediaName, setSelectedMediaName] = useState("");
   const [selectedMediaBackground, setSelectedMediaBackground] = useState("");
   const [selectedMediaLogo, setSelectedMediaLogo] = useState("");
+  const [selectedSportsMatch, setSelectedSportsMatch] = useState<SportsMatchArtwork>();
   const [selectedMediaPoster, setSelectedMediaPoster] = useState("");
   const [selectedResumeTime, setSelectedResumeTime] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -661,11 +664,13 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
 
   const streamBehaviorBackground = typeof safeStream?.behaviorHints?.background === "string" ? safeStream.behaviorHints.background : "";
   const streamBehaviorPoster = typeof safeStream?.behaviorHints?.poster === "string" ? safeStream.behaviorHints.poster : "";
-  const sharedArtwork = selectedMediaBackground
-    || resumeEntry?.background
-    || resumeEntry?.poster
-    || streamBehaviorBackground
-    || streamBehaviorPoster;
+  const sharedArtwork = selectedSportsMatch
+    ? ""
+    : selectedMediaBackground
+      || resumeEntry?.background
+      || resumeEntry?.poster
+      || streamBehaviorBackground
+      || streamBehaviorPoster;
 
   const contrastArtwork = ensureOriginalTmdbImage(
     query?.type === "movie"
@@ -766,7 +771,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
       const parsed = JSON.parse(saved) as MediaStream;
       if (savedMediaMeta) {
         try {
-          const parsedMeta = JSON.parse(savedMediaMeta) as { name?: string; logo?: string; background?: string; poster?: string; resumeTime?: number };
+          const parsedMeta = JSON.parse(savedMediaMeta) as { name?: string; logo?: string; background?: string; poster?: string; resumeTime?: number; sportsMatch?: SportsMatchArtwork };
           const metadataSeed = query ? readDetailMediaMeta(query.type, query.id) : undefined;
           const background = query
             ? resolveDetailBackground(query.type, query.id, parsedMeta.background ?? metadataSeed?.background ?? parsedMeta.poster)
@@ -774,12 +779,14 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
           setSelectedMediaName(typeof parsedMeta.name === "string" ? parsedMeta.name : "");
           setSelectedMediaBackground(typeof background === "string" ? background : "");
           setSelectedMediaLogo(sanitizeLogoUrl(parsedMeta.logo) ?? "");
+          setSelectedSportsMatch(parsedMeta.sportsMatch);
           setSelectedMediaPoster(typeof parsedMeta.poster === "string" && parsedMeta.poster ? parsedMeta.poster : (typeof background === "string" ? background : ""));
           setSelectedResumeTime(Number.isFinite(parsedMeta.resumeTime) ? Math.max(0, Number(parsedMeta.resumeTime)) : 0);
         } catch {
           setSelectedMediaName("");
           setSelectedMediaBackground("");
           setSelectedMediaLogo("");
+          setSelectedSportsMatch(undefined);
           setSelectedMediaPoster("");
           setSelectedResumeTime(0);
         }
@@ -1592,12 +1599,16 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
   function seek(value: number) {
     if (showUpNext) return;
     if (partyLobbyRef.current && !partyLobbyStartBypassRef.current) return;
+    // Un salto real sustituye cualquier exploración pendiente del timeline.
+    // Dejarla viva congela tanto el playhead como las etiquetas de tiempo.
+    cancelTimelinePreview();
     debugLog("seek() called", { value });
     seekBufferingRef.current = true;
     seekStartedAtRef.current = Date.now();
     lastProgressAtRef.current = Date.now();
     setSeekBuffering(true);
     setStalledPlayback(false);
+    currentTimeRef.current = value;
     setCurrentTime(value);
     void sendMpvCommand(["seek", value, "absolute", "exact"]).catch(() => {
       seekBufferingRef.current = false;
@@ -1647,7 +1658,8 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
     if (showUpNext) return;
     if (partyLobbyRef.current) return;
     debugLog("jump() called", { offset });
-    void sendMpvCommand(["seek", offset, "relative"]);
+    const target = getRelativeSeekTarget(currentTimeRef.current, durationRef.current, offset);
+    seek(target);
   }
 
   /** Salto con OSD: los botones ±10s de la barra usan esta vía para que el
@@ -1866,12 +1878,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
   function navigateEpisode(direction: "prev" | "next") {
     if (!query?.season || !query.episode) return;
     const currentIndex = episodeOptions.findIndex(episode => episode.episode === query.episode);
-    if (currentIndex === -1) return;
-    const nextEpisode = direction === "next"
-      ? resolvedNextEpisode
-      : currentIndex > 0
-        ? (episodeOptions[currentIndex - 1] ?? null)
-        : null;
+    const nextEpisode = getEpisodeNavigationTarget(direction, currentIndex, episodeOptions, resolvedNextEpisode);
     if (!nextEpisode) return;
     if (direction === "next" && stream && playbackPreferences.preferBingeGroup) {
       sessionStorage.setItem(AUTO_NEXT_SOURCE_KEY, JSON.stringify({
@@ -3052,6 +3059,7 @@ usePlayerGamepad({
     });
   },
   exitControls: () => {
+    cancelTimelinePreview();
     setGamepadBarMode(false);
     setBarZone("timeline");
     const focused = document.activeElement as HTMLElement | null;
@@ -3131,10 +3139,20 @@ useLayoutEffect(() => {
   if (!player || !button || !actions) return;
 
   const syncPosition = () => {
-    const playerRect = player.getBoundingClientRect();
-    const actionsRect = actions.getBoundingClientRect();
-    button.style.right = `${Math.max(0, playerRect.right - actionsRect.right)}px`;
-    button.style.bottom = `${Math.max(0, playerRect.bottom - actionsRect.top + 32)}px`;
+    // Medir el layout, no la caja transformada por la animación de entrada.
+    // getBoundingClientRect durante el spring guardaba una posición demasiado
+    // baja: al terminar de subir los controles quedaban pegados al salto.
+    let top = 0;
+    let left = 0;
+    let element: HTMLElement | null = actions;
+    while (element && element !== player) {
+      top += element.offsetTop;
+      left += element.offsetLeft;
+      element = element.offsetParent as HTMLElement | null;
+    }
+    if (element !== player) return;
+    button.style.right = `${Math.max(0, player.clientWidth - left - actions.offsetWidth)}px`;
+    button.style.bottom = `${Math.max(0, player.clientHeight - top + 32)}px`;
   };
   syncPosition();
 
@@ -3152,6 +3170,9 @@ useLayoutEffect(() => {
 }, [activeSkipKey, controlsActive, floatingActionsVisible, isBigPicturePlayer, playbackPreferences.skipSegmentsEnabled, mpvReadyForCommands, playbackStarted]);
 useEffect(() => {
   if (!isBigPicturePlayer) return;
+  // El salto toma foco para A solo cuando la navegación espacial del mando
+  // está activa; en modo PC el ratón no debe heredar un foco visual pegado.
+  if (!gamepadBarMode) return;
   if (!activeSkipKey || !playbackPreferences.skipSegmentsEnabled) return;
   if (!mpvReadyForCommands || !playbackStarted) return;
   if (playerMenu !== null || activeSidePanel !== null || subtitleSync.open || showUpNext) return;
@@ -3159,13 +3180,14 @@ useEffect(() => {
     skipButtonRef.current?.focus({ preventScroll: true });
   }, 60);
   return () => window.clearTimeout(timer);
-}, [activeSkipKey, isBigPicturePlayer, playbackPreferences.skipSegmentsEnabled, mpvReadyForCommands, playbackStarted, playerMenu, activeSidePanel, subtitleSync.open, showUpNext]);
+}, [activeSkipKey, gamepadBarMode, isBigPicturePlayer, playbackPreferences.skipSegmentsEnabled, mpvReadyForCommands, playbackStarted, playerMenu, activeSidePanel, subtitleSync.open, showUpNext]);
 // Al ocultarse la barra, soltar su foco para que la cruceta vuelva al modo directo.
 useEffect(() => {
   if (controlsActive) return;
+  cancelTimelinePreview();
   const focused = document.activeElement as HTMLElement | null;
   if (focused?.closest?.("[data-player-controls-glass]")) focused.blur();
-}, [controlsActive]);
+}, [cancelTimelinePreview, controlsActive]);
 // Si la barra se oculta por otra vía (ratón/timeout), salir del modo barra.
 useEffect(() => {
   if (controlsActive || !gamepadBarMode) return;
@@ -4294,7 +4316,7 @@ if (!stream) {
       */}
 
 
-      <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} message={mpvStatus} hideMessage={playbackStarted} p2p={isP2pStream} />
+      <PlayerLoadingOverlay visible={loadingOverlayVisible} artwork={loadingArtwork} title={mediaTitle} message={mpvStatus} hideMessage={playbackStarted} p2p={isP2pStream} sportsMatch={selectedSportsMatch} compactSports={playbackStarted} />
       {isLiveStream ? (
         <LiveBadge
           atEdge={livePlayback.atLiveEdge}
@@ -4505,6 +4527,12 @@ if (!stream) {
         subtitleSyncTrackLabel={subtitleOptions.find(option => option.value === selectedMpvSubtitle)?.label ?? ""}
         liveMode={isLiveStream}
         sportsLiveMode={isSportsLiveStream}
+        sportsSourceStreams={availableStreams}
+        selectedSportsSourceId={stream.id}
+        onSportsSourceChange={sourceId => {
+          const nextSource = availableStreams.find(candidate => candidate.id === sourceId);
+          if (nextSource) selectSource(nextSource);
+        }}
         liveLatencySeconds={livePlayback.latency}
         liveAtEdge={livePlayback.atLiveEdge}
         liveDvrProgress={livePlayback.dvrProgress}

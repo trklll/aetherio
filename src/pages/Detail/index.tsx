@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, Children, Compon
 import type { CSSProperties, ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useBackAction } from "../../input/inputActions.ts";
-import { BookmarkMinus, Image as ImageIcon, MoreHorizontal, Play, X, Check, EyeOff, UsersRound } from "lucide-react";
+import { BookmarkMinus, Download, Image as ImageIcon, MoreHorizontal, Play, X, Check, EyeOff, UsersRound } from "lucide-react";
 import addImageIcon from "../../assets/add-image-svgrepo-com.svg";
 import { tmdbFetch } from "../../config/apiKeys";
 import { useHomePreferences } from "../../config/homePreferences";
+import { useDownloadsEnabled } from "../../config/downloadPreferences";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist";
 import { useAddonStore } from "../../store/addonStore";
 import ContextMenu from "../../components/ui/ContextMenu";
@@ -992,6 +993,7 @@ export default function DetailPage({
   const { type, id } = useParams<{type:string;id:string}>();
   const navigate = useNavigate();
   const location = useLocation();
+  const downloadsEnabled = useDownloadsEnabled();
   const routeCacheKey = detailPageCacheKey(type, id);
   const initialCachedDetail = readPageDataCache<DetailData>("detail", routeCacheKey);
   const normalizedInitialDetail = initialCachedDetail ? normalizeDetailData({
@@ -3306,6 +3308,16 @@ function updateBackdropBlur(scrollTop: number) {
                   icon: inLibrary ? <BookmarkMinus size={15} /> : <LibraryIcon size={15} />,
                   onSelect: toggleDetailLibrary,
                 },
+                ...(downloadsEnabled ? [{
+                  label: "Buscar una fuente para descargar",
+                  icon: <Download size={15} />,
+                  onSelect: playFromDetail,
+                }] : []),
+                ...(downloadsEnabled ? [{
+                  label: "Ver descargas",
+                  icon: <Download size={15} />,
+                  onSelect: () => navigate(isBigPictureLocation(location.pathname) ? "/big-picture/library?tab=downloads" : "/library?tab=downloads"),
+                }] : []),
                 {
                   label: "Elegir fondo del medio",
                   icon: <ImageIcon size={15} />,

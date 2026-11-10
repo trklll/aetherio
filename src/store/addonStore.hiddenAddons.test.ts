@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { listableAddons, PENGUPLAY_MANIFEST_URL, useAddonStore, type InstalledAddon } from "./addonStore.ts";
+import { listableAddons, manifestForHubAddon, PENGUPLAY_MANIFEST_URL, useAddonStore, type InstalledAddon } from "./addonStore.ts";
 
 function addon(id: string, extra: Partial<InstalledAddon> = {}): InstalledAddon {
   return {
@@ -33,6 +33,30 @@ describe("addons ocultos en la UI", () => {
     const list = [addon("com.penguplay", { hiddenInUi: true })];
     expect(listableAddons(list)).toHaveLength(0);
     expect(list.find(item => item.id === "com.penguplay")).toBeDefined();
+  });
+
+  it("mantiene CNCVerse TV fuera de la lista normal de add-ons aunque el directorio remoto no lo marque oculto", () => {
+    expect(listableAddons([addon("com.cncverse.stremiobridge.p1hym8x62am7m")])).toEqual([]);
+  });
+
+  it("normaliza CNCVerse TV a un manifest de stream tv sin catálogos para evitar superficies VOD", () => {
+    const manifest = manifestForHubAddon({
+      id: "com.cncverse.stremiobridge.p1hym8x62am7m",
+      name: "CNCVerse TV",
+      description: "Canales IPTV deportivos",
+      logo: "https://example.com/cnc.png",
+      manifestUrl: "https://example.com/manifest.json",
+      enabledByDefault: true,
+      catalogPolicy: "keep",
+      manifestFallback: { types: ["movie", "series", "other", "tv"], resources: ["catalog", "stream"], catalogs: [] },
+    }, {
+      types: ["movie", "series", "other", "tv"],
+      resources: ["catalog", "stream"],
+      catalogs: [{ type: "movie", id: "movies", name: "Movies" }],
+    });
+    expect(manifest.types).toEqual(["tv"]);
+    expect(manifest.catalogs).toEqual([]);
+    expect(manifest.resources).toEqual([{ name: "stream", types: ["tv"] }]);
   });
 });
 

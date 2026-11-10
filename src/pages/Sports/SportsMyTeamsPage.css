@@ -1,0 +1,69 @@
+.my-teams {
+  --my-teams-muted: #c5c8cd;
+  --my-teams-line: rgb(255 255 255 / 16%);
+  min-height: 100vh;
+  padding: var(--app-page-y) var(--app-gutter-x) var(--app-gutter-bottom);
+  color: #f8f9fa;
+  background: var(--aetherio-page-bg, #1f1f1f);
+  font-size: clamp(16px, 1.15vw, 22px);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.my-teams button { color: inherit; cursor: pointer; font: inherit; }
+.my-teams :focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
+.my-teams ::selection { color: #181b20; background: #e6ebf3; }
+.my-teams__header { display: flex; max-width: 1440px; margin: 12px auto 32px; align-items: center; justify-content: space-between; gap: 24px; }
+.my-teams h1 { margin: 0; font-size: clamp(30px, 2.4vw, 46px); font-weight: 750; line-height: 1.2; text-wrap: balance; }
+.my-teams__notice button, .my-teams__more { display: inline-flex; min-height: 48px; padding: 10px 18px; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--my-teams-line); border-radius: 10px; background: #2c3037; font-weight: 600; }
+.my-teams__notice button:hover, .my-teams__more:hover { background: #41464f; }
+.my-teams__panel { max-width: 1440px; min-width: 0; margin: 0 auto; padding: 8px clamp(16px, 2.2vw, 40px) 12px; border-radius: 28px; --lg-clip: inset(0 round 28px); }
+.my-teams__tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--my-teams-line); }
+.my-teams__tabs button { position: relative; min-height: 80px; padding: 18px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--my-teams-muted); font-size: 1.12em; font-weight: 600; }
+.my-teams__tabs button:hover { color: #fff; background: rgb(255 255 255 / 5%); }
+.my-teams__tabs button[aria-selected="true"] { color: #fff; font-weight: 750; }
+.my-teams__tabs button[aria-selected="true"]::after { content: ""; position: absolute; right: 28%; bottom: -1px; left: 28%; height: 2px; background: #fff; }
+.my-teams__date-group + .my-teams__date-group { border-top: 1px solid var(--my-teams-line); }
+.my-teams__date-group h2 { font: inherit; }
+.my-teams__date { display: flex; min-height: 64px; width: 100%; margin: 0; padding: 16px; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; font: inherit; font-weight: 600; text-align: center; }
+.my-teams__date::first-letter { text-transform: uppercase; }
+.my-teams__table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.my-teams__table td { padding: 0; border-bottom: 1px solid var(--my-teams-line); }
+.my-teams__table tr:last-child td { border-bottom: 0; }
+.my-teams__fixture { display: grid; width: 100%; padding: 26px 12px; grid-template-columns: minmax(0, 35fr) minmax(0, 30fr) minmax(0, 35fr); align-items: center; border: 0; border-radius: 12px; background: transparent; text-align: center; transition: background-color 160ms ease; }
+.my-teams__fixture:hover { background: rgb(255 255 255 / 6%); }
+.my-teams__fixture:focus-visible { outline-offset: -3px; background: rgb(255 255 255 / 9%); }
+.my-teams__side { display: grid; min-width: 0; justify-items: center; gap: 4px; }
+.my-teams__team { display: grid; width: 100%; min-width: 0; min-height: 104px; padding: 8px 10px; grid-template-rows: 64px minmax(1.5em, auto); justify-items: center; align-content: center; gap: 8px; border: 0; border-radius: 12px; background: transparent; text-align: center; font-weight: 600; }
+.my-teams__crest { display: grid; width: 64px; height: 64px; place-items: center; }
+.my-teams__crest img { display: block; max-width: 64px; max-height: 64px; width: auto; height: auto; object-fit: contain; }
+.my-teams__crest > span { display: grid; width: 56px; height: 56px; place-items: center; border: 1px solid var(--my-teams-line); border-radius: 50%; background: #2c3037; font-size: .75em; }
+.my-teams__team-label { display: inline-flex; width: max-content; max-width: 100%; min-width: 0; justify-self: center; align-items: center; justify-content: center; gap: 5px; }
+.my-teams__team-name { min-width: 0; overflow-wrap: anywhere; text-align: center; text-wrap: balance; }
+.my-teams__star { flex-shrink: 0; }
+.my-teams__record { flex-shrink: 0; color: var(--my-teams-muted); font-size: .9em; }
+.my-teams__match { text-align: center; }
+.my-teams__competition, .my-teams__match-status { display: block; color: var(--my-teams-muted); font-size: .8em; overflow-wrap: anywhere; }
+.my-teams__match strong { display: block; margin: 10px 0; font-size: 1.35em; font-weight: 700; }
+.my-teams__empty { display: grid; min-height: 230px; padding: 48px 16px; align-content: center; justify-items: center; gap: 12px; text-align: center; }
+.my-teams__empty h2 { font-size: clamp(20px, 1.8vw, 30px); font-weight: 650; text-wrap: balance; }
+.my-teams__empty p { max-width: 65ch; color: var(--my-teams-muted); }
+.my-teams__notice { display: flex; padding: 24px 0; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--my-teams-line); }
+.my-teams__note { max-width: 1440px; margin: 18px auto 0; color: var(--my-teams-muted); font-size: .78em; overflow-wrap: anywhere; }
+.my-teams__more { display: flex; margin: 20px auto; }
+.my-teams__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 700px) {
+  .my-teams__header { align-items: flex-start; margin-bottom: 24px; gap: 16px; }
+  .my-teams__panel { padding: 4px 12px 8px; }
+  .my-teams__tabs button { min-height: 64px; padding: 14px 4px; font-size: 1em; }
+  .my-teams__fixture { padding: 16px 2px; grid-template-columns: minmax(0, 36fr) minmax(0, 28fr) minmax(0, 36fr); }
+  .my-teams__team { min-height: 96px; padding: 4px 2px; grid-template-rows: 56px minmax(2.5em, auto); gap: 5px; font-size: .8em; }
+  .my-teams__crest { width: 56px; height: 56px; }
+  .my-teams__crest img { max-width: 56px; max-height: 56px; }
+  .my-teams__team-label { gap: 3px; }
+  .my-teams__star { width: 13px; height: 13px; }
+  .my-teams__record { font-size: .8em; }
+  .my-teams__match strong { font-size: 1.15em; }
+  .my-teams__competition, .my-teams__match-status { font-size: .72em; }
+  .my-teams__notice { flex-direction: column; align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) { .my-teams__fixture { transition: none; } }

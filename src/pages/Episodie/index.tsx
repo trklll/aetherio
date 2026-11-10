@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Film, LogOut, RefreshCw, User, Users, X, Zap } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Download, Film, LogOut, RefreshCw, User, Users, X, Zap } from "lucide-react";
 import { tmdbFetch } from "../../config/apiKeys.ts";
 import { useHomePreferences } from "../../config/homePreferences.ts";
+import { useDownloadsEnabled } from "../../config/downloadPreferences.ts";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist.ts";
 import {
   getCachedLastLink,
@@ -43,6 +44,9 @@ import { getReportedSeeders } from "../../utils/torrentHealth.ts";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache.ts";
 import { getSourceLogo, getStreamAddonLogo } from "../../utils/sourceLogos.ts";
 import { buildDetailPath, buildPlayerPath, isBigPictureLocation } from "../../utils/bigPictureDetail.ts";
+import { getStreamDownloadAvailability, getStreamDownloadTarget } from "../../utils/streamDownloads.ts";
+import { createDownloadRequest, startDownload } from "../../services/downloads.ts";
+import { isTauriRuntime } from "../../runtime/platform.ts";
 import { useParty } from "../../party/PartyContext.tsx";
 import { normalizeRoomCode, isCompleteRoomCode, isEncryptedPayload, partyMediaKey, type PartyMedia } from "../../party/protocol.ts";
 import ContextMenu from "../../components/ui/ContextMenu.tsx";
@@ -192,6 +196,7 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
   // background es el del Detail. Tampoco se toca el historial (el padre manda).
   const sharedTransparent = embedded || useSharedBackground;
   const getEnabledAddons = useAddonStore(s => s.getEnabledAddons);
+  const downloadsEnabled = useDownloadsEnabled();
   const playbackPreferences = usePlaybackPreferences();
   const mdbListSettings = useMdbListSettings();
   const { allowTmdbArtworkFallback } = useHomePreferences();
@@ -352,6 +357,8 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
   }, [embedded, metaReady, meta]);
   const [selectedStreamId, setSelectedStreamId] = useState("");
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  const [downloadBusyStreamId, setDownloadBusyStreamId] = useState("");
+  const [downloadError, setDownloadError] = useState("");
   const audioChoice = AUTO_OPTION;
   const subtitleChoice = AUTO_OPTION;
   const [heroStillIndex, setHeroStillIndex] = useState(0);
@@ -941,6 +948,40 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
   playStreamRef.current = playStream;
   allStreamsRef.current = allStreams;
 
+  async function handleDownloadStream(stream: MediaStream) {
+    if (!downloadsEnabled || !query) return;
+    setDownloadBusyStreamId(stream.id);
+    setDownloadError("");
+    try {
+      const availability = getStreamDownloadAvailability(stream);
+      if (!availability.supported) throw new Error(availability.reason ?? "Esta fuente no se puede descargar.");
+      const target = getStreamDownloadTarget(stream);
+      if (!target) throw new Error("La fuente no contiene un enlace descargable.");
+      const rawHeaders = stream.behaviorHints?.headers;
+      const headers = rawHeaders && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)
+        ? Object.fromEntries(Object.entries(rawHeaders as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+        : undefined;
+      const background = ensureOriginalTmdbImage(meta?.background)
+        ?? ensureOriginalTmdbImage(meta?.episodeStill)
+        ?? meta?.poster;
+      await startDownload(createDownloadRequest(stream, {
+        title: mainTitle,
+        mediaType: query.type,
+        mediaId: query.id,
+        episodeTitle: showEpisodeHeading ? episodeTitle : undefined,
+        episodeStill: showEpisodeHeading ? meta?.episodeStill : undefined,
+        poster: meta?.poster,
+        background,
+      }, target, headers));
+      navigate(bigPicture ? "/big-picture/library?tab=downloads" : "/library?tab=downloads");
+    } catch (cause) {
+      setDownloadError(cause instanceof Error ? cause.message : "No se pudo iniciar la descarga.");
+    } finally {
+      setDownloadBusyStreamId("");
+    }
+  }
+
   function playStream(stream: MediaStream, options?: { replace?: boolean; transition?: boolean }) {
     if (!query) return;
     const resume = getExactResumeForQuery(query);
@@ -1164,6 +1205,10 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
                 selectedStreamId={selectedStreamId}
                 selectedSource={selectedSource}
                 bigPicture={bigPicture}
+                downloadsEnabled={downloadsEnabled}
+                downloadBusyStreamId={downloadBusyStreamId}
+                downloadError={downloadError}
+                onDownloadStream={handleDownloadStream}
               mediaRuntimeMinutes={meta?.runtime}
               partyMedia={query ? { type: query.type, id: query.id, season: query.season, episode: query.episode } : null}
               partyMode={partyMode}
@@ -1374,12 +1419,18 @@ const StreamItemButton = memo(function StreamItemButton({
   onSelect,
   primary,
   mediaRuntimeMinutes,
+  downloadsEnabled,
+  downloadBusy,
+  onDownload,
 }: {
   stream: MediaStream;
   selected: boolean;
   onSelect: (id: string) => void;
   primary?: boolean;
   mediaRuntimeMinutes?: number;
+  downloadsEnabled: boolean;
+  downloadBusy: boolean;
+  onDownload: (stream: MediaStream) => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [manifestMetadata, setManifestMetadata] = useState<MediaStream["technicalMetadata"]>();
@@ -1401,6 +1452,11 @@ const StreamItemButton = memo(function StreamItemButton({
     if (sourceName) return getSourceLogo(sourceName);
     return getSourceLogo(stream.addonName ?? "");
   }, [stream]);
+  const downloadAvailability = useMemo(() => getStreamDownloadAvailability(stream), [stream]);
+  const canDownload = downloadsEnabled && isTauriRuntime() && downloadAvailability.supported;
+  const downloadLabel = !isTauriRuntime()
+    ? "Las descargas están disponibles en la app de escritorio."
+    : downloadAvailability.reason ?? `Descargar ${fileName}`;
 
   useEffect(() => {
     if (!shouldInspectStreamManifest(stream)) return;
@@ -1430,12 +1486,13 @@ const StreamItemButton = memo(function StreamItemButton({
   }, [stream]);
 
   return (
+    <div className="flex min-w-0 items-stretch gap-2">
     <button
       ref={buttonRef}
       type="button"
       data-bp-episode-primary={primary ? true : undefined}
       onClick={() => onSelect(stream.id)}
-      className={`rounded-2xl border px-4 py-3 text-left ${
+      className={`min-w-0 flex-1 rounded-2xl border px-4 py-3 text-left ${
         selected
           ? "border-white/[0.24] bg-white/[0.22] text-white"
           : "border-white/[0.1] bg-black/60 text-white/86 hover:bg-black/72"
@@ -1503,6 +1560,21 @@ const StreamItemButton = memo(function StreamItemButton({
         {selected ? <Check size={16} className="mt-0.5 shrink-0 text-white" /> : null}
       </div>
     </button>
+    {downloadsEnabled ? <button
+      type="button"
+      aria-label={canDownload ? `Descargar ${fileName}` : `No se puede descargar: ${downloadLabel}`}
+      title={downloadLabel}
+      disabled={!canDownload || downloadBusy}
+      onClick={event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (canDownload) onDownload(stream);
+      }}
+      className="flex h-auto min-h-14 w-14 shrink-0 items-center justify-center self-stretch rounded-2xl border border-white/[0.1] bg-black/55 text-white/75 transition hover:border-white/20 hover:bg-white/[0.12] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {downloadBusy ? <AppleSpinner size={18} color="rgba(255,255,255,0.78)" /> : <Download size={18} />}
+    </button> : null}
+    </div>
   );
 });
 
@@ -1516,6 +1588,10 @@ function SourcePickerPanel({
   selectedStreamId,
   selectedSource,
   bigPicture,
+  downloadsEnabled,
+  downloadBusyStreamId,
+  downloadError,
+  onDownloadStream,
   fixedHeightPanel,
   mediaRuntimeMinutes,
   partyMedia,
@@ -1535,6 +1611,10 @@ function SourcePickerPanel({
   selectedStreamId: string;
   selectedSource: string | null;
   bigPicture: boolean;
+  downloadsEnabled: boolean;
+  downloadBusyStreamId: string;
+  downloadError: string;
+  onDownloadStream: (stream: MediaStream) => void;
   /** El panel se dimensiona a la altura disponible, no a su contenido. */
   fixedHeightPanel: boolean;
   mediaRuntimeMinutes?: number;
@@ -1957,6 +2037,7 @@ function SourcePickerPanel({
           </>
         ) : null}
       </div>
+      {downloadError ? <p role="alert" className="border-b border-rose-300/15 bg-rose-400/[0.08] px-4 py-2.5 text-xs font-bold text-rose-100/85">{downloadError}</p> : null}
       <div data-bp-episode-streams={bigPicture ? true : undefined} className={bigPicture ? "min-h-0 flex-1 overflow-hidden overscroll-none px-5 py-3" : fixedHeightPanel ? "min-h-0 flex-1 overflow-y-auto overscroll-none px-5 py-3" : "max-h-[calc(100vh-210px)] overflow-y-auto p-3"}>
         {error ? (
           <p className="mb-2 rounded-xl border border-white/[0.08] bg-black/24 px-4 py-3 text-sm font-semibold text-white/58">{error}</p>
@@ -1974,12 +2055,15 @@ function SourcePickerPanel({
             {filteredStreams.map((stream, index) => (
               <StreamItemButton
                 key={stream.id}
-                 stream={stream}
-                 selected={stream.id === selectedStreamId}
-                 primary={bigPicture && index === 0}
-                 mediaRuntimeMinutes={mediaRuntimeMinutes}
-                 onSelect={handlePick}
-              />
+                stream={stream}
+                selected={stream.id === selectedStreamId}
+                primary={bigPicture && index === 0}
+                mediaRuntimeMinutes={mediaRuntimeMinutes}
+                downloadsEnabled={downloadsEnabled}
+                onSelect={handlePick}
+                  downloadBusy={downloadBusyStreamId === stream.id}
+                  onDownload={onDownloadStream}
+                />
             ))}
           </div>
         )}

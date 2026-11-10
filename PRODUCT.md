@@ -29,6 +29,7 @@ Aplicación existente con React 19, TypeScript, Vite, Tauri 2, reproductor mpv, 
 - Los estados locales, AniList, Trakt y la futura sincronización completa de Aetherio deben distinguirse. No afirmar sincronización de cuenta sin confirmación real del servidor.
 - El usuario autoriza fijar reglas y valores iniciales en el plan para un ejecutor literal. Solo los bloqueos externos reales quedan pendientes.
 - Deportes: datos siempre sin servicios de pago ni pruebas temporales. MVP local con FotMob como fuente principal, sin consultas a ESPN; Wikidata como complemento opcional. No prometer continuidad de endpoints no oficiales ni permisos de redistribución no concedidos. Priorizar datos e integración antes de rediseñar el frontend (confirmado el 6 de noviembre de 2026).
+- Aetherio Sports es una app interna con navegación propia, reutilizando las pantallas, datos y componentes deportivos existentes. Se mantiene su entrada en Aetherio y la disponibilidad actual de desarrollo. F9 y View/Back del mando Xbox alternan Sports con la transición de modos existente y el logo proporcionado `AetherioSportsLogo.png`; Start/F10 conserva su función TV/escritorio. La sidebar deportiva conserva el perfil original, empieza su menú con «Volver a Aetherio» y no incluye Listas IPTV (confirmado el 7 de noviembre de 2026).
 
 ## Evidence on Hand
 

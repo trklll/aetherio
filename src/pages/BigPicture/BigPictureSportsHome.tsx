@@ -1,92 +1,197 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useLiveEvents } from "../../hooks/useLiveEvents.ts";
-import { canonicalEventIsPlayable, mergeCanonicalEvents, resolveEvents } from "../../data/sports/identity.ts";
-import { reopenSportsOnboarding, useSportsPreferences } from "../../data/sports/preferences.ts";
-import { primeLivePlaybackSession } from "../../services/liveSportsService.ts";
+import { mergeCanonicalEvents, resolveEvents } from "../../data/sports/identity.ts";
+import { getSportsPreferencesStorageKey, reopenSportsOnboarding, useSportsPreferences } from "../../data/sports/preferences.ts";
 import type { MediaItem } from "../../types/ui.ts";
-import { buildPlayerPath } from "../../utils/bigPictureDetail.ts";
-import { prefersReducedMotion } from "../../utils/motion.ts";
-import BigPictureBackdrop from "./BigPictureBackdrop.tsx";
-import BigPictureHero from "./BigPictureHero.tsx";
 import { SportsOnboarding } from "./BigPictureSportsOnboarding.tsx";
 import CatalogRow from "../Home/CatalogRow.tsx";
 import { buildSportsHome, hasSportsPersonalizationFilters } from "./sportsHome.ts";
-import SportsReplaysRow from "./SportsReplaysRow.tsx";
-import { buildSportsChannels } from "./sportsChannels.ts";
 import SportsIptvSettings from "./SportsIptvSettings.tsx";
-import SportsSourcesDialog from "./SportsSourcesDialog.tsx";
-import type { LiveEvent, LiveSource } from "../../types/liveSports.ts";
+import SportsMatchCard from "./SportsMatchCard.tsx";
+import SportsTeamsRow, { SportsCompetitionsRow } from "./SportsTeamsRow.tsx";
+import { matchDetailFromCanonicalEvent, saveMatchPreview, sportsMatchPath } from "../Sports/matchDetail.ts";
 import "./BigPictureSports.css";
 import "./BigPictureSportsHome.css";
 
-/** Same canvas, hero and horizontal CatalogRow as Aetherio Home. */
+function safeTeamColor(color: string | undefined): string {
+  return color && /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(color) ? color : "#45494F";
+}
+
+function hasChromaticColor(color: string): boolean {
+  const hex = color.slice(1);
+  const channels = hex.length === 3
+    ? [...hex].map(value => parseInt(value + value, 16))
+    : [0, 2, 4].map(index => parseInt(hex.slice(index, index + 2), 16));
+  return Math.max(...channels) - Math.min(...channels) >= 32;
+}
+
+function formatSportsHomeClock(): string {
+  try {
+    return new Intl.DateTimeFormat("es-PE", { hour: "numeric", minute: "2-digit" }).format(new Date());
+  } catch {
+    return "";
+  }
+}
+
+/** Sports event catalogs without the general Home hero. */
 export default function BigPictureSportsHome() {
   const location = useLocation();
   const navigate = useNavigate();
   const prefs = useSportsPreferences();
-  const { liveEvents, upcomingGroups, channels, loading, refreshing, error, refresh } = useLiveEvents(prefs.onboarding !== "pending");
+  const { events: scheduledEvents, upcomingGroups, loading, refreshing, error, refresh } = useLiveEvents(prefs.onboarding !== "pending");
   const pageRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [activeItem, setActiveItem] = useState<MediaItem>();
-  const [selectedItemId, setSelectedItemId] = useState<string>();
   const [iptvSettingsOpen, setIptvSettingsOpen] = useState(false);
-  const [sourceEvent, setSourceEvent] = useState<LiveEvent | null>(null);
+  const [focusedBackdropItem, setFocusedBackdropItem] = useState<MediaItem>();
+  const [sampledColors, setSampledColors] = useState<ReadonlyMap<string, { home?: string; away?: string }>>(() => new Map());
+  const onTeamColorSample = useCallback((itemId: string, side: "home" | "away", color: string) => {
+    setSampledColors(previous => {
+      const colors = previous.get(itemId);
+      if (colors?.[side] === color) return previous;
+      return new Map(previous).set(itemId, { ...colors, [side]: color });
+    });
+  }, []);
+  const focusedSampledColors = focusedBackdropItem ? sampledColors.get(focusedBackdropItem.id) : undefined;
+  const ambientStyle = useMemo(() => {
+    let homeColor = safeTeamColor(focusedSampledColors?.home ?? focusedBackdropItem?.sportsMatch?.home?.color);
+    let awayColor = safeTeamColor(focusedSampledColors?.away ?? focusedBackdropItem?.sportsMatch?.away?.color ?? focusedBackdropItem?.sportsMatch?.home?.color);
+    // A neutral/crestless opponent should not wash out the real team color in
+    // the full-screen ambient layer; keep the card's own unknown field neutral.
+    if (hasChromaticColor(homeColor) && !hasChromaticColor(awayColor)) awayColor = homeColor;
+    else if (!hasChromaticColor(homeColor) && hasChromaticColor(awayColor)) homeColor = awayColor;
+    return {
+      "--match-home-color": homeColor,
+      "--match-away-color": awayColor,
+    } as CSSProperties;
+  }, [focusedBackdropItem, focusedSampledColors]);
   const showOnboarding = prefs.onboarding === "pending";
+  const previousHashRef = useRef(location.hash);
+  const [clock, setClock] = useState(formatSportsHomeClock);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+
+  useEffect(() => {
+    let frame = 0;
+    const docs = [document];
+    try {
+      if (window.parent !== window) docs.push(window.parent.document);
+    } catch { /* Cross-origin parent: the local shell listener below still works. */ }
+    const sync = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const roots = docs.map(doc => doc.documentElement);
+        const explicit = roots.map(root => root.dataset.topNavCollapsed);
+        if (explicit.some(value => value === "true")) {
+          setNavCollapsed(true);
+          return;
+        }
+        if (explicit.some(value => value !== undefined)) {
+          setNavCollapsed(false);
+          return;
+        }
+        const scrollTop = docs.reduce((max, doc) => {
+          const shells = Array.from(doc.querySelectorAll<HTMLElement>("[data-aetherio-scroll-shell]"));
+          const shellY = shells.reduce((value, shell) => Math.max(value, shell.scrollTop), 0);
+          return Math.max(max, shellY, doc.scrollingElement?.scrollTop ?? 0);
+        }, 0);
+        setNavCollapsed(scrollTop > 220);
+      });
+    };
+    docs.forEach(doc => doc.addEventListener("scroll", sync, { capture: true, passive: true }));
+    window.addEventListener("resize", sync);
+    const observer = new MutationObserver(sync);
+    docs.forEach(doc => observer.observe(doc.documentElement, { attributes: true, attributeFilter: ["data-top-nav-collapsed"] }));
+    sync();
+    return () => {
+      docs.forEach(doc => doc.removeEventListener("scroll", sync, true));
+      window.removeEventListener("resize", sync);
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(formatSportsHomeClock()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (location.hash !== "#personalizar") return;
+    reopenSportsOnboarding();
+    navigate(location.pathname, { replace: true });
+  }, [location.hash, location.pathname, navigate]);
+
+  useEffect(() => {
+    const previousHash = previousHashRef.current;
+    previousHashRef.current = location.hash;
+    const returningHome = !location.hash && previousHash === "#equipos";
+    const encodedCompetitionId = location.hash.startsWith("#competicion=")
+      ? location.hash.slice("#competicion=".length)
+      : null;
+    let competitionId: string | null = null;
+    try {
+      competitionId = encodedCompetitionId ? decodeURIComponent(encodedCompetitionId) : null;
+    } catch {
+      competitionId = null;
+    }
+    const selector = location.hash === "#equipos" ? "#sports-followed-teams"
+      : location.hash === "#competiciones" || competitionId ? "#sports-followed-competitions"
+      : null;
+    if ((!selector && !returningHome) || showOnboarding) return;
+    // Wait for the shared rail to finish returning focus before selecting a row.
+    const timer = window.setTimeout(() => {
+      const section = returningHome ? pageRef.current : pageRef.current?.querySelector<HTMLElement>(selector!);
+      const shell = scrollRef.current;
+      if (!section || !shell) return;
+      const target = (competitionId
+        ? Array.from(section.querySelectorAll<HTMLElement>("[data-sports-competition-id]"))
+          .find(button => button.dataset.sportsCompetitionId === competitionId)
+        : null)
+        ?? section.querySelector<HTMLElement>("button[data-row-card]")
+        ?? section.querySelector<HTMLElement>("button:not([disabled]), .media-card-frame");
+      target?.focus({ preventScroll: true });
+      shell.scrollTo({ top: returningHome ? 0 : shell.scrollTop + section.getBoundingClientRect().top - shell.getBoundingClientRect().top - 130, behavior: "instant" });
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [location.hash, location.key, showOnboarding]);
 
   useLayoutEffect(() => {
-    scrollRef.current = pageRef.current?.closest<HTMLDivElement>("[data-aetherio-scroll-shell]") ?? null;
+    const shell = pageRef.current?.closest<HTMLDivElement>("[data-aetherio-scroll-shell]") ?? null;
+    scrollRef.current = shell;
+    // Sports must start at the same top composition on every entry. The shell
+    // is shared across routes and may otherwise retain the previous page's offset.
+    shell?.scrollTo({ top: 0, behavior: "instant" });
   }, [showOnboarding]);
 
   const canonical = useMemo(() => mergeCanonicalEvents([
-    ...resolveEvents(liveEvents, "live"),
+    ...resolveEvents(scheduledEvents, "live"),
     ...resolveEvents(upcomingGroups.flatMap(group => group.events), "agenda"),
-  ]), [liveEvents, upcomingGroups]);
+  ]), [scheduledEvents, upcomingGroups]);
   const home = useMemo(() => buildSportsHome(canonical, prefs), [canonical, prefs]);
-  const channelHome = useMemo(() => buildSportsChannels(channels, prefs.sports), [channels, prefs.sports]);
-  const heroItems = useMemo(() => [...home.heroItems, ...channelHome.items], [home.heroItems, channelHome.items]);
-
-  const startEvent = useCallback((event: LiveEvent, selected?: LiveSource) => {
-    primeLivePlaybackSession(event, selected?.id);
-    navigate(buildPlayerPath(`type=live&id=${encodeURIComponent(event.id)}`, location.pathname));
-  }, [navigate, location.pathname]);
-
-  const play = useCallback((item: MediaItem) => {
-    const channel = channelHome.byId.get(item.id);
-    if (channel) { startEvent(channel); return; }
-    const event = home.eventsById.get(item.id);
-    if (!event || event.status !== "live" || !canonicalEventIsPlayable(event)) return;
-    startEvent(event.raw);
-  }, [home.eventsById, channelHome.byId, startEvent]);
+  const hasNowRow = home.rows.some(row => row.catalogId === "sports-now");
+  const openEvent = useCallback((event: Parameters<typeof matchDetailFromCanonicalEvent>[0]) => {
+    const detail = matchDetailFromCanonicalEvent(event);
+    if (detail) saveMatchPreview(getSportsPreferencesStorageKey(), detail);
+    navigate(sportsMatchPath(event.id));
+  }, [navigate]);
 
   const openCard = useCallback((item: MediaItem) => {
     const event = home.eventsById.get(item.id);
     if (!event) return;
-    if (event.status === "live" && canonicalEventIsPlayable(event)) {
-      play(item);
-      return;
-    }
-    // Agenda cards show their schedule in the hero; they never launch an empty player.
-    setSelectedItemId(item.id);
-    scrollRef.current?.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    pageRef.current?.querySelector<HTMLElement>("[data-sports-personalize]")?.focus({ preventScroll: true });
-  }, [home.eventsById, play]);
+    openEvent(event);
+  }, [home.eventsById, openEvent]);
 
-  const heroItem = heroItems.find(item => item.id === activeItem?.id) ?? heroItems[0];
-  const heroEvent = heroItem ? home.eventsById.get(heroItem.id) : undefined;
-  const heroChannel = heroItem ? channelHome.byId.get(heroItem.id) : undefined;
+  const teamsRow = <SportsTeamsRow events={canonical} loading={loading} onOpenEvent={openEvent} />;
+  const followedRows = <>{teamsRow}<SportsCompetitionsRow /></>;
 
-  // Foco inicial con mando, igual que Party/Genre/Search/Settings: la page
-  // marca su acción principal y se enfoca a sí misma al entrar. El requester
-  // del motor (380 ms tras la ruta) no basta: las entradas vienen del rail,
-  // cuyo item queda enfocado (el motor ignora dentro del rail y su requester
-  // no actúa sin activeElement en el contenido), y el hero puede montar más
-  // tarde si la agenda tarda en cargar. Solo reclama el foco cuando nadie lo
-  // tiene (body o item del rail ya colapsado): no roba el teclado al
-  // onboarding — él posee el foco con su propio manejador.
+  // Foco inicial con mando: el requester del motor puede no actuar al entrar
+  // desde el rail. Reclamarlo solo si no hay foco útil evita robarlo al
+  // onboarding o a cualquier control que ya lo tenga.
   useEffect(() => {
     if (showOnboarding) return;
     const timer = window.setTimeout(() => {
+      if (scrollRef.current?.dataset.rowPositionRestoring === "true") return;
       const active = document.activeElement as HTMLElement | null;
       const orphaned = !active || active === document.body || active === document.documentElement
         || active.closest(".bp-rail") !== null;
@@ -105,7 +210,7 @@ export default function BigPictureSportsHome() {
       card?.focus({ preventScroll: true });
     }, 70);
     return () => window.clearTimeout(timer);
-  }, [showOnboarding, heroItem?.id, loading, home.rows.length]);
+  }, [showOnboarding, loading, home.rows.length]);
 
   return (
     <div ref={pageRef} className={`bp-sports${showOnboarding ? "" : " bp-sports--home"}`} data-bp-sports>
@@ -115,22 +220,12 @@ export default function BigPictureSportsHome() {
         </section>
       ) : (
         <>
-          <BigPictureBackdrop
-            items={heroItems}
-            scrollRef={scrollRef}
-            onActiveItem={setActiveItem}
-            trailersEnabled={false}
-            selectedItemId={selectedItemId}
-          />
+          <div className={`bp-sports__ambient${focusedBackdropItem ? " bp-sports__ambient--visible" : ""}`} style={ambientStyle} aria-hidden="true">
+            <div className="bp-sports__ambient-away" />
+          </div>
+          <time className="bp-sports-home__clock" data-collapsed={navCollapsed} aria-label="Hora actual">{clock}</time>
           <div className="home-page-scale relative flex min-h-full flex-col">
-            {heroItem ? (
-              <BigPictureHero
-                item={heroItem}
-                onOpenItem={play}
-                primaryLabel={heroChannel ? "Ver canal" : heroItem.genres?.[0] === "En directo" ? "Ver en directo" : "Próximamente"}
-                primaryDisabled={!heroChannel && (!heroEvent || heroEvent.status !== "live" || !canonicalEventIsPlayable(heroEvent))}
-              />
-            ) : (
+            {home.rows.length === 0 && (
               <header className="bp-sports-home__empty" data-hero-panel>
                 <h1>Sports</h1>
                 <p role="status">{loading
@@ -146,23 +241,34 @@ export default function BigPictureSportsHome() {
             )}
             <div className="relative flex min-h-full flex-col bp-sports-home__catalogs">
               {error && <p className="bp-sports-home__status" role="status">{error}</p>}
+              {!hasNowRow && home.rows.length > 0 ? (
+                <>
+                  <section className="bp-sports-home__now-empty" aria-labelledby="sports-now-empty-title">
+                    <h2 id="sports-now-empty-title" className="home-row-title">Ahora mismo</h2>
+                    <p>Sin partidos en directo ahora mismo.</p>
+                  </section>
+                  {followedRows}
+                </>
+              ) : null}
               {home.rows.map(row => (
+                <Fragment key={row.catalogId}>
                 <CatalogRow
                   key={row.catalogId}
                   row={row}
                   titleOverride={row.name}
                   posterLayout="horizontal"
+                  itemGap={26}
                   persistHomeScroll={false}
                   disableHeaderNavigation
                   showViewMore={false}
                   onOpenItem={openCard}
-                  onChooseSources={row.catalogId === "sports-now" ? item => setSourceEvent(home.eventsById.get(item.id)?.raw ?? null) : undefined}
+                  onFocusItem={setFocusedBackdropItem}
+                  renderCard={item => <SportsMatchCard item={item} onOpenItem={openCard} onTeamColorSample={onTeamColorSample} />}
                 />
+                {row.catalogId === "sports-now" && followedRows}
+                </Fragment>
               ))}
-              {channelHome.row && <section aria-label="Canales deportivos">
-                <CatalogRow row={channelHome.row} titleOverride="Canales deportivos" posterLayout="horizontal" persistHomeScroll={false} disableHeaderNavigation showViewMore={false} onOpenItem={play} />
-              </section>}
-              <SportsReplaysRow />
+              {home.rows.length === 0 && followedRows}
               <div className="bp-sports-home__tools" data-spatial-grid>
                 <button type="button" className="bp-sports__cta bp-sports__cta--ghost" data-sports-personalize onClick={() => reopenSportsOnboarding()}>Personalizar</button>
                 <button type="button" className="bp-sports__cta bp-sports__cta--ghost" onClick={refresh} disabled={refreshing}>{refreshing ? "Actualizando…" : "Actualizar agenda"}</button>
@@ -170,10 +276,9 @@ export default function BigPictureSportsHome() {
               </div>
             </div>
           </div>
-          {iptvSettingsOpen && <SportsIptvSettings onClose={() => setIptvSettingsOpen(false)} />}
-          {sourceEvent && <SportsSourcesDialog event={sourceEvent} onClose={() => setSourceEvent(null)} onSelect={source => { setSourceEvent(null); startEvent(sourceEvent, source); }} />}
         </>
       )}
+      {iptvSettingsOpen && <SportsIptvSettings onClose={() => setIptvSettingsOpen(false)} />}
     </div>
   );
 }

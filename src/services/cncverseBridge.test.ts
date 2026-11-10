@@ -218,11 +218,17 @@ describe("cncVerseMetaToEvent", () => {
     expect(cncVerseMetaToEvent(meta({ ...eventInfo }), antes)?.status).toBe("upcoming");
   });
 
-  it("isHot manda sobre el reloj", () => {
+  it("respeta el inicio y el final aunque el addon marque isHot", () => {
     const antes = Date.parse("2026-09-30T06:00:00.000Z");
     const event = cncVerseMetaToEvent(meta({ ...eventInfo, isHot: "1" }), antes);
-    expect(event?.status).toBe("live");
-    expect(event?.period).toBe("En directo");
+    expect(event?.status).toBe("upcoming");
+    expect(event?.period).toBeUndefined();
+
+    const durante = Date.parse("2026-09-30T12:00:00.000Z");
+    expect(cncVerseMetaToEvent(meta({ ...eventInfo, isHot: "1" }), durante)?.status).toBe("live");
+
+    const despues = Date.parse("2026-09-30T18:00:00.000Z");
+    expect(cncVerseMetaToEvent(meta({ ...eventInfo, isHot: "1" }), despues)?.status).toBe("ended");
   });
 
   it("descarta un meta sin id", () => {

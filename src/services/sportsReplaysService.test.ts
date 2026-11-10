@@ -4,6 +4,8 @@ import { ensureLocalNuvioSportsServer, readNuvioSportsMode } from "./nuvioSports
 import { fetchSportsReplayPlanPage, fetchSportsReplaysPage, primeSportsReplayPlayback, resolveSportsReplayStreams } from "./sportsReplaysService.ts";
 import { SPORTS_REPLAY_SOURCE_STRIDE } from "./sportsReplayCollections.ts";
 import type { SportsPreferences } from "../data/sports/types.ts";
+import { SELECTED_MEDIA_META_KEY } from "../pages/Player/utils.ts";
+import { withSampledSportsMatchColors } from "../utils/sportsMatchCards.ts";
 
 vi.mock("./nuvioSportsRuntime.ts", async importOriginal => ({ ...await importOriginal<typeof import("./nuvioSportsRuntime.ts")>(), ensureLocalNuvioSportsServer: vi.fn(async () => {}), readNuvioSportsMode: vi.fn(() => "local") }));
 vi.mock("../types/stremioSports.ts", async importOriginal => ({ ...await importOriginal<typeof import("../types/stremioSports.ts")>(), fetchStreams: vi.fn(), probeLiveSource: vi.fn() }));
@@ -17,6 +19,34 @@ function storage() {
 }
 
 describe("plugin replay catalog", () => {
+  it("composes replay match cards from catalog opponents rather than the addon poster", async () => {
+    storage();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ metas: [{
+      id: "match-replay", name: "Real Madrid vs Barcelona", genres: ["FOOTBALL", "LaLiga"],
+      cast: ["Real Madrid", "FC Barcelona"], poster: "https://sports.test/addon-poster.jpg",
+    }] }))));
+    vi.mocked(fetchStreams).mockResolvedValue([{ url: "https://sports.test/replay.mp4" }]);
+    const page = await fetchSportsReplaysPage();
+    expect(page.items[0].sportsMatch?.home?.crest).toMatch(/^\/assets\/football-logos\/clubs\//);
+    expect(page.items[0].sportsMatch?.away?.crest).toMatch(/^\/assets\/football-logos\/clubs\//);
+    expect(page.items[0].background).toBe("https://sports.test/addon-poster.jpg");
+  });
+
+  it("carries the Europa Conference League badge from a replay card into the player session", async () => {
+    const values = storage();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ metas: [{
+      id: "conference-replay", name: "Atalanta vs Kairat - Europa Conference League",
+      genres: ["FOOTBALL"], cast: ["Atalanta", "Kairat"],
+    }] }))));
+    vi.mocked(fetchStreams).mockResolvedValue([{ url: "https://sports.test/replay.mp4" }]);
+
+    const { items } = await fetchSportsReplaysPage();
+    expect(items[0].sportsMatch?.competitionLogo).toBe("/assets/football-logos/competitions/uefa-conference.svg");
+    primeSportsReplayPlayback(items[0], items[0].streams!);
+    expect(JSON.parse(values.get(SELECTED_MEDIA_META_KEY)!).sportsMatch.competitionLogo)
+      .toBe("/assets/football-logos/competitions/uefa-conference.svg");
+  });
+
   it("resolves each replay before showing it and bounds concurrent stream requests", async () => {
     storage();
     const metas = Array.from({ length: 100 }, (_, index) => ({ id: `nuvio_sport_rz_${index}`, type: "tv", name: `NBA Replay ${index}`, genres: ["BASKETBALL"], released: "2026-10-28T18:00:00Z" }));
@@ -161,14 +191,23 @@ describe("plugin replay catalog", () => {
   it("keeps VOD sources and headers but never marks a replay as live", async () => {
     const values = storage();
     vi.mocked(fetchStreams).mockResolvedValueOnce([{ name: "HD", url: "https://sports.test/replay.mp4", behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://sports.test/" } } } }]);
-    const replay = { id: "replay:nuvio_sport_rz_1", requestId: "nuvio_sport_rz_1", type: "sports-replay", name: "Final del torneo" };
+    const sportsMatch = { home: { name: "A", color: "#123456", initials: "A" }, away: { name: "B", color: "#654321", initials: "B" }, label: "Fútbol" };
+    const replay = { id: "replay:nuvio_sport_rz_1", requestId: "nuvio_sport_rz_1", type: "sports-replay", name: "Final del torneo", background: "https://addon.test/poster.jpg", poster: "https://addon.test/poster.jpg", sportsMatch };
     const streams = await resolveSportsReplayStreams(replay);
     expect(streams[0].behaviorHints).toMatchObject({ live: false, sportsReplay: true, headers: { Referer: "https://sports.test/" } });
     expect(streams[0].behaviorHints?.notWebReady).toBeUndefined();
     expect(fetchStreams).toHaveBeenCalledWith(expect.any(String), "tv", replay.requestId);
     expect(probeLiveSource).not.toHaveBeenCalled();
-    primeSportsReplayPlayback(replay, streams);
+    const playbackReplay = {
+      ...replay,
+      sportsMatch: withSampledSportsMatchColors(sportsMatch, { home: "#1267A8", away: "#D8B629" }),
+    };
+    primeSportsReplayPlayback(playbackReplay, streams);
     expect(JSON.parse(values.get("aetherio-selected-stream")!)).toMatchObject({ url: "https://sports.test/replay.mp4", behaviorHints: { live: false } });
+    expect(JSON.parse(values.get(SELECTED_MEDIA_META_KEY)!)).toMatchObject({
+      background: "", poster: "",
+      sportsMatch: { home: { color: "#1267A8" }, away: { color: "#D8B629" } },
+    });
   });
 
   it("does not open a stale player session when the replay has no usable sources", async () => {

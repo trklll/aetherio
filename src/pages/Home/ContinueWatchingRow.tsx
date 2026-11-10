@@ -34,6 +34,7 @@ import { readDetailMediaMeta, writeDetailMediaMeta } from "../../utils/mediaMeta
 import { scrollByGsap, tweenTo } from "../../utils/motion";
 import { useBigPictureActive } from "../../navigation/spatialNav.ts";
 import { buildDetailPath, buildEpisodePath } from "../../utils/bigPictureDetail.ts";
+import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
 import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
 import { syncTraktMarkedWatched, syncTraktRemovePlayback } from "../../trakt";
 import type { MediaItem } from "../../types/ui";
@@ -1006,6 +1007,7 @@ const ContinueCard = memo(function ContinueCard({
     [customArtwork, ...baseArtwork.candidates].filter((url): url is string => Boolean(url)),
   ));
   const image = artworkCandidates.find(url => !failedArtworkUrls.has(url)) ?? "";
+  const responsiveArtwork = getTmdbCardImageResponsiveProps(image, CARD_W);
   const artwork = { image };
   const logo = artwork.image ? sanitizeLogoUrl(entry.logo) : undefined;
   const badgeLabel = availableEpisodeBadge || (progressPercent(entry) === 0 && (entry.entryKind === "new-season"
@@ -1155,7 +1157,9 @@ const ContinueCard = memo(function ContinueCard({
        }}
     >
       {artwork.image && <img
-        src={artwork.image}
+        srcSet={responsiveArtwork?.srcSet}
+        sizes={responsiveArtwork?.sizes}
+        src={responsiveArtwork?.fallbackSrc ?? artwork.image}
         alt={entry.name}
         loading="lazy"
         decoding="async"
@@ -1163,9 +1167,10 @@ const ContinueCard = memo(function ContinueCard({
         onError={event => {
           const failedUrl = event.currentTarget.currentSrc || event.currentTarget.src;
           setFailedArtworkUrls(current => {
-            if (current.has(failedUrl)) return current;
+            if (current.has(failedUrl) && current.has(artwork.image)) return current;
             const next = new Set(current);
             next.add(failedUrl);
+            next.add(artwork.image);
             return next;
           });
         }}

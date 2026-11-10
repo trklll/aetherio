@@ -16,6 +16,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { TogglePill } from "../../components/ui/ToggleSwitch";
+import { saveDownloadsEnabled, useDownloadsEnabled } from "../../config/downloadPreferences.ts";
 import packageJson from "../../../package.json";
 import aetherioLogo from "../../assets/aetheriologo.png";
 import { getApiKeys, saveApiKeys, type ApiKeys } from "../../config/apiKeys.ts";
@@ -357,6 +358,7 @@ function DesignSection({ onNotice }: { onNotice: (message?: string) => void }) {
 
 function PlaybackSection({ onNotice }: { onNotice: (message?: string) => void }) {
   const preferences = usePlaybackPreferences();
+  const downloadsEnabled = useDownloadsEnabled();
 
   function update(patch: Partial<PlaybackPreferences>) {
     savePlaybackPreferences({ ...preferences, ...patch });
@@ -372,6 +374,18 @@ function PlaybackSection({ onNotice }: { onNotice: (message?: string) => void })
         <ToggleRow title="Reutilizar último enlace" description="Prueba el último stream que funcionó para este título." value={preferences.reuseLastLink} onChange={value => update({ reuseLastLink: value })} />
         <CycleRow title="Modo de selección de stream" value={preferences.sourceSelectionMode === "first" ? "Primera fuente" : "Manual"} options={["Manual", "Primera fuente"]} onChange={value => update({ sourceSelectionMode: value === "Primera fuente" ? "first" : "manual" })} />
         <ToggleRow title="Probar otra fuente automáticamente" description="Tras un fallo, prueba hasta dos fuentes alternativas. Puede que ninguna funcione; esta opción solo cambia los reintentos automáticos." value={preferences.automaticSourceRecovery} onChange={value => update({ automaticSourceRecovery: value })} />
+      </SettingsGroup>
+
+      <SettingsGroup title="Descargas sin conexión">
+        <ToggleRow
+          title="Permitir descargas"
+          description="Activa los botones de descarga y el acceso a tus archivos sin conexión en esta app."
+          value={downloadsEnabled}
+          onChange={value => {
+            saveDownloadsEnabled(value);
+            onNotice();
+          }}
+        />
       </SettingsGroup>
 
       <SettingsGroup title="Audio y subtítulos">

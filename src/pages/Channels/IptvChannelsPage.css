@@ -1,0 +1,112 @@
+.iptv-channels {
+  --iptv-accent: #b5ecff;
+  --iptv-panel: rgba(255, 255, 255, 0.055);
+  --iptv-border: rgba(255, 255, 255, 0.09);
+}
+
+.iptv-channels__header,
+.iptv-channels__summary,
+.iptv-channels__provenance,
+.iptv-channels__toolbar,
+.iptv-channels__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.iptv-channels__header { margin-bottom: 22px; }
+.iptv-channels__eyebrow { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--iptv-accent); font-size: 10px; font-weight: 750; letter-spacing: 0.13em; }
+.iptv-channels__header h1 { font-size: 32px; font-weight: 750; letter-spacing: -0.04em; line-height: 1.15; }
+.iptv-channels__intro { margin-top: 7px; color: rgba(255,255,255,0.62); font-size: 13px; }
+.iptv-channels__summary { justify-content: flex-end; flex-wrap: wrap; color: rgba(255,255,255,0.58); font-size: 11px; }
+.iptv-channels__summary strong { color: #fff; font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: -0.04em; }
+.iptv-channels__summary button,
+.iptv-channels__loading { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid var(--iptv-border); border-radius: 999px; background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.78); font-size: 11px; }
+.iptv-channels__summary button { cursor: pointer; }
+.iptv-channels__summary button:hover { background: rgba(255,255,255,0.11); color: #fff; }
+.iptv-channels__loading svg,
+.iptv-channels__spinner { animation: iptv-channel-spin 1s linear infinite; }
+
+.iptv-channels__provenance { justify-content: flex-start; flex-wrap: wrap; min-height: 46px; padding: 8px 13px; border: 1px solid var(--iptv-border); border-radius: 11px; background: rgba(255,255,255,0.035); color: rgba(255,255,255,0.7); font-size: 11px; }
+.iptv-channels__provenance span { display: inline-flex; align-items: center; gap: 8px; }
+.iptv-channels__provenance svg { color: var(--iptv-accent); }
+
+.iptv-channels__toolbar { justify-content: flex-start; flex-wrap: wrap; margin: 19px 0 12px; }
+.iptv-channels__search { display: flex; align-items: center; gap: 9px; flex: 1 1 320px; max-width: 520px; min-height: 42px; padding: 0 13px; color: rgba(255,255,255,0.55); }
+.iptv-channels__search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #fff; font-size: 12px; }
+.iptv-channels__search input::placeholder { color: rgba(255,255,255,0.45); }
+.iptv-channels__search input::-webkit-search-cancel-button { display: none; }
+.iptv-channels__search button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: rgba(255,255,255,0.74); cursor: pointer; }
+.iptv-channels__search button:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.iptv-channels__source { display: flex; align-items: center; gap: 10px; color: rgba(255,255,255,0.56); font-size: 11px; }
+.iptv-channels__source select { max-width: min(280px, 58vw); min-height: 40px; padding: 0 32px 0 12px; border: 1px solid var(--iptv-border); border-radius: 9px; background: #242629; color: #fff; font: inherit; }
+
+.iptv-channels__filters { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 0 0 17px; }
+.iptv-channels__filters button { min-height: 33px; padding: 0 13px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: rgba(255,255,255,0.61); font-size: 11px; cursor: pointer; transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease; }
+.iptv-channels__filters button:hover { background: rgba(255,255,255,0.07); color: #fff; }
+.iptv-channels__filters button.iptv-channels__filter--active { border-color: rgba(181,236,255,0.24); background: rgba(181,236,255,0.11); color: #e5f8ff; }
+
+.iptv-channels__warning,
+.iptv-channels__error { margin: 12px 0; padding: 10px 13px; border-radius: 8px; font-size: 12px; line-height: 1.45; }
+.iptv-channels__warning { border: 1px solid rgba(238,190,106,0.25); background: rgba(238,190,106,0.08); color: #f0d7a6; }
+.iptv-channels__error { border: 1px solid rgba(255,118,118,0.25); background: rgba(255,118,118,0.08); color: #ffb4b4; }
+
+.iptv-channels__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); gap: 9px; }
+.iptv-channel { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 82px; padding: 11px 12px; border: 1px solid var(--iptv-border); border-radius: 12px; background: var(--iptv-panel); transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease; }
+.iptv-channel:hover { transform: translateY(-1px); border-color: rgba(181,236,255,0.22); background: rgba(255,255,255,0.085); }
+.iptv-channel__logo { display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); border-radius: 9px; background: rgba(0,0,0,0.17); color: rgba(255,255,255,0.48); }
+.iptv-channel__logo img { width: 100%; height: 100%; object-fit: contain; padding: 5px; }
+.iptv-channel__details { min-width: 0; flex: 1; }
+.iptv-channel__source,
+.iptv-channel__meta { overflow: hidden; color: rgba(255,255,255,0.49); font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.iptv-channel__source { margin-bottom: 3px; color: rgba(181,236,255,0.75); }
+.iptv-channel__details h2 { overflow: hidden; color: rgba(255,255,255,0.94); font-size: 12px; font-weight: 640; letter-spacing: -0.01em; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.iptv-channel__meta { margin-top: 3px; }
+.iptv-channel__play { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border: 1px solid rgba(181,236,255,0.24); border-radius: 50%; background: rgba(181,236,255,0.12); color: #d9f5ff; cursor: pointer; transition: background-color 140ms ease, color 140ms ease, transform 140ms ease; }
+.iptv-channel__play:hover:not(:disabled) { transform: scale(1.05); background: var(--iptv-accent); color: #0e1a20; }
+.iptv-channel__play:disabled { opacity: 0.62; cursor: wait; }
+
+.iptv-channels__pagination { justify-content: center; margin: 19px 0 8px; color: rgba(255,255,255,0.56); font-size: 11px; }
+.iptv-channels__pagination button,
+.iptv-channels__empty button { min-height: 34px; padding: 0 14px; border: 1px solid var(--iptv-border); border-radius: 999px; background: rgba(255,255,255,0.055); color: #fff; font-size: 11px; cursor: pointer; }
+.iptv-channels__pagination button:hover:not(:disabled),
+.iptv-channels__empty button:hover { background: rgba(255,255,255,0.13); }
+.iptv-channels__pagination button:disabled { opacity: 0.35; cursor: default; }
+.iptv-channels__empty { display: flex; min-height: 270px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: rgba(255,255,255,0.56); text-align: center; }
+.iptv-channels__empty svg { color: var(--iptv-accent); }
+.iptv-channels__empty h2 { color: #fff; font-size: 16px; }
+.iptv-channels__empty p { font-size: 12px; }
+.iptv-channels__empty button { margin-top: 4px; }
+.iptv-channels__footer { margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.07); color: rgba(255,255,255,0.4); font-size: 10px; }
+.iptv-channels button:focus-visible,
+.iptv-channels select:focus-visible,
+.iptv-channels input:focus-visible { outline: 2px solid #d9f5ff; outline-offset: 3px; }
+
+@keyframes iptv-channel-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .iptv-channels__header { align-items: flex-start; }
+  .iptv-channels__summary { align-items: flex-end; gap: 5px; }
+  .iptv-channels__summary strong { font-size: 19px; }
+  .iptv-channels__summary > span:not(.iptv-channels__loading) { display: none; }
+  .iptv-channels__summary button { min-height: 30px; padding-inline: 9px; font-size: 10px; }
+  .iptv-channels__header h1 { font-size: 27px; }
+  .iptv-channels__intro { max-width: 34ch; font-size: 12px; line-height: 1.45; }
+  .iptv-channels__toolbar { align-items: stretch; gap: 10px; }
+  .iptv-channels__search { flex-basis: 100%; max-width: none; }
+  .iptv-channels__source { justify-content: space-between; width: 100%; }
+  .iptv-channels__source select { flex: 1; max-width: none; }
+  .iptv-channels__filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; scrollbar-width: none; }
+  .iptv-channels__filters::-webkit-scrollbar { display: none; }
+  .iptv-channels__filters button { flex: 0 0 auto; }
+  .iptv-channels__grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iptv-channel,
+  .iptv-channel__play,
+  .iptv-channels__filters button { transition: none; }
+  .iptv-channel:hover,
+  .iptv-channel__play:hover:not(:disabled) { transform: none; }
+}

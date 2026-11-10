@@ -1,10 +1,11 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { BookmarkMinus, Check, ChevronRight, Image as ImageIcon, Radio } from "lucide-react";
 import ContextMenu from "../../components/ui/ContextMenu";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import type { HomePosterLayout } from "../../config/homePreferences";
 import { useHorizontalVirtualWindow } from "../../hooks/useHorizontalVirtualWindow";
+import { useNearViewport } from "../../hooks/useNearViewport";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import { isTopFormatRow } from "../../utils/topRows";
@@ -29,6 +30,7 @@ import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
 import { buildDetailPath, isBigPictureLocation } from "../../utils/bigPictureDetail.ts";
 import { isShellPreviewOpen, preloadArtwork } from "../../utils/shellPreview";
 import type { ShellPreviewRequest } from "../../utils/shellPreview";
+import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
 import CardArtworkPicker from "./CardArtworkPicker";
 
 const HORIZONTAL_CARD = { width: 425, height: 248 };
@@ -113,11 +115,19 @@ interface CatalogRowProps {
   onOpenPreview?: (request: ShellPreviewRequest) => void;
   /** Alternate activation for live events, keeping Home's cards and navigation. */
   onOpenItem?: (item: MediaItem) => void;
+  onFocusItem?: (item: MediaItem) => void;
   onChooseSources?: (item: MediaItem) => void;
+  /** A specialized card can reuse this row's virtualization and spatial navigation. */
+  renderCard?: (item: MediaItem) => ReactNode;
   showViewMore?: boolean;
+  deferOffscreenRendering?: boolean;
+  /** Space between cards; defaults to the Home rail spacing. */
+  itemGap?: number;
+  /** Override the ordinary catalog cap for specialized rows with a terminal action. */
+  maxItems?: number;
 }
 
-function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true, onOpenPreview, onOpenItem, onChooseSources, showViewMore: allowViewMore = true }: CatalogRowProps) {
+function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, onScrollOriginChange, restoreScrollLeft, disableHeaderNavigation = false, titleOverride, persistHomeScroll = true, onOpenPreview, onOpenItem, onFocusItem, onChooseSources, renderCard, showViewMore: allowViewMore = true, deferOffscreenRendering = false, itemGap = HORIZONTAL_GAP, maxItems = 200 }: CatalogRowProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const rafRef = useRef<number | null>(null);
@@ -140,7 +150,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const ranked = useMemo(() => isTopFormatRow(row), [row]);
   const sportsRow = row.type === "live" || row.type === "sports-replay";
   // Replays page within this virtualized row instead of the generic catalog.
-  const maxCards = ranked ? 10 : row.type === "sports-replay" ? row.items.length : 200;
+  const maxCards = ranked ? 10 : row.type === "sports-replay" ? row.items.length : maxItems;
   // Vistos fuera: los completados sin episodios nuevos no ocupan las rows
   // (el filtro va ANTES del slice para que la row se rellene con el resto).
   const hiddenMediaKeys = useMemo(() => readHiddenMediaKeys(), [watchedVersion]);
@@ -153,11 +163,19 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const showViewMore = allowViewMore && rowItems.length > 0;
   const rowKey = makeRowKey(row.addonId, row.catalogId, row.type);
   const cardSize = ranked ? VERTICAL_CARD : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
+  // Match the existing header, hover-title and shadow gutters. Chromium then
+  // remembers each row's measured size, keeping the scrollbar/restoration stable
+  // while skipping layout and paint for rows outside its look-ahead region.
+  const intrinsicHeight = cardSize.height
+    + ROW_SHADOW_TOP_GUTTER + ROW_SHADOW_BOTTOM_GUTTER + 16
+    + (hideHeader ? 0 : (bigPicture ? 22 : 30) + 14)
+    - (embedded ? 12 : 18)
+    + (posterLayout === "vertical" && !ranked ? 29.5 : 0);
   const viewMoreSize = Math.min(cardSize.width, cardSize.height, 160);
   const virtualWindow = useHorizontalVirtualWindow({
     itemCount: rowItems.length,
     itemWidth: cardSize.width,
-    gap: HORIZONTAL_GAP,
+    gap: itemGap,
     overscan: 4,
   });
   const visibleStart = ranked ? 0 : virtualWindow.start;
@@ -304,8 +322,8 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   }, []);
 
   const scroll = useCallback((dir: "left" | "right") => {
-    scrollByGsap(scrollRef.current, dir === "right" ? (cardSize.width + HORIZONTAL_GAP) * 3 : -(cardSize.width + HORIZONTAL_GAP) * 3);
-  }, [cardSize.width]);
+    scrollByGsap(scrollRef.current, dir === "right" ? (cardSize.width + itemGap) * 3 : -(cardSize.width + itemGap) * 3);
+  }, [cardSize.width, itemGap]);
 
   const { scrollRef } = virtualWindow;
 
@@ -318,7 +336,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   if (rowItems.length === 0) return null;
 
   return (
-    <section data-row-key={rowKey} data-row-count={rowItems.length + (showViewMore ? 1 : 0)} data-row-hovered={hovered ? "true" : undefined} style={{ paddingLeft: 0, paddingRight: 0, marginBottom: row.type === "sports-replay" ? 0 : -24 }}>
+    <section data-row-key={rowKey} data-row-count={rowItems.length + (showViewMore ? 1 : 0)} data-row-hovered={hovered ? "true" : undefined} style={{ paddingLeft: 0, paddingRight: 0, marginBottom: row.type === "sports-replay" ? 0 : -24, contentVisibility: deferOffscreenRendering ? "auto" : undefined, containIntrinsicBlockSize: deferOffscreenRendering ? `auto ${intrinsicHeight}px` : undefined }}>
       {!hideHeader ? (
         bigPicture ? (
           <div
@@ -414,6 +432,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 data-row-card
                 data-item-index={idx}
                 data-detail-path={onOpenItem ? undefined : itemDetailPath}
+                onFocusCapture={() => onFocusItem?.(item)}
                 onClickCapture={() => {
                   if (!persistHomeScroll) return;
                   const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]");
@@ -424,10 +443,10 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 }}
                 style={{
                   flex: "0 0 auto",
-                  marginRight: idx === rowItems.length - 1 ? 0 : HORIZONTAL_GAP,
+                  marginRight: idx === rowItems.length - 1 ? 0 : itemGap,
                 }}
               >
-                <CinematicCard
+                {renderCard ? renderCard(item) : <CinematicCard
                   item={item}
                   type={row.type}
                   posterLayout={posterLayout}
@@ -437,6 +456,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                   onOpenItem={onOpenItem}
                   onChooseSources={onChooseSources}
                   onOpenPreview={onOpenPreview ? request => {
+                    const sourceScrollLeft = scrollRef.current?.scrollLeft ?? 0;
                     const items = rowItems.map((rowItem, index) => {
                       const background = resolveDetailBackground(row.type, rowItem.id, rowItem.background);
                       writeDetailMediaMeta({
@@ -463,8 +483,10 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                         restoreFocus: () => {
                           const rail = scrollRef.current;
                           if (!rail?.isConnected) return;
-                          // Virtualized cards must be brought back into the DOM before focus.
-                          rail.scrollTo({ left: index * (cardSize.width + HORIZONTAL_GAP), behavior: "instant" });
+                          // Preserve the card's on-screen slot rather than snapping
+                          // it to the leading edge when the preview closes.
+                          const left = sourceScrollLeft + (index - idx) * (cardSize.width + itemGap);
+                          rail.scrollTo({ left, behavior: "instant" });
                           window.setTimeout(() => {
                             if (!rail.isConnected || isShellPreviewOpen()) return;
                             rail.querySelector<HTMLElement>(`[data-item-index="${index}"] [data-row-card]`)?.focus({ preventScroll: true });
@@ -474,7 +496,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                     });
                     onOpenPreview({ ...request, items, initialIndex: idx });
                   } : undefined}
-                />
+                />}
               </div>
             );
           })}
@@ -502,7 +524,7 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
                 width: viewMoreSize,
                 height: viewMoreSize,
                 alignSelf: "center",
-                marginLeft: HORIZONTAL_GAP,
+                marginLeft: itemGap,
                 border: `1px solid ${viewMoreFocused ? "rgba(255,255,255,0.12)" : "transparent"}`,
                 borderRadius: 16,
                 background: viewMoreFocused ? "linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.035))" : "transparent",
@@ -571,6 +593,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const navigate = useNavigate();
   const location = useLocation();
   const cardRef = useRef<HTMLDivElement>(null);
+  const artworkActive = useNearViewport(cardRef);
   // El horario de emisión ("Cada domingo") lo dibuja ahora SpatialPosters dentro
   // del propio póster, así que ya no hace falta calcularlo ni superponerlo acá.
   const sportsContent = type === "live" || type === "sports-replay";
@@ -578,7 +601,8 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const [menuOpen, setMenuOpen] = useState(false);
   const [artworkPickerOpen, setArtworkPickerOpen] = useState(false);
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
-  const [inLibrary, setInLibrary] = useState(() => isInLibrary(type, item.id));
+  // La biblioteca no admite deportes (menú deshabilitado); evitar consultarla.
+  const [inLibrary, setInLibrary] = useState(() => sportsContent ? false : isInLibrary(type, item.id));
   const [, setArtworkVersion] = useState(0);
   const [logoFailed, setLogoFailed] = useState(false);
   // Si el póster SpatialPosters falla (offline, 404, rate-limit), volver al original TMDB/Cinemeta.
@@ -595,7 +619,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   // SpatialPosters compone artwork, logo del título y badge de género/año;
   // Aetherio conserva el número grande de ranking, no el badge del póster.
   const posterOverrides = ranked ? TOP_SPATIAL_POSTER_OVERRIDES : undefined;
-  const resolvedPoster = useSpatialPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides, item.originalPoster);
+  const resolvedPoster = useSpatialPoster(item.id, type, cardPoster, hasCustomPoster || effectivePosterLayout !== "vertical", posterOverrides, item.originalPoster, artworkActive);
   const posterSource = resolvedPoster.url ?? cardPoster;
   const verticalPoster = ranked ? withoutSpatialRankingBadge(posterSource) : posterSource;
   const fallbackPoster = item.originalPoster ?? resolvedPoster.original;
@@ -628,6 +652,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   const cardSize = ranked
     ? VERTICAL_CARD
     : posterLayout === "vertical" ? VERTICAL_CARD : HORIZONTAL_CARD;
+  const responsiveArtwork = getTmdbCardImageResponsiveProps(displayImage, cardSize.width);
   const openDetail = useCallback(() => {
     if (onOpenItem) {
       onOpenItem(item);
@@ -694,7 +719,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
   // ANTES que los efectos — sin este cheque el timer la degradaba igual.
   const imgElRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
-    if (!isSpatialPosterUrl(displayImage) || !fallbackPoster) return;
+    if (!artworkActive || !isSpatialPosterUrl(displayImage) || !fallbackPoster) return;
     const el = imgElRef.current;
     if (el && el.currentSrc === displayImage && el.complete && el.naturalWidth > 0) {
       posterLoadedRef.current = true;
@@ -704,17 +729,17 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       if (!posterLoadedRef.current) setPosterFailed(true);
     }, 15000);
     return () => window.clearTimeout(timer);
-  }, [displayImage, fallbackPoster]);
+  }, [artworkActive, displayImage, fallbackPoster]);
 
   useEffect(() => {
-    const refresh = () => setInLibrary(isInLibrary(type, item.id));
+    const refresh = () => setInLibrary(sportsContent ? false : isInLibrary(type, item.id));
     window.addEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
     window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
       window.removeEventListener("storage", refresh);
     };
-  }, [item.id, type]);
+  }, [item.id, sportsContent, type]);
 
   const openArtworkMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -904,7 +929,7 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
             <Check size={15} style={{ color: "rgba(16,18,20,0.94)" }} />
           </div>
         ) : null}
-          {displayImage ? <SpatialPosterImage ref={imgElRef} src={displayImage} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (sportsContent || (effectivePosterLayout === "vertical" && fallbackPoster)) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
+          {artworkActive && displayImage ? <SpatialPosterImage ref={imgElRef} src={responsiveArtwork?.fallbackSrc ?? displayImage} srcSet={responsiveArtwork?.srcSet} sizes={responsiveArtwork?.sizes} alt={item.name} decoding="async" loading="lazy" onLoad={() => { posterLoadedRef.current = true; }} onError={() => { if (sportsContent || (effectivePosterLayout === "vertical" && fallbackPoster)) setPosterFailed(true); }} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scale(1)" }} /> : null}
 
           {ranked ? (
             <div
@@ -957,9 +982,9 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
           {posterLayout !== "vertical" && !ranked ? <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "0 10px 9px", transform: "translateZ(0)", background: sportsContent ? "linear-gradient(transparent, rgba(0,0,0,0.82))" : undefined }}>
            {sportsContent && <span style={{ display: "block", paddingTop: 18, marginBottom: 5, color: "rgba(255,255,255,0.82)", fontSize: 12, fontWeight: 600 }}>{item.genres?.join(" · ")}{item.runtime ? ` · ${item.runtime}` : ""}</span>}
           {showLogo ? (
-            <img src={logo} alt={item.name}
+            <img src={artworkActive ? logo : undefined} alt={item.name}
               decoding="async"
-              loading="eager"
+              loading="lazy"
               onError={() => setLogoFailed(true)}
               style={{ maxHeight: 48, maxWidth: 206, objectFit: "contain", filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.95))", marginBottom: 3 }} />
           ) : (

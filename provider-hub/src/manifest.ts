@@ -3,6 +3,9 @@ export function buildManifest(
   enabled: Array<{ id: string; name: string; description?: string; logo?: string; supportedTypes: string[]; contentLanguage?: string[]; enabled?: boolean }>,
 ) {
   return {
+    // Sports add-ons live on /api/sports and are intentionally not part of this
+    // movie/series/anime provider directory.
+    domain: "general",
     // Campos que exige el protocolo de fuentes de Aetherio móvil.
     id: "com.aetherio.hub",
     name: "Aetherio Provider Hub",
@@ -13,6 +16,7 @@ export function buildManifest(
     idPrefixes: ["tt"],
     // Campos que consume el runtime de proveedores de Aetherio PC.
     scrapers: enabled.map(provider => ({
+      domain: "general",
       id: provider.id,
       name: provider.name,
       description: provider.description ?? "",

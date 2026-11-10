@@ -1,5 +1,6 @@
 import { invokeCommand, isTauriRuntime } from "../runtime/platform.ts";
 import type { LiveSource } from "./liveSports.ts";
+import { PROVIDER_HUB_BASE_URL } from "../services/providerHubConfig.ts";
 
 /**
  * Cliente mínimo del protocolo de addons Stremio, limitado a lo que necesitan
@@ -22,6 +23,20 @@ const MANIFEST_CACHE_TTL_MS = 30 * 60 * 1000;
 /** Mismo criterio de agente que usan los addons al servir sus manifests. */
 const PROBE_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+function hubSportsAddonUrl(url: string): string | null {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return null; }
+  const provider = parsed.hostname === "sports.highfly.to" ? "sports-streams"
+    : parsed.hostname === "nuviosports.xyz" ? "nuvio"
+      : parsed.hostname === "stremverse1.alwaysdata.net" ? "stremverse" : null;
+  if (!provider) return null;
+  const resource = parsed.pathname.match(/\/(manifest\.json|(?:catalog|meta|stream)\/.*\.json)$/)?.[1];
+  if (!resource) return null;
+  const target = new URL(`${PROVIDER_HUB_BASE_URL}/api/sports/addons/${provider}/${resource}`);
+  target.search = parsed.search;
+  return target.toString();
+}
 
 export interface StremioResource {
   name?: string;
@@ -78,12 +93,15 @@ async function fetchJson<T>(url: string, timeoutMs = REQUEST_TIMEOUT_MS): Promis
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
+    const hubUrl = hubSportsAddonUrl(url);
+    const response = await fetch(hubUrl ?? url, {
       signal: controller.signal,
       headers: { Accept: "application/json" },
     });
     if (!response.ok) return null;
-    return (await response.json()) as T;
+    const value = await response.json() as T & { domain?: string; payload?: T };
+    if (hubUrl) return value?.domain === "sports" ? value.payload ?? null : null;
+    return value as T;
   } catch {
     return null;
   } finally {

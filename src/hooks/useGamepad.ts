@@ -1,14 +1,14 @@
 import { useEffect, useRef } from "react";
-import { dispatchBackAction, dispatchDeleteCharInTextContext, dispatchSyntheticEscape } from "../input/inputActions.ts";
+import { dispatchBackAction, dispatchDeleteCharInTextContext, dispatchSyntheticEscape, GAMEPAD_BUTTON } from "../input/inputActions.ts";
 
 /**
  * Hook de mando estilo Steam Big Picture para Aetherio.
  *
  * - Usa la Gamepad API standard (Xbox por cable primero, luego cualquier otro).
  * - D-pad + stick izquierdo = flechas, A = Enter, B = Escape.
- * - Start(9) solo = alternar Big Picture <-> app normal. Es la ÚNICA vía con
- *   mando para cambiar de modo: el botón Guía/Xbox (16) NUNCA navega entre
- *   modos (Chrome/WebView2 además lo filtra en buttons[16]).
+ * - Start(9) = Big Picture <-> app normal; View/Back(8) = Aetherio Sports.
+ *   El botón Guía/Xbox (16) NUNCA navega entre modos
+ *   (Chrome/WebView2 además lo filtra en buttons[16]).
  * - Solo actúa cuando la página tiene foco; el despertar desde tray/minimizado
  *   lo hará el hilo nativo Rust (fase 3) emitiendo `aetherio-gamepad-wake`.
  */
@@ -18,6 +18,8 @@ export interface GamepadNavCallbacks {
   onCombo?: () => void;
   /** Start (botón 9) pulsado: alternar Big Picture <-> normal. */
   onStart?: () => void;
+  /** View/Back (botón 8) pulsado: alternar Aetherio Sports. */
+  onView?: () => void;
   /** Botón Guía/Xbox (16) pulsado: NUNCA cambia de modo (solo exit-request). */
   onGuide?: () => void;
   enabled?: boolean;
@@ -64,15 +66,17 @@ export interface GamepadActionDetail {
   id: GamepadActionId;
   /** true cuando es repetición por mantener la dirección (cruceta/stick). */
   repeat?: boolean;
+  /** Origen de las direcciones físicas; permite asignar navegación distinta. */
+  source?: "stick" | "dpad";
 }
 
 /** Emite la acción y devuelve true si algún listener la reclamó (preventDefault). */
-export function dispatchGamepadAction(id: GamepadActionId, repeat = false): boolean {
+export function dispatchGamepadAction(id: GamepadActionId, repeat = false, source?: GamepadActionDetail["source"]): boolean {
   if (typeof window === "undefined") return false;
   const event = new CustomEvent<GamepadActionDetail>(GAMEPAD_ACTION_EVENT, {
     bubbles: false,
     cancelable: true,
-    detail: { id, repeat },
+    detail: { id, repeat, source },
   });
   window.dispatchEvent(event);
   return event.defaultPrevented;
@@ -139,11 +143,13 @@ export function isBigPictureActive() {
   return document.documentElement.classList.contains("aetherio-big-picture");
 }
 
-export function useGamepad({ onCombo, onStart, onGuide, enabled = true }: GamepadNavCallbacks = {}) {
+export function useGamepad({ onCombo, onStart, onView, onGuide, enabled = true }: GamepadNavCallbacks = {}) {
   const comboRef = useRef(onCombo);
   comboRef.current = onCombo;
   const startRef = useRef(onStart);
   startRef.current = onStart;
+  const viewRef = useRef(onView);
+  viewRef.current = onView;
   const guideRef = useRef(onGuide);
   guideRef.current = onGuide;
   const enabledRef = useRef(enabled);
@@ -196,12 +202,18 @@ export function useGamepad({ onCombo, onStart, onGuide, enabled = true }: Gamepa
       };
       const [ax, ay] = [pad.axes[0] ?? 0, pad.axes[1] ?? 0];
 
-      // Direcciones: D-pad (12-15) + stick izquierdo con deadzone.
-      let dir: Dir | null = null;
-      if (btn(12) || ay < -AXIS_DEADZONE) dir = "up";
-      else if (btn(13) || ay > AXIS_DEADZONE) dir = "down";
-      else if (btn(14) || ax < -AXIS_DEADZONE) dir = "left";
-      else if (btn(15) || ax > AXIS_DEADZONE) dir = "right";
+      // Conserva el origen para que las superficies puedan separar el stick
+      // analógico de la cruceta sin alterar las acciones normalizadas.
+      let direction: { dir: Dir; source: NonNullable<GamepadActionDetail["source"]> } | null = null;
+      if (btn(12)) direction = { dir: "up", source: "dpad" };
+      else if (ay < -AXIS_DEADZONE) direction = { dir: "up", source: "stick" };
+      else if (btn(13)) direction = { dir: "down", source: "dpad" };
+      else if (ay > AXIS_DEADZONE) direction = { dir: "down", source: "stick" };
+      else if (btn(14)) direction = { dir: "left", source: "dpad" };
+      else if (ax < -AXIS_DEADZONE) direction = { dir: "left", source: "stick" };
+      else if (btn(15)) direction = { dir: "right", source: "dpad" };
+      else if (ax > AXIS_DEADZONE) direction = { dir: "right", source: "stick" };
+      const dir = direction?.dir ?? null;
 
       if (dir) {
         // Un cambio de dirección (o la primera) es "el usuario está moviendo el
@@ -226,7 +238,7 @@ export function useGamepad({ onCombo, onStart, onGuide, enabled = true }: Gamepa
             dir === "up" ? "dpad-up" : dir === "down" ? "open-controls" : dir === "left" ? "dpad-left" : "dpad-right";
           // El reproductor reclama sus acciones en modo directo; fuera de él
           // se mantiene el comportamiento actual (flechas sintéticas).
-          if (dispatchGamepadAction(actionId, repeat)) return;
+          if (dispatchGamepadAction(actionId, repeat, direction?.source)) return;
           const key = dir === "up" ? "ArrowUp" : dir === "down" ? "ArrowDown" : dir === "left" ? "ArrowLeft" : "ArrowRight";
           dispatchKey(key);
         }
@@ -298,7 +310,8 @@ export function useGamepad({ onCombo, onStart, onGuide, enabled = true }: Gamepa
       if (pressedEdge(pad, 7)) dispatchGamepadAction("rt");
       // Start(9) solo (flanco) = ÚNICA vía para alternar Big Picture <->
       // app normal. No confirma, no repite al mantener.
-      // View(8) solo no hace nada para no chocar con "atrás".
+      // View/Back es distinto de B: alterna Sports, sin repeat al mantener.
+      if (pressedEdge(pad, GAMEPAD_BUTTON.TOGGLE_SPORTS)) viewRef.current?.();
       if (pressedEdge(pad, 9)) {
         startRef.current?.();
         // Compat: los oyentes viejos de "combo" también alternan.

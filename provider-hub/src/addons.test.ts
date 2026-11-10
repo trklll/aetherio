@@ -14,12 +14,17 @@ describe("Provider Hub Stremio addon directory", () => {
       "org.portal.free",
       "com.penguplay",
       "community.sports.fly",
+      "community.nuvio.live-sports",
+      "com.stremverse.org",
     ]);
     expect(directory.addons.every(addon => addon.logo.startsWith("https://"))).toBe(true);
     expect(byId.get("com.linvo.cinemeta")?.logo).toBe("https://hub.example/addons/logos/cinemeta.svg");
     expect(byId.has("nyaasi")).toBe(false);
-    expect(byId.get("community.sports.fly")?.manifestUrl).toBe("https://sports.highfly.to/manifest.json");
-    expect(byId.get("community.sports.fly")?.manifestUrl).not.toContain("personal-test");
+    expect(DEFAULT_ADDONS.filter(addon => addon.domain === "sports").map(addon => addon.id)).toEqual([
+      "community.sports.fly", "community.nuvio.live-sports", "com.stremverse.org",
+    ]);
+    expect(byId.get("community.sports.fly")?.domain).toBe("sports");
+    expect(DEFAULT_ADDONS.find(addon => addon.id === "community.sports.fly")?.manifestUrl).toBe("https://sports.highfly.to/manifest.json");
   });
 
   it("keeps official AnimeAV1 artwork available for its independent script, not an AnimES alias", async () => {

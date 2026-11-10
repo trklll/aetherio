@@ -9,13 +9,15 @@ import {
   getModeTransitionPhase,
   transitionToMode,
 } from "../../utils/bigPictureTransition.ts";
+import { toggleSportsMode } from "../../utils/sportsMode.ts";
 
 /**
  * Oyente global del mando. Vive siempre (dentro de PartyProvider en App).
  * - Polling Gamepad API: D-pad/stick -> flechas, A -> Enter, B -> Escape.
- * - Start (botón 9) = ÚNICA vía con mando para alternar modos:
+ * - Start (botón 9) alterna modos de visualización:
  *   en normal entra a Big Picture, en Big Picture vuelve a la app normal.
  *   El botón Guía/Xbox NUNCA navega entre modos.
+ * - View/Back (botón 8) / F9 alterna Aetherio Sports en desarrollo.
  * - Evento Tauri `aetherio-gamepad-wake` (hilo nativo futuro) -> lo mismo que Start.
  */
 export default function GamepadWakeListener() {
@@ -40,11 +42,11 @@ export default function GamepadWakeListener() {
       } catch {
         // Ventana best-effort; la navegación funciona igual en web.
       }
-      transitionToMode("enter", () => navigate("/big-picture"));
+      transitionToMode("enter", () => navigate(location.pathname === "/channels" ? "/big-picture/channels" : "/big-picture"));
       return;
     }
     // En Big Picture, Start = ÚNICA salida a la app normal.
-    transitionToMode("exit", () => navigate("/home"));
+    transitionToMode("exit", () => navigate(location.pathname === "/big-picture/channels" ? "/channels" : "/home"));
   }, [location.pathname, navigate]);
 
   const requestExit = useCallback(() => {
@@ -59,7 +61,11 @@ export default function GamepadWakeListener() {
     }
   }, []);
 
-  useGamepad({ onStart: () => void toggleMode(), onGuide: () => requestExit() });
+  const toggleSports = useCallback(() => {
+    toggleSportsMode(navigate, window.location.pathname, window.location.search);
+  }, [navigate]);
+
+  useGamepad({ onStart: () => void toggleMode(), onView: toggleSports, onGuide: () => requestExit() });
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -69,6 +75,12 @@ export default function GamepadWakeListener() {
     const onWebStart = () => void toggleMode();
     // Atajo de teclado para probar sin mando: F10 alterna como Start.
     const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.key === "F9" && import.meta.env.DEV) {
+        e.preventDefault();
+        toggleSports();
+        return;
+      }
       if (e.key === "F10") {
         e.preventDefault();
         void toggleMode();
@@ -83,7 +95,7 @@ export default function GamepadWakeListener() {
       window.removeEventListener("aetherio-gamepad-combo", onWebStart);
       window.removeEventListener("keydown", onKey);
     };
-  }, [toggleMode, requestExit]);
+  }, [toggleMode, toggleSports, requestExit]);
 
   return null;
 }

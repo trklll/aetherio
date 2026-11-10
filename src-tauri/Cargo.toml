@@ -1,6 +1,6 @@
 [package]
 name = "aetherio"
-version = "0.9.4"
+version = "0.9.5"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -47,6 +47,7 @@ thiserror = "2"
 hex = "0.4"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
+quick-xml = "0.37.5"
 futures-util = "0.3"
 tokio-stream = "0.1"
 librqbit = { version = "8.1.1", default-features = false, features = ["http-api", "default-tls", "tracing-subscriber-utils"] }

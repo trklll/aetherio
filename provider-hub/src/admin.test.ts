@@ -62,9 +62,36 @@ describe("Provider Hub administration panel", () => {
     expect(scriptText).not.toContain("localStorage");
   });
 
+  it("separates sports add-ons from the general movie/series/anime directory", async () => {
+    const { env } = createEnv();
+    const general = await (await request(env, "/addons.json", {}, "")).json() as { domain: string; addons: Array<{ id: string }> };
+    const sports = await (await request(env, "/sports-addons.json", {}, "")).json() as { domain: string; addons: Array<{ id: string }> };
+    expect(general.domain).toBe("general");
+    expect(general.addons.some(addon => addon.id === "community.sports.fly")).toBe(false);
+    expect(sports.domain).toBe("sports");
+    expect(sports.addons.map(addon => addon.id)).toEqual(["community.sports.fly", "community.nuvio.live-sports", "com.stremverse.org"]);
+  });
+
+  it("lets an administrator add a sports-domain Stremio add-on without leaking it into general catalogs", async () => {
+    const { env } = createEnv();
+    const saved = await request(env, "/admin/addons/org.example.sports", {
+      method: "PUT",
+      body: JSON.stringify({
+        name: "Example Sports", domain: "sports", manifestUrl: "https://sports.example/manifest.json",
+        manifestFallback: { id: "org.example.sports", name: "Example Sports", version: "1.0.0", types: ["sport"], resources: ["catalog", "stream"], catalogs: [] },
+      }),
+    });
+    expect(saved.status).toBe(200);
+    const general = await (await request(env, "/addons.json", {}, "")).json() as { addons: Array<{ id: string }> };
+    const sports = await (await request(env, "/sports-addons.json", {}, "")).json() as { addons: Array<{ id: string; domain: string }> };
+    expect(general.addons.some(addon => addon.id === "org.example.sports")).toBe(false);
+    expect(sports.addons.find(addon => addon.id === "org.example.sports")?.domain).toBe("sports");
+    expect((await request(env, "/admin/addons/org.example.invalid", { method: "PUT", body: JSON.stringify({ domain: "anime" }) })).status).toBe(400);
+  });
+
   it("requires ADMIN_TOKEN for every management endpoint", async () => {
     const { env } = createEnv();
-    const paths = ["/admin/providers", "/admin/test", "/admin/validate-script", "/admin/addons", "/admin/validate-addon"];
+    const paths = ["/admin/providers", "/admin/test", "/admin/validate-script", "/admin/addons", "/admin/addons/example.addon/clone", "/admin/validate-addon"];
     for (const path of paths) {
       const response = await request(env, path, {
         method: path.endsWith("providers") ? "GET" : "POST",
@@ -196,7 +223,7 @@ describe("Provider Hub administration panel", () => {
     expect(response.status).toBe(200);
     const addons = await response.json() as Array<Record<string, unknown>>;
     expect(addons.map(addon => addon.name)).toEqual([
-      "AnimES", "Torrentio", "Cinemeta", "HdHub", "DeepFlix", "PenguPlay", "Sports Streams · Highfly",
+      "AnimES", "Torrentio", "Cinemeta", "HdHub", "DeepFlix", "PenguPlay", "Sports Streams · Highfly", "Nuvio Sports", "StremVerse Sports",
     ]);
     expect(addons[0]).toMatchObject({
       id: "com.animeflv.stremio.addon", logo: "https://hub.example/addons/logos/animes.png",
@@ -212,7 +239,7 @@ describe("Provider Hub administration panel", () => {
     const admin = await (await request(env, "/admin/addons")).json() as Array<Record<string, unknown>>;
     expect(admin.filter(addon => addon.isAlias)).toHaveLength(0);
     const publicDirectory = await (await request(env, "/addons.json", {}, "")).json() as { addons: Array<Record<string, unknown>> };
-    expect(publicDirectory.addons).toHaveLength(7);
+    expect(publicDirectory.addons).toHaveLength(6);
     expect(publicDirectory.addons.find(addon => addon.id === "aetherio.source.animeav1")).toBeUndefined();
     expect(publicDirectory.addons.some(addon => addon.id === "aetherio.alias.animeav1")).toBe(false);
   });
@@ -247,15 +274,15 @@ describe("Provider Hub administration panel", () => {
     const original = JSON.stringify({ version: 1, addons: legacy });
     data.set("addons:directory", original);
     const migrated = await (await request(env, "/addons.json", {}, "")).json() as { addons: Array<Record<string, unknown>> };
-    expect(migrated.addons).toHaveLength(7);
+    expect(migrated.addons).toHaveLength(6);
     expect(migrated.addons.find(addon => addon.id === "com.animeflv.stremio.addon")).toMatchObject({ name: "Mi AnimES", enabledByDefault: false });
     expect(migrated.addons.find(addon => addon.id === "aetherio.source.animeav1")).toBeUndefined();
     expect(data.get("addons:directory")).toBe(original); // GET does not write to KV
     expect((await request(env, "/admin/addons/com.animeflv.stremio.addon", { method: "DELETE" })).status).toBe(200);
     const after = await (await request(env, "/addons.json", {}, "")).json() as { addons: Array<Record<string, unknown>> };
-    expect(after.addons).toHaveLength(6);
+    expect(after.addons).toHaveLength(5);
     expect(after.addons.some(addon => addon.id === "aetherio.source.animeav1")).toBe(false);
-    expect(JSON.parse(data.get("addons:directory")!).version).toBe(3);
+    expect(JSON.parse(data.get("addons:directory")!).version).toBe(4);
     data.set("addons:directory", JSON.stringify({ version: 2, addons: [] }));
     expect(await (await request(env, "/addons.json", {}, "")).json()).toMatchObject({ addons: [] });
   });
@@ -291,7 +318,7 @@ describe("Provider Hub administration panel", () => {
     expect(saved.status).toBe(200);
     const publicResponse = await request(env, "/addons.json", {}, "");
     const directory = await publicResponse.json() as { addons: Array<Record<string, unknown>> };
-    expect(directory.addons).toHaveLength(7);
+    expect(directory.addons).toHaveLength(6);
     expect(directory.addons.find(addon => addon.id === "com.stremio.torrentio.addon")).toMatchObject({
       name: "Torrentio Latino", enabledByDefault: false, catalogPolicy: "empty",
       manifestFallback: { name: "Torrentio Latino", description: "NyaaSi y cine", logo: expect.stringContaining("https://hub.example/addons/logos/") },
@@ -325,6 +352,51 @@ describe("Provider Hub administration panel", () => {
     expect((await request(env, "/admin/addons/com.example.Test", { method: "DELETE" })).status).toBe(200);
     const after = await (await request(env, "/addons.json", {}, "")).json() as { addons: Array<{ id: string }> };
     expect(after.addons.some(addon => addon.id === "com.example.Test")).toBe(false);
+  });
+
+  it("creates a separately identified draft for another profile of the same addon", async () => {
+    const { env } = createEnv();
+    const upstreamId = "com.cncverse.stremiobridge.profiletoken";
+    const manifestUrl = "https://cncverse.dpdns.org/u/profile-one/manifest.json";
+    await request(env, `/admin/addons/${upstreamId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: "CNCVerse 1", manifestUrl,
+        manifestFallback: { id: upstreamId, name: "CNCVerse", version: "1.0.0", types: ["movie"], resources: ["stream"], catalogs: [] },
+      }),
+    });
+
+    const cloneResponse = await request(env, `/admin/addons/${upstreamId}/clone`, { method: "POST" });
+    expect(cloneResponse.status).toBe(200);
+    const clonePayload = await cloneResponse.json() as { addon: Record<string, any> };
+    const clone = clonePayload.addon;
+    expect(clone).toMatchObject({
+      id: `${upstreamId}-copy-2`,
+      name: "CNCVerse 2",
+      manifestUrl,
+      upstreamAddonId: upstreamId,
+      manifestFallback: { id: `${upstreamId}-copy-2`, name: "CNCVerse 2" },
+    });
+    expect((await (await request(env, "/addons.json", {}, "")).json() as { addons: unknown[] }).addons).toHaveLength(7);
+
+    const savedClone = await request(env, `/admin/addons/${clone.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        ...clone,
+        name: "CNCVerse 2",
+        manifestUrl: "https://cncverse.dpdns.org/u/profile-two/manifest.json",
+      }),
+    });
+    expect(savedClone.status).toBe(200);
+    const directory = await (await request(env, "/addons.json", {}, "")).json() as { addons: Array<Record<string, any>> };
+    expect(directory.addons.filter(addon => addon.upstreamAddonId === upstreamId)).toHaveLength(1);
+    expect(directory.addons.find(addon => addon.id === upstreamId)).toMatchObject({ name: "CNCVerse 1", manifestUrl });
+    expect(directory.addons.find(addon => addon.id === clone.id)).toMatchObject({
+      name: "CNCVerse 2",
+      manifestUrl: "https://cncverse.dpdns.org/u/profile-two/manifest.json",
+      upstreamAddonId: upstreamId,
+      manifestFallback: { id: clone.id },
+    });
   });
 
   it("keeps personal Highfly configuration and the authenticated PenguPlay proxy outside the Hub", async () => {
@@ -371,7 +443,7 @@ describe("Provider Hub administration panel", () => {
     const response = await request(env, "/admin/addons/org.portal.free", { method: "DELETE" });
     expect(await response.json()).toMatchObject({ ok: true, removed: true });
     const addons = await (await request(env, "/admin/addons")).json() as Array<{ id: string }>;
-    expect(addons).toHaveLength(6);
+    expect(addons).toHaveLength(8);
     expect(addons.some(addon => addon.id === "org.portal.free")).toBe(false);
     expect(addons.some(addon => addon.id === "com.penguplay")).toBe(true);
   });

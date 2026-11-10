@@ -1,10 +1,11 @@
 import type { LiveChannel, LiveEvent, LiveSource } from "../types/liveSports.ts";
 import { cleanMetaName, fetchCatalogMetas, fetchManifest, fetchMeta, fetchStreams, humanizeSport, isLiveReleaseInfo, parseTextDate, probeLiveSource, splitVersus, stremioStreamToLiveSource, type StremioMeta } from "../types/stremioSports.ts";
 import type { LiveSportsProvider } from "./liveSportsService.ts";
-import { sortLiveSources, spanishCommentaryPriority } from "./liveSportsSourceRanking.ts";
+import { liveSourceKey, sortLiveSources, spanishCommentaryPriority } from "./liveSportsSourceRanking.ts";
 import { SPORTS_STREAMS_PROVIDER_ID } from "./sportsStreamsConfig.ts";
 import { publicSportsHttps } from "./fmhySportsHttp.ts";
 import { disciplineFromLabels } from "../data/sports/identity.ts";
+import { prioritizeLiveCandidates } from "./sportsLiveCandidates.ts";
 
 const CATALOG_TTL_MS = 30_000;
 const MAX_CATALOGS = 64;
@@ -13,11 +14,11 @@ const PAGE_SIZE = 100;
 const MAX_EVENTS = 120;
 const CONCURRENCY = 4;
 
-async function concurrent<T, R>(items: readonly T[], worker: (item: T) => Promise<R>): Promise<R[]> {
+async function concurrent<T, R>(items: readonly T[], worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
   let cursor = 0;
   const results = new Array<R>(items.length);
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
-    while (cursor < items.length) { const index = cursor++; results[index] = await worker(items[index]); }
+    while (cursor < items.length) { const index = cursor++; results[index] = await worker(items[index], index); }
   }));
   return results;
 }
@@ -144,13 +145,12 @@ export function buildSportsStreamsProvider(dependencies: {
           quality: source.quality || stream.title?.match(/\b(\d{3,4})[pi]\b/i)?.[0] || stream.title?.match(/\b\d{3,4}x(\d{3,4})\b/)?.[1]?.concat("p"),
           language: source.language || (spanish ? "es" : undefined) };
       }).filter((source): source is NonNullable<typeof source> => source !== null));
-      const available: LiveSource[] = [];
-      for (const source of candidates.slice(0, 12)) {
-        if (available.some(item => item.url === source.url)) continue;
-        if (await probe(source).catch(() => "dead") === "live") available.push({ ...source, verifiedAt: now(), isDefault: available.length === 0 });
-        if (available.length === 4) break;
-      }
-      return available;
+      const unique = candidates.filter((source, index) => candidates.findIndex(item => liveSourceKey(item) === liveSourceKey(source)) === index);
+      const available = await concurrent<LiveSource, LiveSource | null>(unique, async source =>
+        await probe(source).catch(() => "dead") === "live" ? { ...source, verifiedAt: now() } : null,
+      );
+      const verified = available.filter((source): source is LiveSource => source !== null);
+      return verified.map((source, index) => ({ ...source, isDefault: index === 0 }));
     })();
     sourceRequests.set(key, request);
     return request;
@@ -158,14 +158,28 @@ export function buildSportsStreamsProvider(dependencies: {
 
   return {
     id: SPORTS_STREAMS_PROVIDER_ID, label: "Sports Streams · Highfly",
-    async fetchEvents() {
+    async fetchEvents(onProgress) {
       const metas = (await getCatalog()).filter(meta => !meta.id.startsWith("leaf:"));
-      const candidates = metas.map(meta => ({ meta, event: eventFromMeta(meta, now()) })).filter(item => item.event?.status === "live").slice(0, MAX_EVENTS);
-      const events = await concurrent(candidates, async ({ meta, event }) => {
-        const sources = await resolveSources(meta);
-        return sources.length && event ? { ...event, sources } : null;
+      const mapped = metas.map(meta => ({ meta, event: eventFromMeta(meta, now()) }))
+        .filter((item): item is { meta: StremioMeta; event: LiveEvent } => item.event?.status === "live");
+      const byEventId = new Map(mapped.map(item => [item.event.id, item]));
+      const candidates = prioritizeLiveCandidates(mapped.map(item => item.event), SPORTS_STREAMS_PROVIDER_ID)
+        .map(event => byEventId.get(event.id)!)
+        .slice(0, MAX_EVENTS);
+      onProgress?.(candidates.map(item => item.event));
+      const progressive = new Array<LiveEvent | undefined>(candidates.length);
+      const events = await concurrent(candidates, async ({ meta, event }, index) => {
+        let result = event;
+        try {
+          result = { ...event, sources: await resolveSources(meta) };
+        } catch {
+          // A failed candidate remains eligible for an exact IPTV fallback.
+        }
+        progressive[index] = result;
+        onProgress?.(candidates.map((candidate, candidateIndex) => progressive[candidateIndex] ?? candidate.event));
+        return result;
       });
-      return events.filter((event): event is LiveEvent => event !== null);
+      return events;
     },
     async fetchUpcoming() {
       return (await getCatalog()).filter(meta => !meta.id.startsWith("leaf:")).map(meta => eventFromMeta(meta, now()))

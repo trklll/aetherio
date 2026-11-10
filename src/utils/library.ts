@@ -31,8 +31,18 @@ export function readSavedLibrary(): SavedLibraryItem[] {
 }
 
 export function isInLibrary(type: string, id: string) {
-  const key = mediaKey(type, id);
-  return readSavedLibrary().some(item => mediaKey(item.type, item.id) === key);
+  // Identidades no normalizables (p. ej. "live"/"sports-replay" en tarjetas de
+  // deportes) nunca están en la biblioteca: un crash aquí rompería cada render.
+  let key: string;
+  try {
+    key = mediaKey(type, id);
+  } catch {
+    return false;
+  }
+  return readSavedLibrary().some(item => {
+    try { return mediaKey(item.type, item.id) === key; }
+    catch { return false; }
+  });
 }
 
 export function addToLibrary(item: MediaItem) {

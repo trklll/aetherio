@@ -89,6 +89,47 @@ test("creates a Stremio addon from a checked manifest and deletes it", async ({ 
   expect(directory.addons.some((entry: { id: string }) => entry.id === manifest.id)).toBe(false);
 });
 
+test("duplicates a Stremio addon under a new internal id for another profile", async ({ page, request }) => {
+  const sourceId = "com.e2e.cncverse";
+  const profileOne = "https://cncverse.dpdns.org/u/profile-one/manifest.json";
+  await request.put(`/admin/addons/${sourceId}`, {
+    headers: { "x-admin-token": token },
+    data: {
+      name: "CNCVerse 1",
+      manifestUrl: profileOne,
+      manifestFallback: { id: sourceId, name: "CNCVerse", version: "1.0.0", types: ["movie"], resources: ["stream"], catalogs: [] },
+    },
+  });
+  await page.getByRole("button", { name: "Actualizar" }).click();
+
+  await page.getByRole("button", { name: "Duplicar CNCVerse 1", exact: true }).click();
+  await expect(page.locator("#provider-id")).toHaveValue(`${sourceId}-copy-2`);
+  await expect(page.locator("#provider-name")).toHaveValue("CNCVerse 2");
+  await expect(page.locator("#addon-fallback")).toHaveValue(/com\.e2e\.cncverse-copy-2/);
+  const profileTwo = "https://cncverse.dpdns.org/u/profile-two/manifest.json";
+  await page.locator("#addon-manifest-url").fill(profileTwo);
+  await page.getByRole("button", { name: "Guardar copia", exact: true }).click();
+
+  const directory = await (await request.get("/addons.json")).json();
+  expect(directory.addons.find((addon: { id: string }) => addon.id === sourceId)).toMatchObject({ name: "CNCVerse 1", manifestUrl: profileOne });
+  expect(directory.addons.find((addon: { id: string }) => addon.id === `${sourceId}-copy-2`)).toMatchObject({
+    name: "CNCVerse 2",
+    manifestUrl: profileTwo,
+    upstreamAddonId: sourceId,
+    manifestFallback: { id: `${sourceId}-copy-2` },
+  });
+
+  await page.getByRole("button", { name: "Nuevo add-on", exact: true }).click();
+  await page.locator("#provider-id").fill(sourceId);
+  await page.locator("#provider-name").fill("CNCVerse alternative");
+  await page.getByRole("button", { name: "Guardar add-on", exact: true }).click();
+  await expect(page.locator("#save-message")).toContainText("Usa «Duplicar»");
+  expect(await (await request.get("/addons.json")).json()).toMatchObject({ addons: expect.arrayContaining([
+    expect.objectContaining({ id: sourceId, name: "CNCVerse 1" }),
+    expect.objectContaining({ id: `${sourceId}-copy-2`, name: "CNCVerse 2" }),
+  ]) });
+});
+
 test("preserves script editing and signs out without persisting the token", async ({ page }) => {
   await page.getByRole("button", { name: "Editar E2E Script", exact: true }).click();
   await expect(page.locator("#provider-script")).toHaveValue(/getStreams/);

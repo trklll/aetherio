@@ -42,6 +42,7 @@ import {
 } from "../services/jikan.ts";
 import { fetchMdbListRatingsForMedia } from "../services/MDBListService.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
+import { isCncVerseTvAddon } from "../services/cncverseBridge.ts";
 import { HOME_CACHE_MAX_AGE, useCacheStore } from "../store/cacheStore.ts";
 import { isReusableHomeCache, normalizeDailyHeroSignature, normalizeDailyRowsSignature } from "./homeCachePolicy.ts";
 import { homeImagePreloadConcurrency } from "../utils/hardware.ts";
@@ -249,7 +250,8 @@ export function enabledAddonSignature(
   bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
 ) {
   const catalogAddons = addons.filter(addon => (
-    addon.enabled && Array.isArray(addon.manifest?.catalogs) && addon.manifest.catalogs.length > 0
+    addon.enabled && !isCncVerseTvAddon(addon)
+    && Array.isArray(addon.manifest?.catalogs) && addon.manifest.catalogs.length > 0
   ));
   const orientationTag = `|orient:${contentOrientation}:${bothPreference}`;
   const posterTag = `|sp:${spatialPosterSignature()}`;
@@ -756,7 +758,7 @@ export async function fetchHomeRows(
   onPhase?: (rows: CatalogRowData[]) => void,
   bothPreference: BothContentPreference = DEFAULT_HOME_PREFERENCES.bothPreference,
 ) {
-  const enabledAddons = addons.filter(addon => addon.enabled);
+  const enabledAddons = addons.filter(addon => addon.enabled && !isCncVerseTvAddon(addon));
   const cinemetaResolutionCache = new Map<string, Promise<MediaItem | null>>();
   const limitCinemetaResolution = createPromiseLimiter(CINEMETA_RESOLVE_CONCURRENCY);
   const rowTasks = enabledAddons.flatMap(addon =>
@@ -1955,17 +1957,12 @@ export function useHomeCatalogs(
     () => mergeHeroItems(heroQuery.data ?? [], rows, contentOrientation, bothPreference),
     [bothPreference, contentOrientation, heroQuery.data, rows],
   );
-  const usingStarterRows = rows.length > 0 && rows.every(row => row.addonId === "aetherio-starter");
-
   useEffect(() => {
-    if (!usingStarterRows) {
-      preloadHomeImages(rows, heroItems);
-      return;
-    }
-    if (heroQuery.isLoading && !heroQuery.data) return;
-
-    void preloadStarterHomeImages(rows, heroItems);
-  }, [heroItems, heroQuery.data, heroQuery.isLoading, rows, usingStarterRows]);
+    // Cards admit their own artwork as they approach the viewport. Warming
+    // every poster AND backdrop here bypassed lazy loading and saturated the
+    // image/decode queue again on every phased catalog update.
+    preloadHomeImages(heroItems);
+  }, [heroItems]);
 
   return {
     rows,
@@ -1976,7 +1973,7 @@ export function useHomeCatalogs(
   };
 }
 
-function preloadHomeImages(rows: CatalogRowData[], heroItems: MediaItem[]) {
+function preloadHomeImages(heroItems: MediaItem[]) {
   if (typeof Image === "undefined") return;
   const urls = new Set<string>();
 
@@ -1985,51 +1982,11 @@ function preloadHomeImages(rows: CatalogRowData[], heroItems: MediaItem[]) {
     if (item.logo) urls.add(item.logo);
   }
 
-  for (const row of rows.slice(0, 4)) {
-    for (const item of row.items.slice(0, 8)) {
-      const image = item.background ?? item.poster;
-      if (image) urls.add(image);
-      if (item.logo) urls.add(item.logo);
-    }
-  }
-
   for (const url of urls) {
     const image = new Image();
     image.decoding = "async";
     image.src = url;
   }
-}
-
-async function preloadStarterHomeImages(rows: CatalogRowData[], heroItems: MediaItem[]) {
-  if (typeof Image === "undefined") return;
-  const urls = collectStarterHomeImageUrls(rows, heroItems);
-  await preloadImageUrls(urls);
-}
-
-function collectStarterHomeImageUrls(rows: CatalogRowData[], heroItems: MediaItem[]) {
-  const urls = new Set<string>();
-
-  for (const item of heroItems) {
-    if (item.background) urls.add(item.background);
-    if (item.logo) urls.add(item.logo);
-  }
-
-  for (const row of rows) {
-    for (const item of row.items) {
-      const background = readHomeCardArtwork(
-        "background",
-        item.type,
-        item.id,
-        resolveDetailBackground(item.type, item.id, item.background) ?? item.background,
-      );
-      const poster = readHomeCardArtwork("poster", item.type, item.id, item.poster);
-      if (background) urls.add(background);
-      if (poster) urls.add(poster);
-      if (item.logo) urls.add(item.logo);
-    }
-  }
-
-  return [...urls];
 }
 
 async function preloadImageUrls(urls: string[]) {

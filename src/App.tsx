@@ -628,6 +628,8 @@ function PageRoutes({ location, defaultRoute }: { location: Location; defaultRou
         <Route path="/"                  element={<Navigate to={defaultRoute} replace />} />
         <Route path="/home"              element={<HomePage />} />
         <Route path="/library"           element={<LibraryPage />} />
+        <Route path="/channels"          element={<Navigate to="/home" replace />} />
+        <Route path="/downloads"         element={<Navigate to="/library?tab=downloads" replace />} />
         <Route path="/addons"            element={<AddonsPage />} />
         <Route path="/settings"          element={<SettingsPage />} />
         <Route path="/catalog"           element={<CatalogPage />} />

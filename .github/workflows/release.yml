@@ -39,7 +39,12 @@ jobs:
       - name: Install browser for release smoke test
         run: npx playwright install chromium
 
-      - name: Verify app ships without Sports
+      - name: Build frontend for release smoke test
+        run: npm run build
+
+      - name: Verify app ships without Sports or IPTV Channels
+        env:
+          AETHERIO_RELEASE_SMOKE: "1"
         run: npx playwright test e2e/release-no-sports.spec.ts --workers=1
 
       - name: Install MPV runtime

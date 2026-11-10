@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Users } from "lucide-react";
+import BasketballCourtIcon from "../../components/ui/BasketballCourtIcon.tsx";
 import LibraryIcon from "../../components/ui/LibraryIcon.tsx";
 import SearchThinIcon from "../../components/ui/SearchThinIcon.tsx";
 import HomeBoldIcon from "../../components/ui/HomeBoldIcon.tsx";
@@ -32,7 +33,7 @@ import "./BigPictureRail.css";
  * navegación de secciones que usa el rail de la Library de referencia
  * (artifacts/bp-library/ANALYSIS.md).
  */
-interface RailItem {
+export interface RailItem {
   key: string;
   label: string;
   /**
@@ -43,13 +44,16 @@ interface RailItem {
   Icon?: ComponentType<{ size?: number; className?: string }>;
   route: string;
   logoImage?: string;
+  iconSize?: number;
+  collapsedLabel?: string;
 }
 
 const PRIMARY_RAIL_ITEMS: readonly RailItem[] = [
   { key: "search", route: "/big-picture/search", label: "Buscar", Icon: SearchThinIcon },
   { key: "home", route: "/big-picture", label: "Inicio", Icon: HomeBoldIcon },
-  { key: "library", route: "/big-picture/library", label: "Biblioteca", Icon: LibraryIcon },
+  { key: "library", route: "/big-picture/library", label: "Biblioteca", Icon: LibraryIcon, iconSize: 22 },
   { key: "party", route: "/big-picture/party", label: "Party", Icon: Users },
+  ...(import.meta.env.DEV ? [{ key: "sports", route: "/big-picture/sports", label: "Deportes", Icon: BasketballCourtIcon }] : []),
 ];
 const PLATFORM_RAIL_ITEMS: readonly RailItem[] = STREAMING_PLATFORMS.map(platform => ({
   key: `platform-${platform.id}`,
@@ -57,8 +61,6 @@ const PLATFORM_RAIL_ITEMS: readonly RailItem[] = STREAMING_PLATFORMS.map(platfor
   label: platform.name,
   logoImage: platform.logoImage,
 }));
-const RAIL_ITEMS: readonly RailItem[] = [...PRIMARY_RAIL_ITEMS, ...PLATFORM_RAIL_ITEMS];
-const PLATFORM_RAIL_START_INDEX = PRIMARY_RAIL_ITEMS.length;
 
 // Tokens nativos × 1.2 (ver TvPagePill.kt: 230 / 11 / 52 / 7 / 50).
 const RAIL_W = 276;
@@ -66,24 +68,16 @@ const RAIL_PAD = 13;
 const RAIL_PROFILE_H = 62;
 const RAIL_GAP = 8;
 const RAIL_ITEM_H = 60;
+const RAIL_ICON_SIZE = 24;
 const PLATFORM_ITEM_H = 48;
 const PLATFORM_ITEM_GAP = 4;
 const PLATFORM_SECTION_H = 48;
-const PLATFORM_RAIL_MENU_H =
-  PLATFORM_SECTION_H +
-  PLATFORM_RAIL_ITEMS.length * PLATFORM_ITEM_H +
-  Math.max(0, PLATFORM_RAIL_ITEMS.length - 1) * PLATFORM_ITEM_GAP;
-const RAIL_OPEN_H =
-  RAIL_PAD + RAIL_PROFILE_H + RAIL_GAP +
-  PRIMARY_RAIL_ITEMS.length * (RAIL_ITEM_H + RAIL_GAP) +
-  PLATFORM_RAIL_MENU_H + RAIL_PAD;
-
-function getRailItemOffset(index: number): number {
-  if (index < PLATFORM_RAIL_START_INDEX) return index * (RAIL_ITEM_H + RAIL_GAP);
+function getRailItemOffset(index: number, sectionStartIndex: number): number {
+  if (index < sectionStartIndex) return index * (RAIL_ITEM_H + RAIL_GAP);
   return (
-    PLATFORM_RAIL_START_INDEX * (RAIL_ITEM_H + RAIL_GAP) +
+    sectionStartIndex * (RAIL_ITEM_H + RAIL_GAP) +
     PLATFORM_SECTION_H +
-    (index - PLATFORM_RAIL_START_INDEX) * (PLATFORM_ITEM_H + PLATFORM_ITEM_GAP)
+    (index - sectionStartIndex) * (PLATFORM_ITEM_H + PLATFORM_ITEM_GAP)
   );
 }
 
@@ -98,9 +92,40 @@ function formatClock(): string {
   }
 }
 
-export default function BigPictureRail() {
+export default function BigPictureRail({
+  items = PRIMARY_RAIL_ITEMS,
+  showProfile = true,
+  showPlatforms = true,
+  sectionTitle: customSectionTitle,
+  sectionItems: customSectionItems = [],
+  label = "Navegación espacial",
+  profileRoute = "/big-picture/settings",
+  onNavigate,
+}: {
+  items?: readonly RailItem[];
+  showProfile?: boolean;
+  showPlatforms?: boolean;
+  sectionTitle?: string;
+  sectionItems?: readonly RailItem[];
+  label?: string;
+  profileRoute?: string;
+  onNavigate?: (route: string) => void;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
+  const visibleItems = items.filter(item => item.key !== "downloads");
+  const sectionTitle = showPlatforms ? "Plataformas" : customSectionTitle;
+  const sectionItems = showPlatforms ? PLATFORM_RAIL_ITEMS : customSectionItems;
+  const railItems = sectionTitle ? [...visibleItems, ...sectionItems] : visibleItems;
+  const sectionStartIndex = visibleItems.length;
+  const sectionMenuHeight = sectionTitle
+    ? PLATFORM_SECTION_H + sectionItems.length * PLATFORM_ITEM_H
+      + Math.max(0, sectionItems.length - 1) * PLATFORM_ITEM_GAP
+    : -RAIL_GAP;
+  const railOpenHeight = RAIL_PAD * 2
+    + (showProfile ? RAIL_PROFILE_H + RAIL_GAP : 0)
+    + visibleItems.length * (RAIL_ITEM_H + RAIL_GAP)
+    + sectionMenuHeight;
   const [expanded, setExpanded] = useState(false);
   const [cursor, setCursor] = useState<number | "profile" | null>(null);
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
@@ -135,13 +160,17 @@ export default function BigPictureRail() {
   // mapada —/big-picture/entity/…, /big-picture/person/…, /big-picture/addons/…
   //— habría etiquetado la pill con "Buscar" siendo la home la activa.
   const activeIndex = (() => {
-    const exact = RAIL_ITEMS.findIndex(item => item.route === location.pathname);
+    const currentRoute = location.pathname + location.search + location.hash;
+    const exact = railItems.findIndex(item => item.route === currentRoute);
     if (exact >= 0) return exact;
-    return Math.max(0, RAIL_ITEMS.findIndex(item => item.key === "home"));
+    const pathMatch = railItems.findIndex(item => item.route === location.pathname);
+    if (pathMatch >= 0) return pathMatch;
+    return Math.max(0, railItems.findIndex(item => item.key === "home"));
   })();
   const cursorIndex = typeof cursor === "number" ? cursor : null;
   const indicatorIndex = cursor === "profile" ? null : cursorIndex ?? activeIndex;
-  const collapsedItem = RAIL_ITEMS[activeIndex];
+  const collapsedItem = railItems[activeIndex];
+  const collapsedLabel = collapsedItem.collapsedLabel ?? collapsedItem.label;
   const CollapsedIcon = collapsedItem.Icon;
 
   // Ancho real de la pill colapsada (como el nativo mide collapsedContentWidth).
@@ -172,7 +201,7 @@ export default function BigPictureRail() {
       disposed = true;
       window.removeEventListener("resize", measure);
     };
-  }, [collapsedItem.label]);
+  }, [collapsedLabel]);
 
   useEffect(() => {
     const refresh = () => setProfile(getActiveProfile());
@@ -218,6 +247,7 @@ export default function BigPictureRail() {
         const isSubPage =
           document.querySelector("[data-aetherio-big-picture] [data-bp-search-kb]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-library]") !== null ||
+          document.querySelector("[data-aetherio-big-picture] [data-bp-downloads]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-sports]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-party]") !== null ||
           document.querySelector("[data-aetherio-big-picture] [data-bp-genre]") !== null ||
@@ -326,7 +356,7 @@ export default function BigPictureRail() {
     const restore = restoreFocusRef.current;
     restoreFocusRef.current = null;
     if (restore && document.contains(restore)) {
-      window.setTimeout(() => restore.focus({ preventScroll: true }), 120);
+      restore.focus({ preventScroll: true });
     }
   };
 
@@ -348,13 +378,11 @@ export default function BigPictureRail() {
     }
   };
 
-  // Al expandir, foco al item actual (como el nativo tras 130ms).
-  useEffect(() => {
+  // Focus is behavioral, not the end of the visual expansion: a quick right
+  // press must close the rail, not move the programme still focused behind it.
+  useLayoutEffect(() => {
     if (!expanded) return;
-    const t = window.setTimeout(() => {
-      focusRailItem(cursorIndex ?? activeIndex);
-    }, 130);
-    return () => window.clearTimeout(t);
+    focusRailItem(cursorIndex ?? activeIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded]);
 
@@ -385,11 +413,12 @@ export default function BigPictureRail() {
 
   const go = (item: RailItem) => {
     collapse();
-    if (item.route === location.pathname) return;
+    if (item.route === location.pathname + location.search + location.hash) return;
     // Ir explícitamente al home vía rail no restaura el carrusel (solo el back
     // desde el detail vuelve al carrusel).
     if (item.route === "/big-picture") clearPendingShellPreview();
-    navigate(item.route);
+    if (onNavigate) onNavigate(item.route);
+    else navigate(item.route);
     // Con mando el item activado queda enfocado y el rail ya colapsado lo
     // oculta: el motor ignora teclas dentro de `.bp-rail`, así que la page
     // destino ve el mando completamente muerto (Up/Down absorben las flechas
@@ -415,14 +444,14 @@ export default function BigPictureRail() {
       }
 
       const currentIndex = cursorIndex ?? activeIndex;
-      if (e.key === "ArrowUp" && currentIndex === 0) {
+      if (showProfile && e.key === "ArrowUp" && currentIndex === 0) {
         setCursor("profile");
         profileButtonRef.current?.focus({ preventScroll: true });
         return;
       }
 
       const dir = e.key === "ArrowDown" ? 1 : -1;
-      const next = (currentIndex + dir + RAIL_ITEMS.length) % RAIL_ITEMS.length;
+      const next = (currentIndex + dir + railItems.length) % railItems.length;
       setCursor(next);
       focusRailItem(next);
     } else if (e.key === "Home") {
@@ -431,8 +460,8 @@ export default function BigPictureRail() {
       focusRailItem(0);
     } else if (e.key === "End") {
       e.preventDefault();
-      setCursor(RAIL_ITEMS.length - 1);
-      focusRailItem(RAIL_ITEMS.length - 1);
+      setCursor(railItems.length - 1);
+      focusRailItem(railItems.length - 1);
     } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       // Como el nativo: izquierda/derecha cierra el rail y devuelve el foco al contenido.
       e.preventDefault();
@@ -443,7 +472,8 @@ export default function BigPictureRail() {
   const renderRailItem = (item: RailItem, index: number) => {
     const focused = indicatorIndex === index;
     const ItemIcon = item.Icon;
-    const isPlatform = index >= PLATFORM_RAIL_START_INDEX;
+    const isSectionItem = index >= sectionStartIndex;
+    const isPlatformItem = showPlatforms && isSectionItem;
     const logoClass = "bp-rail__item-logo";
 
     return (
@@ -452,7 +482,7 @@ export default function BigPictureRail() {
         ref={el => {
           itemRefs.current[index] = el;
         }}
-        className={`bp-rail__item${isPlatform ? " is-platform" : ""}${focused ? " is-focused" : ""}`}
+        className={`bp-rail__item${isSectionItem ? " is-section-item" : ""}${isPlatformItem ? " is-platform" : ""}${focused ? " is-focused" : ""}`}
         tabIndex={expanded ? 0 : -1}
         onFocus={() => setCursor(index)}
         onMouseEnter={() => setCursor(index)}
@@ -469,7 +499,7 @@ export default function BigPictureRail() {
               onError={event => { event.currentTarget.style.display = "none"; }}
             />
           ) : ItemIcon ? (
-            <ItemIcon size={26} />
+            <ItemIcon size={item.iconSize ?? RAIL_ICON_SIZE} />
           ) : null}
         </span>
         <span className="bp-rail__item-label">{item.label}</span>
@@ -488,7 +518,7 @@ export default function BigPictureRail() {
       )}
       <nav
         className="bp-rail"
-        aria-label="Navegación espacial"
+        aria-label={label}
         aria-hidden={concealed && !expanded}
         style={{ visibility: concealed && !expanded ? "hidden" : "visible" }}
         onMouseEnter={expand}
@@ -507,14 +537,14 @@ export default function BigPictureRail() {
               <CollapsedIcon size={20} />
             ) : null}
           </span>
-          <span className="bp-rail__collapsed-label">{collapsedItem.label}</span>
+          <span className="bp-rail__collapsed-label">{collapsedLabel}</span>
         </div>
 
         <div
           className={`bp-rail__box${expanded ? " is-expanded" : ""}${parked ? " is-parked" : ""}`}
           style={{
             width: expanded ? RAIL_W : contracted ? CONTRACTED_PILL_W : collapsedW || "auto",
-            height: expanded ? RAIL_OPEN_H : 53,
+            height: expanded ? railOpenHeight : 53,
           }}
         >
           {!expanded && (
@@ -522,7 +552,7 @@ export default function BigPictureRail() {
               className={`bp-rail__collapsed${contracted ? " is-contracted" : ""}`}
               onClick={expand}
               onFocus={expand}
-              aria-label={`Abrir navegación, sección actual: ${collapsedItem.label}`}
+              aria-label={`Abrir navegación, sección actual: ${collapsedLabel}`}
             >
               <span className="bp-rail__collapsed-icon">
                 {collapsedItem.logoImage ? (
@@ -534,13 +564,13 @@ export default function BigPictureRail() {
                   <CollapsedIcon size={20} />
                 ) : null}
               </span>
-              <span className={`bp-rail__collapsed-label${contracted ? " is-contracted" : ""}`}>{collapsedItem.label}</span>
+              <span className={`bp-rail__collapsed-label${contracted ? " is-contracted" : ""}`}>{collapsedLabel}</span>
             </button>
           )}
 
           <div className={`bp-rail__expanded${expanded ? " is-visible" : ""}`} aria-hidden={!expanded}>
             {/* Perfil + reloj */}
-            <button
+            {showProfile && <button
               ref={profileButtonRef}
               type="button"
               className="bp-rail__profile"
@@ -549,7 +579,7 @@ export default function BigPictureRail() {
               aria-label="Abrir ajustes del perfil"
               onClick={() => {
                 collapse();
-                navigate("/big-picture/settings");
+                navigate(profileRoute);
               }}
             >
               <span className="bp-rail__avatar">
@@ -561,22 +591,22 @@ export default function BigPictureRail() {
               </span>
               <span className="bp-rail__profile-name">{profile?.name?.trim() || "Perfil"}</span>
               <span className="bp-rail__clock">{clock}</span>
-            </button>
+            </button>}
             <div ref={menuRef} className="bp-rail__menu">
               {/* Indicador blanco animado (pill de foco) */}
               <div
                 className="bp-rail__indicator"
                 style={{
-                  top: getRailItemOffset(indicatorIndex ?? 0),
-                  height: indicatorIndex !== null && indicatorIndex >= PLATFORM_RAIL_START_INDEX ? PLATFORM_ITEM_H : RAIL_ITEM_H,
+                  top: getRailItemOffset(indicatorIndex ?? 0, sectionStartIndex),
+                  height: indicatorIndex !== null && indicatorIndex >= sectionStartIndex ? PLATFORM_ITEM_H : RAIL_ITEM_H,
                   display: indicatorIndex === null ? "none" : undefined,
                 }}
               />
-              {PRIMARY_RAIL_ITEMS.map((item, index) => renderRailItem(item, index))}
-              <div className="bp-rail__section-title">Plataformas</div>
-              {PLATFORM_RAIL_ITEMS.map((item, index) =>
-                renderRailItem(item, PLATFORM_RAIL_START_INDEX + index),
-              )}
+              {visibleItems.map((item, index) => renderRailItem(item, index))}
+              {sectionTitle && <><div className="bp-rail__section-title">{sectionTitle}</div>
+              {sectionItems.map((item, index) =>
+                renderRailItem(item, sectionStartIndex + index),
+              )}</>}
             </div>
           </div>
         </div>

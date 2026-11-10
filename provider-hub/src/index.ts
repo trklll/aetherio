@@ -1,6 +1,6 @@
 import { buildManifest } from "./manifest.ts";
 import { addonLogoResponse, buildAddonDirectory } from "./addons.ts";
-import { adminAddonDirectory, customAddonLogoResponse, deleteAddon, loadAddons, upsertAddon, validateAddonManifest } from "./addonRegistry.ts";
+import { adminAddonDirectory, createAddonCopy, customAddonLogoResponse, deleteAddon, loadAddons, upsertAddon, validateAddonManifest } from "./addonRegistry.ts";
 import { AssetError } from "./remoteAssets.ts";
 import { mergeProviderStreams } from "./merge.ts";
 import {
@@ -26,6 +26,7 @@ import {
 import { resolveTmdbTitle } from "./tmdb.ts";
 import { mapWithConcurrency, selectEnabledStreamProviders, selectProvidersToWarmup, streamDedupeKey, streamsForStremio } from "./streamExecution.ts";
 import type { Env, MediaStream, ProviderRecord } from "./types.ts";
+import { sportsAddonResponse } from "./sportsAddonProxy.ts";
 
 const HUB_VERSION = "1.8.0";
 const STREAM_PROVIDER_CONCURRENCY = 8;
@@ -128,6 +129,8 @@ export default {
       }
       if (url.pathname === "/manifest.json") return await handleManifest(env);
       if (url.pathname === "/addons.json") return await handleAddonDirectory(env, url);
+      if (url.pathname === "/sports-addons.json") return await handleSportsAddonDirectory(env, url);
+      if (url.pathname.startsWith("/api/sports/addons/")) return await sportsAddonResponse(request, env, url.pathname);
       if (url.pathname.startsWith("/addons/logos/custom/")) {
         return await customAddonLogoResponse(env, url.pathname) ?? jsonError(404, "Logo no encontrado");
       }
@@ -149,7 +152,13 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function handleAddonDirectory(env: Env, url: URL): Promise<Response> {
-  return hubJson(200, buildAddonDirectory(url.origin, await loadAddons(env)), 60, true);
+  const addons = (await loadAddons(env)).filter(addon => addon.domain !== "sports");
+  return hubJson(200, { domain: "general", ...buildAddonDirectory(url.origin, addons) }, 60, true);
+}
+
+async function handleSportsAddonDirectory(env: Env, url: URL): Promise<Response> {
+  const addons = (await loadAddons(env)).filter(addon => addon.domain === "sports");
+  return hubJson(200, { domain: "sports", ...buildAddonDirectory(url.origin, addons) }, 60, true);
 }
 
 /* ---------------------------------- streams ---------------------------------- */
@@ -329,6 +338,12 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
   if (url.pathname === "/admin/addons" && request.method === "GET") {
     return hubJson(200, adminAddonDirectory(await loadAddons(env), url.origin));
+  }
+  const cloneRoute = url.pathname.match(/^\/admin\/addons\/([^/]+)\/clone$/);
+  if (cloneRoute && request.method === "POST") {
+    const copy = createAddonCopy(await loadAddons(env), cloneRoute[1]);
+    const [addon] = adminAddonDirectory([copy], url.origin);
+    return hubJson(200, { ok: true, addon: { ...addon, isCopy: true } });
   }
   if (url.pathname === "/admin/validate-addon" && request.method === "POST") {
     const body = await readAdminJson(request, 8_000);

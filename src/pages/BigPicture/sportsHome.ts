@@ -1,16 +1,17 @@
 import { eventMatchesPreferences } from "../../data/sports/board.ts";
-import { SPORTS_ENTITY_BY_ID, sportsDisciplineLabel } from "../../data/sports/catalog.ts";
-import { canonicalEventIsPlayable, mergeCanonicalEvents } from "../../data/sports/identity.ts";
+import { SPORTS_ENTITY_BY_ID } from "../../data/sports/catalog.ts";
+import { mergeCanonicalEvents } from "../../data/sports/identity.ts";
 import { hasAnyFollow } from "../../data/sports/preferences.ts";
 import type { CanonicalEvent, SportsPreferences } from "../../data/sports/types.ts";
 import type { CatalogRowData, MediaItem } from "../../types/ui.ts";
 import { formatSportsSchedule } from "../../utils/sportsTime.ts";
-import { eventCommentaryPriority } from "../../services/liveSportsSourceRanking.ts";
 import { sportsFallbackArtwork } from "../../data/sports/artwork.ts";
+import { buildSportsMatchArtworkForEvent } from "../../utils/sportsMatchCards.ts";
+import { resolveLiveEventStatus } from "../../types/liveSports.ts";
 
 function sportsMediaItem(event: CanonicalEvent): MediaItem {
   const competition = SPORTS_ENTITY_BY_ID.get(event.competitionId ?? event.organizationId ?? "")?.name;
-  const schedule = event.startsAt && event.timePrecision === "exact" ? `${formatSportsSchedule(event.startsAt)} · Perú` : undefined;
+  const schedule = event.startsAt && event.timePrecision === "exact" ? formatSportsSchedule(event.startsAt) : undefined;
   const fallback = sportsFallbackArtwork(event);
   return {
     id: event.id,
@@ -19,12 +20,17 @@ function sportsMediaItem(event: CanonicalEvent): MediaItem {
     poster: event.poster || fallback,
     background: event.poster || fallback,
     originalPoster: fallback,
+    sportsMatch: buildSportsMatchArtworkForEvent(event),
     // An addon's logo is usually the broadcaster, not the event's title art.
-    genres: [event.status === "live" ? "En directo" : "Próximamente", competition ?? sportsDisciplineLabel(event.sport)],
+    genres: [event.status === "live" ? "En directo" : "Próximamente", ...(competition ? [competition] : [])],
     runtime: schedule,
     description: event.status === "live"
-      ? `${competition ?? sportsDisciplineLabel(event.sport)}. ${event.sources.length} ${event.sources.length === 1 ? "fuente disponible" : "fuentes disponibles"} para ver este evento en directo.`
-      : `${competition ?? sportsDisciplineLabel(event.sport)}. La emisión estará disponible cuando el proveedor publique una fuente.`,
+      ? `${competition ? `${competition}. ` : ""}${event.sources.length
+        ? `${event.sources.length} ${event.sources.length === 1 ? "fuente disponible" : "fuentes disponibles"} para ver este evento en directo.`
+        : "Partido programado para ahora. Entra para consultar las fuentes disponibles."}`
+      : `${competition ? `${competition}. ` : ""}${event.sources.length
+        ? `${event.sources.length} ${event.sources.length === 1 ? "fuente disponible" : "fuentes disponibles"} para este evento.`
+        : "La emisión estará disponible cuando el proveedor publique una fuente."}`,
   };
 }
 
@@ -48,11 +54,18 @@ function eventInPersonalization(event: CanonicalEvent, prefs: SportsPreferences)
 
 /** The home uses the same media contract as Home, without fictional VOD metadata. */
 export function buildSportsHome(events: readonly CanonicalEvent[], prefs: SportsPreferences, now = Date.now()) {
-  const visible = mergeCanonicalEvents(events.filter(event => event.status !== "ended"));
-  const live = visible.filter(event => event.status === "live" && canonicalEventIsPlayable(event) && eventInPersonalization(event, prefs))
-    .sort((a, b) => eventCommentaryPriority(b) - eventCommentaryPriority(a));
+  const visible = mergeCanonicalEvents(events.filter(event => event.status !== "ended"), now).map(event => {
+    const status = resolveLiveEventStatus(event.status, event.startsAt, now);
+    return status === event.status ? event : { ...event, status };
+  });
+  // Big Picture match cards require two actual opponents. Competition-only
+  // provider rows (e.g. "Premier League" with no fixture) are not events and
+  // must never become a fake single-team card labeled only "Fútbol".
+  const isMatch = (event: CanonicalEvent) => event.sport !== "futbol" || Boolean(event.home?.name && event.away?.name);
+  const live = visible.filter(event => event.status === "live" && isMatch(event) && eventInPersonalization(event, prefs))
+    .sort((a, b) => (Date.parse(a.startsAt ?? "") || Infinity) - (Date.parse(b.startsAt ?? "") || Infinity));
   const upcoming = visible
-    .filter(event => event.status === "upcoming" && (!event.startsAt || Date.parse(event.startsAt) > now) && eventInPersonalization(event, prefs))
+    .filter(event => event.status === "upcoming" && isMatch(event) && (!event.startsAt || Date.parse(event.startsAt) > now) && eventInPersonalization(event, prefs))
     .sort((a, b) => (Date.parse(a.startsAt ?? "") || Infinity) - (Date.parse(b.startsAt ?? "") || Infinity));
   const rows: CatalogRowData[] = [];
   const append = (catalogId: string, name: string, items: CanonicalEvent[]) => {

@@ -194,6 +194,19 @@
     status.title = isAddon ? "Estado inicial para nuevas instalaciones; no cambia la elección personal del usuario." : "Estado del proveedor de scripts";
     status.append(dot, statusText);
 
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    if (isAddon && !["com.penguplay", "community.sports.fly"].includes(provider.id)) {
+      const duplicate = document.createElement("button");
+      duplicate.type = "button";
+      duplicate.className = "row-copy";
+      duplicate.setAttribute("aria-label", `Duplicar ${provider.name || provider.id}`);
+      duplicate.title = "Crear una copia con un ID interno diferente";
+      duplicate.textContent = "⧉";
+      duplicate.addEventListener("click", () => duplicateAddon(provider, duplicate));
+      actions.append(duplicate);
+    }
+
     const edit = document.createElement("button");
     edit.type = "button";
     edit.className = "row-edit";
@@ -201,8 +214,21 @@
     edit.title = "Editar fuente";
     edit.textContent = "↗";
     edit.addEventListener("click", () => openEditor(provider));
-    row.append(identity, types, status, edit);
+    actions.append(edit);
+    row.append(identity, types, status, actions);
     return row;
+  }
+
+  async function duplicateAddon(provider, button) {
+    button.disabled = true;
+    try {
+      const response = await api(`/admin/addons/${encodeURIComponent(provider.id)}/clone`, { method: "POST" });
+      if (!response?.addon?.id) throw new Error("El Hub no devolvió la copia del add-on.");
+      await openEditor({ ...response.addon, kind: "stremio" });
+      showToast("Copia preparada. Cambia el perfil o la URL del manifest y guárdala.");
+    } catch (error) {
+      showToast(error.message || "No se pudo duplicar el add-on.", true);
+    } finally { button.disabled = false; }
   }
 
   function initials(value) {
@@ -231,13 +257,19 @@
     $("#provider-name").value = provider?.name || "";
     $("#provider-description").value = provider?.description || "";
     $("#provider-logo").value = isAddon ? provider?.logoSource || "" : provider?.logo || "";
-    $("#id-hint").textContent = provider?.upstreamAddonId ? `Fuente de Aetherio · servicio upstream: ${provider.upstreamAddonId}` : isAddon ? "ID exacto del manifest de Stremio (admite puntos y mayúsculas)" : "minúsculas, números y guiones";
+    $("#id-hint").textContent = provider?.isCopy
+      ? `ID nuevo para esta copia · manifest original: ${provider.upstreamAddonId || provider.manifestFallback?.id || provider.id}`
+      : provider?.upstreamAddonId
+        ? `Fuente de Aetherio · servicio upstream: ${provider.upstreamAddonId}`
+        : isAddon ? "ID único del manifest de Stremio (admite puntos y mayúsculas)" : "minúsculas, números y guiones";
     $("#logo-label").textContent = isAddon ? "Logo · URL HTTPS o recurso del Hub" : "Logo · URL HTTPS";
     $("#enabled-label").textContent = isAddon ? "Activar por defecto en nuevas instalaciones" : "Fuente activa";
     $("#addon-fields").hidden = !isAddon;
     $("#source-editor").hidden = isAddon;
     document.querySelectorAll("[data-script-field]").forEach(field => { field.hidden = isAddon; });
     $("#addon-manifest-url").value = isAddon ? provider?.manifestUrl || "" : "";
+    $("#addon-domain-field").hidden = !isAddon;
+    $("#addon-domain").value = provider?.domain === "sports" ? "sports" : "general";
     $("#addon-catalog-policy").value = provider?.catalogPolicy || "empty";
     $("#addon-hidden").checked = provider?.hiddenInUi === true;
     $("#addon-timeout").value = provider?.streamTimeoutMs || "";
@@ -245,7 +277,9 @@
     $("#addon-fallback").value = isAddon && provider?.manifestFallback ? JSON.stringify(provider.manifestFallback, null, 2) : "";
     $("#addon-check-result").textContent = "Comprueba el manifest para importar los datos de un add-on nuevo.";
     $("#addon-check-result").classList.remove("message-success");
-    $("#addon-integration-note").textContent = provider?.id === "community.sports.fly"
+    $("#addon-integration-note").textContent = provider?.isCopy
+      ? "La copia tendrá un ID interno propio, pero seguirá usando este manifest. Cambia la URL al perfil que quieras añadir. El directorio del Hub es público: no guardes aquí enlaces personales que incluyan tokens."
+      : provider?.id === "community.sports.fly"
       ? "Highfly conserva aquí su URL pública. La URL personal se configura solo en Aetherio."
       : provider?.id === "com.penguplay"
         ? "PenguPlay conserva /api/penguplay/manifest.json para usar el proxy autenticado de Aetherio."
@@ -260,10 +294,10 @@
     $("#provider-script").value = "";
     $("#provider-script-url").value = provider?.scriptUrl || "";
     $("#url-check-result").textContent = provider?.scriptUrl ? "URL configurada. Comprueba que sigue respondiendo." : "El Hub descargará esta URL cuando necesite el script.";
-    $("#editor-kicker").textContent = isAddon ? "ADD-ON DE STREMIO" : provider ? (provider.origin === "default" ? "FUENTE INTEGRADA · OVERRIDE" : "REGISTRO KV") : "NUEVA ENTRADA";
-    $("#editor-title").textContent = provider ? (isAddon ? "Editar add-on" : "Editar fuente") : (isAddon ? "Agregar add-on" : "Agregar fuente");
-    $("#save-provider").textContent = provider ? "Guardar cambios" : isAddon ? "Guardar add-on" : "Guardar fuente";
-    $("#delete-provider").hidden = !provider || provider.origin === "default";
+    $("#editor-kicker").textContent = provider?.isCopy ? "NUEVA COPIA" : isAddon ? "ADD-ON DE STREMIO" : provider ? (provider.origin === "default" ? "FUENTE INTEGRADA · OVERRIDE" : "REGISTRO KV") : "NUEVA ENTRADA";
+    $("#editor-title").textContent = provider?.isCopy ? "Duplicar add-on" : provider ? (isAddon ? "Editar add-on" : "Editar fuente") : (isAddon ? "Agregar add-on" : "Agregar fuente");
+    $("#save-provider").textContent = provider?.isCopy ? "Guardar copia" : provider ? "Guardar cambios" : isAddon ? "Guardar add-on" : "Guardar fuente";
+    $("#delete-provider").hidden = !provider || provider.isCopy || provider.origin === "default";
     $("#test-section").hidden = isAddon || !provider;
     $("#test-type").value = provider?.supportedTypes?.includes("movie") ? "movie" : "tv";
     const defaultTest = $("#test-type").value === "movie";
@@ -350,14 +384,19 @@
     try {
       const id = validateForm();
       if (state.editorKind === "stremio") {
+        if (!state.current && state.providers.some(provider => provider.kind === "stremio" && provider.id === id)) {
+          throw new Error("Ya existe un add-on con ese ID. Usa «Duplicar» para crear otra configuración sin reemplazarlo.");
+        }
         let manifestFallback;
         try { manifestFallback = JSON.parse($("#addon-fallback").value); }
         catch { throw new Error("Comprueba el manifest o introduce un JSON de respaldo válido."); }
         const body = {
           name: $("#provider-name").value.trim(), description: $("#provider-description").value.trim(),
           logoSource: $("#provider-logo").value.trim(), manifestUrl: $("#addon-manifest-url").value.trim(),
+          domain: $("#addon-domain").value,
           enabledByDefault: $("#provider-enabled").checked, catalogPolicy: $("#addon-catalog-policy").value,
           hiddenInUi: $("#addon-hidden").checked, manifestFallback,
+          upstreamAddonId: state.current?.upstreamAddonId,
         };
         body.streamTimeoutMs = $("#addon-timeout").value ? Number($("#addon-timeout").value) : null;
         body.streamAttempts = $("#addon-attempts").value ? Number($("#addon-attempts").value) : null;

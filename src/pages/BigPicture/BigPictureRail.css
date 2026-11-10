@@ -281,7 +281,8 @@
   color: #08080a;
 }
 
-.bp-rail__item.is-platform {
+.bp-rail__item.is-platform,
+.bp-rail__item.is-section-item {
   height: 48px;
   margin-bottom: 4px;
 }
@@ -342,12 +343,14 @@
 
 /* Cada servicio ocupa el mismo badge circular; el logo mantiene su proporción
    dentro del círculo, igualando marcas con wordmarks y símbolos. */
-.bp-rail__item.is-platform .bp-rail__item-icon {
+.bp-rail__item.is-platform .bp-rail__item-icon,
+.bp-rail__item.is-section-item .bp-rail__item-icon {
   width: 38px;
   height: 38px;
 }
 
-.bp-rail__item.is-platform .bp-rail__item-logo {
+.bp-rail__item.is-platform .bp-rail__item-logo,
+.bp-rail__item.is-section-item .bp-rail__item-logo {
   width: 32px;
   height: 32px;
 }
@@ -358,6 +361,15 @@
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+}
+
+.bp-rail[aria-label="Navegación de Deportes"] .bp-rail__item.is-section-item .bp-rail__item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 16px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 @media (prefers-reduced-motion: reduce) {

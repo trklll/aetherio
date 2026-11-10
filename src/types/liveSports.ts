@@ -2,6 +2,19 @@ import type { MediaStream } from "./stream.ts";
 
 export type LiveEventStatus = "live" | "upcoming" | "ended";
 
+/** Maximum schedule-only grace period for an event whose provider has not updated its status. */
+export const SCHEDULED_LIVE_WINDOW_MS = 5 * 60 * 60_000;
+
+/** A fixture with a confirmed future kickoff cannot be live, whatever a provider flag says. */
+export function resolveLiveEventStatus(status: LiveEventStatus, startsAt?: string, now = Date.now()): LiveEventStatus {
+  if (status === "ended") return status;
+  const start = Date.parse(startsAt ?? "");
+  if (!Number.isFinite(start)) return status;
+  if (start > now) return "upcoming";
+  if (status === "upcoming" && now - start <= SCHEDULED_LIVE_WINDOW_MS) return "live";
+  return status;
+}
+
 export type LiveSport =
   | "futbol"
   | "baloncesto"
@@ -80,8 +93,8 @@ export interface LiveEvent {
    * Muchos addons no dan la competicion en un campo limpio: la esconden en el
    * segundo genero, en la descripcion o en el `category`. Como el proveedor no
    * sabe que competiciones existen en el catalogo, no decide: las ofrece aqui y
-   * es `resolveCompetitionId` quien se queda con la primera que resuelva de
-   * verdad. Si ninguna encaja, se usa `league` como hasta ahora.
+   * es `resolveCompetitionId` quien las valida. Si la liga es generica y un
+   * candidato identifica el genero, se prefiere el candidato mas especifico.
    */
   leagueCandidates?: string[];
   /** Agrupa filas cuando la league no basta (p. ej. varios partidos del mismo dia). */
@@ -131,6 +144,8 @@ export interface LiveChannel {
 
 export interface LiveSnapshot {
   events: LiveEvent[];
+  /** All discovered event candidates, including scheduled fixtures with no resolved source yet. */
+  scheduledEvents?: LiveEvent[];
   /**
    * Agenda de lo que viene, sin `sources`: todavia no hay stream que abrir. Se
    * ordena por hora de inicio y se pinta en la zona horaria del cliente.
@@ -154,23 +169,25 @@ export interface LiveSportsConfig {
   nativeProvidersVersion?: number;
   iptvProvidersVersion?: number;
   sportsStreamsProvidersVersion?: number;
+  cncVerseTvIptvProvidersVersion?: number;
 }
 
 /**
- * Solo partidos en directo de verdad.
+ * Partidos en directo y canales IPTV deportivos verificados.
  *
  * `canales-fta` queda registrado pero fuera de los defaults a proposito: son
- * canales lineales siempre activos (La 1, Teledeporte, ETB...) y el pedido es
- * "partidos que estan ocurriendo ahora". Si algun dia se quieren de vuelta, basta
- * con anadir el id aqui; la pagina ya sabe pintarlos.
+ * canales generalistas siempre activos (La 1, Teledeporte, ETB...), no una fuente
+ * de canales deportivos. CNCVerse TV se registra por separado y solo entrega sus
+ * canales del catalogo IPTV de deportes.
  */
 export const DEFAULT_LIVE_SPORTS_CONFIG: LiveSportsConfig = {
-  enabledProviders: ["sports-streams", "nuvio-sports", "stremverse", "fmhy-native", "local", "iptv-sports"],
+  enabledProviders: ["sports-streams", "nuvio-sports", "stremverse", "fmhy-native", "local", "iptv-sports", "cncverse-tv-iptv"],
   refreshSeconds: 60,
   hideEnded: true,
   nativeProvidersVersion: 1,
   iptvProvidersVersion: 1,
   sportsStreamsProvidersVersion: 1,
+  cncVerseTvIptvProvidersVersion: 1,
 };
 
 /**

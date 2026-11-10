@@ -10,6 +10,7 @@ import {
   mergeSearchResults,
   normalizeWithoutStopwords,
   normalizeSearchText,
+  searchAddons,
   searchMediaResponse,
   trigramDice,
   type UnifiedSearchResult,
@@ -122,6 +123,28 @@ describe("search ranking", () => {
 
   it("detects semantic intent without converting it into a title correction", () => {
     expect(parseSemanticSearchIntent("anime de accion de 2020").active).toBe(true);
+  });
+});
+
+describe("VOD addon exclusions", () => {
+  it("never sends CNCVerse TV catalogs into general addon search", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const results = await searchAddons("football", [{
+        id: "com.cncverse.stremiobridge.p1hym8x62am7m",
+        name: "CNCVerse TV",
+        url: "https://cncverse.example/profile/manifest.json",
+        manifest: { catalogs: [{ type: "movie", id: "movies" }] },
+        enabled: true,
+        installedAt: 0,
+        version: "1.0.0",
+      }]);
+      expect(results).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

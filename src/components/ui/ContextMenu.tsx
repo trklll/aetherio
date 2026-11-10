@@ -491,7 +491,14 @@ export default function ContextMenu({
               {item.label}
             </span>
             {item.description ? (
-              <span style={{ display: "block", marginTop: 2, color: "rgba(255,255,255,0.46)", fontSize: 11, fontWeight: 500, lineHeight: 1.25 }}>
+              <span style={{
+                display: "block",
+                marginTop: 2,
+                color: apple && selected ? "rgba(11,11,13,0.62)" : "rgba(255,255,255,0.46)",
+                fontSize: 11,
+                fontWeight: 500,
+                lineHeight: 1.25,
+              }}>
                 {item.description}
               </span>
             ) : null}

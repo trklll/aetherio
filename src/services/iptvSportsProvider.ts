@@ -3,6 +3,7 @@ import type { LiveChannel, LiveEvent, LiveSource } from "../types/liveSports.ts"
 import { getScopedStorageKey } from "../utils/localProfiles.ts";
 import { getSportsIptvLists, IPTV_SPORTS_STORAGE_KEY, type SportsIptvList } from "./iptvSportsConfig.ts";
 import { numberedMmaEvent, parseSportsM3u, parseXmltv, programmeMatchup, stableIptvId, withChannelProgrammes, type XmltvGuide } from "./iptvSports.ts";
+import { liveSourceKey } from "./liveSportsSourceRanking.ts";
 import { fetchIptvText, IPTV_SOURCE_VERIFICATION_TTL_MS, probeIptvSource } from "./iptvSportsHttp.ts";
 import { registerLiveSportsProvider, type LiveSportsProvider } from "./liveSportsService.ts";
 
@@ -37,8 +38,15 @@ function mergeChannels(channels: LiveChannel[]): LiveChannel[] {
     const existing = merged.get(key);
     if (!existing) merged.set(key, channel);
     else {
-      const urls = new Set(existing.sources.map(source => source.url));
-      merged.set(key, { ...existing, sports: [...new Set([...(existing.sports ?? []), ...(channel.sports ?? [])])], sources: [...existing.sources, ...channel.sources.filter(source => !urls.has(source.url))] });
+      const known = new Set(existing.sources.map(liveSourceKey));
+      const sources = [...existing.sources];
+      for (const source of channel.sources) {
+        const sourceKey = liveSourceKey(source);
+        if (known.has(sourceKey)) continue;
+        known.add(sourceKey);
+        sources.push(source);
+      }
+      merged.set(key, { ...existing, sports: [...new Set([...(existing.sports ?? []), ...(channel.sports ?? [])])], sources });
     }
   }
   return [...merged.values()];
@@ -64,7 +72,7 @@ export function buildIptvSportsProvider(dependencies: {
   const pendingProbes = new Map<string, Promise<{ at: number; ok: boolean }>>();
 
   async function checkSource(source: LiveSource) {
-    const key = `${source.url}:${JSON.stringify(source.headers ?? {})}`;
+    const key = liveSourceKey(source);
     const cached = probes.get(key);
     const ttl = cached?.ok ? IPTV_SOURCE_VERIFICATION_TTL_MS : FAILED_SOURCE_CACHE_MS;
     if (cached && now() >= cached.at && now() - cached.at < ttl) return cached;
@@ -99,7 +107,7 @@ export function buildIptvSportsProvider(dependencies: {
         catch { issues.push(`No se pudo cargar «${list.name}». Revisa la lista o vuelve a intentarlo.`); return null; }
       });
       const valid = parsed.filter(value => value !== null);
-      const guideUrls = [...new Set(valid.flatMap(value => [...value.list.epgUrls, ...value.epgUrls]))].slice(0, 8);
+      const guideUrls = [...new Set(valid.flatMap(value => [...value.list.epgUrls, ...value.epgUrls]))];
       const guides = await concurrent(guideUrls, 2, async url => {
         try { return parseXmltv(await download(url), now()); }
         catch { issues.push("Una guía de programación no está disponible. Sus canales siguen disponibles sin asignarles partidos."); return null; }
@@ -120,15 +128,15 @@ export function buildIptvSportsProvider(dependencies: {
       const data = await pending;
       const current = withChannelProgrammes(data.channels, data.guides, now());
       const checked = await concurrent<LiveChannel, LiveChannel | null>(current, CHANNEL_PROBE_CONCURRENCY, async (channel): Promise<LiveChannel | null> => {
-        // Keep probing alternatives until one has an accessible HLS manifest and
-        // media segment. Only verified routes enter the visible channel/source list.
+        // Verify every route so the user can choose among all live alternatives.
+        const sources: LiveSource[] = [];
         for (const source of channel.sources) {
           const result = await checkSource(source);
           if (result.ok && result.at <= now() && now() - result.at <= IPTV_SOURCE_VERIFICATION_TTL_MS) {
-            return { ...channel, sources: [{ ...source, verifiedAt: result.at }] };
+            sources.push({ ...source, verifiedAt: result.at });
           }
         }
-        return null;
+        return sources.length ? { ...channel, sources } : null;
       });
       if (probes.size > 2048) {
         for (const key of probes.keys()) { probes.delete(key); if (probes.size <= 1536) break; }
@@ -148,7 +156,7 @@ export function buildIptvSportsProvider(dependencies: {
   }
 
   return {
-    id: "iptv-sports", label: "IPTV · Canales deportivos",
+    id: "iptv-sports", label: "IPTV · Canales deportivos", priority: "fallback",
     fetchChannels: getChannels,
     async fetchEvents() {
       const channels = await getChannels();

@@ -39,6 +39,14 @@ describe("FotMob team adapters", () => {
     expect(fixtures[1].score).toBeUndefined();
     expect(parseFixtures({})).toEqual([]);
   });
+  it("preserves opponent ids and the actual fixture competition, not the team's primary league", () => {
+    const fixtures = parseFixtures({ fixtures: { allFixtures: { fixtures: [{ id: 4, home: { id: 6398, name: "Alianza Lima" }, away: { id: 200, name: "Rival" }, league: { id: 42, name: "Copa" }, status: { utcTime: "2026-11-07T20:00:00Z" } }] } } });
+    expect(fixtures[0]).toMatchObject({ homeId: "6398", awayId: "200", competition: "Copa", competitionId: "42" });
+  });
+  it("reads the tournament shape verified in the live FotMob team endpoint", () => {
+    const fixtures = parseFixtures({ fixtures: { allFixtures: { fixtures: [{ id: 5057571, home: { id: 6398, name: "Alianza Lima" }, away: { id: 425692, name: "CD UT Cajamarca" }, tournament: { name: "Liga 1 Clausura", leagueId: 131 }, status: { utcTime: "2026-11-07T20:00:00Z" } }] } } });
+    expect(fixtures[0]).toMatchObject({ competition: "Liga 1 Clausura", competitionId: "131" });
+  });
   it("only associates a published lineup with its own team and exact match", () => {
     const d = fotmobTeamFixture();
     expect(parseLineup(d, "6398")?.match?.id).toBe("100");

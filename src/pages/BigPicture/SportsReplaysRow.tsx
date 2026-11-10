@@ -8,9 +8,14 @@ import { fetchSportsReplayPlanPage, getSportsReplaysBaseUrl, primeSportsReplayPl
 import type { CatalogRowData, MediaItem } from "../../types/ui.ts";
 import { buildPlayerPath } from "../../utils/bigPictureDetail.ts";
 import CatalogRow from "../Home/CatalogRow.tsx";
+import SportsMatchCard from "./SportsMatchCard.tsx";
+import { withSampledSportsMatchColors, type SampledSportsMatchColors } from "../../utils/sportsMatchCards.ts";
 
 /** Independent query/cache: archive discovery never holds up live events. */
-export default function SportsReplaysRow() {
+export default function SportsReplaysRow({ onFocusItem, onTeamColorSample }: {
+  onFocusItem?: (item: MediaItem) => void;
+  onTeamColorSample?: (itemId: string, side: "home" | "away", color: string) => void;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const prefs = useSportsPreferences();
@@ -34,7 +39,14 @@ export default function SportsReplaysRow() {
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const openingRef = useRef(false);
   const generationRef = useRef(0);
+  const sampledColorsRef = useRef(new Map<string, SampledSportsMatchColors>());
   useEffect(() => () => { generationRef.current++; }, []);
+
+  const recordTeamColorSample = useCallback((itemId: string, side: "home" | "away", color: string) => {
+    const previous = sampledColorsRef.current.get(itemId) ?? {};
+    if (previous[side] !== color) sampledColorsRef.current.set(itemId, { ...previous, [side]: color });
+    onTeamColorSample?.(itemId, side, color);
+  }, [onTeamColorSample]);
 
   const play = useCallback(async (item: MediaItem) => {
     if (openingRef.current) return;
@@ -47,7 +59,10 @@ export default function SportsReplaysRow() {
     try {
       const streams = replay.streams?.length ? replay.streams : await resolveSportsReplayStreams(replay);
       if (generation !== generationRef.current) return;
-      primeSportsReplayPlayback(replay, streams);
+      primeSportsReplayPlayback({
+        ...replay,
+        sportsMatch: withSampledSportsMatchColors(replay.sportsMatch, sampledColorsRef.current.get(replay.id)),
+      }, streams);
       navigate(buildPlayerPath(`type=sports-replay&id=${encodeURIComponent(replay.id)}`, location.pathname));
     } catch (cause) {
       if (generation === generationRef.current) setPlaybackError(cause instanceof Error ? cause.message : "No se pudo abrir esta repetición.");
@@ -63,7 +78,8 @@ export default function SportsReplaysRow() {
     <section className="bp-sports-home__replays" aria-labelledby="sports-replays-title" aria-busy={query.isFetching || Boolean(resolving)}>
       <h2 id="sports-replays-title" className="bp-sports-home__replays-title home-row-title">Repeticiones</h2>
       {items.length > 0 && (
-        <CatalogRow row={row} posterLayout="horizontal" hideHeader persistHomeScroll={false} disableHeaderNavigation showViewMore={false} onOpenItem={play} />
+        <CatalogRow row={row} posterLayout="horizontal" itemGap={26} hideHeader persistHomeScroll={false} disableHeaderNavigation showViewMore={false} onOpenItem={play} onFocusItem={onFocusItem}
+          renderCard={item => <SportsMatchCard item={item} onOpenItem={play} onTeamColorSample={recordTeamColorSample} />} />
       )}
       {pending && <p className="bp-sports-home__status" role="status">Cargando repeticiones…</p>}
       {!pending && !query.error && items.length === 0 && <p className="bp-sports-home__status" role="status">No hay repeticiones con fuentes disponibles ahora mismo.</p>}

@@ -99,7 +99,8 @@ test("flechas directas sin barra visible y sin abrirla", async ({ page }) => {
 
   const after = (await calls(page)).slice(before);
   const seek = after.find(call => call.cmd === "mpv_command" && call.args?.command?.[0] === "seek");
-  expect(seek?.args?.command).toEqual(["seek", 10, "relative"]);
+  expect(seek?.args?.command?.slice(2)).toEqual(["absolute", "exact"]);
+  expect(Number(seek?.args?.command?.[1])).toBeGreaterThan(806);
   const volume = after.filter(call => call.cmd === "mpv_set_property" && call.args?.name === "volume").at(-1);
   expect(volume?.args?.value).toBe(91);
   await expect(controlsLayer(page)).toHaveCSS("pointer-events", "none");

@@ -8,6 +8,7 @@ import { scrollByGsap, tweenTo } from "../../utils/motion";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { isShellPreviewOpen, type ShellPreviewItem, type ShellPreviewRequest } from "../../utils/shellPreview";
+import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
 import "./CinematicRow.css";
 
 interface CinematicRowProps {
@@ -137,6 +138,8 @@ export default function CinematicRow({ row, restoreScrollLeft, onOpenPreview }: 
 
     const detailPath = buildDetailPath(row.type, item.id, undefined, location.pathname);
     if (isBigPictureLocation(location.pathname) && onOpenPreview) {
+      const sourceScrollLeft = scrollerRef.current?.scrollLeft ?? 0;
+      const sourceOffset = card.offsetLeft;
       const previewItems: ShellPreviewItem[] = items.map((previewItem, index) => {
         const previewBackground = resolveDetailBackground(row.type, previewItem.id, previewItem.background);
         writeDetailMediaMeta({
@@ -161,10 +164,8 @@ export default function CinematicRow({ row, restoreScrollLeft, onOpenPreview }: 
             const target = slideRefs.current[index];
             if (!rail?.isConnected || !target?.isConnected) return;
 
-            const railRect = rail.getBoundingClientRect();
-            const targetRect = target.getBoundingClientRect();
             rail.scrollTo({
-              left: Math.max(0, rail.scrollLeft + targetRect.left - railRect.left - (rail.clientWidth - target.clientWidth) / 2),
+              left: sourceScrollLeft + target.offsetLeft - sourceOffset,
               behavior: "instant" as ScrollBehavior,
             });
             window.setTimeout(() => {
@@ -220,6 +221,7 @@ export default function CinematicRow({ row, restoreScrollLeft, onOpenPreview }: 
               const detailBackground = resolveDetailBackground(row.type, item.id, item.background);
               const cardBackground = readHomeCardArtwork("background", row.type, item.id, detailBackground);
               const image = failedArtwork.has(item.id) ? item.poster : cardBackground || item.poster;
+              const responsiveArtwork = getTmdbCardImageResponsiveProps(image, 425);
               return (
                 <button
                   key={item.id}
@@ -234,7 +236,9 @@ export default function CinematicRow({ row, restoreScrollLeft, onOpenPreview }: 
                   {image ? (
                     <img
                       className="cinematic-row__artwork"
-                      src={image}
+                      srcSet={responsiveArtwork?.srcSet}
+                      sizes={responsiveArtwork?.sizes}
+                      src={responsiveArtwork?.fallbackSrc ?? image}
                       alt=""
                       loading={index === activeIndex ? "eager" : "lazy"}
                       decoding="async"

@@ -1,4 +1,6 @@
 mod discord_rpc;
+mod downloads;
+mod downloads_dash;
 mod embedded_subtitles;
 mod player_glass;
 mod poster_cache;
@@ -9,6 +11,10 @@ mod scraper;
 mod secure_credentials;
 mod seek_preview;
 mod sports_hls;
+#[cfg(debug_assertions)]
+mod nuvio_server;
+#[cfg(debug_assertions)]
+mod sports_assets;
 mod mpv_events;
 
 use std::{
@@ -6255,6 +6261,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .manage(MpvState::default())
+        .manage(downloads::DownloadState::default())
         .manage(seek_preview::SeekPreviewState::default())
         .manage(PendingOpenFiles::new(initial_open_files))
         .manage(P2pState::default())
@@ -6263,6 +6270,12 @@ pub fn run() {
         .manage(discord_rpc::DiscordRpcState::new())
         .invoke_handler(tauri::generate_handler![
             playback_capabilities,
+            downloads::download_list,
+            downloads::download_start,
+            downloads::download_retry,
+            downloads::download_cancel,
+            downloads::download_delete,
+            downloads::download_open_folder,
             youtube_search,
             youtube_resolve_stream,
             fetch_introdb_segments,
@@ -6302,6 +6315,18 @@ pub fn run() {
             poster_server::start_posters_server,
             poster_server::stop_posters_server,
             poster_server::posters_server_status,
+            #[cfg(debug_assertions)]
+            nuvio_server::start_nuvio_sports_server,
+            #[cfg(debug_assertions)]
+            nuvio_server::stop_nuvio_sports_server,
+            #[cfg(debug_assertions)]
+            nuvio_server::nuvio_sports_server_status,
+            #[cfg(debug_assertions)]
+            sports_assets::start_sports_assets,
+            #[cfg(debug_assertions)]
+            sports_assets::stop_sports_assets,
+            #[cfg(debug_assertions)]
+            sports_assets::sports_assets_status,
             poster_cache::poster_cache_url,
             tmdb_text_cache::tmdb_text_cache_get,
             tmdb_text_cache::tmdb_text_cache_set_many
@@ -6324,6 +6349,11 @@ pub fn run() {
             // 3000 y ~200 MB de RAM sin que nadie lo pida.
             if let tauri::RunEvent::Exit = event {
                 poster_server::stop();
+                #[cfg(debug_assertions)]
+                {
+                    nuvio_server::stop();
+                    sports_assets::stop_sports_assets();
+                }
             }
         });
 }

@@ -8,6 +8,7 @@ import { sanitizeLogoUrl } from "../../utils/artwork.ts";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata.ts";
 import { saveHomeScroll } from "../../store/homeScrollStore.ts";
 import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork.ts";
+import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
 import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion.ts";
 import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition.ts";
 import { buildDetailPath } from "../../utils/bigPictureDetail.ts";
@@ -43,6 +44,10 @@ const HERO_POST_TRAILER_HOLD_MS = 2500;
 
 function NeighborCard({ item, onClick, side, contentVisible }: { item: MediaItem; onClick: () => void; side: "left" | "right"; contentVisible: boolean }) {
   const bg = ensureOriginalTmdbImage(item.background) ?? "";
+  const responsiveArtwork = getTmdbCardImageResponsiveProps(
+    bg,
+    typeof window === "undefined" ? 1080 : Math.ceil(window.innerHeight * 1.1),
+  );
   if (!bg) return null;
   return (
     <div
@@ -76,7 +81,9 @@ function NeighborCard({ item, onClick, side, contentVisible }: { item: MediaItem
       }}
     >
       <img
-        src={bg}
+        srcSet={responsiveArtwork?.srcSet}
+        sizes={responsiveArtwork?.sizes}
+        src={responsiveArtwork?.fallbackSrc ?? bg}
         alt=""
         decoding="async"
         loading="lazy"
@@ -141,6 +148,10 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
   }, [animateEntrance, fadeEntranceIn]);
 
   const bg = ensureOriginalTmdbImage(displayItem.background) ?? "";
+  const responsiveArtwork = getTmdbCardImageResponsiveProps(
+    bg,
+    typeof window === "undefined" ? 1920 : window.innerWidth,
+  );
   const logo = sanitizeLogoUrl(displayItem.logo);
   const [mdbListRatings, setMdbListRatings] = useState<MdbListRatings | null>(displayItem.mdbListRatings ?? null);
   const awards = useAwards(displayItem.type, displayItem.id, true);
@@ -429,7 +440,9 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
         >
           {bg && (
             <img
-              src={bg}
+              srcSet={responsiveArtwork?.srcSet}
+              sizes={responsiveArtwork?.sizes}
+              src={responsiveArtwork?.fallbackSrc ?? bg}
               alt=""
               decoding="async"
               fetchPriority="high"

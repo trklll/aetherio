@@ -1,5 +1,6 @@
 import { tmdbFetch } from "../config/apiKeys.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
+import { isCncVerseTvAddon } from "../services/cncverseBridge.ts";
 import { normalizeAddonMediaMeta, type MediaMetadataSeed } from "./mediaMetadata";
 import { parseSemanticSearchIntent, searchTmdbSemantically } from "./semanticSearch";
 
@@ -624,7 +625,7 @@ export async function searchCinemeta(query: string, signal?: AbortSignal, timeou
 
 export async function searchAddons(query: string, addons: InstalledAddon[], signal?: AbortSignal): Promise<UnifiedSearchResult[]> {
   const tasks = addons
-    .filter(addon => addon.enabled)
+    .filter(addon => addon.enabled && !isCncVerseTvAddon(addon))
     .flatMap(addon =>
       (addon.manifest?.catalogs ?? [])
         .filter((catalog: any) => catalogSupportsSearch(catalog))

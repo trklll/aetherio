@@ -1,5 +1,6 @@
 import aetherioLogo from "../assets/aetheriologo.png";
 import aetherioTvLogo from "../../aetheriotvlogo.png";
+import aetherioSportsLogo from "../../AetherioSportsLogo.png";
 import { gsap, prefersReducedMotion } from "./motion.ts";
 
 /**
@@ -31,7 +32,7 @@ import { gsap, prefersReducedMotion } from "./motion.ts";
  * desmontaje de AppShell/BigPicturePage durante el navigate.
  */
 
-export type ModeTransitionDirection = "enter" | "exit";
+export type ModeTransitionDirection = "enter" | "exit" | "sports";
 type ModeTransitionPhase = "idle" | "cover" | "reveal" | "brand";
 
 const OVERLAY_ID = "aetherio-bp-mode";
@@ -61,6 +62,7 @@ export function getModeTransitionPhase(): ModeTransitionPhase {
 }
 
 export function getModeBrandLogo(direction: ModeTransitionDirection): string {
+  if (direction === "sports") return aetherioSportsLogo;
   return direction === "enter" ? aetherioTvLogo : aetherioLogo;
 }
 
@@ -243,7 +245,7 @@ export function transitionToMode(
   const showBrand = Boolean(brand && logo);
   if (logo) {
     logo.src = getModeBrandLogo(direction);
-    logo.dataset.bpModeLogo = direction === "enter" ? "tv" : "normal";
+    logo.dataset.bpModeLogo = direction === "sports" ? "sports" : direction === "enter" ? "tv" : "normal";
   }
   if (brand) {
     gsap.set(brand, {
@@ -325,6 +327,7 @@ export function transitionToMode(
 }
 
 function isModeReady(direction: ModeTransitionDirection): boolean {
+  if (direction === "sports") return document.querySelector("[data-bp-sports], .team-page") !== null;
   const bp = document.querySelector(BIG_PICTURE_SELECTOR);
   if (direction === "enter") return bp !== null;
   return bp === null && document.querySelector(SCROLL_SHELL_SELECTOR) !== null;

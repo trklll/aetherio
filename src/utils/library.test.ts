@@ -79,6 +79,15 @@ describe("library persistence adapters", () => {
     expect(readSavedLibrary()).toEqual([]);
   });
 
+  it("treats non-normalizable identities as not in the library instead of throwing", () => {
+    addToLibrary(item("movie", "tmdb:123"));
+
+    expect(isInLibrary("live", "bein:1")).toBe(false);
+    expect(isInLibrary("sports-replay", "match-1")).toBe(false);
+    expect(isInLibrary("movie", "")).toBe(false);
+    expect(isInLibrary("movie", "tmdb:123")).toBe(true);
+  });
+
   it("keeps the legacy void writer and provides a result from the try variant", () => {
     expect(tryAddToLibrary(item("movie", "tmdb:456")).ok).toBe(true);
     expect(addToLibrary(item("series", "tmdb:456"))).toBeUndefined();

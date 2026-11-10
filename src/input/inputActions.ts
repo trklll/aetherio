@@ -17,9 +17,10 @@
  * | move          | D-pad 12-15 + stick izq. | Flechas              |
  * | page          | LB/RB (botones 4/5)      | PageUp/PageDown      |
  * | toggle-mode   | Start (botón 9)          | F10                  |
+ * | toggle-sports | View/Back (botón 8)      | F9                   |
  * | exit-request  | Guía (botón 16) x2       | —                    |
  * |---------------|--------------------------------------------------|
- * | RESERVADOS sin comportamiento: LT/RT(6/7), View(8),      |
+ * | RESERVADOS sin comportamiento: LT/RT(6/7),              |
  * | L3/R3(10/11), stick derecho.                               |
  * + Reproductor Big Picture: abajo (cruceta/stick izq.) abre la barra
  *   (`open-controls`); arriba no hace nada; LB/RB = volumen -/+.
@@ -44,7 +45,8 @@ export const GAMEPAD_BUTTON = {
   TOGGLE_KB_MODE: 3, // Y — teclado en pantalla: alterna ABC <-> 123
   PAGE_UP: 4, // LB
   PAGE_DOWN: 5, // RB
-  // LT(6), RT(7), View(8) reservados.
+  // LT(6), RT(7) reservados.
+  TOGGLE_SPORTS: 8, // View/Back — Sports (desarrollo).
   TOGGLE_MODE: 9, // Start/Menu
   // L3(10), R3(11) reservados.
   DPAD_UP: 12,

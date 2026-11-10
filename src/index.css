@@ -1213,6 +1213,12 @@ html.aetherio-android-tv .scroll-row{
   transform:scale(var(--app-bp-scale));
   transform-origin:top left;
 }
+.home-page-scale[data-home-page="normal"] [data-row-key]{
+  /* Bound paint-chunk layerization to a row instead of merging the whole
+     catalog on each GSAP scroll update. Keep offscreen content-visibility and
+     promote row surfaces only, never every poster. TV is deliberately unchanged. */
+  transform:translateZ(0);
+}
 /* Entity: shell propio con scroll program�tico (como el Detail) y sin
    scrollbar visible en ning�n modo (estilo Steam, todo con mando). */
 .entity-scroll{
@@ -1451,4 +1457,32 @@ section[data-row-key]:focus-within .home-row-title{
 .aetherio-hide-cursor,
 .aetherio-hide-cursor * {
   cursor: none !important;
+}
+
+/* Descargas: el contorno marca el foco del mando sin cambiar el lenguaje visual
+   oscuro de Aetherio. Incluye focus() programático de spatialNav. */
+button[data-download-action]:focus,
+button[data-download-action].spatial-focus {
+  position: relative;
+  z-index: 2;
+  transform: scale(1.06);
+  outline: 2px solid #fff !important;
+  outline-offset: 2px;
+  background-color: rgba(255, 255, 255, 0.07) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+
+button[data-download-action] {
+  transition: transform 140ms ease-out, background-color 140ms ease-out, box-shadow 140ms ease-out, border-color 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[data-download-action] {
+    transition: none;
+  }
+  button[data-download-action]:focus,
+  button[data-download-action].spatial-focus {
+    transform: none;
+  }
 }

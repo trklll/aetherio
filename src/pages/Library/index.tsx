@@ -1,6 +1,6 @@
 ﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Compass, Film, RefreshCw, Tv } from "lucide-react";
+import { Compass, Download, Film, RefreshCw, Tv } from "lucide-react";
 import AppleSpinner from "../../components/ui/AppleSpinner";
 import { appleEase, gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import PageContainer from "../../components/layout/PageContainer";
@@ -8,9 +8,12 @@ import LibraryIcon from "../../components/ui/LibraryIcon";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { buildDetailPath } from "../../utils/bigPictureDetail";
 import LibrarySelector from "./LibrarySelector";
+import OfflineDownloadsTab from "./OfflineDownloadsTab";
+import { useDownloadsEnabled } from "../../config/downloadPreferences";
 import { clearLibraryReturn, readLibraryReturn, saveLibraryReturn, type DiscoverReturnState } from "./libraryTvState";
 import "./Library.css";
 import { GAMEPAD_ACTION_EVENT, type GamepadActionDetail } from "../../hooks/useGamepad";
+import { readLibraryTab, stepLibraryTab, writeLibraryTabSearch, type LibraryTab } from "./libraryTabs";
 import {
   ANILIST_LIBRARY_CHANGED_EVENT,
   readAniListLibrary,
@@ -40,7 +43,6 @@ import {
   type LibraryFilters,
 } from "./libraryLogic";
 
-type LibraryTab = "library" | "discover";
 const DISCOVER_VISIBLE_BATCH = 20;
 
 // §3/§4/§14 — stagger grid cards in on change; reduced-motion collapses to a cross-fade.
@@ -76,13 +78,49 @@ function useGridEntrance(containerRef: React.RefObject<HTMLElement | null>, deps
 
 export default function LibraryPage({ bigPicture = false }: { bigPicture?: boolean }) {
   const addons = useAddonStore(state => state.addons);
-  const [returnState] = useState(() => bigPicture ? readLibraryReturn() : null);
-  const [tab, setTab] = useState<LibraryTab>(returnState?.tab ?? "library");
+  const downloadsEnabled = useDownloadsEnabled();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [returnState] = useState(() => bigPicture && readLibraryTab(location.search) !== "downloads" ? readLibraryReturn() : null);
+  const [tab, setTab] = useState<LibraryTab>(() => readLibraryTab(location.search) ?? returnState?.tab ?? "library");
+  const visibleTab = downloadsEnabled || tab !== "downloads" ? tab : "library";
   const rootRef = useRef<HTMLDivElement>(null);
+  const previousVisibleTabRef = useRef<LibraryTab | null>(null);
   const [version, setVersion] = useState(0);
   const [filters, setFilters] = useState<LibraryFilters>(readLibraryFilters);
   const [aniListSyncing, setAniListSyncing] = useState(false);
   const [aniListError, setAniListError] = useState("");
+
+  const selectTab = (next: LibraryTab) => {
+    if (next === "downloads" && !downloadsEnabled) return;
+    setTab(next);
+    const search = writeLibraryTabSearch(location.search, next);
+    if (search !== location.search) {
+      navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state: location.state });
+    }
+  };
+
+  useLayoutEffect(() => {
+    if (!bigPicture) return;
+    const previous = previousVisibleTabRef.current;
+    previousVisibleTabRef.current = visibleTab;
+    if (previous === visibleTab) return;
+    rootRef.current?.querySelector<HTMLButtonElement>(`[data-library-tab="${visibleTab}"]`)?.focus({ preventScroll: true });
+  }, [bigPicture, visibleTab]);
+
+  useEffect(() => {
+    const requestedTab = readLibraryTab(location.search);
+    if (requestedTab === "downloads" && !downloadsEnabled) {
+      setTab("library");
+      const search = writeLibraryTabSearch(location.search, "library");
+      if (search !== location.search) {
+        navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state: location.state });
+      }
+      return;
+    }
+    if (requestedTab) setTab(requestedTab);
+    else setTab(current => current === "downloads" ? "library" : current);
+  }, [downloadsEnabled, location.hash, location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
     if (!bigPicture) return;
@@ -112,14 +150,15 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
     const onGamepadAction = (event: Event) => {
       const id = (event as CustomEvent<GamepadActionDetail>).detail?.id;
       if (id !== "lb" && id !== "rb") return;
+      const root = rootRef.current;
+      if (!root || !root.isConnected || root.getClientRects().length === 0) return;
+      if (document.querySelector('[data-spatial-modal]:not([hidden]), [data-aetherio-context-menu][data-context-open="true"]')) return;
       event.preventDefault();
-      const next: LibraryTab = id === "lb" ? "library" : "discover";
-      if (next === tab) return;
-      setTab(next);
+      selectTab(stepLibraryTab(visibleTab, id === "lb" ? -1 : 1, downloadsEnabled));
     };
     window.addEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
     return () => window.removeEventListener(GAMEPAD_ACTION_EVENT, onGamepadAction);
-  }, [bigPicture, tab]);
+  }, [bigPicture, downloadsEnabled, location.hash, location.pathname, location.search, location.state, navigate, visibleTab]);
 
   useEffect(() => {
     const refresh = () => setVersion(value => value + 1);
@@ -185,20 +224,25 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
       <PageContainer className="min-h-full pb-10 pt-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
           <div>
-            <h1 className="text-[clamp(2.35rem,4.8vw,4.8rem)] font-black leading-none text-white">{tab === "library" ? "Mi biblioteca" : "Descubrir"}</h1>
+            <h1 className="text-[clamp(2.35rem,4.8vw,4.8rem)] font-black leading-none text-white">{visibleTab === "library" ? "Mi biblioteca" : visibleTab === "discover" ? "Descubrir" : "Descargas"}</h1>
           </div>
-          <div className="liquid-glass inline-flex rounded-2xl p-1" data-spatial-ignore style={{ transform: "translateZ(0)" }}>
-            <TabButton bigPicture={bigPicture} tab="library" active={tab === "library"} icon={<LibraryIcon size={17} />} onClick={() => setTab("library")}>
+          <div className="library-tabs liquid-glass inline-flex rounded-2xl p-1" role={bigPicture ? "tablist" : undefined} aria-label={bigPicture ? "Secciones de la biblioteca" : undefined} style={{ transform: "translateZ(0)" }}>
+            <TabButton bigPicture={bigPicture} tab="library" active={visibleTab === "library"} icon={<LibraryIcon size={17} />} onClick={() => selectTab("library")}>
               Mi biblioteca
             </TabButton>
-            <TabButton bigPicture={bigPicture} tab="discover" active={tab === "discover"} icon={<Compass size={17} />} onClick={() => setTab("discover")}>
+            <TabButton bigPicture={bigPicture} tab="discover" active={visibleTab === "discover"} icon={<Compass size={17} />} onClick={() => selectTab("discover")}>
               Descubrir
             </TabButton>
+            {downloadsEnabled ? (
+              <TabButton bigPicture={bigPicture} tab="downloads" active={visibleTab === "downloads"} icon={<Download size={17} />} onClick={() => selectTab("downloads")}>
+                Descargas
+              </TabButton>
+            ) : null}
           </div>
         </div>
 
-        <div key={tab} ref={tabPanelRef} className="flex flex-col gap-9">
-          {tab === "library" ? (
+        <div key={visibleTab} id="library-tab-panel" role={bigPicture ? "tabpanel" : undefined} aria-labelledby={bigPicture ? `library-tab-${visibleTab}` : undefined} ref={tabPanelRef} className="flex flex-col gap-9">
+          {visibleTab === "library" ? (
             <>
               <AniListSyncBanner
                 count={aniListEntries.length}
@@ -248,7 +292,7 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
                     >
                       {filtered.items.map(item => (
                         <LibraryGridCard key={item.key} item={item.media} itemKey={item.key} bigPicture={bigPicture}
-                          onBeforeOpen={() => { if (bigPicture) saveLibraryReturn({ tab, itemKey: item.key }); }} />
+                          onBeforeOpen={() => { if (bigPicture) saveLibraryReturn({ tab: "library", itemKey: item.key }); }} />
                       ))}
                     </div>
                   ) : (
@@ -259,8 +303,10 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
                 <EmptyLibrary />
               )}
             </>
-          ) : (
+          ) : visibleTab === "discover" ? (
             <DiscoverLibrary catalogs={buildDiscoverCatalogs(addons)} bigPicture={bigPicture} initialState={returnState?.discover} />
+          ) : (
+            <OfflineDownloadsTab bigPicture={bigPicture} />
           )}
         </div>
       </PageContainer>
@@ -547,12 +593,14 @@ function TabButton({ active, icon, children, onClick, bigPicture = false, tab }:
 }) {
   return (
       <button
-      type="button"
-      data-library-tab={tab}
-      role={bigPicture ? "tab" : undefined}
-      aria-selected={bigPicture ? active : undefined}
-      aria-pressed={bigPicture ? undefined : active}
-      tabIndex={bigPicture ? -1 : undefined}
+        type="button"
+        data-library-tab={tab}
+        id={bigPicture ? `library-tab-${tab}` : undefined}
+        role={bigPicture ? "tab" : undefined}
+        aria-selected={bigPicture ? active : undefined}
+        aria-pressed={bigPicture ? undefined : active}
+        aria-controls={bigPicture ? "library-tab-panel" : undefined}
+        tabIndex={bigPicture ? (active ? 0 : -1) : undefined}
       onClick={onClick}
       onPointerDown={event => {
         if (event.button !== 0) return;
@@ -560,7 +608,7 @@ function TabButton({ active, icon, children, onClick, bigPicture = false, tab }:
       }}
       onPointerUp={event => tweenTo(event.currentTarget, { scale: 1 }, 0.24)}
       onPointerCancel={event => tweenTo(event.currentTarget, { scale: 1 }, 0.24)}
-      className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-extrabold"
+      className="library-tab-button inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-extrabold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
       style={{
         background: active ? "rgba(255,255,255,0.94)" : "transparent",
         color: active ? "rgba(12,12,13,0.94)" : "rgba(255,255,255,0.62)",

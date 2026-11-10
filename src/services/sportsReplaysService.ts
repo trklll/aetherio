@@ -1,4 +1,5 @@
 import { sportsFallbackArtwork } from "../data/sports/artwork.ts";
+import { buildSportsMatchArtwork, splitSportsMatchTitle } from "../utils/sportsMatchCards.ts";
 import { replayMatchesPreferences, replayParticipantsMatchFollows } from "../data/sports/board.ts";
 import { disciplineFromLabels } from "../data/sports/identity.ts";
 import { getSportsPreferences, hasAnyFollow } from "../data/sports/preferences.ts";
@@ -66,6 +67,8 @@ function replayMediaItem(meta: StremioMeta): SportsReplayItem {
   const name = cleanMetaName(meta.name, "Repetición deportiva");
   const sport = humanizeSport(meta.genres?.[0]);
   const fallback = sportsFallbackArtwork({ title: name, sport: "futbol" }, sport || "Repetición");
+  // Cast is opponent metadata only on versus entries, not F1/date/tournament hubs.
+  const opponents = splitSportsMatchTitle(name) && meta.cast?.length === 2 ? meta.cast : undefined;
   return {
     id: `replay:${meta.id}`,
     requestId: meta.id,
@@ -75,6 +78,13 @@ function replayMediaItem(meta: StremioMeta): SportsReplayItem {
     poster: meta.poster || meta.background || fallback,
     background: meta.background || meta.poster || fallback,
     originalPoster: fallback,
+    sportsMatch: buildSportsMatchArtwork({
+      title: name,
+      sport: meta.genres?.[0],
+      competitionName: meta.genres?.slice(1).join(" "),
+      home: opponents?.[0] ? { name: opponents[0] } : undefined,
+      away: opponents?.[1] ? { name: opponents[1] } : undefined,
+    }),
     genres: ["Repetición", ...(meta.genres ?? []).map(humanizeSport)],
     description: meta.description,
   };
@@ -269,6 +279,13 @@ export function primeSportsReplayPlayback(replay: SportsReplayItem, streams: Med
   sessionStorage.setItem(AVAILABLE_STREAMS_KEY, JSON.stringify({ key: availableStreamsMediaKey(replay), streams }));
   sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(streams[0]));
   sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
-    name: replay.name, background: replay.background || replay.poster || "", poster: replay.poster || "", logo: "", resumeTime: 0,
+    name: replay.name,
+    // The archive addon poster is metadata, not the Sports card. Let the Player
+    // render the generated match composition while its stream starts.
+    background: "",
+    poster: "",
+    logo: "",
+    sportsMatch: replay.sportsMatch,
+    resumeTime: 0,
   }));
 }

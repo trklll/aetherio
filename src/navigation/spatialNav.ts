@@ -216,30 +216,6 @@ function listRows(): HTMLElement[] {
     .filter(row => getRowCount(row) > 0);
 }
 
-/** Cards focuseables de la row ordenadas por índice (hay doble data-row-card: wrapper + inner). */
-function getRowCards(rowEl: Element): HTMLElement[] {
-  const seen = new Set<HTMLElement>();
-  const cards: { idx: number; el: HTMLElement }[] = [];
-  for (const holder of Array.from(rowEl.querySelectorAll<HTMLElement>("[data-item-index]"))) {
-    const idx = Number(holder.getAttribute("data-item-index"));
-    if (!Number.isFinite(idx) || idx < 0) continue;
-    // El focuseable real (tabIndex 0) vive dentro del wrapper en CatalogRow.
-    const focusable = holder.matches("button, a, input, [tabindex]")
-      && holder.getAttribute("tabindex") !== "-1"
-      && isVisibleFocusable(holder)
-      ? holder
-      : holder.querySelector<HTMLElement>(
-        "button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])",
-      );
-    if (focusable && isVisibleFocusable(focusable) && !seen.has(focusable)) {
-      seen.add(focusable);
-      cards.push({ idx: Math.trunc(idx), el: focusable });
-    }
-  }
-  cards.sort((a, b) => a.idx - b.idx);
-  return cards.map(c => c.el);
-}
-
 function findCardByIndex(rowEl: Element, index: number): HTMLElement | null {
   const holder = rowEl.querySelector<HTMLElement>(`[data-item-index="${index}"]`);
   if (!holder) return null;
@@ -253,18 +229,29 @@ function findCardByIndex(rowEl: Element, index: number): HTMLElement | null {
 }
 
 function estimateStride(rowEl: Element): number {
-  const cards = getRowCards(rowEl);
-  if (cards.length >= 2) {
-    const a = cards[0].getBoundingClientRect();
-    const b = cards[1].getBoundingClientRect();
-    const stride = Math.abs(b.left - a.left);
-    if (stride > 50) return stride;
+  // scrollLeft is in layout pixels, not the transformed viewport pixels from
+  // getBoundingClientRect(). Measuring focused buttons also includes their
+  // hover/focus scale. Use the indexed layout holders, and account for gaps in
+  // the mounted indices of a virtualized row.
+  const holders = Array.from(rowEl.querySelectorAll<HTMLElement>("[data-item-index]"))
+    .filter(holder => holder.closest("[data-row-key]") === rowEl);
+  const first = holders[0];
+  if (first) {
+    const firstIndex = getItemIndex(first);
+    for (const next of holders.slice(1)) {
+      const nextIndex = getItemIndex(next);
+      if (firstIndex === null || nextIndex === null || nextIndex === firstIndex
+        || first.offsetParent !== next.offsetParent) continue;
+      const stride = Math.abs((next.offsetLeft - first.offsetLeft) / (nextIndex - firstIndex));
+      if (stride > 0) return stride;
+    }
+    const scroller = rowEl.querySelector<HTMLElement>("[data-row-scroller]");
+    const style = window.getComputedStyle(first);
+    const gap = scroller ? parseFloat(window.getComputedStyle(scroller).columnGap) || 0 : 0;
+    const stride = first.offsetWidth + (parseFloat(style.marginLeft) || 0) + (parseFloat(style.marginRight) || 0) + gap;
+    if (stride > 0) return stride;
   }
-  if (cards.length === 1) {
-    const w = cards[0].getBoundingClientRect().width;
-    if (w > 50) return w + 18;
-  }
-  return 443; // CARD_W (425) + GAP (18) por defecto
+  return 0;
 }
 
 /**
@@ -310,6 +297,7 @@ function focusRowIndex(rowEl: HTMLElement, index: number, dir: SpatialDir, fast 
   const scroller = rowEl.querySelector<HTMLElement>("[data-row-scroller]");
   if (!scroller) return false;
   const stride = estimateStride(rowEl);
+  if (stride <= 0) return false;
   scroller.scrollTo({ left: Math.max(0, index * stride - 48), behavior: "auto" });
   let attempts = 0;
   const retry = () => {
@@ -638,12 +626,13 @@ function firstEntityRowScrollTop(el: HTMLElement, shell: HTMLElement): number | 
 }
 
 /**
- * Al volver hacia arriba a la primera fila de una plataforma, restaura el
- * hero completo (logo y descripción) en vez de alinear la fila al borde del
- * shell y dejar el encabezado fuera de pantalla.
+ * Al volver hacia arriba a la primera fila de una plataforma o Sports, restaura
+ * el inicio de esa página en vez de dejar la fila pegada al borde del shell.
  */
 function firstStreamingPlatformRowScrollTop(el: HTMLElement): number | null {
-  const page = el.closest<HTMLElement>(".streaming-platform-page[data-streaming-platform]");
+  const page = el.closest<HTMLElement>(
+    ".streaming-platform-page[data-streaming-platform], [data-bp-sports], .team-page",
+  );
   const row = el.closest<HTMLElement>("[data-row-key]");
   if (!page || !row) return null;
   const visibleRows = Array.from(page.querySelectorAll<HTMLElement>("[data-row-key]")).filter(candidate => {

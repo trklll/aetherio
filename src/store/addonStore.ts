@@ -15,6 +15,8 @@ import {
 import {
   CNCVERSE_BRIDGE_ID,
   CNCVERSE_BRIDGE_LOGO,
+  CNCVERSE_TV_ADDON_ID,
+  isCncVerseTvAddon,
   readCncVerseBridgeUrl,
   writeCncVerseBridgeUrl,
 } from "../services/cncverseBridge.ts";
@@ -218,7 +220,7 @@ function isInstalledAddon(value: unknown): value is InstalledAddon {
  * los toggles globales y el log de la pagina) cuenta sobre esta lista.
  */
 export function listableAddons(addons: InstalledAddon[]) {
-  return addons.filter(addon => !addon.hiddenInUi);
+  return addons.filter(addon => !addon.hiddenInUi && !isCncVerseTvAddon(addon));
 }
 
 function readPersistedAddons(key: string): InstalledAddon[] {
@@ -264,7 +266,7 @@ function mergeById(addons: InstalledAddon[]) {
   return [...merged.values()];
 }
 
-function manifestForHubAddon(
+export function manifestForHubAddon(
   entry: ProviderHubAddonEntry,
   remoteManifest?: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -274,13 +276,16 @@ function manifestForHubAddon(
     : Array.isArray(source.catalogs)
       ? source.catalogs
       : [];
+  const cncVerseTvOnly = entry.id === CNCVERSE_TV_ADDON_ID;
   return {
     ...source,
     id: entry.id,
     name: entry.name,
     description: entry.description || source.description,
     logo: entry.logo || source.logo,
-    catalogs,
+    resources: cncVerseTvOnly ? [{ name: "stream", types: ["tv"] }] : source.resources,
+    types: cncVerseTvOnly ? ["tv"] : source.types,
+    catalogs: cncVerseTvOnly ? [] : catalogs,
   };
 }
 

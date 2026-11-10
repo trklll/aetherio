@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 1420;
+const releaseSmoke = process.env.AETHERIO_RELEASE_SMOKE === "1";
+const PORT = releaseSmoke ? 1421 : 1420;
 const baseURL = `http://127.0.0.1:${PORT}`;
 
 // E2E de la capa web: el shell de React, el enrutado y los ajustes. Lo que
@@ -29,9 +30,11 @@ export default defineConfig({
     // proveedores) no hacen falta para probar la interfaz. `--host 127.0.0.1`
     // porque en Windows vite enlaza solo con `localhost` (::1) y `baseURL` apunta
     // a IPv4.
-    command: `npx vite --port ${PORT} --strictPort --host 127.0.0.1`,
+    command: releaseSmoke
+      ? `npx vite preview --port ${PORT} --strictPort --host 127.0.0.1`
+      : `npx vite --port ${PORT} --strictPort --host 127.0.0.1`,
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: releaseSmoke ? false : !process.env.CI,
     timeout: 120_000,
   },
 });

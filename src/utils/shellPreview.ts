@@ -87,7 +87,8 @@ export function withShellPreviewQuery(detailPath: string) {
 export function isShellPreviewInternalPath(pathname: string) {
   return pathname.startsWith("/big-picture/detail/")
     || pathname.startsWith("/big-picture/person/")
-    || pathname.startsWith("/big-picture/entity/");
+    || pathname.startsWith("/big-picture/entity/")
+    || pathname.startsWith("/big-picture/sports/match/");
 }
 
 export function isShellPreviewMessage(value: unknown): value is ShellPreviewMessage {

@@ -30,6 +30,22 @@ function channel(patch: Partial<LiveChannel> = {}): LiveChannel {
     sources: [{ id: "iptv-1", label: "IPTV · Mi lista · Canal Fútbol", url: "https://cdn.example.com/football.m3u8", origin: "iptv", verifiedAt: NOW }], ...patch };
 }
 
+describe("CNCVerse sports channels", () => {
+  it("includes unclassified CNCVerse sports channels despite the selected-sport filter", () => {
+    const cncVerseChannel: LiveChannel = {
+      id: "cncverse-tv-iptv:channel-1",
+      name: "Canal de deportes",
+      category: "Deportes",
+      sources: [{ id: "cnc-source", label: "Canal", url: "https://cdn.example.com/live.m3u8", providerId: "cncverse-tv", origin: "iptv" }],
+    };
+    expect(channelMatchesSports(cncVerseChannel, ["tenis"], NOW)).toBe(true);
+    expect(channelMatchesSports({
+      ...cncVerseChannel,
+      sources: [{ ...cncVerseChannel.sources[0], providerId: "another-provider" }],
+    }, ["tenis"], NOW)).toBe(false);
+  });
+});
+
 describe("sports M3U import", () => {
   it("hides unverified, expired and future-verified IPTV channels but keeps other live providers", () => {
     const expired = channel({ id: "expired", sources: [{ id: "old", label: "IPTV", url: "https://cdn.example.com/old.m3u8", origin: "iptv", verifiedAt: NOW - 55_001 }] });
@@ -74,6 +90,27 @@ https://cdn.example.com/b.m3u8`, list);
     expect(parsed.channels[0].name).toBe("Fútbol, España");
     expect(parsed.channels[0].sources[0].headers?.Referer).toBe("https://watch.example.com/");
     expect(parsed.channels[1].sources[0].headers).toBeUndefined();
+  });
+
+  it("keeps every distinct playable route even when duplicate entries share one URL", () => {
+    const parsed = parseSportsM3u(`#EXTM3U
+#EXTINF:-1 tvg-id="Football.es" group-title="Fútbol",Canal Fútbol
+#EXTVLCOPT:http-referrer=https://one.example/
+https://cdn.example.com/live.m3u8
+#EXTINF:-1 tvg-id="Football.es" group-title="Fútbol",Canal Fútbol
+#EXTVLCOPT:http-referrer=https://two.example/
+https://cdn.example.com/live.m3u8`, list);
+
+    expect(parsed.channels[0].sources).toHaveLength(2);
+    expect(parsed.channels[0].sources.map(source => source.headers?.Referer)).toEqual([
+      "https://one.example/", "https://two.example/",
+    ]);
+  });
+
+  it("keeps every public EPG URL declared in the playlist header", () => {
+    const guides = Array.from({ length: 5 }, (_, index) => `https://guide.example.com/${index}.xml`);
+    const parsed = parseSportsM3u(`#EXTM3U x-tvg-url="${guides.join(",")}"\n#EXTINF:-1 group-title="Fútbol",Canal Fútbol\nhttps://cdn.example.com/live.m3u8`, list);
+    expect(parsed.epgUrls).toEqual(guides);
   });
 
   it("rejects HLS media playlists, arbitrary files, unsafe URLs and DRM-only entries", () => {
@@ -128,6 +165,22 @@ describe("XMLTV programmes and identity", () => {
     expect(programmeMatchesEvent(programme({ title: "Real Madrid vs Barcelona (EN VIVO)" }), event(), NOW)).toBe(true);
   });
 
+  it("matches a provider's Cologne alias to the shorter XMLTV team name", () => {
+    const fixture = event({ title: "Köln — RB Leipzig", home: { name: "1. FC Köln" }, away: { name: "RB Leipzig" }, league: "Bundesliga" });
+    expect(programmeMatchesEvent(programme({ title: "Bundesliga: Köln — RB Leipzig", categories: ["Fußball"] }), fixture, NOW)).toBe(true);
+  });
+
+  it("does not treat a date-only provider kickoff as an exact time when matching the guide", () => {
+    const dateOnly = event({ startsAt: "2026-10-30T00:00:00Z", startsAtPrecision: "day" });
+    expect(programmeMatchesEvent(programme(), dateOnly, NOW)).toBe(true);
+    expect(programmeMatchesEvent(programme(), { ...dateOnly, startsAt: "2026-10-29T00:00:00Z" }, NOW)).toBe(false);
+  });
+
+  it("does not apply a fabricated kickoff time when provider precision is unknown", () => {
+    const unknownTime = event({ startsAt: "2026-10-30T00:00:00Z", startsAtPrecision: "unknown" });
+    expect(programmeMatchesEvent(programme(), unknownTime, NOW)).toBe(true);
+  });
+
   it.each([
     { title: "Real Madrid - Atlético de Madrid" },
     { title: "Real Madrid Femenino - Barcelona Femenino" },
@@ -151,15 +204,18 @@ describe("XMLTV programmes and identity", () => {
     expect(programmeMatchesEvent(programme({ title: "UFC", categories: ["MMA"] }), mma, NOW)).toBe(false);
   });
 
-  it("only prioritizes recently verified matching IPTV, preserves addons and expires old associations", () => {
-    const original = event();
+  it("adds fresh verified IPTV alongside addon sources and expires old associations", () => {
+    const original = event({ sources: [] });
     const [enriched] = attachIptvSources([original], [channel()], NOW);
-    expect(enriched.sources.map(s => s.id)).toEqual(["iptv-1", "addon-source"]);
+    expect(enriched.sources.map(s => s.id)).toEqual(["iptv-1"]);
     expect(enriched.sources[0]).toMatchObject({ origin: "iptv", isDefault: true, validUntil: "2026-10-30T21:00:00Z" });
-    expect(original.sources).toHaveLength(1);
+    expect(original.sources).toEqual([]);
+    const withAddon = attachIptvSources([event()], [channel()], NOW)[0].sources;
+    expect(withAddon.map(source => source.id)).toEqual(expect.arrayContaining(["addon-source", "iptv-1"]));
+    expect(withAddon).toHaveLength(2);
     expect(attachIptvSources([original], [channel({ sources: channel().sources.map(s => ({ ...s, verifiedAt: undefined })) })], NOW)[0].sources).toEqual(original.sources);
     expect(attachIptvSources([enriched], [channel()], Date.parse("2026-10-30T21:01:00Z"))[0].sources).toEqual(original.sources);
-    expect(attachIptvSources([event({ status: "upcoming" })], [channel()], NOW)[0].sources).toHaveLength(1);
+    expect(attachIptvSources([event({ status: "upcoming", sources: [] })], [channel()], NOW)[0].sources).toHaveLength(0);
     expect(attachIptvSources([enriched], [channel({ sources: [] })], NOW)[0].sources).toEqual(original.sources);
   });
 });

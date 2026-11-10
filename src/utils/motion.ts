@@ -171,9 +171,15 @@ export function useGsapState<T extends HTMLElement>(
   return ref;
 }
 
-export function scrollByGsap(element: HTMLElement | null, left: number, duration = 0.48) {
+export function scrollByGsap(
+  element: HTMLElement | null,
+  amount: number,
+  duration = 0.48,
+  axis: "horizontal" | "vertical" = "horizontal",
+) {
   if (!element) return;
-  tweenTo(element, { scrollLeft: element.scrollLeft + left }, duration);
+  const property = axis === "vertical" ? "scrollTop" : "scrollLeft";
+  tweenTo(element, { [property]: element[property] + amount }, duration);
 }
 
 export function scrollToElementGsap(element: HTMLElement | null, duration = 0.52) {
@@ -191,6 +197,7 @@ export function scrollToElementGsap(element: HTMLElement | null, duration = 0.52
 interface InertialScrollState {
   target: number;
   tween: gsap.core.Tween | null;
+  compositor?: boolean;
 }
 
 const inertialScrollStates = new WeakMap<HTMLElement, InertialScrollState>();
@@ -232,6 +239,7 @@ export function stopInertialScroll(element: HTMLElement | null) {
   if (!element) return;
   const state = inertialScrollStates.get(element);
   state?.tween?.kill();
+  if (state?.compositor) element.scrollTo({ top: element.scrollTop, behavior: "instant" });
   inertialScrollStates.delete(element);
   gsap.killTweensOf(element, "scrollTop");
 }
@@ -240,7 +248,7 @@ export function stopInertialScroll(element: HTMLElement | null) {
  * Adds desktop wheel inertia without replacing native touch, keyboard or
  * scrollbar interaction. Nested vertical scrollers consume the gesture first.
  */
-export function installInertialScroll(root: HTMLElement) {
+export function installInertialScroll(root: HTMLElement, { compositor = false }: { compositor?: boolean } = {}) {
   if (prefersReducedMotion()) return () => undefined;
   const controlled = new Set<HTMLElement>();
 
@@ -269,8 +277,10 @@ export function installInertialScroll(root: HTMLElement) {
 
     const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     const existing = inertialScrollStates.get(scroller);
-    const active = existing?.tween?.isActive() === true;
-    const currentTarget = active ? existing.target : scroller.scrollTop;
+    const active = existing?.compositor
+      ? Math.abs(existing.target - scroller.scrollTop) > 1
+      : existing?.tween?.isActive() === true;
+    const currentTarget = active && existing ? existing.target : scroller.scrollTop;
     const trackpadGesture = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(event.deltaY) < 42;
     const multiplier = trackpadGesture ? 1.16 : 1.34;
     const nextTarget = clamp(currentTarget + delta * multiplier, 0, max);
@@ -278,6 +288,16 @@ export function installInertialScroll(root: HTMLElement) {
 
     event.preventDefault();
     existing?.tween?.kill();
+
+    if (compositor) {
+      // Keep Big Picture's explicit nested-scroll routing, but let Chromium
+      // interpolate on the compositor instead of GSAP writing scrollTop on
+      // every main-thread frame. Preserve pending wheel distance across bursts.
+      inertialScrollStates.set(scroller, { target: nextTarget, tween: null, compositor: true });
+      controlled.add(scroller);
+      scroller.scrollTo({ top: nextTarget, behavior: "smooth" });
+      return;
+    }
 
     const distance = Math.abs(nextTarget - scroller.scrollTop);
     const state: InertialScrollState = {
@@ -304,13 +324,25 @@ export function installInertialScroll(root: HTMLElement) {
     }
   };
 
+  const onScrollEnd = (event: Event) => {
+    if (!(event.target instanceof HTMLElement)) return;
+    const element = event.target;
+    const state = inertialScrollStates.get(element);
+    if (state?.compositor && Math.abs(state.target - element.scrollTop) <= 1) {
+      inertialScrollStates.delete(element);
+      controlled.delete(element);
+    }
+  };
+
   root.addEventListener("wheel", onWheel, { passive: false });
   root.addEventListener("pointerdown", stopControlled, { passive: true });
+  if (compositor) root.addEventListener("scrollend", onScrollEnd, { capture: true, passive: true });
   window.addEventListener("keydown", onKeyDown, true);
 
   return () => {
     root.removeEventListener("wheel", onWheel);
     root.removeEventListener("pointerdown", stopControlled);
+    if (compositor) root.removeEventListener("scrollend", onScrollEnd, true);
     window.removeEventListener("keydown", onKeyDown, true);
     stopControlled();
   };

@@ -1,0 +1,22 @@
+.sports-flag {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  pointer-events: none;
+  isolation: isolate;
+  /* Keep the pigment clean: no dark translucent veil over the cloth folds. */
+  background: linear-gradient(112deg, var(--flag-home, hsl(210 8% 27%)) 12%, var(--flag-away, hsl(220 8% 23%)) 88%);
+}
+
+.sports-flag__canvas {
+  /* A long standings table must not stretch a viewport's folds over 3000px.
+     Sticky keeps the cloth visible while reading without a page-sized buffer. */
+  position: sticky;
+  top: 0;
+  display: block;
+  width: 100%;
+  height: min(100%, 100vh);
+  opacity: 0;
+}
+
+.sports-flag[data-flag-ready="true"] .sports-flag__canvas { opacity: 1; }

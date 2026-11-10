@@ -3,6 +3,7 @@ import type { InstalledAddon } from "../../store/addonStore";
 import type { MediaItem } from "../../types/ui";
 import type { ContinueWatchingEntry } from "../../utils/continueWatching";
 import type { SavedLibraryItem } from "../../utils/library";
+import { isCncVerseTvAddon } from "../../services/cncverseBridge";
 import { getScopedStorageKey } from "../../utils/localProfiles";
 import { tmdbFetch } from "../../config/apiKeys";
 import { isSpatialPosterUrl } from "../../config/spatialPosters";
@@ -199,7 +200,7 @@ export function filterLibrary(items: LibraryItem[], filters: LibraryFilters): Fi
 
 export function buildDiscoverCatalogs(addons: InstalledAddon[]): DiscoverCatalog[] {
   const addonCatalogs = addons
-    .filter(addon => addon.enabled)
+    .filter(addon => addon.enabled && !isCncVerseTvAddon(addon))
     .flatMap(addon => {
       const catalogs = Array.isArray(addon.manifest?.catalogs) ? addon.manifest.catalogs : [];
       return catalogs.flatMap((catalog: any) => {

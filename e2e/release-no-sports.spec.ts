@@ -22,3 +22,19 @@ test("release has no Sports navigation, settings, route or provider requests", a
   await expect(page.getByText("Sports", { exact: true })).toHaveCount(0);
   expect(sportsRequests).toEqual([]);
 });
+
+test("release hides IPTV Channels navigation and redirects direct links", async ({ page }) => {
+  await installExperienceFixture(page);
+
+  await page.goto("/channels", { waitUntil: "domcontentloaded" });
+  await revealForCapture(page);
+  await expect(page).toHaveURL(/\/home$/);
+  await expect(page.getByRole("button", { name: "Canales", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Guía de canales", { exact: true })).toHaveCount(0);
+
+  await page.goto("/big-picture/channels", { waitUntil: "domcontentloaded" });
+  await revealForCapture(page);
+  await expect(page).toHaveURL(/\/big-picture$/);
+  await expect(page.getByRole("button", { name: "Canales", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Guía de canales", { exact: true })).toHaveCount(0);
+});

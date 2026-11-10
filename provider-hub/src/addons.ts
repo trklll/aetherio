@@ -2,9 +2,11 @@ import { SEANIME_LOGOS } from "./seanime/catalogLogos.ts";
 import { fetchPublicAsset } from "./remoteAssets.ts";
 
 export type AddonCatalogPolicy = "keep" | "empty";
+export type AddonDomain = "general" | "sports";
 
 export interface ProviderHubAddon {
   id: string;
+  domain?: AddonDomain;
   name: string;
   description: string;
   logo: string;
@@ -180,6 +182,7 @@ export const DEFAULT_ADDONS: readonly ProviderHubAddon[] = [
   },
   {
     id: "community.sports.fly",
+    domain: "sports",
     name: "Sports Streams · Highfly",
     description: "Partidos y canales de Highfly integrados en Sports. Narraciones en español primero; horarios de Perú.",
     logo: "/addons/logos/highfly.ico",
@@ -197,6 +200,34 @@ export const DEFAULT_ADDONS: readonly ProviderHubAddon[] = [
       idPrefixes: ["streamed", "sf", "recap", "leaf"],
       catalogs: [],
       logo: "/addons/logos/highfly.ico",
+    },
+  },
+  {
+    id: "community.nuvio.live-sports",
+    domain: "sports",
+    name: "Nuvio Sports",
+    description: "Partidos y programación deportiva en directo de Nuvio.",
+    logo: "https://nuviosports.xyz/logo.png",
+    manifestUrl: "https://nuviosports.xyz/%7B%22timezone%22%3A%22America%2FLima%22%2C%22languages%22%3A%22Spanish%22%2C%22sports%22%3A%22football%2Cmma%22%7D/manifest.json",
+    enabledByDefault: true,
+    catalogPolicy: "empty",
+    manifestFallback: {
+      id: "community.nuvio.live-sports", version: "3.1.3", name: "Nuvio Sports",
+      resources: ["catalog", "meta", "stream"], types: ["tv"], idPrefixes: ["nuvio_sport_"], catalogs: [],
+    },
+  },
+  {
+    id: "com.stremverse.org",
+    domain: "sports",
+    name: "StremVerse Sports",
+    description: "Eventos deportivos en directo de StremVerse.",
+    logo: "https://storage.ko-fi.com/cdn/useruploads/8be649b0-3d7f-42fc-a516-e092fdc9ca65_8bb57f59-c58d-4129-8b99-0a5ae03c0b06.png",
+    manifestUrl: "https://stremverse1.alwaysdata.net/1XY6xCsIwGIRfRW7O6NRNRRHERbtJKWn4SULTpOSPxSi-u7RVKG7H3cfdvZCeKLAvIcB9iIlR3HAIITXSOQjsolUtJQhsJbf0s7eS6StL8t4yBM4hhTiVjEB4WK8hcLnrJkNg01G0SvrVsjwrN1PHoFrKqASc9Ho6sT5B4NpLb9mMgZLzOU6RuoEiU-3sQDUN5NO4vwgi9U7mP9NYbZzVJjGq9wc/manifest.json",
+    enabledByDefault: true,
+    catalogPolicy: "empty",
+    manifestFallback: {
+      id: "com.stremverse.org", version: "3.0.0", name: "StremVerse Sports",
+      resources: ["catalog", "meta", "stream"], types: ["tv"], idPrefixes: ["stremevent_"], catalogs: [],
     },
   },
 ];
@@ -247,7 +278,7 @@ export function buildAddonDirectory(
       const logo = new URL(logoPath, hubBaseUrl).toString();
       // Metadatos administrados también deben prevalecer al usar el fallback offline.
       return {
-        id: addon.id, name: addon.name, description: addon.description, logo,
+        id: addon.id, domain: addon.domain ?? "general", name: addon.name, description: addon.description, logo,
         manifestUrl: addon.manifestUrl, enabledByDefault: addon.enabledByDefault,
         catalogPolicy: addon.catalogPolicy, hiddenInUi: addon.hiddenInUi,
         streamTimeoutMs: addon.streamTimeoutMs, streamAttempts: addon.streamAttempts,

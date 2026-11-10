@@ -3,6 +3,14 @@ import type { LiveSource } from "../types/liveSports.ts";
 const fold = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const SPANISH = /(?:^|[^a-z0-9])(?:es(?:-[a-z]{2}|-419)?|spa|spanish|espanol|castellano|castilian|latino|latam)(?:$|[^a-z0-9])/;
 
+/** Same URL with different request headers is a different playable route. */
+export function liveSourceKey(source: Pick<LiveSource, "url" | "headers" | "referrer" | "userAgent">): string {
+  const headers = Object.entries(source.headers ?? {})
+    .map(([name, value]) => [name.toLowerCase(), value] as const)
+    .sort(([leftName, leftValue], [rightName, rightValue]) => leftName.localeCompare(rightName) || leftValue.localeCompare(rightValue));
+  return `${source.url.trim()}\u0000${JSON.stringify([headers, source.referrer ?? "", source.userAgent ?? ""])}`;
+}
+
 /** Commentary only: subtitles or a Spanish competition name do not prove Spanish audio. */
 export function spanishCommentaryPriority(source: Pick<LiveSource, "language" | "label">): number {
   const language = fold(source.language?.trim() ?? "");

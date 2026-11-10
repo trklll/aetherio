@@ -1,9 +1,9 @@
 /**
  * Icono de Buscar para el rail de Big Picture.
  *
- * Lupa "thin" de SVG Repo (`search-thin.svg`): circulo de radio 8 con mango a
- * 45 grados. Trazo de 2 sobre viewBox 24 —el mismo grosor que los iconos de
- * lucide— para que no cante mas ni menos que el resto de la fila.
+ * Lupa de SVG Repo (`search-thin.svg`): circulo de radio 8 con mango a 45
+ * grados. Se refuerza el trazo sobre el viewBox 24 para igualar el peso de los
+ * iconos de Lucide en la fila.
  *
  * A diferencia de `Search` de lucide, este trae el trazo ya puesto en el
  * `path` (no en el `svg`), asi que el `strokeWidth` del `<svg>` no lo pisa.
@@ -27,6 +27,7 @@ export default function SearchThinIcon({ size = 24, className }: { size?: number
       <path
         fill="none"
         stroke="currentColor"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
         d="m21 21l-4.343-4.343m0 0A8 8 0 1 0 5.343 5.343a8 8 0 0 0 11.314 11.314"

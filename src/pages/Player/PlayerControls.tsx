@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import type { EpisodeOption, SelectOption, VideoScaleMode } from "./types";
+import type { MediaStream } from "../../types/stream";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
 import { getPlayerGlassSurface } from "../../components/ui/glassSurface";
@@ -32,6 +33,7 @@ import { formatAirDate, formatRuntime } from "../../utils/mediaLabels";
 import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
 import { followHorizontalFocus } from "../../navigation/spatialNav.ts";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
+import { buildSportsSourceOptions, shouldShowSportsSourceMenu } from "./sportsSourceMenu.ts";
 import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
 import SubtitleSyncDialog from "./SubtitleSyncDialog";
 import type { SubtitleSyncCue } from "./subtitleSync/parser";
@@ -125,6 +127,9 @@ interface PlayerControlsProps {
   onGoLive?: () => void;
   /** Sports events keep the timeline pinned to live and omit track/speed menus. */
   sportsLiveMode?: boolean;
+  sportsSourceStreams?: MediaStream[];
+  selectedSportsSourceId?: string;
+  onSportsSourceChange: (value: string) => void;
   /** Variante Big Picture (/big-picture/player): layout sin guía de mando. */
   bigPicture?: boolean;
   /** La ruta TV conserva la barra anterior; la barra nueva se reserva a PC. */
@@ -233,6 +238,9 @@ export default function PlayerControls({
   liveDvrProgress = 1,
   onGoLive,
   sportsLiveMode = false,
+  sportsSourceStreams = [],
+  selectedSportsSourceId = "",
+  onSportsSourceChange,
   bigPicture,
   legacyTv = false,
   openMenu,
@@ -280,6 +288,8 @@ export default function PlayerControls({
   onSelectEpisode,
   onNavigateEpisode,
 }: PlayerControlsProps) {
+  const sportsSourceOptions = buildSportsSourceOptions(sportsSourceStreams);
+  const showSportsSourceMenu = shouldShowSportsSourceMenu(sportsLiveMode, sportsSourceOptions);
   const controlsRef = useRef<HTMLDivElement>(null);
   const controlsGlassRef = useRef<HTMLDivElement>(null);
   const controlsPointerTimerRef = useRef<number | null>(null);
@@ -580,12 +590,13 @@ useEffect(() => {
   const timelineDisabled = (!bigPicture && !duration) || transportLocked;
 
   useEffect(() => {
-    if (!timelineDisabled) return;
+    if (!timelineDisabled && active) return;
     // Un timeline que se bloquea a mitad de arrastre ya no recibe el pointerup:
     // sin esta salida la barra se quedaria pegada a la posicion del puntero.
     seekDraggingRef.current = false;
+    keyboardScrubRef.current = false;
     onCancelTimelinePreview();
-  }, [timelineDisabled, onCancelTimelinePreview]);
+  }, [active, timelineDisabled, onCancelTimelinePreview]);
 
   const subtitleBlurRefreshKey = useMemo(
     () => `${selectedSubtitleValue}|${subtitlesLoading ? "loading" : "ready"}|${subtitleOptions.map(option => option.value).join("\u0000")}`,
@@ -1040,6 +1051,10 @@ useEffect(() => {
     <div
       ref={controlsRef}
       data-player-interactive
+      // Los ranges definen pointer-events:auto: esconder solo el contenedor no
+      // impide que el foco espacial inicial vuelva a abrir la barra oculta.
+      inert={!active}
+      data-spatial-ignore={active ? undefined : "true"}
       className={bigPicture
         // Sin padding exterior: el panel tiene que llegar a los cuatro bordes de
         // la ventana, que es lo que hace que la sombra "agarre" todo.
@@ -1105,7 +1120,21 @@ useEffect(() => {
                 fila y el boton sobraba. El aviso de sala sigue en `partyPill`,
                 junto al titulo. */}
             <div className="bp-bar-actions flex shrink-0 flex-wrap items-center justify-end gap-[clamp(6px,0.55vw,12px)] pb-[0.35em]">
-              {canChangeSource && !legacyTv && <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} bigPicture onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} />}
+              {sportsLiveMode ? showSportsSourceMenu ? <IconMenu
+                id="sports-sources"
+                label="Fuentes"
+                icon={<Radio size={22} />}
+                value={selectedSportsSourceId}
+                options={sportsSourceOptions}
+                onChange={onSportsSourceChange}
+                open={openMenu === "sports-sources"}
+                disabled={transportLocked}
+                onToggle={() => setOpenMenu(value => value === "sports-sources" ? null : "sports-sources")}
+                onClose={() => setOpenMenu(null)}
+                apple
+                header="Fuentes"
+                closeOnSelect
+              /> : null : canChangeSource && !legacyTv ? <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} bigPicture onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} /> : null}
               {!sportsLiveMode ? <SubtitleMenu
                 label={subtitlesLoading ? "Cargando subtítulos" : "Subtítulos"}
                 selectedSubtitleValue={selectedSubtitleValue}
@@ -1264,9 +1293,9 @@ useEffect(() => {
               onPointerUp={endTimelineScrub}
               onPointerCancel={cancelTimelineScrub}
               onBlur={() => {
-                // Si se pierde el foco durante el gesto, no dejar un seek parcial.
-                keyboardScrubRef.current = false;
-                if (seekDraggingRef.current) cancelTimelineScrub();
+                // Ni el arrastre ni el preview por teclado sobreviven al foco.
+                // De lo contrario ocultan las actualizaciones reales de MPV.
+                cancelTimelineScrub();
               }}
               disabled={timelineDisabled}
               style={{
@@ -1336,7 +1365,19 @@ useEffect(() => {
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5">
-            {canChangeSource && !legacyTv && <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} />}
+            {sportsLiveMode ? showSportsSourceMenu ? <IconMenu
+              id="sports-sources"
+              label="Fuentes"
+              icon={<Radio size={17} />}
+              value={selectedSportsSourceId}
+              options={sportsSourceOptions}
+              onChange={onSportsSourceChange}
+              open={openMenu === "sports-sources"}
+              disabled={transportLocked}
+              onToggle={() => setOpenMenu(value => value === "sports-sources" ? null : "sports-sources")}
+              onClose={() => setOpenMenu(null)}
+              closeOnSelect
+            /> : null : canChangeSource && !legacyTv ? <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} /> : null}
             {!sportsLiveMode ? <IconMenu
               id="audio"
               label="Audio"
@@ -2734,6 +2775,7 @@ function IconMenu({
   apple = false,
   header,
   headerBadge = null,
+  closeOnSelect,
 }: {
   id: string;
   icon: ReactNode;
@@ -2749,6 +2791,7 @@ function IconMenu({
   apple?: boolean;
   header?: string;
   headerBadge?: AudioHeaderBadge | AudioHeaderBadge[] | null;
+  closeOnSelect?: boolean;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -2797,7 +2840,7 @@ function IconMenu({
           // el nombre de la pista.
           onSelect: () => onChange(option.value),
           // Con el mando, A selecciona y el menu sigue abierto: se cierra con B.
-          closeOnSelect: apple ? false : undefined,
+          closeOnSelect: closeOnSelect ?? (apple ? false : undefined),
         }))}
       />
     </div>

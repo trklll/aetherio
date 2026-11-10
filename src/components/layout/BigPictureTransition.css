@@ -57,6 +57,10 @@
   width: min(30vw, 410px);
 }
 
+#aetherio-bp-mode [data-bp-mode-brand-logo][data-bp-mode-logo="sports"] {
+  width: min(72vw, 960px);
+}
+
 @media (max-width: 640px) {
   #aetherio-bp-mode [data-bp-mode-brand-logo] {
     width: min(70vw, 460px);
@@ -64,6 +68,10 @@
 
   #aetherio-bp-mode [data-bp-mode-brand-logo][data-bp-mode-logo="normal"] {
     width: min(52vw, 350px);
+  }
+
+  #aetherio-bp-mode [data-bp-mode-brand-logo][data-bp-mode-logo="sports"] {
+    width: min(88vw, 700px);
   }
 }
 

@@ -3,12 +3,12 @@ import { cleanMetaName, humanizeSport, splitVersus } from "../types/stremioSport
 import { registerLiveSportsProvider, type LiveSportsProvider } from "./liveSportsService.ts";
 import { fetchSportsText as fetchText, publicSportsHttps as publicHttps, SPORTS_USER_AGENT as USER_AGENT } from "./fmhySportsHttp.ts";
 import { probeFmhyNativeSource } from "./fmhyNativeProbe.ts";
+import { liveSourceKey } from "./liveSportsSourceRanking.ts";
 
 const SPORTS_BITE = "https://sportsbite.org";
 const STREAM_FREE = "https://streamfree.top";
 const CATALOG_TTL_MS = 30_000;
 const MAX_LIVE_EVENTS = 16;
-const MAX_SOURCES = 3;
 const MAX_EVENT_AGE_MS = 5 * 60 * 60 * 1000;
 const SPORTS_BITE_PATH = /^\/(?:tlive|lol|rs|sk)\//;
 const SPORTS_BITE_PLAYER = /^\/(?:tlive|lol|rs|sk)-embed\/embed\//;
@@ -192,26 +192,33 @@ export function buildFmhySportsProvider(): LiveSportsProvider {
   }
   return {
     id: "fmhy-native", label: "FMHY · SportsBite / StreamFree (nativo)",
-    async fetchEvents() {
+    async fetchEvents(onProgress) {
       const candidates = (await getCatalog()).filter(candidate => candidate.event.status === "live");
       // A per-site cap prevents one catalog consuming the entire request budget.
       const bounded = ["sportsbite", "streamfree"].flatMap(provider => candidates.filter(candidate => candidate.provider === provider).slice(0, MAX_LIVE_EVENTS / 2));
+      const resolvedById = new Map<string, LiveEvent>();
       const events = await mapConcurrent(bounded, async candidate => {
         const sources: LiveSource[] = [];
+        const addSource = (source: LiveSource) => {
+          if (sources.some(existing => liveSourceKey(existing) === liveSourceKey(source))) return;
+          sources.push(source);
+          resolvedById.set(candidate.event.id, { ...candidate.event, sources: [...sources] });
+          onProgress?.([...resolvedById.values()]);
+        };
         try {
           if (candidate.provider === "sportsbite") {
-            for (const player of candidate.players.slice(0, MAX_SOURCES)) {
+            for (const player of candidate.players) {
               const source = await resolveSportsBiteSource(player);
-              if (source && !sources.some(existing => existing.url === source.url)) sources.push(source);
+              if (source) addSource(source);
             }
           } else if (candidate.streamKey) {
             const response = record(await fetchJson(`${STREAM_FREE}/api/v1/sources/${encodeURIComponent(candidate.streamKey)}`));
             // Merely being listed in `sources` does not mean it is transmitting.
             const players = Array.isArray(response.live_sources) ? response.live_sources : [];
-            for (const player of players.slice(0, MAX_SOURCES)) {
+            for (const player of players) {
               if (typeof player !== "string") continue;
               const source = await resolveStreamFreeSource(candidate.streamKey, player);
-              if (source && !sources.some(existing => existing.url === source.url)) sources.push(source);
+              if (source) addSource(source);
             }
           }
         } catch { /* One bad player never discards another site's events. */ }

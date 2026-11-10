@@ -72,6 +72,7 @@ test("entrar a Sports desde el rail con el mando deja el foco en la página", as
   // El rail se abre y enfoca sus items: el foco entra al item Sports.
   await page.locator(".bp-rail__collapsed").focus();
   await expect(page.locator(".bp-rail__expanded.is-visible")).toBeVisible();
+  await expect(page.locator(".bp-rail__item", { hasText: "Inicio" })).toBeFocused();
   await page.locator(".bp-rail__item", { hasText: "Sports" }).focus();
   await expect(page.locator(".bp-rail__item.is-focused", { hasText: "Sports" })).toBeVisible();
 
@@ -88,7 +89,7 @@ test("entrar a Sports desde el rail con el mando deja el foco en la página", as
 
   // El mando sigue vivo: Down baja de la acción primaria a la primera card.
   await page.keyboard.press("ArrowDown");
-  const card = page.locator('.media-card-frame[role="button"]').first();
+  const card = page.locator('.media-card-frame:is(button, [role="button"])').first();
   await expect(card).toBeFocused();
   await expect(page.locator("[data-hero-primary]")).not.toBeFocused();
 });
@@ -110,7 +111,7 @@ test("ruta directa a /big-picture/sports enfoca la acción principal", async ({ 
   await expect(page.locator("[data-bp-sports]")).toBeVisible();
   await expect(page.locator("[data-bp-sports] [data-hero-primary]")).toBeFocused();
   await page.keyboard.press("ArrowDown");
-  await expect(page.locator('.media-card-frame[role="button"]').first()).toBeFocused();
+  await expect(page.locator('.media-card-frame:is(button, [role="button"])').first()).toBeFocused();
 });
 
 test("se puede navegar al perfil desde el rail con el mando", async ({ page }) => {

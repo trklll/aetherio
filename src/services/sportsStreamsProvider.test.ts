@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSportsStreamsProvider as buildProvider } from "./sportsStreamsProvider.ts";
 import type { StremioMeta } from "../types/stremioSports.ts";
 import type { LiveSource } from "../types/liveSports.ts";
+import { getSportsPreferencesStorageKey } from "../data/sports/preferences.ts";
 
 const NOW = Date.parse("2026-10-30T23:00:00Z");
 const buildSportsStreamsProvider = (dependencies: Parameters<typeof buildProvider>[0]) => buildProvider({ meta: async () => null, ...dependencies });
@@ -26,10 +27,50 @@ describe("Highfly Sports adapter", () => {
     expect(details).toHaveBeenCalledWith("https://sports.highfly.to/test", "sport", "streamed:hidden");
   });
 
+  it("prioritizes a followed match and publishes it without waiting for a slower candidate", async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    });
+    values.set(getSportsPreferencesStorageKey(), JSON.stringify({
+      onboarding: "completed", legacyTeamNames: ["Liverpool"], view: "explorar", scope: "todos",
+    }));
+    values.set("aetherio-sports-legacy-teams-migrated", "1");
+    let finishOther!: (streams: { name: string; url: string }[]) => void;
+    const streams = vi.fn((_base: string, _type: string, id: string) => id.endsWith(":other")
+      ? new Promise<{ name: string; url: string }[]>(resolve => { finishOther = resolve; })
+      : Promise.resolve([{ name: "Highfly", url: "https://cdn.example/followed.m3u8" }]));
+    const provider = buildSportsStreamsProvider({
+      base: () => "https://sports.highfly.to/test",
+      manifest: async () => ({ catalogs: [{ type: "sport", id: "sports_live" }] }),
+      catalog: async () => [meta("streamed:other", { name: "Arsenal vs Chelsea" }), meta("streamed:followed", { name: "Manchester City vs Liverpool" })],
+      streams,
+      probe: async () => "live",
+      now: () => NOW,
+    });
+    const progress: { id: string; sources: unknown[] }[][] = [];
+    let completed = false;
+    const pending = provider.fetchEvents(events => {
+      progress.push(events.map(event => ({ id: event.id, sources: event.sources })));
+    }).then(events => { completed = true; return events; });
+
+    try {
+      await vi.waitFor(() => expect(streams).toHaveBeenCalledTimes(2));
+      expect(streams.mock.calls[0]?.[2]).toBe("streamed:followed");
+      await vi.waitFor(() => expect(progress.some(events => events.some(event => event.id === "sportsstreams:streamed:followed" && event.sources.length > 0))).toBe(true));
+      expect(completed).toBe(false);
+    } finally {
+      finishOther?.([{ name: "Highfly", url: "https://cdn.example/other.m3u8" }]);
+      await pending;
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects an unsafe stream URL before invoking a media probe", async () => {
     const probe = vi.fn(async (_source: LiveSource) => "live" as const);
     const provider = buildSportsStreamsProvider({ base: () => "https://sports.highfly.to/test", manifest: async () => ({ catalogs: [{ type: "sport", id: "sports_live" }] }), catalog: async () => [meta("streamed:a")], streams: async () => [{ name: "Spanish", url: "https://127.0.0.1/secret" }], probe, now: () => NOW });
-    expect(await provider.fetchEvents()).toEqual([]);
+    expect(await provider.fetchEvents()).toEqual([expect.objectContaining({ id: "sportsstreams:streamed:a", sources: [] })]);
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -62,11 +103,32 @@ describe("Highfly Sports adapter", () => {
     expect(probe.mock.calls[0][0].url).toContain("/es.m3u8");
   });
 
-  it("keeps future UTC schedules as absolute instants, omits dead matches and does not reuse UTC poster text", async () => {
+  it("keeps every verified source returned by the sports addon", async () => {
+    const provider = buildSportsStreamsProvider({
+      base: () => "https://sports.highfly.to/test",
+      manifest: async () => ({ catalogs: [{ type: "sport", id: "sports_live" }] }),
+      catalog: async () => [meta("streamed:many")],
+      streams: async () => ["one", "two", "three", "four", "five"].map(name => ({
+        name, url: `https://cdn.example.com/${name}.m3u8`,
+      })),
+      probe: async () => "live",
+      now: () => NOW,
+    });
+
+    const events = await provider.fetchEvents();
+
+    expect(events[0].sources.map(source => source.url)).toEqual([
+      "https://cdn.example.com/one.m3u8", "https://cdn.example.com/two.m3u8",
+      "https://cdn.example.com/three.m3u8", "https://cdn.example.com/four.m3u8",
+      "https://cdn.example.com/five.m3u8",
+    ]);
+  });
+
+  it("keeps future schedules exact and retains dead live candidates for an IPTV fallback", async () => {
     const provider = buildSportsStreamsProvider({ base: () => "https://sports.highfly.to/test", manifest: async () => ({ catalogs: [{ type: "sport", id: "sports_live" }] }), now: () => NOW,
       catalog: async () => [meta("streamed:next", { releaseInfo: "31 Oct 2026 - 02:30 UTC", poster: "https://cdn.highfly.to/posters/event_UTC.webp", background: "https://cdn.highfly.to/posters/custom/event.webp" }), meta("streamed:dead")],
       streams: async () => [{ name: "Source", url: "https://cdn.example.com/dead.m3u8" }], probe: async () => "dead" });
-    expect(await provider.fetchEvents()).toEqual([]);
+    expect(await provider.fetchEvents()).toEqual([expect.objectContaining({ id: "sportsstreams:streamed:dead", status: "live", sources: [] })]);
     const upcoming = await provider.fetchUpcoming!();
     expect(upcoming).toHaveLength(1);
     expect(upcoming[0]).toMatchObject({ startsAt: "2026-10-31T02:30:00.000Z", status: "upcoming", sources: [], poster: "https://cdn.highfly.to/posters/custom/event.webp" });
@@ -76,6 +138,9 @@ describe("Highfly Sports adapter", () => {
     const provider = buildSportsStreamsProvider({ base: () => "https://sports.highfly.to/test", manifest: async () => ({ catalogs: [{ type: "sport", id: "sports_live" }, { type: "sport", id: "league_nba" }] }), now: () => NOW,
       catalog: async (_base, _type, id) => { if (id === "league_nba") throw new Error("offline"); return [meta("streamed:a"), meta("streamed:b")]; },
       streams: async (_base, _type, id) => { if (id.endsWith(":a")) throw new Error("offline"); return [{ name: "ES", url: "https://cdn.example.com/b.m3u8" }]; }, probe: async () => "live" });
-    expect((await provider.fetchEvents()).map(event => event.id)).toEqual(["sportsstreams:streamed:b"]);
+    expect(await provider.fetchEvents()).toEqual([
+      expect.objectContaining({ id: "sportsstreams:streamed:a", sources: [] }),
+      expect.objectContaining({ id: "sportsstreams:streamed:b", sources: [expect.objectContaining({ url: "https://cdn.example.com/b.m3u8" })] }),
+    ]);
   });
 });

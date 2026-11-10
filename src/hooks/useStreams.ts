@@ -7,6 +7,7 @@ import { sortStreamsForPlayback } from "../utils/streamPlaybackRanking.ts";
 import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetadata.ts";
 import { matchesAddonStreamFilter } from "../utils/addonStreamFilter.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
+import { isCncVerseTvAddon } from "../services/cncverseBridge.ts";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -295,7 +296,10 @@ function normalizeStream(raw: any, addonId: string, addonName: string, idx: numb
 
 export function useStreams(query: StreamQuery | null): UseStreamsResult {
   const installedAddons = useAddonStore(s => s.addons);
-  const enabledAddons = useMemo(() => installedAddons.filter(addon => addon.enabled), [installedAddons]);
+  const enabledAddons = useMemo(
+    () => installedAddons.filter(addon => addon.enabled && !isCncVerseTvAddon(addon)),
+    [installedAddons],
+  );
   const streamId = useMemo(() => (query ? buildStreamId(query) : ""), [query]);
   const initialCachedStreams = useMemo(() => {
     if (!query || !streamId) return [] as MediaStream[];

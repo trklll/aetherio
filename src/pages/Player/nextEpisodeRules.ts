@@ -83,6 +83,21 @@ interface NextEpisodeCardInput {
   thresholdMinutesBeforeEnd: number;
 }
 
+/**
+ * El siguiente episodio ya viene resuelto (incluida la temporada siguiente),
+ * así que no debe depender de que el episodio actual exista en la lista local.
+ */
+export function getEpisodeNavigationTarget<T>(
+  direction: "prev" | "next",
+  currentIndex: number,
+  episodes: readonly T[],
+  resolvedNextEpisode: T | null,
+): T | null {
+  if (direction === "next") return resolvedNextEpisode;
+  if (!Number.isInteger(currentIndex) || currentIndex <= 0) return null;
+  return episodes[currentIndex - 1] ?? null;
+}
+
 export function shouldShowNextEpisodeCard(input: NextEpisodeCardInput): boolean {
   const { position, duration } = input;
   if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return false;

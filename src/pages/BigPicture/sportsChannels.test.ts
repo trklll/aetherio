@@ -21,6 +21,17 @@ describe("sports channels row", () => {
     expect(buildSportsChannels([], []).row).toBeNull();
     expect(buildSportsChannels(channels, []).row?.items).toHaveLength(2);
   });
+  it("puts generic CNCVerse TV sports channels in the Canales deportivos row", () => {
+    const cncVerse: LiveChannel = {
+      id: "cncverse-tv-iptv:canal-1",
+      name: "ESPN Deportes",
+      category: "Deportes",
+      sources: [{ id: "cnc", label: "ESPN", url: "https://cdn.example.com/espn.m3u8", providerId: "cncverse-tv", origin: "iptv" }],
+    };
+    const home = buildSportsChannels([cncVerse], ["tenis"]);
+    expect(home.row?.name).toBe("Canales deportivos");
+    expect(home.row?.items.map(item => item.name)).toEqual(["ESPN Deportes"]);
+  });
   it("shows Spanish-language channels first and keeps the rest available in their original order", () => {
     const mixed: LiveChannel[] = [
       { id: "english", name: "Arena Sport 1", tvgId: "ArenaSport1.rs@HD", language: "English", sports: ["futbol"], category: "Deportes", sources: [{ id: "en", label: "IPTV", url: "https://cdn.example.com/en.m3u8" }] },

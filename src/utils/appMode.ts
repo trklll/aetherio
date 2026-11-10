@@ -21,6 +21,7 @@ const LAST_APP_MODE_KEY = "aetherio-last-app-mode-v1";
 const NORMAL_PREFIXES = [
   "/home",
   "/library",
+  "/channels",
   "/addons",
   "/settings",
   "/catalog",

@@ -9,6 +9,7 @@ const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_DIRECTORY_BYTES = 2 * 1024 * 1024;
 const PENGUPLAY_PATH = "/api/penguplay/manifest.json";
 const HIGHFLY_URL = "https://sports.highfly.to/manifest.json";
+const NON_DUPLICABLE_ADDON_IDS = new Set(["com.penguplay", "community.sports.fly"]);
 const ANIMEAV1_ALIAS_ID = "aetherio.alias.animeav1";
 const GENERIC_LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#18352f"/><text x="64" y="80" text-anchor="middle" fill="#8de0c3" font-family="sans-serif" font-size="42">AH</text></svg>';
 
@@ -25,7 +26,7 @@ export async function loadAddons(env: Env): Promise<ManagedAddon[]> {
   if (raw === null) return DEFAULT_ADDONS.map(addon => ({ ...addon, updatedAt: 0 }));
   const stored: unknown = JSON.parse(raw);
   // No resembrar ni sobrescribir un índice existente dañado o incompatible.
-  if (!isObject(stored) || ![1, 2, 3].includes(Number(stored.version)) || !Array.isArray(stored.addons)) {
+  if (!isObject(stored) || ![1, 2, 3, 4].includes(Number(stored.version)) || !Array.isArray(stored.addons)) {
     throw new Error("Índice de add-ons inválido");
   }
   const addons = stored.addons as ManagedAddon[];
@@ -35,15 +36,28 @@ export async function loadAddons(env: Env): Promise<ManagedAddon[]> {
   if (stored.version === 1 || stored.version === 2) {
     const exactFilter = (addon: ManagedAddon, mode: string) => addon.streamNameFilter?.mode === mode
       && addon.streamNameFilter.prefixes.length === 1 && addon.streamNameFilter.prefixes[0] === "AnimeAV1";
-    return addons.filter(addon => !(addon.id === "aetherio.source.animeav1"
+    return normalizeAddonDomains(addons.filter(addon => !(addon.id === "aetherio.source.animeav1"
       && addon.upstreamAddonId === "com.animeflv.stremio.addon" && exactFilter(addon, "include")))
       .map(addon => {
         if (addon.id !== "com.animeflv.stremio.addon" || !exactFilter(addon, "exclude")) return addon;
         const { streamNameFilter: _obsolete, ...original } = addon;
         return original;
-      });
+      }), addons.length > 0);
   }
-  return addons;
+  return normalizeAddonDomains(addons, Number(stored.version) < 4 && addons.length > 0);
+}
+
+function normalizeAddonDomains(addons: ManagedAddon[], seedSportsAddons = false): ManagedAddon[] {
+  const normalized = addons.map(addon => ({
+    ...addon,
+    domain: addon.domain === "sports" || addon.id === "community.sports.fly" ? "sports" as const : "general" as const,
+  }));
+  // One-time additions for installs whose KV directory predates the sports Hub.
+  // Existing user-managed entries win; removed defaults are never resurrected.
+  const known = new Set(normalized.map(addon => addon.id));
+  return [...normalized, ...(seedSportsAddons ? DEFAULT_ADDONS
+    .filter(addon => addon.domain === "sports" && !known.has(addon.id))
+    .map(addon => ({ ...addon, updatedAt: 0 })) : [])];
 }
 
 export function adminAddonDirectory(addons: ManagedAddon[], hubUrl: string) {
@@ -51,6 +65,45 @@ export function adminAddonDirectory(addons: ManagedAddon[], hubUrl: string) {
   return addons.map((addon, index) => ({
     ...published[index], logoSource: addon.logo, updatedAt: addon.updatedAt,
   }));
+}
+
+/** Makes an editable, not-yet-persisted copy with a distinct Hub identity. */
+export function createAddonCopy(addons: ManagedAddon[], sourceId: string): ManagedAddon {
+  const source = addons.find(addon => addon.id === sourceId);
+  if (!source) throw new AssetError("No se encontró el add-on que quieres duplicar.", 404);
+  if (NON_DUPLICABLE_ADDON_IDS.has(source.id)) {
+    throw new AssetError("Esta integración tiene una configuración única y no se puede duplicar.");
+  }
+
+  const ids = new Set(addons.map(addon => addon.id));
+  const names = new Set(addons.map(addon => addon.name));
+  let copyId = "";
+  let copyName = "";
+  const nameRoot = source.name.replace(/\s+(?:\(\d+\)|\d+)$/, "").trim() || source.name;
+
+  for (let index = 2; ; index += 1) {
+    const idSuffix = `-copy-${index}`;
+    const idPrefix = source.id.slice(0, 128 - idSuffix.length).replace(/[._-]+$/, "");
+    const candidateId = `${idPrefix}${idSuffix}`;
+    const nameSuffix = ` ${index}`;
+    const candidateName = `${nameRoot.slice(0, 120 - nameSuffix.length).trimEnd()}${nameSuffix}`;
+    if (!ids.has(candidateId) && !names.has(candidateName)) {
+      copyId = candidateId;
+      copyName = candidateName;
+      break;
+    }
+  }
+
+  const originalManifestId = source.upstreamAddonId
+    ?? (typeof source.manifestFallback.id === "string" ? source.manifestFallback.id : source.id);
+  return {
+    ...source,
+    id: copyId,
+    name: copyName,
+    upstreamAddonId: originalManifestId,
+    manifestFallback: { ...source.manifestFallback, id: copyId, name: copyName },
+    updatedAt: Date.now(),
+  };
 }
 
 function requiredText(value: unknown, label: string, limit: number): string {
@@ -102,7 +155,7 @@ function boundedNumber(value: unknown, fallback: number | undefined, min: number
 }
 
 async function persistAddons(env: Env, addons: ManagedAddon[]) {
-  const serialized = JSON.stringify({ version: 3, addons });
+  const serialized = JSON.stringify({ version: 4, addons });
   if (new TextEncoder().encode(serialized).byteLength > MAX_DIRECTORY_BYTES) {
     throw new AssetError("El directorio de add-ons supera 2 MB.", 413);
   }
@@ -126,6 +179,7 @@ export async function upsertAddon(env: Env, id: string, body: Record<string, unk
   }
   const catalogPolicy = body.catalogPolicy ?? existing?.catalogPolicy ?? "empty";
   if (catalogPolicy !== "keep" && catalogPolicy !== "empty") throw new AssetError("catalogPolicy debe ser keep o empty.");
+  if (body.domain !== undefined && body.domain !== "general" && body.domain !== "sports") throw new AssetError("domain debe ser general o sports.");
   for (const key of ["enabledByDefault", "hiddenInUi"]) {
     if (body[key] !== undefined && typeof body[key] !== "boolean") throw new AssetError(`${key} debe ser booleano.`);
   }
@@ -142,7 +196,7 @@ export async function upsertAddon(env: Env, id: string, body: Record<string, unk
     throw new AssetError("Filtro de streams inválido: usa include/exclude y de 1 a 20 prefijos de nombre.");
   }
   const addon: ManagedAddon = {
-    id, name, description, manifestUrl: url, logo, catalogPolicy,
+    id, domain: body.domain === "sports" ? "sports" : "general", name, description, manifestUrl: url, logo, catalogPolicy,
     enabledByDefault: (body.enabledByDefault ?? existing?.enabledByDefault ?? true) as boolean,
     hiddenInUi: (body.hiddenInUi ?? existing?.hiddenInUi ?? false) as boolean,
     streamTimeoutMs: boundedNumber(body.streamTimeoutMs, existing?.streamTimeoutMs, 1000, 120_000, "Timeout"),

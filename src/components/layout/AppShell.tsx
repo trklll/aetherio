@@ -16,6 +16,7 @@ import { useParty } from "../../party/PartyContext";
 import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn";
 import ProfileBackdrop from "../profile/ProfileBackdrop";
 import { getActiveProfile, LOCAL_PROFILES_CHANGED_EVENT } from "../../utils/localProfiles";
+import { useRowPositionMemory } from "../../hooks/useRowPositionMemory";
 
 interface RouteFocusSnapshot {
   card: HTMLElement;
@@ -55,6 +56,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const navigationScrollKey = makeScrollKey(loc.pathname, loc.search);
   const hideNav = isPlayer || isEpisodePage;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const hasRowPosition = useRowPositionMemory(scrollRef, navigationScrollKey);
   const scrollPositionsRef = useRef(new Map<string, number>());
   const focusedCardsRef = useRef(new Map<string, RouteFocusSnapshot>());
   const routeHistoryRef = useRef(new Map<number, string>());
@@ -350,6 +352,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }
     const previousKey = activeScrollKeyRef.current;
     if (previousKey === nextKey) return;
+    if (hasRowPosition) {
+      activeScrollKeyRef.current = nextKey;
+      if (pendingScrollRafRef.current !== null) cancelAnimationFrame(pendingScrollRafRef.current);
+      pendingScrollRafRef.current = null;
+      return;
+    }
 
     // La posicion de la page saliente ya esta guardada por el listener de scroll
     // de arriba: aqui ya estaria recortada a 0.
@@ -430,7 +438,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       };
       pendingScrollRafRef.current = requestAnimationFrame(tick);
     }
-  }, [loc.pathname, navigationScrollKey]);
+  }, [loc.pathname, navigationScrollKey, hasRowPosition]);
 
   useEffect(() => () => {
     if (pendingScrollRafRef.current !== null) cancelAnimationFrame(pendingScrollRafRef.current);

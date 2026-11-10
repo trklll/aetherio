@@ -1,0 +1,202 @@
+{
+  "checkedAt": "2026-11-09T18:44:07.952Z",
+  "transport": "Node fetch using Aetherio's bounded IPTV downloader (not the Tauri HTTP bridge)",
+  "scope": "Built-in sports defaults and the current Channels catalog; not private native-profile storage",
+  "lists": [
+    {
+      "id": "iptv-org-sports",
+      "name": "iptv-org · Deportes",
+      "ok": true,
+      "entries": 505,
+      "sportsChannels": 494,
+      "sources": 505,
+      "elapsedMs": 222
+    },
+    {
+      "id": "iptv-org-all",
+      "name": "IPTV-org · Lista completa",
+      "ok": true,
+      "entries": 11466,
+      "sportsChannels": 500,
+      "sources": 511,
+      "elapsedMs": 729
+    },
+    {
+      "id": "iptv-free-sports",
+      "name": "IPTV Free · Deportes",
+      "ok": true,
+      "entries": 496,
+      "sportsChannels": 485,
+      "sources": 496,
+      "elapsedMs": 758
+    },
+    {
+      "id": "hacks-tools-sports",
+      "name": "Hacks.Tools · Deportes",
+      "ok": true,
+      "entries": 496,
+      "sportsChannels": 485,
+      "sources": 496,
+      "elapsedMs": 646
+    },
+    {
+      "id": "u-din-sports",
+      "name": "u-din IPTV · Deportes",
+      "ok": true,
+      "entries": 313,
+      "sportsChannels": 72,
+      "sources": 93,
+      "elapsedMs": 58
+    },
+    {
+      "id": "bundled-popular-sports",
+      "name": "Popular Sports IPTV (bundled)",
+      "ok": true,
+      "activeDefault": false,
+      "entries": 322,
+      "sportsChannels": 314
+    }
+  ],
+  "guides": [
+    {
+      "host": "www.tdtchannels.com",
+      "ok": true,
+      "channels": 186,
+      "programmes": 7826
+    },
+    {
+      "host": "epg.pw",
+      "ok": false,
+      "error": "Error: La lista o guía supera el tamaño permitido."
+    }
+  ],
+  "samples": [
+    {
+      "list": "iptv-org · Deportes",
+      "channel": "Barca TV",
+      "mediaVerified": false,
+      "elapsedMs": 5
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "07.SETANTA SPORTS 1",
+      "mediaVerified": true,
+      "elapsedMs": 880
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "beIN SPORTS XTRA en Espanol",
+      "mediaVerified": true,
+      "elapsedMs": 446
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "07.SETANTA SPORTS 2",
+      "mediaVerified": true,
+      "elapsedMs": 901
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "like Gecko) Chrome/156.0.0.0 Safari/537.36\" group-title=\"Sports\",Real Madrid TV",
+      "mediaVerified": false,
+      "elapsedMs": 762
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "08.ESPN (LaLiga)",
+      "mediaVerified": false,
+      "elapsedMs": 3063
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "Real Madrid TV English",
+      "mediaVerified": false,
+      "elapsedMs": 836
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "09.ESPN",
+      "mediaVerified": false,
+      "elapsedMs": 10265
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "30A Golf Kingdom",
+      "mediaVerified": false,
+      "elapsedMs": 1196
+    }
+  ],
+  "native": [
+    {
+      "channel": "07.SETANTA SPORTS 1",
+      "decoderStarted": true,
+      "profile": "current",
+      "scenario": "remote",
+      "firstFrameMs": 1903.22,
+      "elapsedMs": 1904.21,
+      "manifestRequests": 0,
+      "segmentRequests": 0,
+      "endReason": null,
+      "errorCode": null,
+      "mpvVersion": "mpv v0.41.0-458-g062f4bf04",
+      "httpStatus": null
+    },
+    {
+      "channel": "beIN SPORTS XTRA en Espanol",
+      "decoderStarted": true,
+      "profile": "current",
+      "scenario": "remote",
+      "firstFrameMs": 1847.1,
+      "elapsedMs": 1848.89,
+      "manifestRequests": 0,
+      "segmentRequests": 0,
+      "endReason": null,
+      "errorCode": null,
+      "mpvVersion": "mpv v0.41.0-458-g062f4bf04",
+      "httpStatus": null
+    },
+    {
+      "channel": "07.SETANTA SPORTS 2",
+      "decoderStarted": true,
+      "profile": "current",
+      "scenario": "remote",
+      "firstFrameMs": 1903.28,
+      "elapsedMs": 1904.15,
+      "manifestRequests": 0,
+      "segmentRequests": 0,
+      "endReason": null,
+      "errorCode": null,
+      "mpvVersion": "mpv v0.41.0-458-g062f4bf04",
+      "httpStatus": null
+    }
+  ],
+  "channelCatalog": {
+    "bundled": 1986,
+    "attachedM3u": 322,
+    "iptvCatSnapshot": 1664,
+    "remoteChannels": 3727,
+    "failedPlaylists": [],
+    "sources": [
+      {
+        "id": "iptv-free-sports",
+        "name": "IPTV Free · Deportes",
+        "channels": 496
+      },
+      {
+        "id": "hacks-tools-sports",
+        "name": "Hacks Tools · Deportes",
+        "channels": 496
+      },
+      {
+        "id": "u-din-sports",
+        "name": "u-din · Deportes",
+        "channels": 313
+      },
+      {
+        "id": "iptv-free-spanish",
+        "name": "IPTV Free · Español",
+        "channels": 2422
+      }
+    ]
+  }
+}

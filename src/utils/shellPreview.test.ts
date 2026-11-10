@@ -19,6 +19,8 @@ describe("shell preview protocol", () => {
     expect(isShellPreviewInternalPath("/big-picture/detail/movie/tmdb:42")).toBe(true);
     expect(isShellPreviewInternalPath("/big-picture/person/42")).toBe(true);
     expect(isShellPreviewInternalPath("/big-picture/entity/company/10")).toBe(true);
+    expect(isShellPreviewInternalPath("/big-picture/sports/match/fotmob%3A1")).toBe(true);
+    expect(isShellPreviewInternalPath("/big-picture/sports/teams")).toBe(false);
     expect(isShellPreviewInternalPath("/detail/movie/tmdb:42")).toBe(false);
     expect(isShellPreviewInternalPath("/big-picture/episode")).toBe(false);
     expect(isShellPreviewInternalPath("/episode")).toBe(false);

@@ -7,7 +7,7 @@ import { array, identifier, numeric, object, text } from "./sportsDataValues";
 export interface TeamPlayer { id: string; name: string; jersey?: string; position?: string; photo?: string; age?: number; country?: string; goals?: string }
 export interface TeamStanding { id: string; name: string; rank?: string; played?: string; wins?: string; draws?: string; losses?: string; goalsFor?: string; goalsAgainst?: string; difference?: string; points?: string }
 export interface TeamStandingGroup { name: string; season?: string; rows: TeamStanding[] }
-export interface TeamFixture { id: string; date?: string; name: string; home?: string; away?: string; score?: string; completed: boolean; live: boolean; timeValid: boolean; cancelled?: boolean }
+export interface TeamFixture { id: string; date?: string; name: string; home?: string; away?: string; homeId?: string; awayId?: string; competition?: string; competitionId?: string; score?: string; completed: boolean; live: boolean; timeValid: boolean; cancelled?: boolean }
 export interface TeamOverview {
   supported: boolean; provider: "FotMob"; teamId?: string; league?: string; season?: string; venue?: string; city?: string;
   standings: TeamStandingGroup[]; squad: TeamPlayer[]; fixtures: TeamFixture[];
@@ -81,7 +81,10 @@ function fixture(value: unknown): TeamFixture | undefined {
   const status = object(item.status); const home = text(object(item.home).name); const away = text(object(item.away).name);
   const completed = status.finished === true; const cancelled = status.cancelled === true;
   const live = status.started === true && !completed && !cancelled;
+  const league = object(item.league); const tournament = object(item.tournament);
   return { id, date: text(status.utcTime), name: `${home ?? "Local"} — ${away ?? "Visitante"}`, home, away, completed, live, cancelled,
+    homeId: identifier(object(item.home).id), awayId: identifier(object(item.away).id),
+    competition: text(tournament.name) ?? text(league.name) ?? text(item.leagueName), competitionId: identifier(tournament.leagueId) ?? identifier(league.id) ?? identifier(item.leagueId),
     score: completed || live ? text(status.scoreStr)?.replace(/\s*-\s*/g, " – ") : undefined,
     timeValid: !!text(status.utcTime) && !cancelled };
 }
@@ -127,7 +130,7 @@ async function fetchOverview(entity: SportsEntity, refresh: boolean): Promise<Te
   const details = object(raw.details);
   if (identifier(details.id) !== id || !entityNames(entity).has(normalizeLiveTeamKey(text(details.name)))
     || details.gender === "female" || (COUNTRY_CODES[entity.countryId ?? ""] && text(details.country) !== COUNTRY_CODES[entity.countryId!])) {
-    throw new Error("La identidad del equipo devuelta por FotMob no coincide con el catálogo");
+    throw new Error("La identidad del equipo recibida no coincide con el catálogo");
   }
   const squad = parseRoster(raw);
   const statistics = array(object(raw.stats).players).map(object).find(entry => entry.name === "goals");

@@ -1,9 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 
-async function setup(page: Page, player = false, width = 1920, height = 1080, unavailable: string[] = []) {
+async function openSourcesByLongPress(page: Page, label = "Real Madrid vs Barcelona") {
+  await page.getByRole("button", { name: label, exact: true }).focus();
+  await page.keyboard.down("Enter");
+  await page.waitForTimeout(550);
+  await page.keyboard.up("Enter");
+}
+
+async function setup(page: Page, player = false, width = 1920, height = 1080, unavailable: string[] = [], sourceCount = 2) {
   await page.setViewportSize({ width, height });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.addInitScript(({ player, unavailable }) => {
+  await page.addInitScript(({ player, unavailable, sourceCount }) => {
     let nextId = 1;
     let statusTick = 1;
     const now = Date.now();
@@ -59,42 +66,36 @@ https://cdn.example.com/news.m3u8`;
     const game = { id: "iptv-game", title: "Real Madrid vs Barcelona", sport: "Football", league: "LaLiga", status: "live", startsAt, home: { name: "Real Madrid" }, away: { name: "FC Barcelona" }, sources: [{ id: "addon", label: "Addon Sports", url: "https://addon.example.com/live.m3u8" }] };
     localStorage.setItem("aetherio-live-sports-local-events", JSON.stringify([game]));
     if (player) {
-      const streams = [{ id: "iptv", addonId: "iptv-sports", addonName: "IPTV", name: "Fútbol TV", title: "Fútbol TV", url: "https://cdn.example.com/football.m3u8", behaviorHints: { live: true, sourceType: "iptv", liveEventId: game.id } }, { id: "addon", addonId: "live", addonName: "Addon Sports", name: "Addon Sports", url: "https://addon.example.com/live.m3u8", behaviorHints: { live: true } }];
+      const streams = [{ id: "iptv", addonId: "iptv-sports", addonName: "IPTV", name: "Fútbol TV", title: "Fútbol TV", url: "https://cdn.example.com/football.m3u8", behaviorHints: { live: true, sourceType: "iptv", liveEventId: game.id } }, { id: "addon", addonId: "live", addonName: "Addon Sports", name: "Addon Sports", url: "https://addon.example.com/live.m3u8", behaviorHints: { live: true } }].slice(0, sourceCount);
       sessionStorage.setItem("aetherio-selected-stream", JSON.stringify(streams[0]));
       sessionStorage.setItem("aetherio-selected-media-meta", JSON.stringify({ name: game.title }));
       sessionStorage.setItem("aetherio-available-streams", JSON.stringify({ key: `live:${game.id}::`, streams }));
     }
     const fetcher = window.fetch.bind(window);
     window.fetch = (input, init) => /nuvio|stremverse|7310/.test(String(input)) ? Promise.resolve(new Response(JSON.stringify({ metas: [], sync: { state: "idle" } }))) : fetcher(input, init);
-  }, { player, unavailable });
+  }, { player, unavailable, sourceCount });
   await page.goto(player ? "/big-picture/player?type=live&id=iptv-game" : "/big-picture/sports");
   await page.addStyleTag({ content: ".startup-app-content { visibility: visible !important; opacity: 1 !important; transform: none !important; pointer-events: auto !important; }" });
 }
 
-test("la card permite elegir el addon sin imponer la fuente IPTV", async ({ page }) => {
+test("la card en directo no muestra el icono y conserva la selección de fuentes por pulsación larga", async ({ page }) => {
   await setup(page);
-  await expect(page.getByRole("region", { name: "Canales deportivos", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Elegir fuentes para Real Madrid vs Barcelona", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Real Madrid vs Barcelona", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Elegir fuentes para Real Madrid vs Barcelona", exact: true })).toHaveCount(0);
+  await openSourcesByLongPress(page);
   const dialog = page.getByRole("dialog", { name: "Elegir fuente", exact: true });
-  await expect(dialog).toContainText("Programación coincide");
+  await expect(dialog).toContainText("Narraciones identificadas en español primero");
   await dialog.getByRole("button", { name: /Addon Sports/ }).click();
   await expect(page).toHaveURL(/player\?type=live&id=iptv-game/);
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("aetherio-selected-stream")!).id)).toBe("addon");
 });
 
-test("Fuentes queda dentro de la primera card móvil sin desplazar horizontalmente la fila", async ({ page }) => {
+test("las cards en directo no muestran el icono de fuentes en móvil", async ({ page }) => {
   await setup(page, false, 390, 844);
   const row = page.locator('[data-row-key*="sports-now"]');
   await expect(row.getByRole("button", { name: "Real Madrid vs Barcelona", exact: true })).toBeVisible();
   await row.scrollIntoViewIfNeeded();
-  const sources = row.getByRole("button", { name: "Elegir fuentes para Real Madrid vs Barcelona", exact: true });
-  // IntersectionObserver rounds fractional pixels after the shell's scale.
-  await expect(sources).toBeInViewport({ ratio: 0.999 });
-  await page.screenshot({ path: ".impeccable/review/iptv-card-sources-mobile.png" });
-  await sources.click();
-  const dialog = page.getByRole("dialog", { name: "Elegir fuente", exact: true });
-  await expect(dialog).toContainText("Fútbol TV");
-  await expect(dialog).toContainText("Addon Sports");
+  await expect(row.getByRole("button", { name: "Elegir fuentes para Real Madrid vs Barcelona", exact: true })).toHaveCount(0);
 });
 
 test("los canales identificados en español aparecen antes de los demás", async ({ page }) => {
@@ -140,10 +141,7 @@ test("cambiar de deporte cambia la fila y desactivar la lista retira sus fuentes
     patchSportsPreferences({ sports: ["futbol"] });
   });
   await page.getByRole("button", { name: "Real Madrid vs Barcelona", exact: true }).click();
-  await page.getByRole("button", { name: "Fuentes", exact: true }).click();
-  const sources = page.getByRole("dialog", { name: "Fuentes", exact: true });
-  await expect(sources).toContainText("Addon Sports");
-  await expect(sources).not.toContainText("Fútbol TV");
+  await expect(page.getByRole("button", { name: "Fuentes", exact: true })).toHaveCount(0);
 });
 
 test("rechaza una lista privada sin enviar la petición", async ({ page }) => {
@@ -156,34 +154,27 @@ test("rechaza una lista privada sin enviar la petición", async ({ page }) => {
   expect(await page.evaluate(() => (window as unknown as { __iptvCalls: Array<{ cmd: string; args?: { request?: { url?: string } } }> }).__iptvCalls.some(call => call.args?.request?.url?.includes("/private.m3u")))).toBe(false);
 });
 
-test("Sports muestra canales del deporte elegido y une IPTV al partido del addon", async ({ page }) => {
-  await setup(page);
-  const channels = page.getByRole("region", { name: "Canales deportivos", exact: true });
-  await expect(channels.getByRole("button", { name: "Fútbol TV", exact: true })).toBeVisible();
-  await expect(channels.getByRole("button", { name: "MMA TV", exact: true })).toHaveCount(0);
-  await expect(channels).not.toContainText("Noticias TV");
-  await page.locator('[data-row-key*="sports-now"]').getByRole("button", { name: "Real Madrid vs Barcelona", exact: true }).click();
-  await expect(page).toHaveURL(/player\?type=live&id=iptv-game/);
-  await expect(page.getByRole("button", { name: "Fuentes", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Fuentes", exact: true }).click();
-  const sources = page.getByRole("dialog", { name: "Fuentes", exact: true });
-  await expect(sources).toContainText("IPTV");
-  await expect(sources).toContainText("Fútbol TV");
-  await expect(sources).toContainText("Addon Sports");
-  const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem("aetherio-selected-stream")!));
-  expect(saved.behaviorHints.sourceType).toBe("iptv");
+test("el reproductor de Deportes oculta el selector cuando solo hay una fuente", async ({ page }) => {
+  await setup(page, true, 1280, 720, [], 1);
+  await page.mouse.move(640, 360);
+  await expect(page.locator("[data-player-controls-glass]")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Fuentes", exact: true })).toHaveCount(0);
 });
 
-test("el botón Fuentes junto a mejoras funciona con teclado y cambia entre IPTV y addons", async ({ page }) => {
+test("el icono compacto Fuentes abre el menu contextual y cambia a otra fuente deportiva", async ({ page }) => {
   await setup(page, true, 1280);
   const button = page.getByRole("button", { name: "Fuentes", exact: true });
+  await page.mouse.move(640, 360);
+  await expect(page.locator("[data-player-controls-glass]")).toBeVisible();
   await expect(button).toBeVisible();
-  expect((await button.boundingBox())!.width).toBeGreaterThanOrEqual(100);
+  expect((await button.boundingBox())!.width).toBeLessThan(64);
   await button.focus();
   await page.keyboard.press("Enter");
-  const sources = page.getByRole("dialog", { name: "Fuentes", exact: true });
+  const sources = page.getByRole("menu");
   await expect(sources).toBeVisible();
-  await sources.locator('[data-source-id="addon"]').click();
+  const activeSource = sources.locator('[data-selected="true"]');
+  await expect(activeSource.locator(":scope > span > span").nth(1)).toHaveCSS("color", "rgba(11, 11, 13, 0.62)");
+  await sources.getByRole("menuitem", { name: "Addon Sports", exact: true }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem("aetherio-selected-stream")!).id)).toBe("addon");
 });
 
@@ -207,36 +198,22 @@ test("un canal se abre como canal lineal y la gestión de listas permite importa
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("aetherio-selected-media-meta")!).name)).toBe("Fútbol TV");
 });
 
-test("revisión visual de canales, selección de fuentes e importación en escritorio y móvil", async ({ page }) => {
+test("revisión visual del selector de fuentes deportivas en escritorio y móvil", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  await setup(page, false, 1440, 900);
-  const channels = page.getByRole("region", { name: "Canales deportivos", exact: true });
-  await expect(channels.getByRole("button", { name: "Fútbol TV", exact: true })).toBeVisible();
-  await channels.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: ".impeccable/review/iptv-channels-desktop.png" });
-  await page.getByRole("button", { name: "Elegir fuentes para Real Madrid vs Barcelona", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Elegir fuente", exact: true })).toBeVisible();
-  await page.screenshot({ path: ".impeccable/review/iptv-card-sources-desktop.png" });
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Listas IPTV", exact: true }).click();
-  const settings = page.getByRole("dialog", { name: "Listas IPTV", exact: true });
-  await expect(settings).toBeVisible();
-  await page.screenshot({ path: ".impeccable/review/iptv-settings-desktop.png" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(await settings.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
-  await page.screenshot({ path: ".impeccable/review/iptv-settings-mobile.png" });
-  await page.keyboard.press("Escape");
-  await channels.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: ".impeccable/review/iptv-channels-mobile.png" });
   await setup(page, true, 1910, 1080);
+  await page.mouse.move(960, 540);
   const toggle = page.getByRole("button", { name: "Fuentes", exact: true });
   await expect(toggle).toBeVisible();
-  await toggle.focus();
-  await page.screenshot({ path: ".impeccable/review/iptv-player-user-1910.png" });
   await toggle.click();
-  await expect(page.getByRole("dialog", { name: "Fuentes", exact: true }).locator('[data-source-id="addon"]')).toBeVisible();
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await page.screenshot({ path: ".impeccable/review/iptv-player-1280.png" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: ".impeccable/review/iptv-player-mobile.png" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Addon Sports", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("sports-source-menu-1910.png") });
+
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.mouse.move(viewport.width / 2, viewport.height / 2);
+    await expect(toggle).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Addon Sports", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`sports-source-menu-${viewport.width}.png`) });
+  }
 });

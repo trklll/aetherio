@@ -19,7 +19,22 @@ function event(patch: Partial<LiveEvent> = {}) {
 }
 
 describe("home de Sports", () => {
-  it("includes Highfly basketball in Sports and formats its schedule in Peru even on a UTC computer", () => {
+  it("passes composed match artwork to the TV cards without replacing the hero backdrop", () => {
+    const live = event({ poster: "https://sports.test/addon-poster.jpg" });
+    const item = buildSportsHome([live], prefs(), NOW).rows[0].items[0];
+    expect(item.sportsMatch?.home?.crest).toMatch(/^\/assets\/football-logos\/clubs\//);
+    expect(item.sportsMatch?.away?.crest).toMatch(/^\/assets\/football-logos\/clubs\//);
+    expect(item.background).toBe(live.poster);
+  });
+
+  it("preserves provider team logos and colors for clubs outside the local registry", () => {
+    const live = event({ title: "Aurora Norte vs Deportivo Sur", home: { name: "Aurora Norte", logo: "https://teams.test/aurora.png", color: "#123456" }, away: { name: "Deportivo Sur", logo: "https://teams.test/sur.png" } });
+    const item = buildSportsHome([live], prefs(), NOW).rows[0].items[0];
+    expect(item.sportsMatch?.home).toMatchObject({ name: "Aurora Norte", crest: "https://teams.test/aurora.png", color: "#123456" });
+    expect(item.sportsMatch?.away?.crest).toBe("https://teams.test/sur.png");
+  });
+
+  it("includes Highfly basketball in Sports and formats its schedule in Peru's timezone without showing the country", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-30T23:00:00Z"));
     const basketball = event({ id: "sportsstreams:nba", title: "Lakers vs Celtics", sport: "Basketball", league: "NBA", status: "upcoming", startsAt: "2026-10-31T02:30:00Z", home: { name: "Lakers" }, away: { name: "Celtics" }, sources: [] });
@@ -27,15 +42,16 @@ describe("home de Sports", () => {
     const preferences = normalizeSportsPreferences({ sports: ["baloncesto"], onboarding: "completed" });
     expect(preferences.sports).toEqual(["baloncesto"]);
     const home = buildSportsHome([basketball], preferences, Date.now());
-    expect(home.rows[0].items[0].runtime).toContain("Hoy 21:30");
+    expect(home.rows[0].items[0].runtime).toBe("Hoy 21:30");
+    expect(home.rows[0].items[0].runtime).not.toContain("Perú");
     expect(home.rows[0].items[0].genres).toContain("NBA");
     expect(basketball.home?.crest).toBeUndefined();
   });
 
-  it("places matches with Spanish commentary first without hiding other languages", () => {
-    const english = event({ id: "en", title: "Arsenal vs Chelsea", home: { name: "Arsenal" }, away: { name: "Chelsea" }, sources: [{ id: "en", label: "English", language: "en", url: "https://cdn.test/en" }] });
-    const spanish = event({ sources: [{ id: "es", label: "Español", language: "es", url: "https://cdn.test/es" }] });
-    expect(buildSportsHome([english, spanish], prefs(), NOW).heroItems.map(item => item.id)).toEqual([spanish.id, english.id]);
+  it("orders Ahora mismo by kickoff instead of source language", () => {
+    const english = event({ id: "en", title: "Arsenal vs Chelsea", startsAt: new Date(NOW - 20 * 60_000).toISOString(), home: { name: "Arsenal" }, away: { name: "Chelsea" }, sources: [{ id: "en", label: "English", language: "en", url: "https://cdn.test/en" }] });
+    const spanish = event({ startsAt: new Date(NOW - 10 * 60_000).toISOString(), sources: [{ id: "es", label: "Español", language: "es", url: "https://cdn.test/es" }] });
+    expect(buildSportsHome([spanish, english], prefs(), NOW).heroItems.map(item => item.id)).toEqual([english.id, spanish.id]);
   });
 
   it("does not mark a Highfly kickoff recovered from meta as synthesized just because it is starting now", () => {
@@ -78,29 +94,41 @@ describe("home de Sports", () => {
     expect(home.rows[0].items.map(item => item.id)).toEqual([premier.id, laliga.id]);
   });
 
-  it("Ahora mismo agrupa los directos sin duplicados y excluye eventos sin fuentes, terminados o futuros", () => {
+  it("Ahora mismo agrupa partidos por horario aunque aún no tengan fuentes", () => {
     const football = event();
     const mma = event({ id: "mma", title: "UFC Main Card", sport: "MMA", league: "UFC", home: undefined, away: undefined });
-    const noSources = event({ id: "no-source", title: "Partido sin fuentes", home: undefined, away: undefined, sources: [] });
+    const noSources = event({ id: "no-source", title: "Liverpool vs Chelsea", home: { name: "Liverpool" }, away: { name: "Chelsea" }, sources: [] });
+    const startedBySchedule = event({ id: "scheduled-now", title: "PSG vs Lyon", home: { name: "PSG" }, away: { name: "Lyon" }, status: "upcoming", startsAt: new Date(NOW - 10 * 60_000).toISOString(), sources: [] });
     const ended = event({ id: "finished", title: "Partido terminado", home: undefined, away: undefined, status: "ended" });
     const upcoming = event({ id: "upcoming", title: "Partido futuro", home: undefined, away: undefined, status: "upcoming", startsAt: new Date(NOW + 3_600_000).toISOString() });
-    const home = buildSportsHome([football, mma, football, noSources, ended, upcoming], prefs(), NOW);
+    const home = buildSportsHome([football, mma, football, noSources, startedBySchedule, ended, upcoming], prefs(), NOW);
 
     const row = home.rows.find(row => row.catalogId === "sports-now");
 
-    expect(row?.items.map(item => item.id)).toEqual([football.id, mma.id]);
+    expect(row?.items.map(item => item.id)).toEqual([football.id, mma.id, noSources.id, startedBySchedule.id]);
     expect(row?.items.every(item => item.genres?.[0] === "En directo")).toBe(true);
   });
 
-  it("no ofrece como directo un evento sin fuente ni un partido terminado", () => {
-    const home = buildSportsHome([event({ sources: [] }), event({ id: "ended", status: "ended" })], prefs(), NOW);
-    expect(home.rows).toEqual([]);
-    expect(home.heroItems).toEqual([]);
+  it("mantiene en Ahora mismo un partido que acaba de empezar según horario", () => {
+    const scheduled = event({ id: "scheduled", title: "Arsenal vs Chelsea", home: { name: "Arsenal" }, away: { name: "Chelsea" }, status: "upcoming", startsAt: new Date(NOW - 60_000).toISOString(), sources: [] });
+    const tooOld = event({ id: "stale", title: "Juventus vs Milan", home: { name: "Juventus" }, away: { name: "Milan" }, status: "upcoming", startsAt: new Date(NOW - 6 * 60 * 60_000).toISOString(), sources: [] });
+    const ended = event({ id: "ended", status: "ended" });
+    const home = buildSportsHome([scheduled, tooOld, ended], prefs(), NOW);
+    expect(home.rows.find(row => row.catalogId === "sports-now")?.items.map(item => item.id)).toEqual([scheduled.id]);
+    expect(home.heroItems.map(item => item.id)).toEqual([scheduled.id]);
   });
 
   it("un próximo con fuentes publicadas sigue siendo agenda, no directo", () => {
     const home = buildSportsHome([event({ status: "upcoming", startsAt: new Date(NOW + 3_600_000).toISOString() })], prefs(), NOW);
     expect(home.rows.map(row => row.name)).toEqual(["Próximamente"]);
+  });
+
+  it("no mete en Ahora mismo un partido marcado live cuyo kickoff exacto es futuro", () => {
+    const scheduledLive = event({ status: "live", startsAt: new Date(NOW + 90 * 60_000).toISOString() });
+    const home = buildSportsHome([scheduledLive], prefs(), NOW);
+
+    expect(home.rows.map(row => row.catalogId)).toEqual(["sports-upcoming"]);
+    expect(home.heroItems[0].genres?.[0]).toBe("Próximamente");
   });
 
   it("usa artwork deportivo sin inventar ratings, películas ni logos del canal", () => {

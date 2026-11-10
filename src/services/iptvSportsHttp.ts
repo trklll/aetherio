@@ -94,6 +94,14 @@ export async function probeIptvSource(source: LiveSource): Promise<boolean> {
   try {
     const initial = publicIptvUrl(source.url);
     if (!initial) return false;
+
+    // Channels also plays these progressive formats directly; they are not HLS
+    // manifests and must be validated by their container signature instead.
+    if (/\.(?:mp4|webm|ogg)(?:[?#]|$)/i.test(initial.href)) {
+      const bytes = await fetchIptvBytes(initial.href, { ...source.headers, Range: "bytes=0-1023" }, 2 * 1024 * 1024);
+      return looksLikePlayableMedia(bytes);
+    }
+
     let url: URL = initial;
     for (let hop = 0; hop < 3; hop++) {
       const body: string = new TextDecoder().decode(await fetchIptvBytes(url.href, source.headers, 512 * 1024)).trimStart();
@@ -109,4 +117,10 @@ export async function probeIptvSource(source: LiveSource): Promise<boolean> {
     }
   } catch { /* A failed channel never hides an addon's working sources. */ }
   return false;
+}
+
+function looksLikePlayableMedia(bytes: Uint8Array): boolean {
+  if (bytes.length >= 8 && ["ftyp", "styp", "moof", "sidx"].includes(new TextDecoder().decode(bytes.slice(4, 8)))) return true;
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return true;
+  return bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53;
 }

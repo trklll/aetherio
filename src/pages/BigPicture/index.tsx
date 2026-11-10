@@ -20,12 +20,15 @@ import { isShellPreviewOpen } from "../../utils/shellPreview";
 import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn.ts";
 import { isFreshHomeEntrance } from "../../utils/homeEntrance.ts";
 import { gsap, installInertialScroll, prefersReducedMotion, springTo } from "../../utils/motion.ts";
+import { useRowPositionMemory } from "../../hooks/useRowPositionMemory";
+import { enterSportsMode } from "../../utils/sportsMode";
 import type { MediaItem } from "../../types/ui.ts";
 import type { DetailEpisodeRequest } from "../Detail/index.tsx";
 import HomePage from "../Home/index.tsx";
 import BigPictureBackdrop from "./BigPictureBackdrop.tsx";
 import BigPictureHero from "./BigPictureHero.tsx";
 import BigPictureRail from "./BigPictureRail.tsx";
+import SportsRail from "../Sports/SportsRail.tsx";
 import BigPictureSearch from "./BigPictureSearch.tsx";
 import BigPictureParty from "./BigPictureParty.tsx";
 import BigPictureGenre from "./BigPictureGenre.tsx";
@@ -43,6 +46,8 @@ const CatalogPage = lazy(() => import("../Catalog/index.tsx"));
 const StreamingPlatformPage = lazy(() => import("../StreamingPlatform/index.tsx"));
 const BigPictureSettings = lazy(() => import("./BigPictureSettings.tsx"));
 const BigPictureAddons = lazy(() => import("./BigPictureAddons.tsx"));
+// Sports is available for iteration in `tauri dev`, not in release builds.
+const SportsApp = import.meta.env.DEV ? lazy(() => import("../Sports/SportsApp.tsx")) : null;
 
 // Episodie es sección del Detail (un solo fondo): las rutas /big-picture/episode
 // y /big-picture/streams redirigen al Detail con la sección abierta.
@@ -112,6 +117,8 @@ export default function BigPicturePage() {
   // de interacción para un mando.
   const isSearch = location.pathname.startsWith("/big-picture/search");
   const isLibrary = location.pathname.startsWith("/big-picture/library");
+  const isDownloads = location.pathname.startsWith("/big-picture/downloads");
+  const isChannels = location.pathname.startsWith("/big-picture/channels");
   const isParty = location.pathname.startsWith("/big-picture/party");
   const isSports = location.pathname.startsWith("/big-picture/sports");
   const isGenre = location.pathname.startsWith("/big-picture/genre");
@@ -124,13 +131,14 @@ export default function BigPicturePage() {
   const isPerson = location.pathname.startsWith("/big-picture/person/");
   const isEntity = location.pathname.startsWith("/big-picture/entity/");
   const isStreamingPlatform = location.pathname.startsWith("/big-picture/platform/");
-  const isSubPage = isSearch || isLibrary || isParty || isSports || isGenre || isCatalog || isSettings || isAddons || isEpisode || isDetail || isPlayer || isPerson || isEntity || isStreamingPlatform;
+  const isSubPage = isSearch || isLibrary || isDownloads || isChannels || isParty || isSports || isGenre || isCatalog || isSettings || isAddons || isEpisode || isDetail || isPlayer || isPerson || isEntity || isStreamingPlatform;
   const addons = useAddonStore(s => s.addons);
   const prefs = useHomePreferences();
   const { heroItems } = useHomeCatalogs(addons, prefs.contentOrientation, prefs.bothPreference, !isSubPage);
   const [activeItem, setActiveItem] = useState<MediaItem | undefined>(undefined);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const hasRowPosition = useRowPositionMemory(scrollRef, makeScrollKey(location.pathname, location.search));
   // Mismo valor que calcula HomePage en este commit: escalonado solo al
   // entrar recién a la app, instantáneo al volver desde otra página.
   const [isEntrance] = useState(() => isFreshHomeEntrance(location));
@@ -196,20 +204,22 @@ export default function BigPicturePage() {
   // reproducción.
   useHiddenCursor("gamepad", { idleMs: 2500 });
 
-  // Mismo scroll con inercia de la app normal (rueda del ratón).
+  // Home retains TV's nested-scroll routing but delegates the interpolation
+  // to Chromium, so image/React work cannot stall a GSAP scrollTop tween.
   useEffect(() => {
     const shell = scrollRef.current;
     if (!shell) return;
-    return installInertialScroll(shell);
-  }, []);
+    return installInertialScroll(shell, { compositor: !isSubPage });
+  }, [isSubPage]);
 
   // Al entrar al detalle, ajustes, addons, player, persona o entidad, el
   // scroll exterior queda arriba: el scroll real lo lleva el shell interior
   // de la propia page (igual que en PC con AppShell). Sin esto el hero heredaría el scroll.
   useEffect(() => {
-    if (!isDetail && !isCatalog && !isSettings && !isAddons && !isLibrary && !isSports && !isEpisode && !isPlayer && !isPerson && !isEntity && !isStreamingPlatform) return;
+    if (!isDetail && !isCatalog && !isSettings && !isAddons && !isLibrary && !isDownloads && !isChannels && !isSports && !isEpisode && !isPlayer && !isPerson && !isEntity && !isStreamingPlatform) return;
+    if (hasRowPosition) return;
     scrollRef.current?.scrollTo({ top: 0, behavior: "auto" as ScrollBehavior });
-  }, [isDetail, isCatalog, isSettings, isAddons, isLibrary, isSports, isEpisode, isPlayer, isPerson, isEntity, isStreamingPlatform, location.pathname]);
+  }, [isDetail, isCatalog, isSettings, isAddons, isLibrary, isDownloads, isChannels, isSports, isEpisode, isPlayer, isPerson, isEntity, isStreamingPlatform, location.pathname, hasRowPosition]);
 
   // Root de la page que hay que fundir en cada cambio de ruta: el primer hijo
   // CON className del shell de scroll. Ese descriptor descarta a propósito los
@@ -332,7 +342,7 @@ export default function BigPicturePage() {
   // - En el home (/big-picture): un toque abre la advertencia de salida
   //   (salir de la app). NUNCA vuelve a la app normal: la única salida a
   //   modo normal es el botón Start del mando.
-  // - En las sub-páginas (/big-picture/search, /big-picture/library,
+  // - En las sub-páginas (/big-picture/search, /big-picture/library, /big-picture/downloads,
   //   /big-picture/party, /big-picture/sports, /big-picture/genre,
   //   /big-picture/settings,
   //   /big-picture/addons, /big-picture/episode, /big-picture/player,
@@ -346,6 +356,7 @@ export default function BigPicturePage() {
     // Las acciones dirigidas a window se entregan por orden de registro;
     // el selector consume B, pero este listener exterior puede recibirlo antes.
     if (document.querySelector("[data-library-tv-picker]")) return;
+    if (document.querySelector("[data-channels-search]")) return;
     // Popup de sinopsis del detail (sin X): B lo cierra a él; no retroceder.
     if (document.querySelector("[data-aetherio-synopsis-popup]")) return;
     // Reproductor: siempre a la page de Episodie (picker de fuentes) del mismo
@@ -383,6 +394,10 @@ export default function BigPicturePage() {
       return;
     }
     if (isSubPage) {
+      if (isChannels && !(window.history.state?.idx > 0)) {
+        navigate("/big-picture", { replace: true });
+        return;
+      }
       // Streaming pages return to their source card without waiting for the
       // decorative route fade; Home restores its scroll and focus in layout.
       if (isStreamingPlatform) {
@@ -393,7 +408,7 @@ export default function BigPicturePage() {
       return;
     }
     setExitConfirmOpen(true);
-  }, [location.pathname, location.search, navigate, exitConfirmOpen, isDetail, isEpisode, isPlayer, isSubPage, fadeOutThen]);
+  }, [location.pathname, location.search, navigate, exitConfirmOpen, isDetail, isEpisode, isPlayer, isChannels, isSubPage, fadeOutThen]);
   useBackAction(handleBack);
 
   return (
@@ -401,7 +416,9 @@ export default function BigPicturePage() {
       {!isSubPage && (
         <BigPictureBackdrop items={heroItems} scrollRef={scrollRef} onActiveItem={handleActiveItem} animateEntrance={isEntrance} contentVisible={heroContentVisible} />
       )}
-      {!isPlayer && !isEpisode && <BigPictureRail />}
+      {!isPlayer && !isEpisode && (isSports && SportsApp ? <SportsRail /> : <BigPictureRail
+        onNavigate={route => route === "/big-picture/sports" ? enterSportsMode(navigate, location.pathname) : navigate(route)}
+      />)}
       {exitConfirmOpen && (
         <ExitConfirm
           onCancel={() => setExitConfirmOpen(false)}
@@ -411,16 +428,24 @@ export default function BigPicturePage() {
       <div
         ref={scrollRef}
         data-aetherio-scroll-shell
-        className={`big-picture__scroll${isPlayer ? " big-picture__scroll--static" : ""}`}
+        className={`big-picture__scroll${isPlayer || isChannels ? " big-picture__scroll--static" : ""}`}
       >
         {isSearch ? (
           <BigPictureSearch />
         ) : isLibrary ? (
           <BigPictureLibrary />
+        ) : isDownloads ? (
+          <Navigate to="/big-picture/library?tab=downloads" replace />
+        ) : isChannels ? (
+          <Navigate to="/big-picture" replace />
         ) : isParty ? (
           <BigPictureParty />
         ) : isSports ? (
-          <Navigate to="/big-picture" replace />
+          SportsApp ? (
+            <Suspense fallback={<LoadingState label="Cargando Deportes" />}>
+              <SportsApp />
+            </Suspense>
+          ) : <Navigate to="/big-picture" replace />
         ) : isGenre ? (
           <BigPictureGenre />
         ) : isCatalog ? (

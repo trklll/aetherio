@@ -11,6 +11,8 @@ describe("buildManifest", () => {
     }]);
 
     expect(manifest.scrapers[0].logo).toBe("https://example.org/logo.png");
+    expect(manifest.domain).toBe("general");
+    expect(manifest.scrapers[0].domain).toBe("general");
   });
 
   it("leaves the optional logo out when it is unavailable", () => {

@@ -94,6 +94,8 @@ describe("appMode (recuerda el último modo)", () => {
     expect(resolveAppModeForPath("/big-picture")).toBe("big-picture");
     expect(resolveAppModeForPath("/big-picture/settings")).toBe("big-picture");
     expect(resolveAppModeForPath("/home")).toBe("normal");
+    expect(resolveAppModeForPath("/channels")).toBe("normal");
+    expect(resolveAppModeForPath("/big-picture/channels")).toBe("big-picture");
     expect(resolveAppModeForPath("/detail/movie/tt123")).toBe("normal");
     expect(resolveAppModeForPath("/")).toBeNull();
     expect(resolveAppModeForPath("/profiles")).toBeNull();

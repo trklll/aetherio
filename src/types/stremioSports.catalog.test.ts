@@ -15,6 +15,13 @@ it("encodes multiple catalog extras in one Stremio path segment, not separate ro
   expect(extras.get("skip")).toBe("100");
 });
 
+it("fetches remote sports add-on catalogs through the classified Provider Hub API", async () => {
+  const request = vi.fn(async (_url: string) => json({ domain: "sports", provider: "sports-streams", payload: { metas: [{ id: "match" }] } }));
+  vi.stubGlobal("fetch", request);
+  expect(await fetchCatalogMetas("https://sports.highfly.to", "sport", "sports_live")).toEqual([{ id: "match" }]);
+  expect(new URL(request.mock.calls[0][0]).pathname).toBe("/api/sports/addons/sports-streams/catalog/sport/sports_live.json");
+});
+
 it("waits briefly for a cold local schedule instead of caching the first empty response", async () => {
   vi.useFakeTimers();
   const meta = { id: "fixture", name: "A vs B" };

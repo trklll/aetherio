@@ -40,6 +40,10 @@ export default function TopNav() {
   const [hovering, setHovering] = useState(false);
   const collapsed = scrolled && !hovering && !searching;
   useEffect(() => {
+    document.documentElement.dataset.topNavCollapsed = String(collapsed);
+    return () => { delete document.documentElement.dataset.topNavCollapsed; };
+  }, [collapsed]);
+  useEffect(() => {
     let raf = 0;
     function readY(): number {
       // Hay páginas (Detail) con su propio [data-aetherio-scroll-shell] anidado:
@@ -158,7 +162,7 @@ export default function TopNav() {
   return (
     <div
       ref={searchContainerRef}
-      className="relative z-50 flex items-center justify-center"
+      className={clsx("relative z-50 flex items-center justify-center", location.pathname === "/channels" && "channels-top-nav")}
       data-tauri-drag-region
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
@@ -199,7 +203,7 @@ export default function TopNav() {
 
         {!searching && (
           <div
-            className="flex items-center gap-0.5 aetherio-nav-pop"
+            className="flex items-center gap-0.5 aetherio-nav-pop top-nav-links"
             style={{
               maxWidth: collapsed ? 0 : 320,
               opacity: collapsed ? 0 : 1,
@@ -227,7 +231,7 @@ export default function TopNav() {
 
         {searching && (
           <div
-            className="flex items-center aetherio-nav-pop overflow-hidden"
+            className="flex items-center aetherio-nav-pop overflow-hidden top-nav-search"
             style={{
               width: collapsed ? 0 : 320,
               opacity: collapsed ? 0 : 1,

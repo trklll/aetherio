@@ -144,6 +144,52 @@ describe("FMHY provider registration and HTTP isolation", () => {
     await provider.fetchUpcoming!();
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/streams"))).toHaveLength(2);
   });
+  it("keeps every verified SportsBite player for the same match", async () => {
+    const streamIds = ["real-barca-a", "real-barca-b", "real-barca-c", "real-barca-d"];
+    const multiSourceEvent = { ...live, streams: streamIds.map(id => ({
+      manifest_url: `https://sportsbite.org/tlive-embed/embed/${id}`,
+      language: "Spanish",
+    })) };
+    const routes: Record<string, Response> = {
+      "https://sportsbite.org/api/forestgump/matches": json({ days: [{ events: [multiSourceEvent] }] }),
+      "https://streamfree.top/streams": json({ streams: {} }),
+    };
+    for (const id of streamIds) {
+      routes[`https://sportsbite.org/tlive-embed/embed/${id}`] = new Response(
+        `var source = atob("${btoa(`https://sportsbite.org/tlive/${id}.m3u8`)}");`,
+      );
+    }
+    mockFetch(routes);
+
+    const events = await buildFmhySportsProvider().fetchEvents();
+
+    expect(events[0].sources.map(source => source.url)).toEqual(streamIds.map(id => `https://sportsbite.org/tlive/${id}.m3u8`));
+    expect(probe).toHaveBeenCalledTimes(4);
+  });
+  it("publishes each verified live match while slower candidates are still being checked", async () => {
+    const second = { ...live, slug: "second-match", title: "Team A vs Team B", start: "2026-10-29T19:10:00Z",
+      teams: { home: { name: "Team A" }, away: { name: "Team B" } },
+      streams: [{ manifest_url: "https://sportsbite.org/tlive-embed/embed/second-match", language: "Spanish" }] };
+    mockFetch({
+      "https://sportsbite.org/api/forestgump/matches": json({ days: [{ events: [live, second] }] }),
+      "https://sportsbite.org/tlive-embed/embed/real-barca?v=high": new Response(`var source = atob("${btoa("https://sportsbite.org/tlive/real-barca")}");`),
+      "https://sportsbite.org/tlive-embed/embed/second-match": new Response(`var source = atob("${btoa("https://sportsbite.org/tlive/second-match")}");`),
+      "https://streamfree.top/streams": json({ streams: {} }),
+    });
+    let releaseSlowProbe!: (valid: boolean) => void;
+    probe.mockImplementation(async (source: { url: string }) => source.url.endsWith("/real-barca")
+      ? true : new Promise<boolean>(resolve => { releaseSlowProbe = resolve; }));
+    const updates: string[][] = [];
+    let complete = false;
+    const pending = buildFmhySportsProvider().fetchEvents(events => {
+      updates.push(events.map(event => event.title));
+    }).then(events => { complete = true; return events; });
+
+    await vi.waitFor(() => expect(updates.some(events => events.includes("Real Madrid vs Barcelona"))).toBe(true));
+    expect(complete).toBe(false);
+    releaseSlowProbe(true);
+    await pending;
+  });
   it("uses the existing native HTTP bridge in Tauri instead of relying on browser CORS", async () => {
     nativeRuntime.mockReturnValue(true);
     invoke.mockImplementation(async (_command, args) => ({ status: 200, url: args.request.url, bodyBase64: btoa(JSON.stringify({ streams: {}, days: [] })) }));

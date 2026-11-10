@@ -26,6 +26,13 @@ export interface LocalFileSelection {
   subtitlePaths: string[];
 }
 
+export interface LocalMediaMetadata {
+  name?: string;
+  poster?: string;
+  background?: string;
+  logo?: string;
+}
+
 export function splitLocalFiles(paths: string[]): LocalFileSelection {
   const unique = [...new Set(paths.map(path => path.trim()).filter(Boolean))];
   const subtitlePaths = unique.filter(path => SUBTITLE_EXTENSIONS.has(fileExtension(path)));
@@ -33,8 +40,12 @@ export function splitLocalFiles(paths: string[]): LocalFileSelection {
   return { mediaPath, subtitlePaths };
 }
 
-export function prepareLocalMediaPlayback(mediaPath: string, subtitlePaths: string[] = []) {
-  const filename = fileName(mediaPath) || "Archivo local";
+export function prepareLocalMediaPlayback(
+  mediaPath: string,
+  subtitlePaths: string[] = [],
+  metadata: LocalMediaMetadata = {},
+) {
+  const filename = metadata.name?.trim() || fileName(mediaPath) || "Archivo local";
   const stream: MediaStream = {
     id: `local:${mediaPath}`,
     addonId: "aetherio-local",
@@ -55,7 +66,12 @@ export function prepareLocalMediaPlayback(mediaPath: string, subtitlePaths: stri
   };
 
   sessionStorage.setItem(SELECTED_STREAM_KEY, JSON.stringify(stream));
-  sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({ name: filename }));
+  sessionStorage.setItem(SELECTED_MEDIA_META_KEY, JSON.stringify({
+    name: filename,
+    poster: metadata.poster,
+    background: metadata.background,
+    logo: metadata.logo,
+  }));
   sessionStorage.removeItem(SELECTED_PLAYBACK_OVERRIDES_KEY);
   return buildPlayerPath(`local=${Date.now()}`);
 }

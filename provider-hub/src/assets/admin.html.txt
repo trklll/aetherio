@@ -88,6 +88,7 @@
               <label class="field field-full">Descripción
                 <textarea id="provider-description" name="description" rows="2" maxlength="300" placeholder="Qué contenido ofrece esta fuente"></textarea>
               </label>
+              <label class="field field-full" id="addon-domain-field" hidden>Dominio del Hub<select id="addon-domain"><option value="general">General · películas, series y anime</option><option value="sports">Deportes</option></select></label>
               <label class="field field-full"><span id="logo-label">Logo · URL HTTPS</span>
                 <div class="logo-input-row"><input id="provider-logo" name="logo" type="url" placeholder="https://…/logo.png" /><div class="logo-preview-wrap"><img id="logo-preview" alt="Vista previa del logo" hidden /><span id="logo-placeholder">LOGO</span></div></div>
               </label>

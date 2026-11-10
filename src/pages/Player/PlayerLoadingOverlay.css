@@ -1,0 +1,125 @@
+.player-loading-overlay--sports {
+  place-items: stretch;
+}
+
+.player-loading-overlay__sports-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 100vw;
+  min-height: 100vh;
+}
+
+.player-loading-overlay__competition-only {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.player-loading-overlay__competition-only img {
+  width: clamp(148px, 15vw, 228px);
+  height: clamp(148px, 15vw, 228px);
+  object-fit: contain;
+  filter: drop-shadow(0 2px 10px rgb(0 0 0 / 52%)) drop-shadow(0 0 8px rgb(255 255 255 / 48%));
+}
+
+.player-sports-loading-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #111316;
+}
+
+.player-sports-loading-card__field {
+  position: absolute;
+  inset: 0;
+}
+
+.player-sports-loading-card__field--home {
+  clip-path: polygon(0 0, 62% 0, 42% 100%, 0 100%);
+  opacity: 0.9;
+  filter: saturate(0.82) brightness(0.9);
+}
+
+.player-sports-loading-card__field--away {
+  clip-path: polygon(62% 0, 100% 0, 100% 100%, 42% 100%);
+  opacity: 0.9;
+  filter: saturate(0.82) brightness(0.9);
+}
+
+.player-sports-loading-card__team {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  width: 38%;
+  height: 100%;
+  place-items: center;
+  transform: translateY(-50%);
+  color: white;
+  font-size: clamp(24px, 5vw, 52px);
+  font-weight: 900;
+  text-shadow: 0 3px 18px rgb(0 0 0 / 50%);
+}
+
+.player-sports-loading-card__team--home { left: 4%; }
+.player-sports-loading-card__team--away { right: 4%; }
+
+.player-sports-loading-card__team img {
+  width: min(22vw, 360px);
+  height: min(38vh, 420px);
+  max-width: 78%;
+  max-height: 68%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 8px rgb(0 0 0 / 48%));
+  image-rendering: auto;
+}
+
+.player-sports-loading-card__label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-size: clamp(24px, 4vw, 56px);
+  font-weight: 800;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 65%);
+}
+
+.player-sports-loading-card__spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: clamp(148px, 15vw, 228px);
+  aspect-ratio: 1;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.player-sports-loading-card__spinner img {
+  width: 88%;
+  height: 88%;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 10px rgb(0 0 0 / 50%)) drop-shadow(0 0 8px rgb(255 255 255 / 48%));
+}
+
+.player-sports-loading-card__message {
+  position: absolute;
+  right: 24px;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  left: 24px;
+  margin: 0;
+  color: rgb(255 255 255 / 72%);
+  text-align: center;
+  font-size: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-sports-loading-card { animation: none; }
+}

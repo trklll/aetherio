@@ -30,7 +30,9 @@ export const experienceFixture = JSON.parse(
   readFileSync(new URL("./experience/core.json", import.meta.url), "utf8"),
 ) as ExperienceFixture;
 
-const APP_ORIGIN = "http://127.0.0.1:1420";
+const APP_ORIGIN = process.env.AETHERIO_RELEASE_SMOKE === "1"
+  ? "http://127.0.0.1:1421"
+  : "http://127.0.0.1:1420";
 const FIXTURE_IMAGE = [
   "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"450\" viewBox=\"0 0 800 450\">",
   "<defs><linearGradient id=\"g\" x2=\"1\" y2=\"1\"><stop stop-color=\"#26384a\"/><stop offset=\"1\" stop-color=\"#111318\"/></linearGradient></defs>",

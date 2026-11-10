@@ -60,8 +60,11 @@ export function buildPlayerBackPath(search: string, pathname?: string): string |
   const type = params.get("type");
   const id = params.get("id");
   if (!type || !id) return null;
-  // Sports returns to Big Picture's board or normal-mode home, not a VOD picker.
-  // Other media keeps the shared episode-picker behavior below.
+  // Live IPTV channels return to their channel grid; sports returns to the
+  // board/home instead of a VOD picker. Other media uses the episode picker.
+  if (type === "live" && params.get("from") === "channels") {
+    return isBigPictureLocation(pathname) ? "/big-picture/channels" : "/channels";
+  }
   if (type === "live" || type === "sports-replay") return isBigPictureLocation(pathname) ? "/big-picture/sports" : "/home";
   if (params.get("trailer") === "1") return buildDetailPath(type, id, undefined, pathname);
   const next = new URLSearchParams({ type, id });

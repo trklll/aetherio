@@ -1,4 +1,5 @@
 import type { MdbListRatings } from "../config/mdblist.ts";
+import type { SportsMatchArtwork } from "./sportsMatch.ts";
 
 export type TrailerSource = "netflix" | "crunchyroll" | "hbo" | "disney" | "prime" | "apple" | "hulu" | "paramount" | "mubi" | "youtube" | "tmdb";
 
@@ -26,6 +27,8 @@ export interface MediaItem {
   mdbListRatings?: MdbListRatings;
   trailerKey?: string;
   trailerSource?: TrailerSource;
+  /** TV Sports composes opponent artwork instead of displaying addon posters. */
+  sportsMatch?: SportsMatchArtwork;
 }
 
 export interface CatalogRowData {

@@ -214,6 +214,34 @@ test("Crunchyroll shows an unpaginated standard trending row first in the catalo
   await expect.poll(() => animatedTitle.evaluate(el => getComputedStyle(el).opacity)).toBe("1");
 });
 
+for (const route of ["/platform/crunchyroll", "/big-picture/platform/crunchyroll"]) {
+  test(`${route}: keeps full-page gradients composited without removing glass`, async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await prepare(page);
+    await mockTrending(page);
+    await page.goto(route);
+    const platform = page.locator('[data-streaming-platform="crunchyroll"]');
+    await expect(platform).toBeVisible();
+
+    for (const selector of [".streaming-platform-page__backdrop", ".streaming-platform-page__scrim"]) {
+      const background = platform.locator(selector);
+      // Without a persistent layer, SVG backdrop refraction reprocesses these
+      // full-page gradients during scrolling in WebView2 (native A/B evidence).
+      await expect(background).not.toHaveCSS("transform", "none");
+      await expect(background).toHaveCSS("background-image", /gradient\(/);
+      const coverage = await background.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        const page = element.closest("[data-streaming-platform]")!.getBoundingClientRect();
+        return { width: Math.abs(rect.width - page.width), height: Math.abs(rect.height - page.height) };
+      });
+      expect(coverage.width).toBeLessThan(1);
+      expect(coverage.height).toBeLessThan(1);
+    }
+    const glass = platform.locator(".row-arrow-shell").first();
+    await expect(glass).toHaveCSS("backdrop-filter", /frosted-xl/);
+  });
+}
+
 test("genre tabs query new trends and restore cached All results", async ({ page }) => {
   await prepare(page);
   await mockTrending(page);

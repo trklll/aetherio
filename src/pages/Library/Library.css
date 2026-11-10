@@ -8,9 +8,23 @@
   scroll-margin-block: calc(5vh + 90px) 48px;
 }
 
+.library-page--tv .library-tab-button:focus-visible,
+.library-page--tv .library-tab-button.spatial-focus {
+  outline: 3px solid rgba(255, 255, 255, 0.95);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.12);
+}
+
 .big-picture--home-maximized .library-page--tv button:focus,
 .big-picture--home-maximized .library-page--tv button.spatial-focus {
   outline: none;
+}
+
+.big-picture--home-maximized .library-page--tv .library-tab-button:focus-visible,
+.big-picture--home-maximized .library-page--tv .library-tab-button.spatial-focus {
+  outline: 3px solid rgba(255, 255, 255, 0.95);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.12);
 }
 
 .big-picture--home-maximized .library-page--tv button:not(.media-card-frame):focus,

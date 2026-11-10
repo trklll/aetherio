@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { dispatchGamepadAction, GAMEPAD_ACTION_EVENT, type GamepadActionId } from "../../hooks/useGamepad.ts";
 import { installSpatialNavigation, exitDetailContentZone } from "../../navigation/spatialNav";
@@ -16,8 +16,10 @@ import {
   resolveShellPreviewInitialIndex,
   withShellPreviewQuery,
   type ShellPreviewRequest,
+  type ShellPreviewItem,
 } from "../../utils/shellPreview";
 import BigPictureRail from "../../pages/BigPicture/BigPictureRail.tsx";
+import SportsRail from "../../pages/Sports/SportsRail.tsx";
 import "../../pages/BigPicture/BigPicture.css";
 import "../../pages/BigPicture/ShellDetailPreview.css";
 
@@ -25,6 +27,7 @@ const DetailPage = lazy(() => import("../../pages/Detail"));
 const DetailSectionPage = lazy(() => import("../../pages/Detail/DetailSectionPage"));
 const PersonPage = lazy(() => import("../../pages/Person"));
 const EntityPage = lazy(() => import("../../pages/Entity"));
+const SportsMatchPage = lazy(() => import("../../pages/Sports/SportsMatchPage"));
 
 interface ShellDetailPreviewProps {
   request: ShellPreviewRequest;
@@ -36,6 +39,8 @@ interface ShellDetailPreviewProps {
   dismissed?: boolean;
   onClose: () => void;
   onNavigate: (path: string, activeIndex: number, background?: string) => void;
+  /** Generated-art surfaces can paint their existing card material before the iframe is ready. */
+  renderBackdrop?: (item: ShellPreviewItem, animated: boolean, backingWidth: number, backingHeight: number) => ReactNode;
 }
 
 // Ciclo de vida de la ficha, en el orden en el que se recorren:
@@ -102,7 +107,7 @@ function hasOverlayAboveShell(): boolean {
   ));
 }
 
-export default function ShellDetailPreview({ request, dismissed = false, onClose, onNavigate }: ShellDetailPreviewProps) {
+export default function ShellDetailPreview({ request, dismissed = false, onClose, onNavigate, renderBackdrop }: ShellDetailPreviewProps) {
   const items = request.items?.length ? request.items : [request];
   const count = items.length;
   const initialIndex = resolveShellPreviewInitialIndex(request);
@@ -156,6 +161,7 @@ export default function ShellDetailPreview({ request, dismissed = false, onClose
   const selectedRef = useRef(items[index]);
   selectedRef.current = items[index];
   const expanded = stage === "expanded";
+  const fullSizeBackdrop = stage === "collapsing" || (stage === "expanded" && active);
   const reduced = prefersReducedMotion();
   const item = items[index];
   const artwork = artworkByIndex.get(index);
@@ -408,13 +414,17 @@ useEffect(() => {
 
   const sendActivation = useCallback(() => {
     const targetOrigin = window.location.origin === "null" ? "*" : window.location.origin;
+    const externalFlag = !!renderBackdrop;
+    const animateFrame = !externalFlag && !dismissed && (stage === "expanded"
+      || (isPreviewStage(stage) && revealed && previewReady));
     iframeRefs.current.forEach((frame, frameIndex) => {
       frame.contentWindow?.postMessage({
         source: SHELL_PREVIEW_MESSAGE_SOURCE, type: "activate", active: active && frameIndex === index,
+        animated: animateFrame && frameIndex === index, externalFlag,
         density: compact.density,
       }, targetOrigin);
     });
-  }, [active, compact.density, index]);
+  }, [active, compact.density, dismissed, index, previewReady, renderBackdrop, revealed, stage]);
 
   useEffect(() => { sendActivation(); }, [sendActivation, ready]);
 
@@ -680,6 +690,9 @@ useEffect(() => {
             const resolvedPreviewKey = resolved ? `${i}:${resolved}` : "";
             const itemPreviewReady = i === index && ready && (!resolved
               || (loadedArtworkKeys.has(resolvedArtworkKey) && revealedPreviewKeys.has(resolvedPreviewKey)));
+            // Keep the shell-owned cloth running through reveal and expansion;
+            // the selected iframe remains transparent and never replaces it.
+            const animateBackdrop = i === index && !dismissed && stage !== "closing";
             const markUrlLoaded = (key: string) => {
               if (!key) return;
               setLoadedArtworkKeys(current => {
@@ -692,10 +705,13 @@ useEffect(() => {
             return (
               <div className="bp-shell-preview__panel" key={entry.detailPath + i}
                 data-shell-side={slot === 0 ? "active" : slot < 0 ? "start" : "end"}
+                data-shell-external-flag={renderBackdrop ? "true" : undefined}
                 aria-hidden={i !== index} style={{
                   left: `calc(${(pos + slot)} * (100% + var(--shell-gap)))`,
                   visibility: i === index || !expanded ? "visible" : "hidden",
                 }}>
+                {renderBackdrop && <div className="bp-shell-preview__match-backdrop" aria-hidden="true" inert>{renderBackdrop(entry, animateBackdrop,
+                  fullSizeBackdrop ? viewport.width : compact.width, fullSizeBackdrop ? viewport.height : compact.height)}</div>}
                 {baseArtwork ? <img
                   className={`bp-shell-preview__artwork${loadedArtworkKeys.has(baseArtworkKey) ? " is-loaded" : ""}`}
                   src={baseArtwork}
@@ -727,10 +743,11 @@ useEffect(() => {
                   onError={() => markUrlLoaded(resolvedArtworkKey)}
                 /> : null}
                 {mountedIndices.has(i) ? <iframe ref={node => registerIframe(i, node)} title={`Detalle de ${entry.title}`}
-                  src={withShellPreviewQuery(entry.detailPath)} tabIndex={active && i === index ? 0 : -1}
-                  inert={!active || i !== index} allow="autoplay; fullscreen; picture-in-picture"
-                  referrerPolicy="same-origin" data-preview-ready={itemPreviewReady ? "true" : "false"}
-                  data-preview-revealed={i === index && revealed && previewReady ? "true" : "false"}
+                   src={withShellPreviewQuery(entry.detailPath)} tabIndex={active && i === index ? 0 : -1}
+                   inert={!active || i !== index} allow="autoplay; fullscreen; picture-in-picture"
+                   referrerPolicy="same-origin" data-preview-ready={itemPreviewReady ? "true" : "false"}
+                   data-shell-external-flag={renderBackdrop ? "true" : undefined}
+                   data-preview-revealed={i === index && revealed && previewReady ? "true" : "false"}
                   onLoad={sendActivation} /> : null}
               </div>
             );
@@ -748,10 +765,12 @@ export function ShellPreviewApp() {
   const currentPath = `${location.pathname}${location.search}${location.hash}`;
   const initialPathRef = useRef(location.pathname);
   const [active, setActive] = useState(false);
+  const [previewMotion, setPreviewMotion] = useState(false);
+  const [externalFlag, setExternalFlag] = useState(false);
   const [detailReady, setDetailReady] = useState(false);
   // El padre manda cuándo entra el contenido: hasta ese momento el hero se ve
   // solo y los bloques del detalle esperan escondidos (ver data-hero-reveal).
-  const [revealed, setRevealed] = useState(false);
+  const revealedRef = useRef(false);
   // Gracia anti-doble-Enter del lado iframe (cubre el teclado físico, que va
   // directo al iframe sin pasar por el forward del parent).
   const previewActiveSinceRef = useRef(0);
@@ -791,9 +810,16 @@ export function ShellPreviewApp() {
         // Detail al recibir el evento (va por su propio scroll).
         if (!message.active) exitDetailContentZone();
         setActive(message.active);
+        if (typeof message.animated === "boolean") setPreviewMotion(message.animated);
+        if (typeof message.externalFlag === "boolean") setExternalFlag(message.externalFlag);
       }
       if (message.type === "reveal" && typeof message.on === "boolean") {
-        setRevealed(message.on);
+        // This flag only drives CSS reveal selectors. Mutating the attribute
+        // avoids rerendering the entire match/standings tree at the exact moment
+        // the full-window iframe becomes visible over the live shell canvas.
+        revealedRef.current = message.on;
+        const app = document.querySelector<HTMLElement>(".shell-preview-app");
+        if (app) app.dataset.previewRevealed = String(message.on);
         return;
       }
       if (message.type === "gamepad-action"
@@ -874,7 +900,7 @@ export function ShellPreviewApp() {
 
   return (
     <div className="big-picture shell-preview-app" data-aetherio-big-picture data-preview-active={active}
-      data-preview-revealed={revealed} data-detail-ready={detailReady}
+      data-preview-revealed={revealedRef.current} data-detail-ready={detailReady}
       style={{ "--app-shell-nav-height": "0px" } as CSSProperties}>
       <Suspense fallback={<div className="shell-preview-app__fallback" />}>
         <Routes>
@@ -886,6 +912,7 @@ export function ShellPreviewApp() {
           <Route path="/big-picture/detail/:type/:id/:section" element={<DetailSectionPage />} />
           <Route path="/big-picture/person/:id" element={<PersonPage />} />
           <Route path="/big-picture/entity/:kind/:id" element={<EntityPage />} />
+          <Route path="/big-picture/sports/match/:matchId" element={<SportsMatchPage onShellPreviewLoading={signalDetailLoading} onShellPreviewReady={signalDetailReady} shellActive={active} shellAnimated={previewMotion} shellExternalFlag={externalFlag} />} />
           <Route path="*" element={<div className="shell-preview-app__fallback" />} />
         </Routes>
       </Suspense>
@@ -898,7 +925,7 @@ export function ShellPreviewApp() {
          navegación interna (detail/person/entity) no existe en este documento,
          así que al pulsar otro destino el <Routes> cae en "*" y el mensaje
          `navigate` (L434) hace que el parent entregue a la app real. */}
-      {active && <BigPictureRail />}
+      {active && (location.pathname.startsWith("/big-picture/sports/") ? <SportsRail /> : <BigPictureRail />)}
     </div>
   );
 }

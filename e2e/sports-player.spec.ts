@@ -14,7 +14,9 @@ async function setupSportsPlayer(page: Page, pathname: string) {
       async invoke(cmd: string, args?: Record<string, unknown>) {
         calls.push({ cmd, args });
         if (cmd === "mpv_status") return {
-          timePos: statusTick++,
+          // Start beyond ten seconds so the rewind remains positive; MPV's
+          // command is an absolute target, not the relative -10 offset.
+          timePos: 30 + statusTick++,
           duration: 0,
           demuxerCacheDuration: 2.7,
           pause: false,
@@ -82,17 +84,29 @@ for (const [label, pathname] of [
     if (label === "normal") {
       // The controls auto-hide after a few seconds; wake them before clicking.
       await page.mouse.move(960, 540);
+      const callsBeforeSeek = await page.evaluate(() => (window as unknown as { __sportsPlayerCalls: unknown[] }).__sportsPlayerCalls.length);
       await page.locator('[aria-label="Retroceder 10 segundos"]').click();
-      await expect.poll(() => page.evaluate(() => {
+      await expect.poll(() => page.evaluate(start => {
         const calls = (window as unknown as { __sportsPlayerCalls: Array<{ cmd: string; args?: { command?: unknown[] } }> }).__sportsPlayerCalls;
-        return calls.some(call => call.cmd === "mpv_command" && call.args?.command?.[0] === "seek" && call.args.command[1] === -10);
-      })).toBe(true);
+        return calls.slice(start).some(call => call.cmd === "mpv_command"
+          && call.args?.command?.[0] === "seek"
+          && typeof call.args.command[1] === "number"
+          && call.args.command[1] > 0
+          && call.args.command[2] === "absolute"
+          && call.args.command[3] === "exact");
+      }, callsBeforeSeek)).toBe(true);
     } else {
+      const callsBeforeSeek = await page.evaluate(() => (window as unknown as { __sportsPlayerCalls: unknown[] }).__sportsPlayerCalls.length);
       await page.evaluate(() => window.dispatchEvent(new CustomEvent("aetherio-gamepad-action", { detail: { id: "dpad-left" } })));
-      await expect.poll(() => page.evaluate(() => {
+      await expect.poll(() => page.evaluate(start => {
         const calls = (window as unknown as { __sportsPlayerCalls: Array<{ cmd: string; args?: { command?: unknown[] } }> }).__sportsPlayerCalls;
-        return calls.some(call => call.cmd === "mpv_command" && call.args?.command?.[0] === "seek" && call.args.command[1] === -10);
-      })).toBe(true);
+        return calls.slice(start).some(call => call.cmd === "mpv_command"
+          && call.args?.command?.[0] === "seek"
+          && typeof call.args.command[1] === "number"
+          && call.args.command[1] > 0
+          && call.args.command[2] === "absolute"
+          && call.args.command[3] === "exact");
+      }, callsBeforeSeek)).toBe(true);
     }
   });
 }

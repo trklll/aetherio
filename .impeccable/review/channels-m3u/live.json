@@ -1,0 +1,173 @@
+{
+  "checkedAt": "2026-11-09T18:40:54.451Z",
+  "transport": "Node fetch using Aetherio's bounded IPTV downloader (not the Tauri HTTP bridge)",
+  "scope": "Five built-in defaults plus the bundled M3U; not private native-profile storage",
+  "lists": [
+    {
+      "id": "iptv-org-sports",
+      "name": "iptv-org · Deportes",
+      "ok": true,
+      "entries": 505,
+      "sportsChannels": 494,
+      "sources": 505,
+      "elapsedMs": 419
+    },
+    {
+      "id": "iptv-org-all",
+      "name": "IPTV-org · Lista completa",
+      "ok": true,
+      "entries": 11466,
+      "sportsChannels": 500,
+      "sources": 511,
+      "elapsedMs": 393
+    },
+    {
+      "id": "iptv-free-sports",
+      "name": "IPTV Free · Deportes",
+      "ok": true,
+      "entries": 496,
+      "sportsChannels": 485,
+      "sources": 496,
+      "elapsedMs": 1206
+    },
+    {
+      "id": "hacks-tools-sports",
+      "name": "Hacks.Tools · Deportes",
+      "ok": true,
+      "entries": 496,
+      "sportsChannels": 485,
+      "sources": 496,
+      "elapsedMs": 898
+    },
+    {
+      "id": "u-din-sports",
+      "name": "u-din IPTV · Deportes",
+      "ok": true,
+      "entries": 313,
+      "sportsChannels": 72,
+      "sources": 93,
+      "elapsedMs": 66
+    },
+    {
+      "id": "bundled-popular-sports",
+      "name": "Popular Sports IPTV (bundled)",
+      "ok": true,
+      "activeDefault": false,
+      "entries": 322,
+      "sportsChannels": 314
+    }
+  ],
+  "guides": [
+    {
+      "host": "www.tdtchannels.com",
+      "ok": true,
+      "channels": 186,
+      "programmes": 7829
+    },
+    {
+      "host": "epg.pw",
+      "ok": false,
+      "error": "Error: La lista o guía supera el tamaño permitido."
+    }
+  ],
+  "samples": [
+    {
+      "list": "iptv-org · Deportes",
+      "channel": "Barca TV",
+      "mediaVerified": false,
+      "elapsedMs": 79
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "07.SETANTA SPORTS 1",
+      "mediaVerified": true,
+      "elapsedMs": 1567
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "beIN SPORTS XTRA en Espanol",
+      "mediaVerified": true,
+      "elapsedMs": 612
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "07.SETANTA SPORTS 2",
+      "mediaVerified": true,
+      "elapsedMs": 1561
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "like Gecko) Chrome/156.0.0.0 Safari/537.36\" group-title=\"Sports\",Real Madrid TV",
+      "mediaVerified": true,
+      "elapsedMs": 794
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "08.ESPN (LaLiga)",
+      "mediaVerified": false,
+      "elapsedMs": 3070
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "Real Madrid TV English",
+      "mediaVerified": false,
+      "elapsedMs": 850
+    },
+    {
+      "list": "u-din IPTV · Deportes",
+      "channel": "09.ESPN",
+      "mediaVerified": false,
+      "elapsedMs": 10095
+    },
+    {
+      "list": "Popular Sports IPTV (bundled)",
+      "channel": "30A Golf Kingdom",
+      "mediaVerified": false,
+      "elapsedMs": 1252
+    }
+  ],
+  "native": [
+    {
+      "channel": "07.SETANTA SPORTS 1",
+      "decoderStarted": true,
+      "profile": "current",
+      "scenario": "remote",
+      "firstFrameMs": 6294.1,
+      "elapsedMs": 6296.03,
+      "manifestRequests": 0,
+      "segmentRequests": 0,
+      "endReason": null,
+      "errorCode": null,
+      "mpvVersion": "mpv v0.41.0-458-g062f4bf04",
+      "httpStatus": null
+    },
+    {
+      "channel": "beIN SPORTS XTRA en Espanol",
+      "decoderStarted": true,
+      "profile": "current",
+      "scenario": "remote",
+      "firstFrameMs": 6295.66,
+      "elapsedMs": 6297.91,
+      "manifestRequests": 0,
+      "segmentRequests": 0,
+      "endReason": null,
+      "errorCode": null,
+      "mpvVersion": "mpv v0.41.0-458-g062f4bf04",
+      "httpStatus": null
+    },
+    {
+      "channel": "07.SETANTA SPORTS 2",
+      "decoderStarted": true,
+      "profile": "current",
+      "scenario": "remote",
+      "firstFrameMs": 1891.06,
+      "elapsedMs": 1893.27,
+      "manifestRequests": 0,
+      "segmentRequests": 0,
+      "endReason": null,
+      "errorCode": null,
+      "mpvVersion": "mpv v0.41.0-458-g062f4bf04",
+      "httpStatus": null
+    }
+  ]
+}

@@ -1,7 +1,8 @@
 import { disciplineFromLabels, resolveParticipant } from "../data/sports/identity.ts";
 import type { LiveChannel, LiveChannelProgramme, LiveEvent, LiveSource } from "../types/liveSports.ts";
 import { IPTV_SOURCE_VERIFICATION_TTL_MS, MAX_IPTV_TEXT, publicIptvUrl } from "./iptvSportsHttp.ts";
-import { sortLiveSources } from "./liveSportsSourceRanking.ts";
+import { liveSourceKey, sortLiveSources } from "./liveSportsSourceRanking.ts";
+import { CNCVERSE_TV_SOURCE_ID } from "./cncverseBridge.ts";
 
 export interface XmltvGuide {
   channels: Map<string, string[]>;
@@ -52,7 +53,7 @@ export function parseSportsM3u(text: string, list: { id: string; name: string })
   const lines = text.replace(/^\uFEFF/, "").trim().split(/\r?\n/);
   if (!/^#EXTM3U\b/i.test(lines[0] ?? "") || lines.some(line => /^#EXT-X-(?:TARGETDURATION|STREAM-INF|MEDIA-SEQUENCE)/i.test(line))) throw new Error("El contenido debe ser una lista de canales M3U, no un vídeo HLS.");
   const header = attributes(lines[0]);
-  const epgUrls = [...new Set([header["x-tvg-url"], header["url-tvg"], header["tvg-url"]].filter(Boolean).flatMap(urls => urls.split(/[,;\s]+/)).map(url => publicIptvUrl(url)?.href).filter((url): url is string => Boolean(url)))].slice(0, 4);
+  const epgUrls = [...new Set([header["x-tvg-url"], header["url-tvg"], header["tvg-url"]].filter(Boolean).flatMap(urls => urls.split(/[,;\s]+/)).map(url => publicIptvUrl(url)?.href).filter((url): url is string => Boolean(url)))];
   const channels = new Map<string, LiveChannel>();
   let entry: { name: string; attrs: Record<string, string>; group: string; headers: Record<string, string>; drm: boolean; quality?: string } | undefined;
   for (const raw of lines.slice(1)) {
@@ -95,7 +96,7 @@ export function parseSportsM3u(text: string, list: { id: string; name: string })
         quality: pending.quality, language: pending.attrs["tvg-language"] || undefined, ...(Object.keys(headers).length ? { headers } : {}) };
       // The quality suffix was removed from the name, but the EXTINF line retains it.
       const known = channels.get(key);
-      if (known) { if (!known.sources.some(existing => existing.url === source.url)) known.sources.push(source); }
+      if (known) { if (!known.sources.some(existing => liveSourceKey(existing) === liveSourceKey(source))) known.sources.push(source); }
       else channels.set(key, { id, name: pending.name, tvgId: pending.attrs["tvg-id"] || undefined, tvgName: pending.attrs["tvg-name"] || undefined,
         language: pending.attrs["tvg-language"] || undefined, country: pending.attrs["tvg-country"] || undefined,
         category: "Deportes", sports, logo: publicIptvUrl(pending.attrs["tvg-logo"])?.href, sources: [source] });
@@ -185,7 +186,10 @@ export function channelMatchesSports(channel: LiveChannel, sports: readonly stri
   const p = channel.currentProgramme;
   const current = p && Date.parse(p.startsAt) <= now && now < Date.parse(p.endsAt)
     ? disciplineFromLabels([...p.categories, p.title, p.subtitle]) : null;
-  return Boolean(current ? sports.includes(current) : channel.sports?.some(sport => sports.includes(sport)));
+  const channelSports = channel.sports?.some(sport => sports.includes(sport)) ?? false;
+  const genericCncVerseSportsChannel = !current && !channel.sports?.length
+    && channel.sources.some(source => source.providerId === CNCVERSE_TV_SOURCE_ID);
+  return Boolean(current ? sports.includes(current) : channelSports || genericCncVerseSportsChannel);
 }
 
 export function requiresRecentChannelProbe(channel: Pick<LiveChannel, "id">, source: LiveSource): boolean {
@@ -227,9 +231,20 @@ function participantKey(name: string, sport: "futbol" | "mma" | "baloncesto"): s
 }
 
 export function programmeMatchesEvent(p: LiveChannelProgramme, event: LiveEvent, now = Date.now()): boolean {
-  if (event.status !== "live" || p.repeat || NOT_A_MATCH.test(fold(`${p.title} ${p.subtitle ?? ""}`)) || Date.parse(p.startsAt) > now || Date.parse(p.endsAt) <= now) return false;
+  const programmeStart = Date.parse(p.startsAt);
+  const programmeEnd = Date.parse(p.endsAt);
+  if (event.status !== "live" || p.repeat || NOT_A_MATCH.test(fold(`${p.title} ${p.subtitle ?? ""}`))
+    || !Number.isFinite(programmeStart) || !Number.isFinite(programmeEnd) || programmeStart > now || programmeEnd <= now) return false;
+
   const start = Date.parse(event.startsAt);
-  if (!Number.isFinite(start) || Math.abs(start - Date.parse(p.startsAt)) > 45 * 60_000) return false;
+  const precision = event.startsAtPrecision ?? "exact";
+  if (precision === "exact" && (!Number.isFinite(start) || Math.abs(start - programmeStart) > 45 * 60_000)) return false;
+  if (precision === "day" && Number.isFinite(start)
+    && new Date(start).toISOString().slice(0, 10) !== new Date(programmeStart).toISOString().slice(0, 10)) return false;
+  // `synthesized` and `unknown` are not trustworthy kickoff times. The guide
+  // programme is already live now, so keep matching on sport and participants
+  // rather than rejecting it because of a fabricated or absent clock value.
+
   const sport = disciplineFromLabels([event.sport, event.league]);
   const programmeSport = disciplineFromLabels([...p.categories, p.title, p.subtitle]);
   if (!sport || programmeSport && programmeSport !== sport) return false;
@@ -251,17 +266,19 @@ export function attachIptvSources(events: readonly LiveEvent[], channels: readon
     // A cached source must not remain primary after a failed probe or guide change.
     const originals = event.sources.filter(source => source.origin !== "iptv" || !source.validUntil);
     const matching: LiveSource[] = [];
+    const known = new Set(originals.map(liveSourceKey));
     if (event.status === "live") for (const channel of channels) {
       const programme = channel.currentProgramme;
       if (!programme || !programmeMatchesEvent(programme, event, now)) continue;
       for (const source of channel.sources) {
         if (!source.verifiedAt || now - source.verifiedAt > 120_000 || source.verifiedAt > now) continue;
-        if (matching.some(s => s.url === source.url)) continue;
+        const key = liveSourceKey(source);
+        if (known.has(key)) continue;
+        known.add(key);
         matching.push({ ...source, origin: "iptv", channelName: channel.name, isDefault: true, validUntil: programme.endsAt });
       }
     }
-    const urls = new Set(matching.map(source => source.url));
-    return { ...event, sources: sortLiveSources([...matching, ...originals.filter(source => !urls.has(source.url))]) };
+    return { ...event, sources: sortLiveSources([...originals, ...matching]) };
   });
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import aetherioLogo from "../assets/aetheriologo.png";
 import aetherioTvLogo from "../../aetheriotvlogo.png";
+import aetherioSportsLogo from "../../AetherioSportsLogo.png";
 import {
   getModeBrandLogo,
   getModeTransitionPhase,
@@ -19,6 +20,14 @@ describe("bigPictureTransition sin DOM", () => {
   it("usa Aetherio TV al entrar y Aetherio normal al salir", () => {
     expect(getModeBrandLogo("enter")).toBe(aetherioTvLogo);
     expect(getModeBrandLogo("exit")).toBe(aetherioLogo);
+  });
+
+  it("usa el logo propio al entrar a Aetherio Sports", () => {
+    expect(getModeBrandLogo("sports")).toBe(aetherioSportsLogo);
+    const navigateFn = vi.fn();
+    transitionToMode("sports", navigateFn);
+    expect(navigateFn).toHaveBeenCalledTimes(1);
+    expect(getModeTransitionPhase()).toBe("idle");
   });
 
   it("completa la pantalla de marca inmediatamente sin DOM", () => {

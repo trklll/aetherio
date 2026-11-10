@@ -69,6 +69,13 @@ describe("buildPlayerBackPath", () => {
       .toBe("/home");
   });
 
+  it("returns live channel playback to the Channels grid", () => {
+    expect(buildPlayerBackPath("type=live&id=channel-1&from=channels", "/player"))
+      .toBe("/channels");
+    expect(buildPlayerBackPath("type=live&id=channel-1&from=channels", "/big-picture/player"))
+      .toBe("/big-picture/channels");
+  });
+
   it("returns to the episode picker, never to the detail", () => {
     expect(buildPlayerBackPath("type=series&id=tt123&season=2&ep=5", "/player"))
       .toBe("/episode?type=series&id=tt123&season=2&ep=5&fromPlayer=1");

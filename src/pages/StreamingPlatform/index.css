@@ -44,6 +44,14 @@
     linear-gradient(180deg, rgba(5, 6, 9, 0.08) 0%, #08090c 62rem);
 }
 
+.streaming-platform-page__backdrop,
+.streaming-platform-page__scrim {
+  /* Keep the full-page gradients reusable by the compositor while the glass
+     controls sample their backdrop. Promote only these two static surfaces,
+     not the catalog/cards; retain the gradients and SVG refraction unchanged. */
+  transform: translateZ(0);
+}
+
 .streaming-platform-page__content {
   position: relative;
   z-index: 1;
