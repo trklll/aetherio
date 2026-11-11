@@ -7,17 +7,17 @@ import type { MediaStream, StreamQuery } from "../types/stream.ts";
 import type { SubtitleSource } from "../types/subtitle.ts";
 import { readPageDataCache, writePageDataCache } from "../utils/pageDataCache.ts";
 
-const OPEN_SUBTITLES_PRO_URL = "https://opensubtitlesv3-pro.dexter21767.com/eyJsYW5ncyI6WyJzcGFuaXNoIiwic3BhbmlzaC1sYSJdLCJzb3VyY2UiOiJhbGwiLCJhaVRyYW5zbGF0ZWQiOnRydWUsImF1dG9BZGp1c3RtZW50Ijp0cnVlfQ==/manifest.json";
+const OPEN_SUBTITLES_PRO_URL = "https://opensubtitles.stremio.homes/ea%7Ces%7Csp/ai-translated=true%7Cfrom=all%7Cauto-adjustment=true/manifest.json";
 const OPEN_SUBTITLES_PRO_ADDON: InstalledAddon = {
-  id: "community.opensubtitlesv3.pro",
-  name: "opensubtitles PRO",
-  description: "ad-free and spam-free subtitles addon",
-  logo: "https://i.imgur.com/cGc1DXB.png",
+  id: "community.opensubtitles.stremio.homes",
+  name: "OpenSubtitles",
+  description: "OpenSubtitles subtitles addon",
+
   url: OPEN_SUBTITLES_PRO_URL,
   manifest: {
-    id: "community.opensubtitlesv3.pro",
+    id: "community.opensubtitles.stremio.homes",
     version: "0.1.0",
-    name: "opensubtitles PRO",
+    name: "OpenSubtitles",
     resources: ["subtitles"],
     types: ["movie", "series"],
     idPrefixes: ["tt", "kitsu"],

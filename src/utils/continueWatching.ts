@@ -4,12 +4,20 @@ import { captureExperienceScope, getScopedStorageKey } from "./localProfiles";
 import { mediaRefFromLegacy, MediaIdentityError } from "../domain/mediaIdentity";
 import { recoverExperienceJournal, writeExperienceBatch, writeExperienceJSON } from "../domain/experienceStorage";
 import { storageFailure, type StorageResult } from "../domain/storageResult";
+import {
+  clearDeletionTombstone,
+  isDeletionTombstone,
+  mergeDeletionTombstones,
+  recordDeletionTombstone,
+  replaceDeletionTombstones,
+} from "../domain/tombstones";
 
 export const CONTINUE_WATCHING_EVENT = "aetherio-continue-watching-updated";
 
 const STORAGE_KEY = "aetherio-continue-watching-v1";
 const WATCHED_HISTORY_STORAGE_KEY = "aetherio-watched-history-v1";
 const AUDIO_SELECTION_STORAGE_KEY = "aetherio-continue-watching-audio-selection-v1";
+const TOMBSTONES_KEY = "aetherio-continue-watching-tombstones-v1";
 const MAX_ENTRIES = 80;
 const MAX_WATCHED_HISTORY_ENTRIES = 12000;
 const MIN_SAVE_SECONDS = 5;
@@ -21,6 +29,7 @@ const RECENT_RELEASE_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
 export type ContinueWatchingEntryKind = "resume" | "next" | "new" | "new-season";
 
 export interface ContinueWatchingEntry {
+  source?: "local";
   key: string;
   mediaKey: string;
   type: string;
@@ -42,8 +51,6 @@ export interface ContinueWatchingEntry {
   completed: boolean;
   entryKind?: ContinueWatchingEntryKind;
   remoteProgressPercent?: number;
-  source?: "local" | "trakt";
-  traktPlaybackId?: number;
   streamId?: string;
   streamName?: string;
   selectedAudio?: string;
@@ -103,6 +110,7 @@ export interface MarkEpisodeWatchedInput {
 }
 
 export interface NextEpisodePromptInput {
+  source?: "local";
   query: StreamQuery;
   name: string;
   episodeName?: string;
@@ -113,7 +121,6 @@ export interface NextEpisodePromptInput {
   runtimeSeconds?: number;
   entryKind?: Exclude<ContinueWatchingEntryKind, "resume">;
   updatedAt?: number;
-  source?: "local" | "trakt";
 }
 
 export function buildMediaKey(type: string, id: string) {
@@ -280,7 +287,8 @@ export function getContinueWatchingAudioSelection(query: StreamQuery | null | un
 export function saveContinueWatchingProgress(input: ContinueWatchingInput) {
   const entry = buildContinueWatchingProgress(input);
   if (!entry) return null;
-  persistContinueWatchingProgress(entry);
+  const result = persistContinueWatchingProgress(entry);
+  if (result.ok) clearDeletionTombstone(TOMBSTONES_KEY, entry.key);
   return entry;
 }
 
@@ -397,8 +405,7 @@ export function markEpisodeAsWatched(input: MarkEpisodeWatchedInput) {
 
 export function saveNextEpisodePrompt(input: NextEpisodePromptInput) {
   if (input.query.type === "movie" || !input.query.season || !input.query.episode) return null;
-  const key = buildContinueWatchingKey(input.query);
-  const mediaKey = buildMediaKey(input.query.type, input.query.id);
+  const key = buildContinueWatchingKey(input.query);  const mediaKey = buildMediaKey(input.query.type, input.query.id);
   const entries = readContinueWatchingEntries();
   const existing = entries.find(entry => entry.key === key);
   const duration = Math.max(1, clampFinite(input.runtimeSeconds ?? existing?.duration ?? 1));
@@ -432,7 +439,8 @@ export function saveNextEpisodePrompt(input: NextEpisodePromptInput) {
     selectedSubtitleLanguage: existing?.selectedSubtitleLanguage,
   };
 
-  writeEntries([entry, ...entries.filter(item => item.key !== key)].slice(0, MAX_ENTRIES));
+  const result = writeEntries([entry, ...entries.filter(item => item.key !== key)].slice(0, MAX_ENTRIES));
+  if (result.ok) clearDeletionTombstone(TOMBSTONES_KEY, key);
   return entry;
 }
 
@@ -440,8 +448,11 @@ export function removeContinueWatchingEntry(key: string) {
   const current = readContinueWatchingEntries();
   const watched = readWatchedHistoryEntries();
   const removed = current.find(entry => entry.key === key) ?? watched.find(entry => entry.key === key) ?? null;
-  const entries = current.filter(entry => entry.key !== key);
-  writeProgressAndHistory(entries.slice(0, MAX_ENTRIES), watched.filter(entry => entry.key !== key));
+  const result = writeProgressAndHistory(
+    current.filter(entry => entry.key !== key).slice(0, MAX_ENTRIES),
+    watched.filter(entry => entry.key !== key),
+  );
+  if (result.ok) recordDeletionTombstone(TOMBSTONES_KEY, key);
   return removed;
 }
 
@@ -602,6 +613,79 @@ export function mergeContinueWatchingEntries(importedEntries: ContinueWatchingEn
     MAX_ENTRIES,
   );
   writeProgressAndHistory(nextProgress, nextHistory, watchedEntries.length > 0);
+}
+
+export interface RemotePlaybackState {
+  progress?: ContinueWatchingEntry[];
+  history?: ContinueWatchingEntry[];
+}
+
+/**
+ * Fusiona el estado de reproducción remoto (respaldo de Google Drive) con el
+ * local: última escritura gana por entrada (`updatedAt`). Un progreso —local o
+ * remoto— se descarta si el historial fusionado marca esa entrada como
+ * completada en un momento igual o posterior (se vio en otro dispositivo).
+ */
+export function mergeRemotePlaybackState(remote: RemotePlaybackState) {
+  const remoteHistory = Array.isArray(remote.history) ? remote.history.filter(isContinueWatchingEntry) : [];
+  const remoteProgress = Array.isArray(remote.progress) ? remote.progress.filter(isContinueWatchingEntry) : [];
+  if (!remoteHistory.length && !remoteProgress.length) return;
+
+  const nextHistory = remoteHistory.length
+    ? mergeEntries(readWatchedHistoryEntries(), remoteHistory, MAX_WATCHED_HISTORY_ENTRIES)
+    : readWatchedHistoryEntries();
+
+  const completedAt = new Map<string, number>();
+  for (const entry of nextHistory) {
+    if (entry.completed) completedAt.set(entry.key, entry.updatedAt);
+  }
+
+  const localProgress = dropSupersededProgress(readContinueWatchingEntries(), completedAt);
+  const mergedProgress = remoteProgress.length
+    ? mergeEntries(localProgress, dropSupersededProgress(remoteProgress, completedAt), MAX_ENTRIES)
+    : localProgress;
+
+  writeProgressAndHistory(mergedProgress, nextHistory, remoteHistory.length > 0);
+}
+
+function dropSupersededProgress(entries: ContinueWatchingEntry[], completedAt: Map<string, number>) {
+  return entries.filter(entry => {
+    if (entry.completed) return true;
+    const watchedAt = completedAt.get(entry.key);
+    return watchedAt === undefined || watchedAt < entry.updatedAt;
+  });
+}
+
+/**
+ * Aplica lápidas remotas (Google Drive) al estado de reproducción: un descarte
+ * ("quitar de continuar viendo") gana si es posterior a la última escritura de
+ * la entrada; si esta se recreó después del descarte, sobrevive y la lápida se
+ * retira para que deje de circular entre dispositivos.
+ */
+export function applyContinueWatchingTombstones(remoteTombstones: unknown) {
+  if (!Array.isArray(remoteTombstones)) return;
+  const tombstones = mergeDeletionTombstones(TOMBSTONES_KEY, remoteTombstones.filter(isDeletionTombstone));
+  if (!tombstones.length) return;
+  const tombstoneByKey = new Map(tombstones.map(tombstone => [tombstone.key, tombstone] as const));
+
+  const alive = (entry: ContinueWatchingEntry) => {
+    const tombstone = tombstoneByKey.get(entry.key);
+    if (!tombstone) return true;
+    return entry.updatedAt > tombstone.deletedAt;
+  };
+  const nextProgress = readContinueWatchingEntries().filter(alive);
+  const nextHistory = readWatchedHistoryEntries().filter(alive);
+  writeProgressAndHistory(nextProgress, nextHistory, true);
+
+  // Lápidas cuya entrada sobrevivió (más nueva que el borrado) dejan de circular.
+  const survivingKeys = new Set<string>();
+  for (const entry of [...nextProgress, ...nextHistory]) {
+    const tombstone = tombstoneByKey.get(entry.key);
+    if (tombstone && entry.updatedAt > tombstone.deletedAt) survivingKeys.add(entry.key);
+  }
+  if (survivingKeys.size) {
+    replaceDeletionTombstones(TOMBSTONES_KEY, tombstones.filter(tombstone => !survivingKeys.has(tombstone.key)));
+  }
 }
 
 function writeEntries(entries: ContinueWatchingEntry[]) {

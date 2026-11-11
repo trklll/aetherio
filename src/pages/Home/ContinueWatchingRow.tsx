@@ -36,7 +36,6 @@ import { useBigPictureActive } from "../../navigation/spatialNav.ts";
 import { buildDetailPath, buildEpisodePath } from "../../utils/bigPictureDetail.ts";
 import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
 import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
-import { syncTraktMarkedWatched, syncTraktRemovePlayback } from "../../trakt";
 import type { MediaItem } from "../../types/ui";
 import CardArtworkPicker from "./CardArtworkPicker";
 
@@ -419,8 +418,7 @@ export default function ContinueWatchingRow() {
   }
 
   function commitRemove(entry: ContinueWatchingEntry) {
-    const removed = removeContinueWatchingEntry(entry.key);
-    void syncTraktRemovePlayback(removed);
+    removeContinueWatchingEntry(entry.key);
     setRemovingKeys(keys => {
       const next = new Set(keys);
       next.delete(entry.key);
@@ -1228,7 +1226,6 @@ const ContinueCard = memo(function ContinueCard({
           { label: "Eliminar de la lista", icon: <MinusCircle size={15} />, onSelect: onRemove },
           { label: "Marcar como visto", icon: <Check size={15} />, onSelect: () => {
             const marked = markContinueWatchingEntryAsWatched(entry.key);
-            void syncTraktMarkedWatched(marked);
             void createNextEpisodePromptFromEntry(marked ?? entry);
           } },
           {

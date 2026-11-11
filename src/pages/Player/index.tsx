@@ -20,7 +20,6 @@ import type { SportsMatchArtwork } from "../../types/sportsMatch.ts";
 import type { SubtitleSource } from "../../types/subtitle";
 import {
   buildContinueWatchingKey,
-  buildMediaKey,
   getContinueWatchingAudioSelection,
   getExactResumeForQuery,
   getResumeStartTime,
@@ -28,7 +27,6 @@ import {
   saveContinueWatchingProgress,
   saveNextEpisodePrompt,
   updateContinueWatchingSelection,
-  type ContinueWatchingEntry,
 } from "../../utils/continueWatching";
 import { sanitizeLogoUrl } from "../../utils/artwork";
 import {
@@ -41,7 +39,6 @@ import {
 import { isPlayableMediaStream } from "../../utils/playableMedia";
 import { sortStreamsForPlayback } from "../../utils/streamPlaybackRanking";
 import { readDetailMediaMeta, resolveDetailBackground } from "../../utils/mediaMetadata";
-import { sendTraktScrobble, syncTraktProgressEntry } from "../../trakt";
 import {
   getNativePlaybackStatus,
   getPlaybackCapabilities,
@@ -277,8 +274,6 @@ export default function PlayerPage() {
   const holdSpeedActiveRef = useRef(false);
   const holdSpeedRestoreRef = useRef(1);
   const ignoreNextScreenClickRef = useRef(false);
-  const traktStartedKeyRef = useRef("");
-  const traktStoppedKeyRef = useRef("");
   const nextEpisodePromptKeyRef = useRef("");
   const skipButtonRef = useRef<HTMLButtonElement | null>(null);
   const postPlayRef = useRef<HTMLDivElement | null>(null);
@@ -1836,7 +1831,6 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
       ? (streamsPath ?? detailPath)
       : !playbackStarted ? (streamsPath ?? detailPath) : (detailPath ?? streamsPath);
     saveCurrentProgressNow("goBack");
-    sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
     void stopNativePlayback()
       .finally(() => {
         if (target) {
@@ -1892,7 +1886,6 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
       sessionStorage.removeItem(AUTO_NEXT_SOURCE_KEY);
     }
     saveCurrentProgressNow(`navigate-${direction}`);
-    sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
     void stopNativePlayback().finally(() => {
       const autoplay = direction === "next" ? "&autoplay=1" : "";
       navigate(buildEpisodePath(`type=${query.type}&id=${encodeURIComponent(query.id)}&season=${nextEpisode.season}&ep=${nextEpisode.episode}${autoplay}`));
@@ -2542,45 +2535,6 @@ const isMovie = query?.type === "movie";
 const episodeAvailabilityKnown = isMovie || !query?.season || !query?.episode || episodeMetadataReady;
 const showPanelToggle = !isMovie && panelItems.length > 0;
 
-function buildTraktEntrySnapshot(): ContinueWatchingEntry | null {
-  if (!query || !stream || isTrailerStream) return null;
-  const current = Math.max(0, currentTimeRef.current);
-  const totalDuration = Math.max(0, durationRef.current);
-  const completed = totalDuration > 0 && (current / totalDuration >= 0.92 || totalDuration - current <= 90);
-  const behaviorBackground = typeof stream.behaviorHints?.background === "string" ? stream.behaviorHints.background : "";
-  const behaviorPoster = typeof stream.behaviorHints?.poster === "string" ? stream.behaviorHints.poster : "";
-  const background = !isMovie && currentEpisode?.still
-    ? currentEpisode.still
-    : selectedMediaBackground || behaviorBackground || behaviorPoster || undefined;
-  return {
-    key: buildContinueWatchingKey(query),
-    mediaKey: buildMediaKey(query.type, query.id),
-    type: query.type,
-    id: query.id,
-    name: mediaTitle,
-    logo: sanitizeLogoUrl(selectedMediaLogo || detailLogoUrl || addonLogoUrl || seriesLogoUrl) || undefined,
-    background,
-    poster: behaviorPoster || undefined,
-    episodeStill: !isMovie ? currentEpisode?.still : undefined,
-    season: query.season,
-    episode: query.episode,
-    episodeName: currentEpisode?.name,
-    currentTime: current,
-    duration: totalDuration,
-    updatedAt: Date.now(),
-    completed,
-    source: "local",
-    streamId: stream.id,
-    streamName: stream.title ?? stream.name,
-  };
-}
-
-function sendCurrentTraktPlaybackEvent(action: "start" | "pause" | "stop") {
-  const entry = buildTraktEntrySnapshot();
-  if (!entry) return;
-  void sendTraktScrobble(action, entry);
-}
-
 function saveUpcomingEpisodePrompt() {
   if (!query || isMovie || !canGoNextEpisode) return;
   const nextEpisode = resolvedNextEpisode;
@@ -2642,54 +2596,12 @@ function saveCurrentProgressNow(reason: string) {
     selectedSubtitleLanguage: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLanguage,
   });
   if (savedEntry?.completed) saveUpcomingEpisodePrompt();
-  void syncTraktProgressEntry(savedEntry);
   resumeLog("progress saved", { reason });
   return savedEntry;
 }
 
-function shouldStopTraktPlayback() {
-  const totalDuration = durationRef.current;
-  if (!totalDuration || totalDuration < 60) return false;
-  const current = currentTimeRef.current;
-  return current / totalDuration >= 0.9 || totalDuration - current <= 90;
-}
-
-useEffect(() => {
-  if (!playbackStarted || !query || !stream || isTrailerStream || isLiveStream) return;
-  const key = `${buildContinueWatchingKey(query)}:${stream.id}`;
-  if (traktStartedKeyRef.current === key) return;
-  traktStartedKeyRef.current = key;
-  traktStoppedKeyRef.current = "";
-  sendCurrentTraktPlaybackEvent("start");
-}, [isLiveStream, isTrailerStream, playbackStarted, query, stream]);
-
-useEffect(() => {
-  if (!manualPaused || !playbackStarted) return;
-  sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
-}, [manualPaused, playbackStarted]);
-
-useEffect(() => {
-  if (!playbackStarted || !query || !stream || isTrailerStream || !shouldStopTraktPlayback()) return;
-  const key = `${buildContinueWatchingKey(query)}:${stream.id}`;
-  if (traktStoppedKeyRef.current === key) return;
-  traktStoppedKeyRef.current = key;
-  saveUpcomingEpisodePrompt();
-  sendCurrentTraktPlaybackEvent("stop");
-}, [currentTime, isTrailerStream, playbackStarted, query, stream]);
-
-useEffect(() => {
-  if (!playbackStarted || manualPaused || !query || !stream || isTrailerStream) return;
-  const interval = window.setInterval(() => {
-    const entry = buildTraktEntrySnapshot();
-    if (!entry) return;
-    void sendTraktScrobble("start", entry);
-  }, 12000);
-  return () => window.clearInterval(interval);
-}, [isTrailerStream, manualPaused, playbackStarted, query, stream]);
-
 useEffect(() => () => {
   saveCurrentProgressNow("unmount");
-  sendCurrentTraktPlaybackEvent(shouldStopTraktPlayback() ? "stop" : "pause");
 }, [isTrailerStream, query?.episode, query?.id, query?.season, query?.type, stream?.id]);
 
 useEffect(() => {
@@ -2711,7 +2623,7 @@ useEffect(() => {
     ? selectedMediaBackground || behaviorBackground || behaviorPoster || undefined
     : currentEpisode?.still || selectedMediaBackground || behaviorBackground || behaviorPoster || undefined;
   const continuePoster = selectedMediaPoster || behaviorPoster || undefined;
-  const savedEntry = saveContinueWatchingProgress({
+  saveContinueWatchingProgress({
     query,
     stream,
     name: mediaTitle,
@@ -2729,7 +2641,6 @@ useEffect(() => {
     selectedSubtitleLabel: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLabel,
     selectedSubtitleLanguage: subtitleSelectionMeta(desiredSubtitleSelectionSetRef.current ? desiredSubtitleSelectionRef.current : selectedMpvSubtitleRef.current).selectedSubtitleLanguage,
   });
-  void syncTraktProgressEntry(savedEntry);
   resumeLog("progress saved", { nearEnd, saveIntervalMs: sinceLastSaveMs });
 }, [
   addonLogoUrl,

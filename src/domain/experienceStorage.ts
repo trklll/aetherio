@@ -26,6 +26,8 @@ const registeredKeys = new Set<string>([
   "aetherio-sync-state-v1",
   "aetherio-anilist-sync-queue-v1",
   "aetherio-anime-preferences-v1",
+  "aetherio-library-tombstones-v1",
+  "aetherio-continue-watching-tombstones-v1",
 ]);
 
 export let EXPERIENCE_STORAGE_KEYS: readonly string[] = Object.freeze(Array.from(registeredKeys));
@@ -302,7 +304,7 @@ function nextRevision(): number {
 function isAllowedStorageKey(key: string): boolean {
   return typeof key === "string"
     && /^aetherio-[a-z0-9-]+-v\d+$/.test(key)
-    && !/(?:token|secret|credential|api-keys|trakt-auth|pin)/i.test(key);
+    && !/(?:token|secret|credential|api-keys|pin)/i.test(key);
 }
 
 function isStoredValueFromFuture(raw: string | null): boolean {

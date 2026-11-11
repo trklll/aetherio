@@ -46,7 +46,7 @@ export default function OfflineDownloadsTab({ bigPicture = false }: { bigPicture
   function play(item: DownloadRecord) {
     if (!item.filePath) return;
     const name = item.episodeTitle ? `${item.title} · ${item.episodeTitle}` : item.title;
-    navigate(prepareLocalMediaPlayback(item.filePath, [], {
+    navigate(prepareLocalMediaPlayback(item.filePath, item.subtitlePaths ?? [], {
       name,
       poster: item.poster ?? undefined,
       background: item.background ?? undefined,

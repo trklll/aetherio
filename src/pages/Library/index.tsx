@@ -2,7 +2,8 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { Compass, Download, Film, RefreshCw, Tv } from "lucide-react";
 import AppleSpinner from "../../components/ui/AppleSpinner";
-import { appleEase, gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
+import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
+import { restorePageTransition } from "../../utils/pageTransition";
 import PageContainer from "../../components/layout/PageContainer";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
@@ -14,6 +15,7 @@ import { clearLibraryReturn, readLibraryReturn, saveLibraryReturn, type Discover
 import "./Library.css";
 import { GAMEPAD_ACTION_EVENT, type GamepadActionDetail } from "../../hooks/useGamepad";
 import { readLibraryTab, stepLibraryTab, writeLibraryTabSearch, type LibraryTab } from "./libraryTabs";
+import { animateLibraryTabPanel } from "./libraryTransitions";
 import {
   ANILIST_LIBRARY_CHANGED_EVENT,
   readAniListLibrary,
@@ -195,28 +197,18 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
   useGridEntrance(libraryGridRef, [tab, filtered.items, filters]);
 
   const tabPanelRef = useRef<HTMLDivElement>(null);
+  const lastAnimatedTabRef = useRef<LibraryTab | null>(null);
   useLayoutEffect(() => {
     const panel = tabPanelRef.current;
     if (!panel) return;
-    if (prefersReducedMotion()) {
-      // §14 — short cross-fade, no slide/scale
-      gsap.fromTo(panel, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: "power1.out" });
+    if (lastAnimatedTabRef.current === tab) {
+      // React Activity reconnects layout effects when a cached route returns.
+      // Restore the settled panel rather than replaying its entrance.
+      restorePageTransition(panel);
       return;
     }
-    gsap.set(panel, { willChange: "transform,opacity" });
-    gsap.fromTo(
-      panel,
-      { opacity: 0, y: 10, scale: 0.99 },
-      {
-        opacity: 1,
-        y: 0,
-        scale: 1,
-        duration: 0.38,
-        ease: appleEase,
-        clearProps: "transform,opacity",
-        onComplete: () => gsap.set(panel, { willChange: "auto" }),
-      },
-    );
+    lastAnimatedTabRef.current = tab;
+    return animateLibraryTabPanel(panel, prefersReducedMotion());
   }, [tab]);
 
   return (

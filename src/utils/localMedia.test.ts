@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareLocalMediaPlayback } from "./localMedia";
+import { SELECTED_STREAM_KEY } from "../pages/Player/utils";
 
 function createSessionStorage() {
   const values = new Map<string, string>();
@@ -33,5 +34,19 @@ describe("prepareLocalMediaPlayback", () => {
 
     expect(prepareLocalMediaPlayback("C:\\Videos\\movie.mp4"))
       .toBe("/big-picture/player?local=123");
+  });
+
+  it("hands saved sidecar subtitle paths to the offline player", () => {
+    const storage = createSessionStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    vi.stubGlobal("window", { location: { pathname: "/library" } });
+
+    prepareLocalMediaPlayback("C:\\Videos\\movie.mp4", ["C:\\Videos\\movie.es.srt"]);
+
+    const stream = JSON.parse(storage.getItem(SELECTED_STREAM_KEY) ?? "{}");
+    expect(stream.subtitles).toEqual([expect.objectContaining({
+      url: "C:\\Videos\\movie.es.srt",
+      lang: "und",
+    })]);
   });
 });

@@ -2,6 +2,13 @@ import type { MediaItem } from "../types/ui";
 import { captureExperienceScope, getScopedStorageKey } from "./localProfiles";
 import { MediaIdentityError, mediaRefFromLegacy, mediaRefKey } from "../domain/mediaIdentity";
 import { recoverExperienceJournal, writeExperienceJSON } from "../domain/experienceStorage";
+import {
+  clearDeletionTombstone,
+  isDeletionTombstone,
+  mergeDeletionTombstones,
+  recordDeletionTombstone,
+  replaceDeletionTombstones,
+} from "../domain/tombstones";
 import { storageFailure, type StorageResult } from "../domain/storageResult";
 
 export interface SavedLibraryItem extends MediaItem {
@@ -9,6 +16,7 @@ export interface SavedLibraryItem extends MediaItem {
 }
 
 const LIBRARY_KEY = "aetherio-saved-library-v1";
+const TOMBSTONES_KEY = "aetherio-library-tombstones-v1";
 export const LIBRARY_CHANGED_EVENT = "aetherio-library-changed";
 
 export function readSavedLibrary(): SavedLibraryItem[] {
@@ -68,7 +76,9 @@ export function tryAddToLibrary(item: MediaItem): StorageResult {
   });
   if (index >= 0) items[index] = { ...items[index], ...next };
   else items.unshift(next);
-  return writeSavedLibrary(items);
+  const result = writeSavedLibrary(items);
+  if (result.ok) clearDeletionTombstone(TOMBSTONES_KEY, key);
+  return result;
 }
 
 export function removeFromLibrary(type: string, id: string) {
@@ -82,10 +92,12 @@ export function tryRemoveFromLibrary(type: string, id: string): StorageResult {
   } catch (error) {
     return storageFailure(error instanceof MediaIdentityError ? "invalid-identity" : "invalid-data", error);
   }
-  return writeSavedLibrary(readSavedLibrary().filter(item => {
+  const result = writeSavedLibrary(readSavedLibrary().filter(item => {
     try { return mediaKey(item.type, item.id) !== key; }
     catch { return true; }
   }));
+  if (result.ok) recordDeletionTombstone(TOMBSTONES_KEY, key);
+  return result;
 }
 
 export function toggleLibraryItem(item: MediaItem) {
@@ -95,6 +107,73 @@ export function toggleLibraryItem(item: MediaItem) {
   }
   addToLibrary(item);
   return true;
+}
+
+/**
+ * Fusiona una biblioteca remota (respaldo de Google Drive): unión por
+ * identidad normalizada; en duplicados gana el añadido más reciente. La baja
+ * de un título no se propaga entre dispositivos en este MVP (la unión la
+ * resucita), misma limitación que tienen los respaldos de solo unión.
+ */
+export function mergeSavedLibraryItems(remoteItems: SavedLibraryItem[]) {
+  if (!Array.isArray(remoteItems) || !remoteItems.length) return;
+  const byKey = new Map<string, SavedLibraryItem>();
+  for (const item of readSavedLibrary()) {
+    try { byKey.set(mediaKey(item.type, item.id), item); }
+    catch { continue; }
+  }
+  let changed = false;
+  for (const item of remoteItems) {
+    if (typeof item?.id !== "string" || typeof item?.type !== "string" || typeof item?.name !== "string") continue;
+    if (typeof item?.addedAt !== "number" || !Number.isFinite(item.addedAt)) continue;
+    let key: string;
+    try { key = mediaKey(item.type, item.id); }
+    catch { continue; }
+    const normalized: SavedLibraryItem = { ...item, type: normalizeType(item.type) };
+    const current = byKey.get(key);
+    if (!current || item.addedAt > current.addedAt) {
+      byKey.set(key, current ? { ...current, ...normalized } : normalized);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const next = Array.from(byKey.values()).sort((a, b) => b.addedAt - a.addedAt);
+  writeSavedLibrary(next);
+}
+
+/**
+ * Aplica lápidas remotas (Google Drive) a la biblioteca ya fusionada: un
+ * borrado gana si es posterior al `addedAt` del título; un re-añadido posterior
+ * sobrevive y retira la lápida para que deje de circular entre dispositivos.
+ */
+export function applyLibraryTombstones(remoteTombstones: unknown) {
+  if (!Array.isArray(remoteTombstones)) return;
+  const tombstones = mergeDeletionTombstones(TOMBSTONES_KEY, remoteTombstones.filter(isDeletionTombstone));
+  if (!tombstones.length) return;
+  const tombstoneByKey = new Map(tombstones.map(tombstone => [tombstone.key, tombstone] as const));
+
+  const items = readSavedLibrary().filter(item => {
+    let key: string;
+    try { key = mediaKey(item.type, item.id); }
+    catch { return true; }
+    const tombstone = tombstoneByKey.get(key);
+    if (!tombstone) return true;
+    return item.addedAt > tombstone.deletedAt;
+  });
+  writeSavedLibrary(items);
+
+  // Las lápidas cuyo título sobrevivió (re-añadido más nuevo) dejan de circular.
+  const survivingKeys = new Set<string>();
+  for (const item of items) {
+    try {
+      const key = mediaKey(item.type, item.id);
+      const tombstone = tombstoneByKey.get(key);
+      if (tombstone && item.addedAt > tombstone.deletedAt) survivingKeys.add(key);
+    } catch { continue; }
+  }
+  if (survivingKeys.size) {
+    replaceDeletionTombstones(TOMBSTONES_KEY, tombstones.filter(tombstone => !survivingKeys.has(tombstone.key)));
+  }
 }
 
 function writeSavedLibrary(items: SavedLibraryItem[]): StorageResult {

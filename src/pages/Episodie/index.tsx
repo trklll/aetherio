@@ -45,7 +45,7 @@ import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache
 import { getSourceLogo, getStreamAddonLogo } from "../../utils/sourceLogos.ts";
 import { buildDetailPath, buildPlayerPath, isBigPictureLocation } from "../../utils/bigPictureDetail.ts";
 import { getStreamDownloadAvailability, getStreamDownloadTarget } from "../../utils/streamDownloads.ts";
-import { createDownloadRequest, startDownload } from "../../services/downloads.ts";
+import { createDownloadRequest, getOpenSubtitlesForDownload, startDownload } from "../../services/downloads.ts";
 import { isTauriRuntime } from "../../runtime/platform.ts";
 import { useParty } from "../../party/PartyContext.tsx";
 import { normalizeRoomCode, isCompleteRoomCode, isEncryptedPayload, partyMediaKey, type PartyMedia } from "../../party/protocol.ts";
@@ -457,7 +457,7 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
     query,
     returnedFromPlayer,
   ]);
-  const { subtitles: addonSubtitles } = useSubtitles(query, selectedStream, subtitleChoice);
+  const { subtitles: addonSubtitles, ready: subtitlesReady } = useSubtitles(query, selectedStream, subtitleChoice);
 
   useEffect(() => {
     let cancelled = false;
@@ -953,6 +953,7 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
     setDownloadBusyStreamId(stream.id);
     setDownloadError("");
     try {
+      if (!subtitlesReady) throw new Error("Espera a que termine la búsqueda de subtítulos antes de descargar.");
       const availability = getStreamDownloadAvailability(stream);
       if (!availability.supported) throw new Error(availability.reason ?? "Esta fuente no se puede descargar.");
       const target = getStreamDownloadTarget(stream);
@@ -973,6 +974,7 @@ export default function EpisodiePage({ useSharedBackground = false, embedded = f
         episodeStill: showEpisodeHeading ? meta?.episodeStill : undefined,
         poster: meta?.poster,
         background,
+        subtitles: getOpenSubtitlesForDownload(addonSubtitles),
       }, target, headers));
       navigate(bigPicture ? "/big-picture/library?tab=downloads" : "/library?tab=downloads");
     } catch (cause) {

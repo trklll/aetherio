@@ -28,6 +28,8 @@ const EVENT_NAME: &str = "download-progress";
 pub(crate) const MAX_REDIRECTS: usize = 5;
 const MAX_PLAYLIST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SEGMENT_BYTES: usize = 512 * 1024 * 1024;
+const MAX_SUBTITLE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_DOWNLOAD_SUBTITLES: usize = 20;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(350);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -50,6 +52,8 @@ pub struct DownloadRecord {
     pub segments_downloaded: Option<usize>,
     pub total_segments: Option<usize>,
     pub file_path: Option<String>,
+    #[serde(default)]
+    pub subtitle_paths: Vec<String>,
     pub error: Option<String>,
     #[serde(default)]
     pub retry_available: bool,
@@ -70,7 +74,18 @@ pub struct DownloadRequest {
     pub episode_still: Option<String>,
     pub poster: Option<String>,
     pub background: Option<String>,
+    #[serde(default)]
+    pub subtitles: Vec<DownloadSubtitleRequest>,
     pub live: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadSubtitleRequest {
+    pub url: String,
+    pub lang: String,
+    pub label: String,
+    pub format: Option<String>,
 }
 
 #[derive(Default)]
@@ -155,6 +170,7 @@ pub fn download_start(
         segments_downloaded: None,
         total_segments: None,
         file_path: None,
+        subtitle_paths: Vec::new(),
         error: None,
         retry_available: true,
         created_at: now,
@@ -213,6 +229,7 @@ pub fn download_retry(
     record.segments_downloaded = None;
     record.total_segments = None;
     record.file_path = None;
+    record.subtitle_paths.clear();
     record.error = None;
     record.updated_at = now;
     record.retry_available = true;
@@ -240,6 +257,19 @@ fn validate_download_request(request: &DownloadRequest) -> Result<(), String> {
             .map_err(|_| String::from("La fuente no tiene un enlace HTTP descargable."))?;
         if target.scheme() != "http" && target.scheme() != "https" {
             return Err(String::from("Solo se pueden descargar fuentes HTTP o HTTPS."));
+        }
+    }
+    if request.subtitles.len() > MAX_DOWNLOAD_SUBTITLES {
+        return Err(String::from("La solicitud contiene demasiados subtítulos."));
+    }
+    for subtitle in &request.subtitles {
+        if subtitle.url.len() > 8 * 1024 {
+            return Err(String::from("El enlace del subtítulo excede el tamaño permitido."));
+        }
+        let url = Url::parse(subtitle.url.trim())
+            .map_err(|_| String::from("El subtítulo contiene un enlace inválido."))?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(String::from("Los subtítulos deben usar enlaces HTTP o HTTPS."));
         }
     }
     Ok(())
@@ -547,6 +577,7 @@ fn run_download(
                         last_progress = Instant::now();
                     }
                 }
+                validate_download_length(downloaded, total)?;
                 output
                     .flush()
                     .map_err(|error| format!("No se pudo finalizar el archivo: {error}"))?;
@@ -562,7 +593,8 @@ fn run_download(
         let final_path = item_dir.join(safe_filename(&record.title, extension));
         fs::rename(&part_path, &final_path)
             .map_err(|error| format!("No se pudo finalizar la descarga: {error}"))?;
-        Ok(final_path)
+        let subtitle_warning = download_open_subtitles(&request.subtitles, &final_path, &cancel);
+        Ok((final_path, subtitle_warning))
     })();
 
     if result
@@ -571,20 +603,18 @@ fn run_download(
         .is_some_and(|error| error == "__cancelled__")
         || cancel.load(Ordering::Acquire)
     {
-        let _ = fs::remove_file(&part_path);
-        let _ = fs::remove_dir_all(item_dir.join("dash"));
-        remove_partial_youtube_files(&item_dir);
+        let _ = fs::remove_dir_all(&item_dir);
         finish_job(&app, &root, &manager, &record.id, "cancelled", None, None);
     } else {
         match result {
-            Ok(path) => finish_job(
+            Ok((path, warning)) => finish_job(
                 &app,
                 &root,
                 &manager,
                 &record.id,
                 "completed",
                 Some(path.to_string_lossy().into_owned()),
-                None,
+                warning,
             ),
             Err(error) => {
                 let _ = fs::remove_file(&part_path);
@@ -1273,6 +1303,120 @@ fn read_limited(response: &mut Response, limit: usize) -> Result<Vec<u8>, String
     Ok(result)
 }
 
+fn subtitle_sidecar_path(media_path: &Path, lang: &str, format: Option<&str>, url: &Url) -> PathBuf {
+    let stem = media_path.file_stem().and_then(|value| value.to_str()).unwrap_or("video");
+    let language = lang
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .take(16)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let language = if language.is_empty() { "und" } else { &language };
+    let raw_extension = format
+        .map(str::to_ascii_lowercase)
+        .or_else(|| url.path().rsplit('.').next().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    let extension = match raw_extension.as_str() {
+        "vtt" | "webvtt" => "vtt",
+        "ass" | "ssa" => "ass",
+        "sub" => "sub",
+        _ => "srt",
+    };
+    media_path.with_file_name(format!("{stem}.{language}.{extension}"))
+}
+
+fn is_subtitle_payload(bytes: &[u8]) -> bool {
+    let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
+    let sample = sample.trim_start().to_ascii_lowercase();
+    !(sample.starts_with("<!doctype html")
+        || sample.starts_with("<html")
+        || sample.starts_with("{"))
+}
+
+fn find_subtitle_sidecars(media_path: &Path) -> Vec<String> {
+    let Some(parent) = media_path.parent() else { return Vec::new() };
+    let stem = media_path.file_stem().and_then(|value| value.to_str()).unwrap_or_default();
+    let prefix = format!("{stem}.");
+    let Ok(entries) = fs::read_dir(parent) else { return Vec::new() };
+    let mut paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+            let extension = path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
+            name.starts_with(&prefix)
+                && matches!(extension.as_str(), "srt" | "vtt" | "ass" | "sub")
+                && path.is_file()
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn download_open_subtitles(
+    subtitles: &[DownloadSubtitleRequest],
+    media_path: &Path,
+    cancel: &AtomicBool,
+) -> Option<String> {
+    if subtitles.is_empty() {
+        return None;
+    }
+    let client = match Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .redirect(Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return Some(format!("No se pudieron preparar los subtítulos: {error}")),
+    };
+    let mut failures = 0usize;
+    let mut saved_paths = std::collections::HashSet::new();
+    for subtitle in subtitles.iter().take(MAX_DOWNLOAD_SUBTITLES) {
+        if cancel.load(Ordering::Acquire) {
+            return Some("Descarga de subtítulos cancelada.".to_string());
+        }
+        let result = (|| -> Result<(), String> {
+            let url = Url::parse(subtitle.url.trim())
+                .map_err(|_| String::from("URL de subtítulo inválida."))?;
+            if !super::is_public_http_url(&url) {
+                return Err(String::from("URL de subtítulo no pública."));
+            }
+            let mut response = send_get(&client, url.clone(), "", None, cancel)?;
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if is_rejected_media_type(&content_type) {
+                return Err(String::from("El proveedor devolvió una página de error en vez de subtítulos."));
+            }
+            let bytes = read_limited(&mut response, MAX_SUBTITLE_BYTES)?;
+            if bytes.is_empty() {
+                return Err(String::from("El proveedor devolvió un subtítulo vacío."));
+            }
+            if !is_subtitle_payload(&bytes) {
+                return Err(String::from("El proveedor devolvió una página de error en vez de subtítulos."));
+            }
+            let mut path = subtitle_sidecar_path(media_path, &subtitle.lang, subtitle.format.as_deref(), &url);
+            let mut suffix = 2usize;
+            while !saved_paths.insert(path.clone()) || path.exists() {
+                let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("subtitle");
+                let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("srt");
+                path = path.with_file_name(format!("{stem}-{suffix}.{extension}"));
+                suffix += 1;
+            }
+            fs::write(path, bytes).map_err(|error| format!("No se pudo guardar el subtítulo: {error}"))
+        })();
+        if result.is_err() {
+            failures += 1;
+        }
+    }
+    (failures > 0).then(|| format!("No se pudieron descargar {failures} subtítulos de OpenSubtitles."))
+}
+
 fn extension_for_response(url: &Url, content_type: &str) -> &'static str {
     let extension = Path::new(url.path())
         .extension()
@@ -1291,6 +1435,17 @@ fn extension_for_response(url: &Url, content_type: &str) -> &'static str {
         _ if content_type.contains("mp2t") => ".ts",
         _ => ".mp4",
     }
+}
+
+fn validate_download_length(downloaded: u64, expected: Option<u64>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        if downloaded != expected {
+            return Err(format!(
+                "La descarga quedó incompleta: se recibieron {downloaded} de {expected} bytes."
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn is_youtube_host(host: &str) -> bool {
@@ -1715,6 +1870,11 @@ fn finish_job(
         record.status = status.to_string();
         record.file_path = path;
         record.error = error;
+        record.subtitle_paths = if status == "completed" {
+            record.file_path.as_deref().map(Path::new).map(find_subtitle_sidecars).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         if status == "completed" {
             if let Some(total) = record.total_bytes {
                 record.bytes_downloaded = total;
@@ -1854,6 +2014,28 @@ mod tests {
     }
 
     #[test]
+    fn creates_language_tagged_subtitle_sidecars_with_safe_extensions() {
+        let media = Path::new("movie.mp4");
+        let url = Url::parse("https://subs.example/movie.es.srt").unwrap();
+        assert_eq!(
+            subtitle_sidecar_path(media, "es-ES", None, &url),
+            PathBuf::from("movie.es-es.srt")
+        );
+        assert_eq!(
+            subtitle_sidecar_path(media, "../../es", Some("unknown"), &url),
+            PathBuf::from("movie.es.srt")
+        );
+    }
+
+    #[test]
+    fn rejects_error_pages_masquerading_as_subtitles() {
+        assert!(!is_subtitle_payload(b"<!doctype html><html>error</html>"));
+        assert!(!is_subtitle_payload(b" {\"error\":\"expired\"}"));
+        assert!(is_subtitle_payload(b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello"));
+        assert!(is_subtitle_payload(b"1\n00:00:01,000 --> 00:00:02,000\nHello"));
+    }
+
+    #[test]
     fn identifies_youtube_hosts_without_matching_lookalikes() {
         assert!(is_youtube_host("www.youtube.com"));
         assert!(is_youtube_host("r3---sn.googlevideo.com"));
@@ -1876,5 +2058,12 @@ mod tests {
         assert!(is_byte_range_response(206, false));
         assert!(is_byte_range_response(200, true));
         assert!(!is_byte_range_response(200, false));
+    }
+
+    #[test]
+    fn rejects_truncated_http_downloads_when_content_length_is_known() {
+        assert!(validate_download_length(99, Some(100)).is_err());
+        assert!(validate_download_length(100, Some(100)).is_ok());
+        assert!(validate_download_length(99, None).is_ok());
     }
 }

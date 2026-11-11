@@ -11,6 +11,20 @@ import {
 } from "../../utils/localProfiles";
 import { writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { searchMedia, type UnifiedSearchResult } from "../../utils/searchProviders";
+import { useGoogleDriveSyncStatus } from "../../hooks/useGoogleDriveSyncStatus";
+
+function driveBadge(
+  sync: ReturnType<typeof useGoogleDriveSyncStatus>,
+): { className: string; title: string } | null {
+  if (!sync.connected) return null;
+  if (sync.syncing) {
+    return { className: "bg-amber-300", title: "Google Drive: sincronizando…" };
+  }
+  if (sync.lastError) {
+    return { className: "bg-red-400", title: `Google Drive: ${sync.lastError}` };
+  }
+  return { className: "bg-emerald-400", title: "Google Drive: sincronizado" };
+}
 
 const NAV_ITEMS = [
   { label: "Inicio", to: "/home", type: null },
@@ -26,6 +40,8 @@ export default function TopNav() {
   const [suggestions, setSuggestions] = useState<UnifiedSearchResult[]>([]);
   const [showSugg, setShowSugg] = useState(false);
   const [profile, setProfile] = useState<LocalProfile | null>(() => getActiveProfile());
+  const driveSync = useGoogleDriveSyncStatus();
+  const driveStatus = driveBadge(driveSync);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -115,7 +131,7 @@ export default function TopNav() {
             closeSearch();
             navigate("/settings?tab=account");
           }}
-          className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mr-2 hover:scale-105 gsap-transition"
+          className="relative w-8 h-8 rounded-full flex items-center justify-center shrink-0 mr-2 hover:scale-105 gsap-transition"
           style={{
             background: profile?.avatarDataUrl ? undefined : "linear-gradient(180deg, rgba(154,154,154,0.96) 0%, rgba(112,112,112,0.96) 100%)",
             boxShadow: profile?.avatarDataUrl ? undefined : "0 8px 16px rgba(0,0,0,0.4)",
@@ -128,6 +144,17 @@ export default function TopNav() {
           ) : (
             <span className="font-black text-sm" style={{ color: "rgba(255,255,255,0.94)", fontFamily: "Inter, system-ui, sans-serif" }}>{getProfileInitial(profile)}</span>
           )}
+          {driveStatus ? (
+            <span
+              aria-hidden
+              className={clsx(
+                "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-black/50",
+                driveStatus.className,
+                driveSync.syncing && "animate-pulse",
+              )}
+              title={driveStatus.title}
+            />
+          ) : null}
         </button>
 
         {!searching && (

@@ -40,11 +40,6 @@ import {
   writeDetailMediaMeta,
 } from "../../utils/mediaMetadata";
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
-import {
-  syncTraktMarkedUnwatched,
-  syncTraktMarkedWatched,
-  syncTraktRemovePlayback,
-} from "../../trakt";
 import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../services/tmdbComments";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, appleEase, prefersReducedMotion, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
@@ -2676,7 +2671,7 @@ backdropBlurAmountRef.current = 0;
     : playableEpisodes.length > 0 && playableEpisodes.every(item => episodeProgressMap.get(getEpisodeKey(item.season, item.episode))?.completed);
 
   function markEpisodeFromCard(episode: Episode) {
-    const marked = markEpisodeAsWatched({
+    markEpisodeAsWatched({
       query: { type: detailData.type, id: detailData.id, season: episode.season, episode: episode.episode },
       name: detailData.name,
       episodeName: episode.name,
@@ -2685,7 +2680,6 @@ backdropBlurAmountRef.current = 0;
       background: detailData.backdrop,
       poster: detailData.poster,
     });
-    void syncTraktMarkedWatched(marked);
     const nextEpisode = findNextEpisode(regularSeasons, episode.season, episode.episode);
     if (nextEpisode) {
       saveNextEpisodePrompt({
@@ -2718,9 +2712,7 @@ backdropBlurAmountRef.current = 0;
   function markEpisodeAsUnwatched(episode: Episode, entries: ContinueWatchingEntry[]) {
     const target = findPlaybackEntryForEpisode(episode, entries);
     if (!target) return;
-    const removed = removeContinueWatchingEntry(target.key);
-    void syncTraktRemovePlayback(removed ?? target);
-    void syncTraktMarkedUnwatched(removed ?? target);
+    removeContinueWatchingEntry(target.key);
   }
 
   function markSeasonAsWatched(seasonNumber: number) {
@@ -2808,7 +2800,7 @@ backdropBlurAmountRef.current = 0;
 
   function markShowAsWatched() {
     if (isMovie) {
-      const marked = markEpisodeAsWatched({
+      markEpisodeAsWatched({
         query: { type: detailData.type, id: detailData.id },
         name: detailData.name,
         runtimeSeconds: runtimeMinutes(detailData.runtime) ? runtimeMinutes(detailData.runtime)! * 60 : undefined,
@@ -2816,7 +2808,6 @@ backdropBlurAmountRef.current = 0;
         background: detailData.backdrop,
         poster: detailData.poster,
       });
-      void syncTraktMarkedWatched(marked);
       return;
     }
     for (const episode of regularSeasons.flatMap(item => item.episodes)) {
@@ -2829,9 +2820,7 @@ backdropBlurAmountRef.current = 0;
     const entries = readPlaybackStateEntries();
     const targets = entries.filter(entry => detailEntryMatches(detailData, entry));
     for (const target of targets) {
-      const removed = removeContinueWatchingEntry(target.key);
-      void syncTraktRemovePlayback(removed ?? target);
-      void syncTraktMarkedUnwatched(removed ?? target);
+      removeContinueWatchingEntry(target.key);
     }
   }
 
@@ -3190,6 +3179,7 @@ function updateBackdropBlur(scrollTop: number) {
       <div
         ref={detailContentRef}
         data-aetherio-detail-content
+        data-detail-mode={bigPicture ? "tv" : "normal"}
         className="detail-page-scale"
         key={`detail-content-${data.id}`}
         inert={episodeOpen || undefined}
@@ -3505,9 +3495,7 @@ function updateBackdropBlur(scrollTop: number) {
                   onShowComments={() => scrollToElementGsap(commentsSectionRef.current)}
                   hasTmdbComments={tmdbComments.length > 0}
                   onMarkUnwatched={(entry) => {
-                    const removed = removeContinueWatchingEntry(entry.key);
-                    void syncTraktRemovePlayback(removed ?? entry);
-                    void syncTraktMarkedUnwatched(removed ?? entry);
+                    removeContinueWatchingEntry(entry.key);
                   }}
                 />
               ))}
@@ -3541,9 +3529,7 @@ function updateBackdropBlur(scrollTop: number) {
                   onShowComments={() => scrollToElementGsap(commentsSectionRef.current)}
                   hasTmdbComments={tmdbComments.length > 0}
                   onMarkUnwatched={(entry) => {
-                    const removed = removeContinueWatchingEntry(entry.key);
-                    void syncTraktRemovePlayback(removed ?? entry);
-                    void syncTraktMarkedUnwatched(removed ?? entry);
+                    removeContinueWatchingEntry(entry.key);
                   }}
                 />
               ))}

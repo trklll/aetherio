@@ -33,7 +33,7 @@ import {
 import { prefetchHomeData, warmHomeStartup } from "./hooks/useCatalogs.ts";
 import { useFullscreen } from "./hooks/useFullscreen.ts";
 import { getHomePreferences } from "./config/homePreferences.ts";
-import { completeTraktAuthorization, TRAKT_AUTH_CHANGED_EVENT, type TraktAuthEventDetail } from "./trakt";
+import { completeGoogleDriveAuthorization, initGoogleDriveSync, isGoogleDriveCallbackUrl } from "./gdrive";
 import {
   getCurrentDeepLinks,
   listenOpenFiles,
@@ -78,10 +78,10 @@ import {
 } from "./utils/appMode.ts";
 import { showBigPictureBrand } from "./utils/bigPictureTransition.ts";
 import { recordRouteVisit, resetEntrancePlayed } from "./utils/homeEntrance.ts";
+import { restorePageTransition } from "./utils/pageTransition.ts";
+import { pageCacheKey } from "./utils/pageCacheKey.ts";
 
-const PROCESSED_TRAKT_CALLBACKS_KEY = "aetherio-processed-trakt-callbacks-v1";
 const PROCESSED_OAUTH_CALLBACKS_KEY = "aetherio-processed-oauth-callbacks-v1";
-const processedTraktCallbacks = new Set<string>();
 const processedOAuthCallbacks = new Set<string>();
 
 const HomePage = lazy(() => import("./pages/Home"));
@@ -311,15 +311,15 @@ export default function App() {
     prefetchHomeData(queryClient, enabledAddons, homePrefs.contentOrientation, homePrefs.bothPreference);
   }, [enabledAddons, hasProfile, queryClient]);
 
+  // Respaldo en Google Drive: registra listeners y, si hay sesión, baja el
+  // remoto. Los cambios de perfil/cuenta re-disparan el pull vía su evento.
+  useEffect(() => {
+    initGoogleDriveSync();
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-
-    const emitAuthError = (message: string) => {
-      window.dispatchEvent(new CustomEvent<TraktAuthEventDetail>(TRAKT_AUTH_CHANGED_EVENT, {
-        detail: { kind: "error", message },
-      }));
-    };
 
     const handleUrls = async (urls: string[] | null | undefined) => {
       for (const url of urls ?? []) {
@@ -359,25 +359,24 @@ export default function App() {
           }
           continue;
         }
-        const callbackKey = getTraktCallbackKey(url);
-        if (callbackKey && hasProcessedTraktCallback(callbackKey)) continue;
-        try {
-          const result = await completeTraktAuthorization(url);
-          if (callbackKey) markTraktCallbackProcessed(callbackKey);
-          if (result.status === "ignored") continue;
-          if (!disposed) navigate("/settings?tab=trakt", { replace: true });
-        } catch (error) {
-          const message = describeTraktCallbackError(error);
-          console.warn("[AETHERIO:TRAKT] callback failed", { error: message });
-          emitAuthError(message);
-          if (!disposed) navigate("/settings?tab=trakt", { replace: true });
+        if (isGoogleDriveCallbackUrl(url)) {
+          try {
+            const result = await completeGoogleDriveAuthorization(url);
+            if (result.status === "ignored") continue;
+            if (!disposed) navigate("/settings?tab=gdrive", { replace: true });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "No se pudo completar la conexion con Google Drive.";
+            console.warn("[AETHERIO:GDRIVE] callback failed", { error: message });
+            if (!disposed) navigate("/settings?tab=gdrive", { replace: true });
+          }
+          continue;
         }
       }
     };
 
     void getCurrentDeepLinks()
       .then(urls => handleUrls(urls))
-      .catch(error => console.warn("[AETHERIO:TRAKT] initial deep link read failed", String(error)));
+      .catch(error => console.warn("[AETHERIO:DEEPLINK] initial deep link read failed", String(error)));
 
     void listenOpenUrls(urls => {
       void handleUrls(urls);
@@ -386,7 +385,7 @@ export default function App() {
         if (disposed) nextUnlisten();
         else unlisten = nextUnlisten;
       })
-      .catch(error => console.warn("[AETHERIO:TRAKT] deep link listener failed", String(error)));
+      .catch(error => console.warn("[AETHERIO:DEEPLINK] deep link listener failed", String(error)));
 
     return () => {
       disposed = true;
@@ -597,18 +596,13 @@ function CachedPageRoutes({
       {[...pagesRef.current.entries()].map(([cacheKey, cachedLocation]) => {
         const active = cacheCurrentPage && cacheKey === currentKey;
         return (
-          <Activity key={cacheKey} mode={active ? "visible" : "hidden"} name={`page:${cacheKey}`}>
-            <div
-              className={`min-h-full ${cachedLocation.pathname === "/home" ? "home-page-route-enter" : "aetherio-page-enter"}`}
-              // Activity conserva el DOM de las rutas ocultas. Si la animación
-              // de entrada se interrumpe al navegar, su opacity/transform
-              // inline también se conserva y la página vuelve oscurecida.
-              // La ruta activa siempre debe recuperar su estado visual base.
-              style={active ? { opacity: 1, transform: "none" } : undefined}
-            >
-              <PageRoutes location={cachedLocation} defaultRoute={defaultRoute} />
-            </div>
-          </Activity>
+          <CachedPageActivity
+            key={cacheKey}
+            cacheKey={cacheKey}
+            active={active}
+            location={cachedLocation}
+            defaultRoute={defaultRoute}
+          />
         );
       })}
 
@@ -618,6 +612,40 @@ function CachedPageRoutes({
         </div>
       )}
     </>
+  );
+}
+
+function CachedPageActivity({
+  cacheKey,
+  active,
+  location,
+  defaultRoute,
+}: {
+  cacheKey: string;
+  active: boolean;
+  location: Location;
+  defaultRoute: string;
+}) {
+  const pageRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!active) return;
+    // Activity conserva el DOM y GSAP puede dejar opacity/transform inline si
+    // la navegación interrumpe la entrada. Al reactivar la ruta, mata ese tween
+    // y devuelve el wrapper a su estado visual base.
+    restorePageTransition(pageRef.current);
+  }, [active]);
+
+  return (
+    <Activity mode={active ? "visible" : "hidden"} name={`page:${cacheKey}`}>
+      <div
+        ref={pageRef}
+        className={`min-h-full ${location.pathname === "/home" ? "home-page-route-enter" : "aetherio-page-enter"}`}
+        style={active ? { opacity: 1, transform: "none" } : undefined}
+      >
+        <PageRoutes location={location} defaultRoute={defaultRoute} />
+      </div>
+    </Activity>
   );
 }
 
@@ -649,30 +677,13 @@ function PageRoutes({ location, defaultRoute }: { location: Location; defaultRou
 }
 
 function makePageCacheKey(location: Location) {
-  // Ajustes usa `?tab=` solo para estado local; no debe crear una nueva página cacheada
-  // ni disparar la animación `aetherio-page-enter` en cada cambio de pestaña.
-  if (location.pathname === "/settings") return location.pathname;
-  return `${location.pathname}${location.search}`;
+  // Ajustes y Biblioteca usan `?tab=` como estado local; cambiar de pestaña no
+  // debe crear otra instancia cacheada de la página.
+  return pageCacheKey(location.pathname, location.search);
 }
 
 function RouteFallback() {
   return <div style={{ minHeight: "100vh" }} />;
-}
-
-function getTraktCallbackKey(rawUrl: string) {
-  try {
-    const url = new URL(rawUrl);
-    if (
-      url.protocol === "aetherio:" &&
-      url.hostname === "trakt" &&
-      url.pathname.replace(/\/$/, "") === "/callback"
-    ) {
-      return rawUrl;
-    }
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 /**
@@ -702,31 +713,6 @@ function buildOpenPath(rawUrl: string): string | null {
     return "/home";
   } catch {
     return null;
-  }
-}
-
-function hasProcessedTraktCallback(callbackKey: string) {
-  if (processedTraktCallbacks.has(callbackKey)) return true;
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(PROCESSED_TRAKT_CALLBACKS_KEY) || "[]");
-    if (Array.isArray(stored) && stored.includes(callbackKey)) {
-      processedTraktCallbacks.add(callbackKey);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
-
-function markTraktCallbackProcessed(callbackKey: string) {
-  processedTraktCallbacks.add(callbackKey);
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(PROCESSED_TRAKT_CALLBACKS_KEY) || "[]");
-    const next = Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string") : [];
-    sessionStorage.setItem(PROCESSED_TRAKT_CALLBACKS_KEY, JSON.stringify([callbackKey, ...next.filter(value => value !== callbackKey)].slice(0, 12)));
-  } catch {
-    // Session storage is best-effort; the in-memory set still prevents duplicate callbacks in this run.
   }
 }
 
@@ -773,8 +759,3 @@ function markProcessedOAuthCallback(callbackKey: string) {
   }
 }
 
-function describeTraktCallbackError(error: unknown) {
-  if (error instanceof Error && error.message.trim()) return error.message;
-  if (typeof error === "string" && error.trim()) return error;
-  return "No se pudo completar la conexion con Trakt.";
-}

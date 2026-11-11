@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import {
@@ -76,13 +76,13 @@ import {
   type LocalProfile,
 } from "../../utils/localProfiles";
 import {
-  disconnectTrakt,
-  getTraktAuthSnapshot,
-  startTraktAuthorization,
-  syncTraktNow,
-  TRAKT_AUTH_CHANGED_EVENT,
-  type TraktAuthEventDetail,
-} from "../../trakt";
+  disconnectGoogleDrive,
+  getGoogleDriveAuthSnapshot,
+  startGoogleDriveAuthorization,
+  syncGoogleDriveNow,
+  GDRIVE_AUTH_CHANGED_EVENT,
+  GDRIVE_SYNC_CHANGED_EVENT,
+} from "../../gdrive";
 import {
   AETHERIO_AUTH_CHANGED_EVENT,
   AETHERIO_AUTH_ERROR_EVENT,
@@ -100,7 +100,7 @@ import packageJson from "../../../package.json";
 import PinPad from "../../components/pin/PinPad.tsx";
 
 type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "trakt" | "mdblist" | "discord";
+type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "gdrive" | "mdblist" | "discord";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 type SavedSections = {
   profile: boolean;
@@ -519,14 +519,14 @@ function AccountPanel({
   playback: PlaybackPreferences;
   onPlaybackChange: <Value extends PlaybackPreferences[keyof PlaybackPreferences]>(name: keyof PlaybackPreferences, value: Value) => void;
 }) {
-const [account, setAccount] = useState(() => getStoredAccount());
+  const [account, setAccount] = useState(() => getStoredAccount());
   const [linkBusy, setLinkBusy] = useState<OAuthProvider | null>(null);
   const [linkStatus, setLinkStatus] = useState("");
   const [linkError, setLinkError] = useState("");
-  const [traktAuth, setTraktAuth] = useState(() => getTraktAuthSnapshot());
-  const [traktStatus, setTraktStatus] = useState("");
-  const [traktError, setTraktError] = useState("");
-  const [traktBusy, setTraktBusy] = useState(false);
+  const [gdriveSync, setGdriveSync] = useState(() => getGoogleDriveAuthSnapshot());
+  const [gdriveStatus, setGdriveStatus] = useState("");
+  const [gdriveError, setGdriveError] = useState("");
+  const [gdriveBusy, setGdriveBusy] = useState(false);
 
   useEffect(() => {
     const refresh = (event: Event) => {
@@ -555,41 +555,62 @@ const [account, setAccount] = useState(() => getStoredAccount());
   }, []);
 
   useEffect(() => {
-    const refresh = (event: Event) => {
-      setTraktAuth(getTraktAuthSnapshot());
-      const detail = (event as CustomEvent<TraktAuthEventDetail | undefined>).detail;
-      if (detail?.kind === "connected") {
-        setTraktBusy(false);
-        setTraktError("");
-        setTraktStatus(detail.username ? `Conectado como ${detail.username}.` : "Trakt conectado.");
-      } else if (detail?.kind === "disconnected") {
-        setTraktBusy(false);
-        setTraktStatus("Trakt desconectado. El progreso local se conserva.");
-      } else if (detail?.kind === "error") {
-        setTraktBusy(false);
-        setTraktError(detail.message);
-      }
-    };
-    window.addEventListener(TRAKT_AUTH_CHANGED_EVENT, refresh);
+    const refresh = () => setGdriveSync(getGoogleDriveAuthSnapshot());
+    refresh();
+    window.addEventListener(GDRIVE_AUTH_CHANGED_EVENT, refresh);
+    window.addEventListener(GDRIVE_SYNC_CHANGED_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(TRAKT_AUTH_CHANGED_EVENT, refresh);
+      window.removeEventListener(GDRIVE_AUTH_CHANGED_EVENT, refresh);
+      window.removeEventListener(GDRIVE_SYNC_CHANGED_EVENT, refresh);
       window.removeEventListener("storage", refresh);
     };
   }, []);
 
-async function startTraktConnection() {
-    setTraktBusy(true);
-    setTraktError("");
-    setTraktStatus("");
+  async function startGoogleDriveConnection() {
+    setGdriveBusy(true);
+    setGdriveError("");
+    setGdriveStatus("");
     try {
-      await startTraktAuthorization();
-      setTraktAuth(getTraktAuthSnapshot());
-      setTraktStatus("Autoriza Aetherio en Trakt. Volverás automáticamente a la app.");
-      setTraktBusy(false);
+      await startGoogleDriveAuthorization();
+      setGdriveSync(getGoogleDriveAuthSnapshot());
+      setGdriveStatus("Autoriza Aetherio en Google. Volverás automáticamente a la app.");
     } catch (error) {
-      setTraktError(describeUnknownError(error, "No se pudo iniciar la conexión con Trakt."));
-      setTraktBusy(false);
+      setGdriveError(describeUnknownError(error, "No se pudo iniciar la conexión con Google Drive."));
+    } finally {
+      setGdriveBusy(false);
+    }
+  }
+
+  function disconnectGoogleDriveAccount() {
+    setGdriveBusy(true);
+    setGdriveError("");
+    setGdriveStatus("");
+    try {
+      disconnectGoogleDrive();
+      setGdriveSync(getGoogleDriveAuthSnapshot());
+      setGdriveStatus("Google Drive desconectado. El respaldo en Drive se conserva.");
+    } catch (error) {
+      setGdriveError(describeUnknownError(error, "No se pudo desconectar Google Drive."));
+    } finally {
+      setGdriveBusy(false);
+    }
+  }
+
+  async function runManualGoogleDriveSync() {
+    setGdriveBusy(true);
+    setGdriveError("");
+    setGdriveStatus("");
+    try {
+      await syncGoogleDriveNow();
+      const fresh = getGoogleDriveAuthSnapshot();
+      setGdriveSync(fresh);
+      setGdriveError(fresh.lastError ?? "");
+      setGdriveStatus(fresh.lastError ? "Sincronización con errores." : "Sincronización completada.");
+    } catch (error) {
+      setGdriveError(describeUnknownError(error, "No se pudo sincronizar con Google Drive."));
+    } finally {
+      setGdriveBusy(false);
     }
   }
 
@@ -609,33 +630,6 @@ async function startTraktConnection() {
       setLinkError(describeUnknownError(error, "No se pudo iniciar la conexión."));
     } finally {
       setLinkBusy(null);
-    }
-  }
-
-  async function disconnectTraktAccount() {
-    setTraktBusy(true);
-    setTraktError("");
-    try {
-      await disconnectTrakt();
-      setTraktAuth(getTraktAuthSnapshot());
-      setTraktStatus("Trakt desconectado. El progreso local se conserva.");
-    } catch (error) {
-      setTraktError(describeUnknownError(error, "No se pudo desconectar Trakt."));
-    } finally {
-      setTraktBusy(false);
-    }
-  }
-
-  async function runManualTraktSync() {
-    setTraktBusy(true);
-    setTraktError("");
-    try {
-      const result = await syncTraktNow();
-      setTraktStatus(`Sincronizacion lista. Importados: ${result.imported}. Cola pendiente: ${result.queued}.`);
-    } catch (error) {
-      setTraktError(describeUnknownError(error, "No se pudo sincronizar Trakt."));
-    } finally {
-      setTraktBusy(false);
     }
   }
 
@@ -681,7 +675,7 @@ async function startTraktConnection() {
           <NavRow title="MDBList" description="Configura ratings externos para la pantalla de detalle." onClick={() => onViewChange("mdblist")} />
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
           <NavRow title="TheIntroDB" description="Timestamps de créditos (outros) para disparar Up Next en películas y series." onClick={() => onViewChange("theintrodb")} />
-          <NavRow title="Trakt.tv" description="Sincroniza progreso, historial visto y scrobbling con Trakt por perfil local." onClick={() => onViewChange("trakt")} />
+          <NavRow title="Google Drive" description="Respalda continuar viendo, historial y biblioteca en tu propio Google Drive, con sincronización automática." onClick={() => onViewChange("gdrive")} />
           <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estás viendo en Aetherio." onClick={() => onViewChange("discord")} />
         </PillBlock>
       </PanelScaffold>
@@ -705,36 +699,48 @@ async function startTraktConnection() {
     );
   }
 
-  if (view === "trakt") {
+  if (view === "gdrive") {
     return (
-      <PanelScaffold title="Trakt.tv" onBack={() => onViewChange("integrations")}>
+      <PanelScaffold title="Google Drive" onBack={() => onViewChange("integrations")}>
         <div className="grid gap-5">
           <PillBlock>
             <PillRow
-              title={traktAuth.connected ? `Conectado${traktAuth.username ? ` como ${traktAuth.username}` : ""}` : "Cuenta Trakt"}
+              title={gdriveSync.connected ? "Cuenta de Google conectada" : "Respaldo en Google Drive"}
               description={
-                traktAuth.connected
-                  ? "Scrobbling y sincronización activos para este perfil."
-                  : traktAuth.authorizationPending
-                    ? "Termina la autorización en Trakt o vuelve a abrir la página de conexión."
-                    : "Conecta tu cuenta Trakt para sincronizar progreso, historial y scrobbling."
+                gdriveSync.connected
+                  ? gdriveSync.syncing
+                    ? "Sincronizando con tu Google Drive..."
+                    : gdriveSync.lastError
+                      ? `Último intento con error: ${gdriveSync.lastError}`
+                      : gdriveSync.lastSyncedAt
+                        ? `Última sincronización: ${new Date(gdriveSync.lastSyncedAt).toLocaleTimeString()}. La sincronización es automática.`
+                        : "Sincronización automática activa: sube los cambios con un pequeño retardo y baja el respaldo al arrancar o al cambiar de perfil."
+                  : gdriveSync.authorizationPending
+                    ? "Termina la autorización en Google o vuelve a abrir la página de conexión."
+                    : gdriveSync.credentialsConfigured
+                      ? "Conecta tu cuenta de Google para respaldar continuar viendo, el historial visto y la biblioteca en tu propio Drive, en la carpeta privada de Aetherio (appDataFolder), invisible en tu Drive normal."
+                      : "Google Drive no esta configurado en esta version de Aetherio."
               }
             >
-              {traktAuth.connected ? (
-                <ActionButton onClick={disconnectTraktAccount} icon={<Unlink size={15} />} disabled={traktBusy}>Desconectar</ActionButton>
+              {gdriveSync.connected ? (
+                <ActionButton onClick={disconnectGoogleDriveAccount} icon={<Unlink size={15} />} disabled={gdriveBusy}>Desconectar</ActionButton>
               ) : (
-                <ActionButton onClick={startTraktConnection} icon={<LogIn size={15} />} disabled={traktBusy}>
-                  {traktAuth.authorizationPending ? "Reabrir Trakt" : "Conectar Trakt.tv"}
+                <ActionButton onClick={startGoogleDriveConnection} icon={<LogIn size={15} />} disabled={gdriveBusy || !gdriveSync.credentialsConfigured}>
+                  {gdriveSync.authorizationPending ? "Reabrir Google" : "Conectar Google Drive"}
                 </ActionButton>
               )}
             </PillRow>
           </PillBlock>
 
           <div className="flex flex-wrap items-center gap-3">
-            <ActionButton onClick={runManualTraktSync} icon={<RefreshCw size={15} />} disabled={traktBusy || !traktAuth.connected}>Sincronizar ahora</ActionButton>
+            <ActionButton onClick={runManualGoogleDriveSync} icon={<RefreshCw size={15} />} disabled={gdriveBusy || !gdriveSync.connected}>Sincronizar ahora</ActionButton>
           </div>
-          {traktStatus ? <p className="text-sm text-white/56">{traktStatus}</p> : null}
-          {traktError ? <p className="text-sm font-semibold text-red-300">{traktError}</p> : null}
+          {gdriveStatus ? <p className="text-sm text-white/56">{gdriveStatus}</p> : null}
+          {gdriveError ? <p className="text-sm font-semibold text-red-300">{gdriveError}</p> : null}
+          <p className="text-xs text-white/36">
+            Los archivos se guardan en la carpeta privada de la app dentro de tu Drive (no cuentan como archivos visibles ni los puedes borrar a mano).
+            Cada perfil local tiene su propio respaldo; si dos dispositivos cambian lo mismo, gana la edición más reciente.
+          </p>
         </div>
       </PanelScaffold>
     );
@@ -872,7 +878,7 @@ return (
           </>
         ) : null}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
-        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip, Trakt y Discord." onClick={() => onViewChange("integrations")} />
+        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip y Discord." onClick={() => onViewChange("integrations")} />
       </PillBlock>
     </PanelScaffold>
   );
@@ -1876,7 +1882,7 @@ function getInitialTab(search: string): SettingsTab {
 function getInitialAccountView(search: string): AccountView {
   const tab = new URLSearchParams(search).get("tab");
   if (tab === "services") return "integrations";
-  if (tab === "trakt") return "trakt";
+  if (tab === "gdrive") return "gdrive";
   if (tab === "mdblist") return "mdblist";
   return "overview";
 }

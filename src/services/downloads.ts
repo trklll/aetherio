@@ -1,4 +1,5 @@
 import type { MediaStream } from "../types/stream";
+import type { SubtitleSource } from "../types/subtitle";
 import { getDownloadsEnabled } from "../config/downloadPreferences";
 import { invokeCommand, isTauriRuntime, listenPlatformEvent } from "../runtime/platform";
 
@@ -17,10 +18,18 @@ export interface DownloadRecord {
   segmentsDownloaded?: number | null;
   totalSegments?: number | null;
   filePath?: string | null;
+  subtitlePaths?: string[];
   error?: string | null;
   retryAvailable?: boolean;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface DownloadSubtitleRequest {
+  url: string;
+  lang: string;
+  label: string;
+  format?: string;
 }
 
 export interface DownloadStartRequest {
@@ -34,7 +43,24 @@ export interface DownloadStartRequest {
   episodeStill?: string;
   poster?: string;
   background?: string;
+  subtitles?: DownloadSubtitleRequest[];
   live?: boolean;
+}
+
+export function getOpenSubtitlesForDownload(sources: SubtitleSource[]): DownloadSubtitleRequest[] {
+  const seen = new Set<string>();
+  return sources.flatMap(source => {
+    const provider = `${source.addonId} ${source.addonName}`.toLowerCase();
+    if (!provider.includes("opensubtitles")) return [];
+    try {
+      const url = new URL(source.url);
+      if ((url.protocol !== "https:" && url.protocol !== "http:") || seen.has(url.href)) return [];
+      seen.add(url.href);
+      return [{ url: url.href, lang: source.lang, label: source.label, format: source.format }];
+    } catch {
+      return [];
+    }
+  }).slice(0, 20);
 }
 
 export type DownloadEvent = DownloadRecord | { id: string; deleted: true };

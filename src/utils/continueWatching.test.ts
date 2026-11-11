@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaStream } from "../types/stream";
 import {
+  applyContinueWatchingTombstones,
   classifyContinueWatchingEntryKind,
   CONTINUE_WATCHING_EVENT,
   getContinueWatchingRows,
   mergeContinueWatchingEntries,
+  mergeRemotePlaybackState,
   readContinueWatchingEntries,
   readWatchedHistoryEntries,
+  removeContinueWatchingEntry,
   saveNextEpisodePrompt,
   saveContinueWatchingProgress,
   tryMarkMediaAsWatched,
@@ -282,9 +285,106 @@ describe("continue watching release badges", () => {
       ...existing,
       entryKind: "new-season",
       updatedAt: now - 1,
-      source: "trakt",
     }]);
 
     expect(getContinueWatchingRows()[0]?.entryKind).toBe("new-season");
+  });
+});
+
+describe("merge remote playback state", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("window", { dispatchEvent: vi.fn() });
+    vi.stubGlobal("CustomEvent", class {
+      type: string;
+
+      constructor(type: string) {
+        this.type = type;
+      }
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the most recent edit per entry when the remote is older", async () => {
+    saveContinueWatchingProgress(baseInput);
+    const local = readContinueWatchingEntries()[0];
+    if (!local) throw new Error("Expected local entry");
+
+    mergeRemotePlaybackState({ progress: [{ ...local, currentTime: 10, updatedAt: local.updatedAt - 1000 }] });
+    expect(readContinueWatchingEntries()[0]?.currentTime).toBe(local.currentTime);
+
+    mergeRemotePlaybackState({ progress: [{ ...local, currentTime: 55, updatedAt: local.updatedAt + 1000 }] });
+    expect(readContinueWatchingEntries()[0]?.currentTime).toBe(55);
+  });
+
+  it("drops a local progress entry superseded by a completed remote history entry", () => {
+    saveContinueWatchingProgress(baseInput);
+    const local = readContinueWatchingEntries()[0];
+    if (!local) throw new Error("Expected local entry");
+
+    mergeRemotePlaybackState({
+      history: [{
+        ...local,
+        completed: true,
+        currentTime: local.duration,
+        duration: local.duration,
+        updatedAt: local.updatedAt + 500,
+      }],
+    });
+
+    expect(readContinueWatchingEntries()).toHaveLength(0);
+    expect(readWatchedHistoryEntries().some(entry => entry.key === local.key)).toBe(true);
+  });
+});
+
+describe("continue watching tombstones", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("window", { dispatchEvent: vi.fn() });
+    vi.stubGlobal("CustomEvent", class {
+      type: string;
+
+      constructor(type: string) {
+        this.type = type;
+      }
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a dismissed entry deleted when another device pushes it again", async () => {
+    saveContinueWatchingProgress(baseInput);
+    const entry = readContinueWatchingEntries()[0];
+    if (!entry) throw new Error("Expected entry");
+
+    expect(removeContinueWatchingEntry(entry.key)).toBeTruthy();
+    expect(readContinueWatchingEntries()).toHaveLength(0);
+
+    // El otro dispositivo aún no conoce el borrado y empuja la entrada antigua.
+    mergeContinueWatchingEntries([{ ...entry, updatedAt: entry.updatedAt }]);
+    expect(readContinueWatchingEntries()).toHaveLength(1);
+
+    applyContinueWatchingTombstones([{ key: entry.key, deletedAt: Date.now() }]);
+    expect(readContinueWatchingEntries()).toHaveLength(0);
+  });
+
+  it("lets an entry recreated after its dismissal survive remote tombstones", async () => {
+    saveContinueWatchingProgress(baseInput);
+    const entry = readContinueWatchingEntries()[0];
+    if (!entry) throw new Error("Expected entry");
+    removeContinueWatchingEntry(entry.key);
+
+    // Reproducción posterior al descarte: la entrada vuelve con updatedAt nuevo.
+    await new Promise(resolve => setTimeout(resolve, 30));
+    saveContinueWatchingProgress(baseInput);
+    expect(readContinueWatchingEntries()).toHaveLength(1);
+
+    applyContinueWatchingTombstones([{ key: entry.key, deletedAt: Date.now() - 15 }]);
+    expect(readContinueWatchingEntries()).toHaveLength(1);
   });
 });

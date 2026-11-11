@@ -20,6 +20,7 @@ import { isShellPreviewOpen } from "../../utils/shellPreview";
 import { findDetailReturnDelta, makeScrollKey } from "../../utils/detailReturn.ts";
 import { isFreshHomeEntrance } from "../../utils/homeEntrance.ts";
 import { gsap, installInertialScroll, prefersReducedMotion, springTo } from "../../utils/motion.ts";
+import { restorePageTransition } from "../../utils/pageTransition.ts";
 import { useRowPositionMemory } from "../../hooks/useRowPositionMemory";
 import { enterSportsMode } from "../../utils/sportsMode";
 import type { MediaItem } from "../../types/ui.ts";
@@ -267,11 +268,7 @@ export default function BigPicturePage() {
     // elementos. Forzar el root a opacity:0 aquí ocultaría ese fondo y
     // recrearía el frame negro justo durante la transición entre medios.
     if (switchingBetweenDetails) {
-      const root = routeRoot();
-      if (root) {
-        gsap.killTweensOf(root);
-        gsap.set(root, { clearProps: "opacity" });
-      }
+      restorePageTransition(routeRoot());
       return;
     }
     if (isPlayer || isEpisode || prefersReducedMotion()) return;
@@ -280,6 +277,7 @@ export default function BigPicturePage() {
     let frame = 0;
     let waited = 0;
     let tween: ReturnType<typeof gsap.to> | null = null;
+    let animatedRoot: HTMLElement | null = null;
     const reveal = () => {
       const root = routeRoot();
       if (!root) {
@@ -287,12 +285,14 @@ export default function BigPicturePage() {
         if (waited < 1200) frame = requestAnimationFrame(reveal);
         return;
       }
+      animatedRoot = root;
       tween = gsap.fromTo(root, { opacity: 0 }, { opacity: 1, duration: 0.32, ease: "power2.out", clearProps: "opacity" });
     };
     frame = requestAnimationFrame(reveal);
     return () => {
       cancelAnimationFrame(frame);
       tween?.kill();
+      restorePageTransition(animatedRoot);
     };
   }, [location.pathname, isDetail, isPlayer, isEpisode, routeRoot]);
 
@@ -317,13 +317,13 @@ export default function BigPicturePage() {
     }
     gsap.killTweensOf(shell);
     let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(guard);
-      gsap.set(shell, { clearProps: "opacity" });
-      go();
-    };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(guard);
+        restorePageTransition(shell);
+        go();
+      };
     const guard = window.setTimeout(finish, 400);
     gsap.to(shell, { opacity: 0, duration: 0.16, ease: "power1.in", onComplete: finish });
   }, []);

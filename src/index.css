@@ -1140,6 +1140,12 @@ html.aetherio-android-tv .scroll-row{
 .line-clamp-2{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .line-clamp-3{overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;}
 
+.detail-page-scale[data-detail-mode="normal"] > .detail-page-content > *{
+  /* Reuse one composited surface per section while scrolling past the shared
+     backdrop. Keep glass, shadows and overflow intact; do not promote every
+     episode card or change Big Picture's separate scroll/transition path. */
+  transform:translateZ(0);
+}
 .detail-page-scale{
   width:83.333333%;
   transform:scale(1.2);

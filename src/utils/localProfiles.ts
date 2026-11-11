@@ -21,9 +21,6 @@ const SCOPED_STORAGE_KEYS = [
   "aetherio-last-links",
   "aetherio-continue-watching-v1",
   "aetherio-continue-watching-audio-selection-v1",
-  "aetherio-trakt-auth-v1",
-  "aetherio-trakt-queue-v1",
-  "aetherio-trakt-sync-v1",
 ];
 
 export interface LocalProfile {

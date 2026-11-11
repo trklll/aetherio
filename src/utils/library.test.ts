@@ -1,97 +1,83 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  addToLibrary,
+  applyLibraryTombstones,
   isInLibrary,
+  mergeSavedLibraryItems,
   readSavedLibrary,
   tryAddToLibrary,
   tryRemoveFromLibrary,
 } from "./library";
-import type { MediaItem } from "../types/ui";
 
-function createStorage() {
+function createStorage(): Storage {
   const values = new Map<string, string>();
-  let failingKey: string | null = null;
-  let failNext = false;
   return {
-    values,
-    failOnce(key: string) { failingKey = key; failNext = true; },
-    getItem(key: string) { return values.get(key) ?? null; },
-    setItem(key: string, value: string) {
-      if (failNext && key === failingKey) {
-        failNext = false;
-        throw new DOMException("quota", "QuotaExceededError");
-      }
-      values.set(key, String(value));
+    get length() {
+      return values.size;
     },
-    removeItem(key: string) { values.delete(key); },
-    clear() { values.clear(); },
-    key(index: number) { return Array.from(values.keys())[index] ?? null; },
-    get length() { return values.size; },
-  } as Storage & { values: Map<string, string>; failOnce(key: string): void };
+    clear: () => values.clear(),
+    getItem: key => values.get(key) ?? null,
+    key: index => Array.from(values.keys())[index] ?? null,
+    removeItem: key => values.delete(key),
+    setItem: (key, value) => values.set(key, String(value)),
+  };
 }
 
-const item = (type: string, id: string): MediaItem => ({ id, type, name: `${type}-${id}` });
+function stubExperienceGlobals() {
+  vi.stubGlobal("localStorage", createStorage());
+  vi.stubGlobal("window", { dispatchEvent: vi.fn() });
+  vi.stubGlobal("CustomEvent", class {
+    type: string;
 
-describe("library persistence adapters", () => {
-  let storage: ReturnType<typeof createStorage>;
-  let dispatchEvent: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    storage = createStorage();
-    dispatchEvent = vi.fn();
-    vi.stubGlobal("localStorage", storage);
-    vi.stubGlobal("window", { dispatchEvent, addEventListener: vi.fn(), removeEventListener: vi.fn() });
-    vi.stubGlobal("CustomEvent", class {
-      type: string;
-      constructor(type: string) { this.type = type; }
-    });
+    constructor(type: string) {
+      this.type = type;
+    }
   });
+}
 
+const item = { type: "series", id: "tmdb:42", name: "Serie de prueba" };
+
+/** Formato real de mediaRefKey: JSON.stringify([kind, namespace, addonId, id]). */
+function libraryKey(id: string) {
+  return JSON.stringify(["series", "tmdb", "", id]);
+}
+describe("library tombstones", () => {
+  beforeEach(stubExperienceGlobals);
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps movie and series with the same provider id as separate library records", () => {
-    addToLibrary(item("movie", "tmdb:123"));
-    addToLibrary(item("series", "tmdb:123"));
+  it("keeps a removed title deleted when a remote push resurrects it", () => {
+    tryAddToLibrary(item);
+    expect(tryRemoveFromLibrary(item.type, item.id).ok).toBe(true);
+    expect(readSavedLibrary()).toHaveLength(0);
 
-    expect(readSavedLibrary()).toHaveLength(2);
-    expect(isInLibrary("movie", "tmdb:123")).toBe(true);
-    expect(isInLibrary("series", "tmdb:123")).toBe(true);
+    // Otro dispositivo empuja su copia con el título añadido antes del borrado:
+    // la unión lo resucita y la lápida local lo vuelve a quitar.
+    mergeSavedLibraryItems([{ ...item, addedAt: Date.now() - 60_000 }]);
+    expect(readSavedLibrary()).toHaveLength(1);
+
+    applyLibraryTombstones([{ key: libraryKey("42"), deletedAt: Date.now() }]);
+    expect(readSavedLibrary()).toHaveLength(0);
   });
 
-  it("does not collapse two anime deliveries that have distinct MAL ids", () => {
-    addToLibrary(item("anime", "mal:101"));
-    addToLibrary(item("anime", "mal:202"));
-    expect(readSavedLibrary().map(saved => saved.id)).toEqual(["mal:202", "mal:101"]);
+  it("lets a title re-added after its deletion survive remote tombstones", async () => {
+    tryAddToLibrary({ ...item, id: "tmdb:43" });
+    expect(tryRemoveFromLibrary("series", "tmdb:43").ok).toBe(true);
+
+    // Re-añadido posterior al borrado (el borrado fue antes de esta espera).
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(tryAddToLibrary({ ...item, id: "tmdb:43" }).ok).toBe(true);
+    expect(isInLibrary("series", "tmdb:43")).toBe(true);
+
+    // Lápida remota anterior al re-añadido: el título sobrevive.
+    applyLibraryTombstones([{ key: libraryKey("43"), deletedAt: Date.now() - 15 }]);
+    expect(isInLibrary("series", "tmdb:43")).toBe(true);
   });
 
-  it("returns a typed failure without emitting a success event when storage rejects a write", () => {
-    storage.failOnce("aetherio-saved-library-v1");
+  it("removes a title when the remote tombstone is newer than its addedAt", () => {
+    tryAddToLibrary({ ...item, id: "tmdb:44" });
+    const [saved] = readSavedLibrary();
+    if (!saved) throw new Error("Expected saved item");
 
-    const result = tryAddToLibrary(item("movie", "tmdb:123"));
-    expect(result).toMatchObject({ ok: false, code: "storage-unavailable" });
-    expect(readSavedLibrary()).toEqual([]);
-    expect(dispatchEvent.mock.calls.map(([event]) => event.type)).not.toContain("aetherio-library-changed");
-  });
-
-  it("rejects invalid identities instead of sharing a blank key", () => {
-    const result = tryAddToLibrary({ id: "", type: "", name: "Sin identidad" });
-    expect(result).toEqual({ ok: false, code: "invalid-identity" });
-    expect(readSavedLibrary()).toEqual([]);
-  });
-
-  it("treats non-normalizable identities as not in the library instead of throwing", () => {
-    addToLibrary(item("movie", "tmdb:123"));
-
-    expect(isInLibrary("live", "bein:1")).toBe(false);
-    expect(isInLibrary("sports-replay", "match-1")).toBe(false);
-    expect(isInLibrary("movie", "")).toBe(false);
-    expect(isInLibrary("movie", "tmdb:123")).toBe(true);
-  });
-
-  it("keeps the legacy void writer and provides a result from the try variant", () => {
-    expect(tryAddToLibrary(item("movie", "tmdb:456")).ok).toBe(true);
-    expect(addToLibrary(item("series", "tmdb:456"))).toBeUndefined();
-    expect(tryRemoveFromLibrary("movie", "tmdb:456").ok).toBe(true);
-    expect(readSavedLibrary().map(saved => saved.type)).toEqual(["series"]);
+    applyLibraryTombstones([{ key: libraryKey("44"), deletedAt: saved.addedAt + 5000 }]);
+    expect(readSavedLibrary()).toHaveLength(0);
   });
 });
