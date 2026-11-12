@@ -56,6 +56,7 @@ import EpisodePanel from "./EpisodePanel";
 import SourcePanel from "./SourcePanel";
 import SourceResolver from "./SourceResolver";
 import PlayerControls from "./PlayerControls";
+import PlayerInfoOverlay from "./PlayerInfoOverlay";
 import PlayerLoadingOverlay from "./PlayerLoadingOverlay";
 import PlayerPauseScreen, { usePauseScreenDelay } from "./PlayerPauseScreen";
 import { LiveBadge, LiveEndedNotice } from "./LiveOverlays";
@@ -311,7 +312,6 @@ export default function PlayerPage() {
   const [gamepadBarMode, setGamepadBarMode] = useState(false);
   const [barZone, setBarZone] = useState<"timeline" | "buttons" | "episodes">("timeline");
   const [barFocusWithin, setBarFocusWithin] = useState(false);
-  const [bigPictureEpisodesOpen, setBigPictureEpisodesOpen] = useState(false);
   const episodeRowWasOpenRef = useRef(false);
   const episodeRowShouldResumeRef = useRef(false);
   const episodeRowPauseOwnedRef = useRef(false);
@@ -367,10 +367,38 @@ export default function PlayerPage() {
   const [mpvDemuxerCacheDuration, setMpvDemuxerCacheDuration] = useState(0);
   const [chapterIndex, setChapterIndex] = useState<number | null>(null);
   const [chapterOptions, setChapterOptions] = useState<ChapterOption[]>([]);
-  const [activeSidePanel, setActiveSidePanel] = useState<"episodes" | "sources" | null>(null);
+  const [activeSidePanel, setActiveSidePanel] = useState<"episodes" | "episode-row" | "sources" | "info" | null>(null);
+  const bigPictureEpisodesOpen = activeSidePanel === "episode-row";
   // Menú flotante de la barra (audio/subtítulos/velocidad/mejoras/party),
   // elevado desde PlayerControls para que el mando (X) lo abra de forma tipada.
   const [playerMenu, setPlayerMenu] = useState<string | null>(null);
+  const handlePlayerMenuChange = useCallback((next: string | null) => {
+    if (next !== null) setActiveSidePanel(null);
+    setPlayerMenu(next);
+  }, []);
+  const openSourcesPanel = useCallback(() => {
+    setPlayerMenu(null);
+    setActiveSidePanel("sources");
+  }, []);
+  const toggleSourcesPanel = useCallback(() => {
+    if (activeSidePanel === "sources") {
+      setActiveSidePanel(null);
+      return;
+    }
+    openSourcesPanel();
+  }, [activeSidePanel, openSourcesPanel]);
+  const openInfoOverlay = useCallback(() => {
+    setPlayerMenu(null);
+    setActiveSidePanel("info");
+    holdControls();
+  }, [holdControls]);
+  const closeInfoOverlay = useCallback(() => {
+    setActiveSidePanel(null);
+    wakeControls();
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>("[data-player-info-toggle]")?.focus({ preventScroll: true });
+    });
+  }, [wakeControls]);
   const [availableStreams, setAvailableStreams] = useState<MediaStream[]>([]);
   const [resolvingSources, setResolvingSources] = useState(false);
   const resolveAttemptedKeyRef = useRef("");
@@ -415,7 +443,7 @@ export default function PlayerPage() {
   const [mpvPausedForCache, setMpvPausedForCache] = useState(false);
   const [mpvCacheBuffering, setMpvCacheBuffering] = useState<number>(0);
   const [stalledPlayback, setStalledPlayback] = useState(false);
-  const [videoScaleMode, setVideoScaleMode] = useState<VideoScaleMode>("original");
+  const videoScaleMode: VideoScaleMode = "original";
   const [loadingOverlayVisible, setLoadingOverlayVisible] = useState(false);
   const [isLeavingPlayer, setIsLeavingPlayer] = useState(false);
   const leavingPlayerRef = useRef(false);
@@ -446,7 +474,7 @@ export default function PlayerPage() {
   const playbackSelection = usePlaybackSelection(query);
   const isSportsReplay = query?.type === "sports-replay";
   const vodMetadataQuery = isSportsReplay ? null : query;
-  const { episodeOptions, seriesLogoUrl, nextSeasonEpisode, episodeMetadataReady } = useEpisodeMetadata(vodMetadataQuery);
+  const { episodeOptions, seriesLogoUrl, seriesBackdropUrl, nextSeasonEpisode, episodeMetadataReady } = useEpisodeMetadata(vodMetadataQuery);
   const { addonLogoUrl, detailLogoUrl } = usePlayerLogos(vodMetadataQuery, stream);
   const safeStream = stream ?? null;
   // Calculated with the other unconditional hooks: PlayerPage has loading and
@@ -1520,7 +1548,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
       key: item.id,
       title: `${item.episode}. ${item.name}`,
       subtitle: item.airDate ?? `T${item.season} E${item.episode}`,
-      image: item.still,
+      image: item.still ?? seriesBackdropUrl ?? undefined,
       active: item.episode === query?.episode,
       onClick: () => {
         if (item.episode === query?.episode) return;
@@ -1711,12 +1739,6 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
         void sendMpvCommand(["set_property", "video-pan-y", 0]);
         void sendMpvCommand(["set_property", "video-recenter", true]);
       });
-  }
-
-  function toggleVideoScale() {
-    const nextMode = videoScaleMode === "original" ? "crop" : "original";
-    setVideoScaleMode(nextMode);
-    applyVideoScale(nextMode);
   }
 
   function applyVideoProfile(profile: string) {
@@ -2452,6 +2474,7 @@ const showFallbackPanel = Boolean(hasMpvError) && !isLeavingPlayer;
     togglePlay,
     jump,
     applyVolume,
+    toggleMute,
     flash: flashActionFeedback,
     startSpaceAcceleration,
     stopSpaceAcceleration,
@@ -2534,6 +2557,7 @@ const canGoNextEpisode = Boolean(resolvedNextEpisode);
 const isMovie = query?.type === "movie";
 const episodeAvailabilityKnown = isMovie || !query?.season || !query?.episode || episodeMetadataReady;
 const showPanelToggle = !isMovie && panelItems.length > 0;
+const showInfoToggle = Boolean(query && !isLiveStream && !isTrailerStream && !isSportsReplay);
 
 function saveUpcomingEpisodePrompt() {
   if (!query || isMovie || !canGoNextEpisode) return;
@@ -2922,7 +2946,7 @@ function activateFocusedControl() {
 // el mando (B o cruceta arriba) y el teclado (flecha arriba): una sola accion
 // para que ambos caminos devuelvan la barra al estado anterior.
 function closeEpisodeRow() {
-  setBigPictureEpisodesOpen(false);
+  setActiveSidePanel(current => current === "episode-row" ? null : current);
   focusBarTimeline();
 }
 usePlayerGamepad({
@@ -2994,21 +3018,20 @@ usePlayerGamepad({
   navigateEpisode,
   openSubtitles: () => {
     if (isSportsLiveStream) return;
-    setPlayerMenu("subtitles");
+    handlePlayerMenuChange("subtitles");
     holdControls();
     focusPlayerOverlay();
   },
   openEpisodesOrSources: () => {
     if (episodeOptions.length > 0) {
       holdControls();
-      setActiveSidePanel(null);
+      setActiveSidePanel("episode-row");
       setGamepadBarMode(true);
-      setBigPictureEpisodesOpen(true);
       setBarZone("episodes");
       return;
     }
     if (!canHaveSources) return;
-    setActiveSidePanel("sources");
+    openSourcesPanel();
     holdControls();
     focusPlayerOverlay();
   },
@@ -3022,7 +3045,8 @@ usePlayerGamepad({
       return true;
     }
     if (activeSidePanel !== null) {
-      setActiveSidePanel(null);
+      if (activeSidePanel === "info") closeInfoOverlay();
+      else setActiveSidePanel(null);
       return true;
     }
     return false;
@@ -4209,7 +4233,7 @@ if (!stream) {
             >
               Reintentar reproducción
             </button>
-            {canHaveSources ? <button type="button" data-player-interactive onClick={() => setActiveSidePanel("sources")}
+            {canHaveSources ? <button type="button" data-player-interactive onClick={openSourcesPanel}
               className="min-h-11 rounded-md border border-white/30 bg-white/10 px-5 py-2.5 font-bold text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">Elegir otra fuente</button> : null}
             </div>
             {playbackTarget && <p className="mt-4 break-all text-xs text-white/32">{playbackTarget}</p>}
@@ -4351,6 +4375,18 @@ if (!stream) {
         onClose={() => setActiveSidePanel(null)}
         onSelect={selectSource}
       />
+      <PlayerInfoOverlay
+        visible={activeSidePanel === "info"}
+        title={currentMetaTitle}
+        episodeLabel={query?.season && query?.episode
+          ? `S${String(query.season).padStart(2, "0")}E${String(query.episode).padStart(2, "0")}`
+          : undefined}
+        seriesTitle={!isMovie && currentEpisode ? mediaTitle : undefined}
+        overview={pauseScreenOverview || (isMovie ? "No hay una descripción disponible para esta película." : currentOverview)}
+        posterUrl={selectedMediaPoster || resumeEntry?.poster || streamBehaviorPoster || selectedMediaBackground || undefined}
+        nativeSurfaceVisible={nativeSurfaceVisible}
+        onClose={closeInfoOverlay}
+      />
       {!isSportsReplay && activeSidePanel === "sources" && sourcesMediaKey && resolveAttemptedKeyRef.current !== sourcesMediaKey ? (
         <SourceResolver
           key={sourcesMediaKey}
@@ -4395,7 +4431,7 @@ if (!stream) {
       />
 
       <PlayerControls
-        active={controlsReady && controlsActive && !showUpNext && !pauseScreenVisible}
+        active={controlsReady && controlsActive && !showUpNext && !pauseScreenVisible && activeSidePanel !== "info"}
         bigPicture={isBigPicturePlayer}
         legacyTv={isBigPictureRoute}
         currentMetaTitle={currentMetaTitle}
@@ -4415,7 +4451,6 @@ if (!stream) {
         selectedSubtitleValue={selectedSubtitleValue}
         selectedSpeed={selectedSpeed}
         selectedVideoProfile={selectedVideoProfile}
-        videoScaleMode={videoScaleMode}
         isLocalPlayback={isLocalPlayback}
         repeatEnabled={isLocalPlayback && repeatLocal}
         onToggleRepeat={() => setRepeatLocal(value => !value)}
@@ -4450,19 +4485,18 @@ if (!stream) {
         onGoLive={livePlayback.goLive}
         nativeSurfaceVisible={nativeSurfaceVisible}
          openMenu={playerMenu}
-        onOpenMenuChange={setPlayerMenu}
+         onOpenMenuChange={handlePlayerMenuChange}
         showPanelToggle={showPanelToggle}
+        showInfoToggle={showInfoToggle}
         activeSidePanel={activeSidePanel}
         episodesRowOpen={bigPictureEpisodesOpen}
         episodeOptions={episodeOptions}
+        episodeFallbackImage={seriesBackdropUrl}
         currentEpisodeNumber={query?.episode}
-        hasEpisodeOptions={episodeOptions.length > 0}
         controlsLocked={false}
         lobbyMode={partyLobby}
         partyConnected={partyStatus === "connected"}
         partyPeerNames={partyPeers.map(peer => peer.name)}
-        canGoPrevEpisode={canGoPrevEpisode}
-        canGoNextEpisode={canGoNextEpisode}
         canChangeSource={canHaveSources}
         onBarFocusChange={handleBarFocusChange}
         onBarFocusWithinChange={handleBarFocusWithinChange}
@@ -4571,10 +4605,9 @@ if (!stream) {
           void sendMpvCommand(["set_property", "speed", Number(value)]);
         }}
         onVideoProfileChange={applyVideoProfile}
-        onToggleVideoScale={toggleVideoScale}
-        onToggleSourcePanel={() => setActiveSidePanel(value => value === "sources" ? null : "sources")}
-        onToggleEpisodePanel={() => setBigPictureEpisodesOpen(value => !value)}
-        onNavigateEpisode={navigateEpisode}
+         onToggleSourcePanel={toggleSourcesPanel}
+         onToggleEpisodePanel={() => setActiveSidePanel(current => current === "episode-row" ? null : "episode-row")}
+         onToggleInfoPanel={openInfoOverlay}
       />
 
       {(showUpNext || upNextExiting) && related.recommendation && (isMovie || !canGoNextEpisode) ? (

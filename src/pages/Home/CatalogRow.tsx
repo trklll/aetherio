@@ -23,7 +23,6 @@ import { useSpatialPoster } from "../../hooks/useSpatialPoster";
 import { readHiddenMediaKeys } from "../../services/watchedVisibility";
 import { scrollByGsap, tweenTo } from "../../utils/motion";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
-import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
 import { useBigPictureActive } from "../../navigation/spatialNav.ts";
 import { useLongPressAction } from "../../hooks/useLongPressAction.ts";
@@ -673,8 +672,6 @@ const CinematicCard = memo(function CinematicCard({ item, type, posterLayout, wa
       onOpenPreview({ detailPath, title: item.name, cardElement: cardRef.current });
       return;
     }
-    setSharedElementName(type, item.id);
-    captureCardRect(cardRef.current);
     navigate(detailPath);
   }, [detailBackground, item, location.pathname, navigate, onOpenPreview, onOpenItem, type]);
 

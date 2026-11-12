@@ -4,9 +4,9 @@ import {
   AudioLines,
   Captions,
   Check,
+  CircleHelp,
   ChevronLeft,
   ChevronRight,
-  Crop,
   Minus,
   ListVideo,
   Pause,
@@ -23,7 +23,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import type { EpisodeOption, SelectOption, VideoScaleMode } from "./types";
+import type { EpisodeOption, SelectOption } from "./types";
 import type { MediaStream } from "../../types/stream";
 import { formatTime } from "./utils";
 import ContextMenu from "../../components/ui/ContextMenu";
@@ -94,7 +94,6 @@ interface PlayerControlsProps {
   selectedSubtitleValue: string;
   selectedSpeed: string;
   selectedVideoProfile: string;
-  videoScaleMode: VideoScaleMode;
   isLocalPlayback: boolean;
   repeatEnabled: boolean;
   audioOptions: SelectOption[];
@@ -138,18 +137,17 @@ interface PlayerControlsProps {
   openMenu: string | null;
   onOpenMenuChange: (next: string | null) => void;
   showPanelToggle: boolean;
-  activeSidePanel: "episodes" | "sources" | null;
+  activeSidePanel: "episodes" | "episode-row" | "sources" | "info" | null;
+  showInfoToggle: boolean;
   episodesRowOpen: boolean;
   episodeOptions: EpisodeOption[];
+  episodeFallbackImage?: string | null;
   currentEpisodeNumber?: number;
-  hasEpisodeOptions: boolean;
   controlsLocked: boolean;
   /** Sala de espera Party: bloquea transporte pero deja volumen y Party vivos. */
   lobbyMode: boolean;
   partyConnected: boolean;
   partyPeerNames: string[];
-  canGoPrevEpisode: boolean;
-  canGoNextEpisode: boolean;
   canChangeSource: boolean;
   onControlsEnter: () => void;
   onControlsLeave: () => void;
@@ -171,10 +169,10 @@ interface PlayerControlsProps {
   onPickSubtitleTrack: () => void;
   onSpeedChange: (value: string) => void;
   onVideoProfileChange: (value: string) => void;
-  onToggleVideoScale: () => void;
   onToggleRepeat: () => void;
   onToggleSourcePanel: () => void;
   onToggleEpisodePanel: () => void;
+  onToggleInfoPanel: () => void;
   /** Refleja el foco del reproductor para compartir navegación teclado/mando. */
   onBarFocusChange: (zone: "timeline" | "buttons" | "episodes") => void;
   /** Indica si el foco de teclado sigue dentro de la barra. */
@@ -182,7 +180,6 @@ interface PlayerControlsProps {
   /** Colapsa la fila de episodios y devuelve el foco al timeline. */
   onCloseEpisodeRow: () => void;
   onSelectEpisode: (episode: EpisodeOption) => void;
-  onNavigateEpisode: (direction: "prev" | "next") => void;
 }
 
 /** Logo de la cabecera "Audio": el PNG real del `.json` de la stream. */
@@ -211,7 +208,6 @@ export default function PlayerControls({
   selectedSubtitleValue,
   selectedSpeed,
   selectedVideoProfile,
-  videoScaleMode,
   isLocalPlayback,
   repeatEnabled,
   audioOptions,
@@ -247,16 +243,15 @@ export default function PlayerControls({
   onOpenMenuChange,
   showPanelToggle,
   activeSidePanel,
+  showInfoToggle,
   episodesRowOpen,
   episodeOptions,
+  episodeFallbackImage,
   currentEpisodeNumber,
-  hasEpisodeOptions,
   controlsLocked,
   lobbyMode,
   partyConnected,
   partyPeerNames,
-  canGoPrevEpisode,
-  canGoNextEpisode,
   canChangeSource,
   onControlsEnter,
   onControlsLeave,
@@ -278,15 +273,14 @@ export default function PlayerControls({
   onPickSubtitleTrack,
   onSpeedChange,
   onVideoProfileChange,
-  onToggleVideoScale,
   onToggleRepeat,
   onToggleSourcePanel,
   onToggleEpisodePanel,
+  onToggleInfoPanel,
   onBarFocusChange,
   onBarFocusWithinChange,
   onCloseEpisodeRow,
   onSelectEpisode,
-  onNavigateEpisode,
 }: PlayerControlsProps) {
   const sportsSourceOptions = buildSportsSourceOptions(sportsSourceStreams);
   const showSportsSourceMenu = shouldShowSportsSourceMenu(sportsLiveMode, sportsSourceOptions);
@@ -792,7 +786,7 @@ useEffect(() => {
       const playerControlSurfaces = bigPicture && player
         // Skip pills are opaque white, not glass. Giving them a native mask
         // leaves a blurred silhouette when the action disappears or moves.
-        ? Array.from(player.querySelectorAll<HTMLElement>("[data-player-control-glass]"))
+        ? Array.from(document.querySelectorAll<HTMLElement>("[data-player-control-glass]"))
           .filter(element => !element.parentElement?.closest("[data-player-control-glass]"))
           .map(element => {
             const box = element.getBoundingClientRect();
@@ -825,7 +819,7 @@ useEffect(() => {
               top: r(episodeRect.top),
               right: r(episodeRect.right),
               bottom: r(episodeRect.bottom),
-              cornerRadius: activeSidePanel ? Math.round(28 * scale) : 0,
+              cornerRadius: Math.round((activeSidePanel === "info" ? 24 : 28) * scale),
             }
           : undefined,
         // El panel de sincronizacion ocupa toda la pantalla: no hay nada detras que
@@ -1134,7 +1128,7 @@ useEffect(() => {
                 apple
                 header="Fuentes"
                 closeOnSelect
-              /> : null : canChangeSource && !legacyTv ? <SourcesButton active={activeSidePanel === "sources"} disabled={transportLocked} bigPicture onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })} /> : null}
+              /> : null : null}
               {!sportsLiveMode ? <SubtitleMenu
                 label={subtitlesLoading ? "Cargando subtítulos" : "Subtítulos"}
                 selectedSubtitleValue={selectedSubtitleValue}
@@ -1538,13 +1532,12 @@ useEffect(() => {
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2.5">
-              <IconButton
-                label={videoScaleMode === "crop" ? "Recortar" : "Original"}
+              {!sportsLiveMode && canChangeSource && !legacyTv ? <SourcesButton
+                active={activeSidePanel === "sources"}
                 disabled={transportLocked}
-                onClick={() => runControlAction(onToggleVideoScale)}
-              >
-                <Crop size={18} />
-              </IconButton>
+                bigPicture
+                onClick={() => runControlAction(() => { setOpenMenu(null); onToggleSourcePanel(); })}
+              /> : null}
               {showPanelToggle ? (
                 <button
                   type="button"
@@ -1554,7 +1547,7 @@ useEffect(() => {
                   data-player-control-glass
                   aria-expanded={episodesRowOpen}
                   aria-controls="bp-episode-row"
-                  className={`flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-semibold text-white gsap-transition ${
+                  className={`flex h-[clamp(44px,3.1vw,60px)] shrink-0 items-center gap-2 rounded-full border px-4 text-[clamp(13px,0.95vw,17px)] font-semibold text-white gsap-transition ${
                     episodesRowOpen
                       ? "border-white/[0.11] bg-white/18"
                       : "border-white/[0.07] bg-white/10 hover:bg-white/16"
@@ -1565,24 +1558,22 @@ useEffect(() => {
                   Episodios
                 </button>
               ) : null}
-              {hasEpisodeOptions && (
-                <>
-                  <IconButton
-                    label="Episodio anterior"
-                    onClick={() => runControlAction(() => onNavigateEpisode("prev"))}
-                    disabled={transportLocked || !canGoPrevEpisode}
-                  >
-                    <ChevronLeft size={18} />
-                  </IconButton>
-                  <IconButton
-                    label="Episodio siguiente"
-                    onClick={() => runControlAction(() => onNavigateEpisode("next"))}
-                    disabled={transportLocked || !canGoNextEpisode}
-                  >
-                    <ChevronRight size={18} />
-                  </IconButton>
-                </>
-              )}
+              {bigPicture && showInfoToggle ? (
+                <button
+                  type="button"
+                  data-player-info-toggle
+                  data-player-control-glass
+                  onClick={() => runControlAction(onToggleInfoPanel)}
+                  aria-expanded={activeSidePanel === "info"}
+                  aria-controls="player-info-overlay"
+                  className="inline-flex h-[clamp(44px,3.1vw,60px)] min-w-fit shrink-0 items-center justify-center gap-3 rounded-full border border-white/[0.07] bg-white/10 px-6 text-[clamp(13px,0.95vw,17px)] font-semibold leading-none text-white gsap-transition hover:bg-white/16 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+                  title="Info"
+                  aria-label="Info"
+                >
+                  <CircleHelp size={22} aria-hidden="true" />
+                  <span>Info</span>
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -1612,6 +1603,7 @@ useEffect(() => {
             {episodeOptions.map((episode, index) => {
               const current = episode.episode === currentEpisodeNumber;
               const runtime = formatRuntime(episode.runtime);
+              const image = episode.still ?? episodeFallbackImage;
               return (
                 <div
                   key={episode.id}
@@ -1661,8 +1653,8 @@ useEffect(() => {
                   className="detail-episode-card"
                 >
 <div className="detail-episode-card__media">
-                    {episode.still ? (
-                      <img className="detail-episode-card__image" src={episode.still} alt="" loading="lazy" decoding="async" />
+                    {image ? (
+                      <img className="detail-episode-card__image" src={image} alt="" loading="lazy" decoding="async" />
                     ) : (
                       <div className="detail-episode-card__placeholder" />
                     )}
@@ -2558,7 +2550,7 @@ if (bigPicture) {
 function SourcesButton({ active, disabled, bigPicture = false, onClick }: { active: boolean; disabled: boolean; bigPicture?: boolean; onClick: () => void }) {
   return <button type="button" data-player-control-glass data-player-source-toggle aria-label="Fuentes" aria-expanded={active} aria-controls="player-sources-panel"
     disabled={disabled} onClick={onClick} title="Fuentes"
-    className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full border px-4 font-semibold gsap-transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-35 ${bigPicture ? "h-[clamp(44px,3.1vw,60px)] text-[clamp(13px,0.95vw,17px)]" : "text-sm"} ${active ? "border-white/30 bg-white text-black" : "border-white/15 bg-white/10 text-white hover:bg-white/20"}`}>
+    className={`inline-flex min-h-11 min-w-fit shrink-0 items-center justify-center gap-2 rounded-full border px-4 font-semibold leading-none gsap-transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-35 ${bigPicture ? "h-[clamp(44px,3.1vw,60px)] text-[clamp(13px,0.95vw,17px)]" : "text-sm"} ${active ? "border-white/[0.11] bg-white/18 text-white" : "border-white/[0.07] bg-white/10 text-white hover:bg-white/16"}`}>
     <Radio size={bigPicture ? 22 : 18} aria-hidden="true" /><span>Fuentes</span>
   </button>;
 }

@@ -10,7 +10,6 @@ import { saveHomeScroll } from "../../store/homeScrollStore.ts";
 import { ensureOriginalTmdbImage } from "../../utils/tmdbArtwork.ts";
 import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
 import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion.ts";
-import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition.ts";
 import { buildDetailPath } from "../../utils/bigPictureDetail.ts";
 import {
   fetchYouTubeClip,
@@ -362,8 +361,6 @@ export default function HeroSection({ item, items, activeIndex, onSelect, onVide
       year: displayItem.year,
       mdbListRatings: mdbListRatings ?? displayItem.mdbListRatings,
     });
-    setSharedElementName(displayItem.type, displayItem.id);
-    captureCardRect(cardRef.current);
     navigate(buildDetailPath(displayItem.type, displayItem.id));
   };
 

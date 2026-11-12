@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import { X } from "lucide-react";
 import { CONTEXT_GLASS_STYLE } from "../../components/ui/glassSurface";
 import { gsap, tweenTo } from "../../utils/motion";
 
 interface PlayerSidePanelProps {
   id?: string;
+  panelStyle?: CSSProperties;
   surfaceStyle?: CSSProperties;
   visible: boolean;
   title: string;
@@ -17,6 +18,7 @@ interface PlayerSidePanelProps {
 
 export default function PlayerSidePanel({
   id,
+  panelStyle,
   surfaceStyle,
   visible,
   title,
@@ -157,8 +159,11 @@ export default function PlayerSidePanel({
         top: "calc(var(--app-safe-top) + 62px)",
         right: "var(--app-safe-x)",
         bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) + 12px)",
+        ...panelStyle,
       }}
       aria-label={title}
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
     >
       <div
         ref={innerRef}
@@ -186,11 +191,11 @@ export default function PlayerSidePanel({
             <button
               type="button"
               onClick={onClose}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.08] text-white/90 gsap-transition hover:bg-white/[0.15]"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/72 gsap-transition hover:bg-white/[0.1] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
               title="Cerrar panel"
               aria-label="Cerrar panel"
             >
-              <ChevronRight size={18} />
+              <X size={18} />
             </button>
           )}
         </header>

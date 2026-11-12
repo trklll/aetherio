@@ -99,6 +99,7 @@ interface TmdbPlatformResult {
   first_air_date?: string;
   vote_average?: number;
   vote_count?: number;
+  popularity?: number;
   genre_ids?: number[];
   original_language?: string;
 }
@@ -108,13 +109,62 @@ interface TmdbPlatformPage {
   total_pages?: number;
 }
 
+interface TmdbWatchProvider {
+  provider_id?: number;
+  display_priorities?: Record<string, number>;
+}
+
+interface TmdbWatchProvidersPage {
+  results?: TmdbWatchProvider[];
+}
+
 const WATCH_REGIONS = ["PE", "US"] as const;
 const PLATFORM_RAIL_ITEM_LIMIT = 20;
+const STREAMING_TRENDING_CONCURRENCY = 8;
 const CRUNCHYROLL_RAIL_ITEM_LIMIT = 200;
 const CRUNCHYROLL_MAX_PAGES_PER_REGION = 10;
 const PLATFORM_COLLECTION_SOURCE_LIMIT = 40;
 const PLATFORM_COLLECTION_CANDIDATE_LIMIT = 24;
 const PLATFORM_COLLECTION_LIMIT = 10;
+
+export interface StreamingTrendingGenre {
+  key: string;
+  label: string;
+  movieGenreIds: readonly number[];
+  seriesGenreIds: readonly number[];
+}
+
+/** One genre bar mapped to the separate TMDB movie and TV taxonomies. */
+export const STREAMING_TRENDING_GENRES = [
+  { key: "action-adventure", label: "Acción y aventura", movieGenreIds: [28, 12], seriesGenreIds: [10759] },
+  { key: "animation", label: "Animación", movieGenreIds: [16], seriesGenreIds: [16] },
+  { key: "comedy", label: "Comedia", movieGenreIds: [35], seriesGenreIds: [35] },
+  { key: "crime", label: "Crimen", movieGenreIds: [80], seriesGenreIds: [80] },
+  { key: "documentary", label: "Documental", movieGenreIds: [99], seriesGenreIds: [99] },
+  { key: "drama", label: "Drama", movieGenreIds: [18], seriesGenreIds: [18] },
+  { key: "family", label: "Familia", movieGenreIds: [10751], seriesGenreIds: [10751] },
+  { key: "fantasy-sci-fi", label: "Ciencia ficción y fantasía", movieGenreIds: [878, 14], seriesGenreIds: [10765] },
+  { key: "history", label: "Historia", movieGenreIds: [36], seriesGenreIds: [] },
+  { key: "horror", label: "Terror", movieGenreIds: [27], seriesGenreIds: [] },
+  { key: "kids", label: "Infantil", movieGenreIds: [], seriesGenreIds: [10762] },
+  { key: "music", label: "Música", movieGenreIds: [10402], seriesGenreIds: [] },
+  { key: "mystery", label: "Misterio", movieGenreIds: [9648], seriesGenreIds: [9648] },
+  { key: "news", label: "Noticias", movieGenreIds: [], seriesGenreIds: [10763] },
+  { key: "reality", label: "Reality", movieGenreIds: [], seriesGenreIds: [10764] },
+  { key: "romance", label: "Romance", movieGenreIds: [10749], seriesGenreIds: [] },
+  { key: "soap", label: "Telenovela", movieGenreIds: [], seriesGenreIds: [10766] },
+  { key: "talk", label: "Talk show", movieGenreIds: [], seriesGenreIds: [10767] },
+  { key: "thriller", label: "Suspense", movieGenreIds: [53], seriesGenreIds: [] },
+  { key: "tv-movie", label: "Película de TV", movieGenreIds: [10770], seriesGenreIds: [] },
+  { key: "war-politics", label: "Guerra y política", movieGenreIds: [10752], seriesGenreIds: [10768] },
+  { key: "western", label: "Western", movieGenreIds: [37], seriesGenreIds: [37] },
+] as const satisfies readonly StreamingTrendingGenre[];
+
+/** Shared cross-media categories used to keep MUBI's genre bar unified. */
+export const MUBI_TRENDING_CATEGORIES = STREAMING_TRENDING_GENRES;
+
+/** Apple TV uses the same cross-media genre taxonomy as other platforms. */
+export const APPLE_TV_TRENDING_GENRES = STREAMING_TRENDING_GENRES;
 
 export interface StreamingPlatformCollection {
   id: number;
@@ -340,6 +390,153 @@ async function fetchPlatformAnimeTopTen(platform: StreamingPlatform): Promise<Ca
   return null;
 }
 
+interface TrendingMediaSource {
+  type: "movie" | "series";
+  tmdbType: "movie" | "tv";
+}
+
+const TRENDING_MEDIA_SOURCES: readonly TrendingMediaSource[] = [
+  { type: "movie", tmdbType: "movie" },
+  { type: "series", tmdbType: "tv" },
+];
+
+async function fetchStreamingTrendingRows(
+  platformId: string,
+  platformName: string,
+  providerIds: readonly number[],
+  genres: readonly StreamingTrendingGenre[],
+  genreKey?: string,
+): Promise<CatalogRowData[]> {
+  const selectedGenre = genreKey ? genres.find(genre => genre.key === genreKey) : undefined;
+  if (genreKey && !selectedGenre) {
+    throw new Error(`Género no reconocido para ${platformName}: ${genreKey}`);
+  }
+
+  let providerLookupAttempts = 0;
+  let providerLookupErrors = 0;
+  const mediaResults = await Promise.all(TRENDING_MEDIA_SOURCES.map(async source => {
+    const genreIds = selectedGenre
+      ? selectedGenre[source.type === "movie" ? "movieGenreIds" : "seriesGenreIds"]
+      : [...new Set(genres.flatMap(genre => genre[source.type === "movie" ? "movieGenreIds" : "seriesGenreIds"]))];
+    if (!genreIds.length) return { source, results: [] as TmdbPlatformResult[] };
+
+    providerLookupAttempts += 1;
+    let providers: TmdbWatchProvidersPage | null;
+    try {
+      providers = await tmdbFetch<TmdbWatchProvidersPage>(`/watch/providers/${source.tmdbType}`, {
+        params: { language: "en-US" },
+      });
+    } catch {
+      providerLookupErrors += 1;
+      return { source, results: [] as TmdbPlatformResult[] };
+    }
+
+    const regions = [...new Set(providerIds.flatMap(providerId => {
+      const provider = providers?.results?.find(candidate => candidate.provider_id === providerId);
+      return Object.keys(provider?.display_priorities ?? {}).filter(region => /^[A-Z]{2}$/.test(region));
+    }))].sort();
+    const regionalResults = await mapConcurrent(regions, STREAMING_TRENDING_CONCURRENCY, async region => {
+      try {
+        const page = await tmdbFetch<TmdbPlatformPage>(`/discover/${source.tmdbType}`, {
+          params: {
+            language: "es-ES",
+            page: "1",
+            include_adult: "false",
+            sort_by: "popularity.desc",
+            with_genres: genreIds.join("|"),
+            watch_region: region,
+            with_watch_monetization_types: "flatrate",
+            with_watch_providers: providerIds.join("|"),
+          },
+        });
+        return page?.results ?? [];
+      } catch {
+        // Una región temporalmente inaccesible no cancela el catálogo global.
+        return [];
+      }
+    });
+
+    const uniqueResults = new Map<number, TmdbPlatformResult>();
+    for (const result of regionalResults.flat()) {
+      if (Number.isInteger(result.id) && !uniqueResults.has(result.id!)) {
+        uniqueResults.set(result.id!, result);
+      }
+    }
+
+    return {
+      source,
+      results: [...uniqueResults.values()].sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0)),
+    };
+  }));
+
+  if (providerLookupAttempts > 0 && providerLookupErrors === providerLookupAttempts) {
+    throw new Error(`No se pudo consultar la disponibilidad global de ${platformName} en TMDB.`);
+  }
+
+  const visibleGenres = selectedGenre ? [selectedGenre] : genres;
+  const rows: CatalogRowData[] = [];
+  for (const { source, results } of mediaResults) {
+    const typeGenreIds = (genre: StreamingTrendingGenre) =>
+      genre[source.type === "movie" ? "movieGenreIds" : "seriesGenreIds"];
+    const createRow = (key: string, name: string, candidates: TmdbPlatformResult[]): CatalogRowData => {
+      const seen = new Set<string>();
+      const items = candidates
+        .map(result => mapMovieSeriesGenreItem(result, source.type))
+        .filter((item): item is NonNullable<typeof item> => {
+          if (!item || seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        })
+        .slice(0, PLATFORM_RAIL_ITEM_LIMIT);
+
+      return {
+        addonId: "tmdb",
+        addonName: platformName,
+        catalogId: `streaming.${platformId}.${source.type}.genre.${key}`,
+        type: source.type,
+        name,
+        subtitle: platformName,
+        items,
+      };
+    };
+
+    if (!selectedGenre) {
+      rows.push(createRow("all", source.type === "movie" ? "Películas" : "Series", results));
+    }
+
+    for (const genre of visibleGenres) {
+      const genreIds = typeGenreIds(genre);
+      const candidates = results.filter(result => result.genre_ids?.some(id => genreIds.includes(id)));
+      rows.push(createRow(genre.key, source.type === "movie" ? "Películas" : "Series", candidates));
+    }
+  }
+
+  return rows;
+}
+
+/** Fetches any configured platform's movies and series from every TMDB provider region. */
+export function fetchStreamingPlatformTrendingRows(platformId: string, genreKey?: string): Promise<CatalogRowData[]> {
+  const platform = getStreamingPlatform(platformId);
+  if (!platform) return Promise.resolve([]);
+
+  const providerIds = platform.providerIds.split("|")
+    .map(value => Number(value.trim()))
+    .filter(providerId => Number.isInteger(providerId) && providerId > 0);
+  if (!providerIds.length) return Promise.resolve([]);
+
+  return fetchStreamingTrendingRows(platform.id, platform.name, providerIds, STREAMING_TRENDING_GENRES, genreKey);
+}
+
+/** Fetches MUBI movies and series globally, preserving a genre row for each type. */
+export function fetchMubiTrendingRows(genreKey?: string): Promise<CatalogRowData[]> {
+  return fetchStreamingPlatformTrendingRows("mubi", genreKey);
+}
+
+/** Fetches Apple TV movies and series globally, preserving a genre row for each type. */
+export function fetchAppleTvTrendingRows(genreKey?: string): Promise<CatalogRowData[]> {
+  return fetchStreamingPlatformTrendingRows("apple-tv-plus", genreKey);
+}
+
 export async function fetchStreamingPlatformCollections(
   platformId: string,
   movies: CatalogRowData["items"],
@@ -448,4 +645,19 @@ export async function fetchStreamingPlatformRows(platformId: string): Promise<Ca
   // puntuación antes de todo el catálogo cuando TMDB devuelve resultados.
   return [animeTopTen, popularMovies, popularSeries, topTenMovies, topRatedSeries]
     .filter((row): row is CatalogRowData => Boolean(row));
+}
+
+async function mapConcurrent<T, R>(items: readonly T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]);
+    }
+  }));
+
+  return results;
 }

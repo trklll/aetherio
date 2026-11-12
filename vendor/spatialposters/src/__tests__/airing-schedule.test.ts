@@ -86,6 +86,34 @@ describe("getAiringScheduleLabel", () => {
     expect(label).toBe("Cada lunes")
   })
 
+  it("adelanta un dia el horario de los animes japoneses", () => {
+    const label = getAiringScheduleLabel({
+      mediaType: "tv",
+      inProduction: true,
+      tvStatus: "Returning Series",
+      lastAirDate: iso(-7),
+      nextEpisode: { air_date: nextDow(2) },
+      seasonEpisodes: weeklyEpisodes(2, 5),
+      isAnime: true,
+      lang: "es",
+    })
+    expect(label).toBe("Cada miércoles")
+  })
+
+  it("no ajusta el dia de series que no son anime", () => {
+    const label = getAiringScheduleLabel({
+      mediaType: "tv",
+      inProduction: true,
+      tvStatus: "Returning Series",
+      lastAirDate: iso(-7),
+      nextEpisode: { air_date: nextDow(2) },
+      seasonEpisodes: weeklyEpisodes(2, 5),
+      isAnime: false,
+      lang: "es",
+    })
+    expect(label).toBe("Cada martes")
+  })
+
   it("une dos dias con 'y', en orden de lunes a domingo", () => {
     // Martes (2) y jueves (4): sale "martes y jueves", no al reves.
     const seasonEpisodes = [...weeklyEpisodes(2, 5), ...weeklyEpisodes(4, 5)]

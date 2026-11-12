@@ -216,13 +216,10 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
     // must survive its clearProps, not merely exist during the entrance.
     await expect.poll(() => rows.first().evaluate(element => (element as HTMLElement).style.transform)).toBe("");
     const transforms = await rows.evaluateAll(elements => elements.map(element => getComputedStyle(element).transform));
-    if (mode === "normal") {
-      expect(transforms.every(transform => transform !== "none")).toBe(true);
-      expect(await rows.first().evaluate(element => new DOMMatrixReadOnly(getComputedStyle(element).transform).isIdentity)).toBe(true);
-    } else {
-      // This change is measured on desktop; do not alter TV's compositor path.
-      expect(transforms.every(transform => transform === "none")).toBe(true);
-    }
+    expect(transforms.every(transform => transform !== "none")).toBe(true);
+    expect(await rows.evaluateAll(elements => elements.every(element =>
+      new DOMMatrixReadOnly(getComputedStyle(element).transform).isIdentity,
+    ))).toBe(true);
     expect(await rows.locator("[data-row-card]").evaluateAll(cards => cards.filter(card =>
       getComputedStyle(card).transform.startsWith("matrix3d") || getComputedStyle(card).willChange.includes("transform"),
     ).length)).toBe(0);

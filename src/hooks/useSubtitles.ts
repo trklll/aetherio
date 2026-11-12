@@ -249,7 +249,7 @@ function isOpenSubtitlesPro(addon: InstalledAddon) {
   return addon.id === OPEN_SUBTITLES_PRO_ADDON.id || addon.url === OPEN_SUBTITLES_PRO_URL;
 }
 
-async function fetchJsonWithTimeout(url: string, timeoutMs = 8000) {
+async function fetchJsonWithTimeout(url: string, timeoutMs = 2500) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -335,14 +335,14 @@ export function useSubtitles(
         return;
       }
       const loaded: SubtitleSource[] = [];
-      const imdbId = await resolveImdbId(query).catch(() => null);
+      const imdbIdPromise = resolveImdbId(query).catch(() => null);
       const requestType = subtitleRequestType(query);
 
-      for (const addon of subtitleAddons(getEnabledAddons())) {
+      const addonResults = await Promise.all(subtitleAddons(getEnabledAddons()).map(async addon => {
         const resource = subtitleResourceFor(addon);
         const supportedTypes = resourceTypes(addon, resource);
-        if (Array.isArray(supportedTypes) && supportedTypes.length > 0 && !supportedTypes.includes(requestType)) continue;
-        if (!addonHasSubtitles(addon)) continue;
+        if (Array.isArray(supportedTypes) && supportedTypes.length > 0 && !supportedTypes.includes(requestType)) return [] as SubtitleSource[];
+        if (!addonHasSubtitles(addon)) return [] as SubtitleSource[];
 
         try {
           const base = addon.url.replace(/\/manifest\.json$/, "").replace(/\/$/, "");
@@ -365,43 +365,50 @@ export function useSubtitles(
           const hasStrictPrefixes = idPrefixes.length > 0;
           const supportsImdb = !hasStrictPrefixes || idPrefixes.includes("tt");
           const allowHashId = !hasStrictPrefixes || isOpenSubtitlesPro(addon);
-          const idsToTry = buildSubtitleIds(query, supportsImdb ? imdbId : null, videoId, allowHashId, videoHash)
+          const immediateIds = buildSubtitleIds(query, null, videoId, allowHashId, videoHash)
             .filter(id => {
               const isHashId = Boolean(videoHash && id === videoHash);
               return addonSupportsSubtitleId(addon, id) || (isOpenSubtitlesPro(addon) && isHashId);
             });
+          const effectiveSubtitleLanguage = resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage);
+          const normalizeResult = (json: any) => (json?.subtitles ?? [])
+            .map((subtitle: any, index: number) => normalizeSubtitle(subtitle, addon.id, addon.name, index))
+            .filter(Boolean) as SubtitleSource[];
+          const filterPreferred = (items: SubtitleSource[]) => playbackPreferences.addonSubtitleLoadMode === "preferred" && effectiveSubtitleLanguage
+            ? items.filter(subtitle => subtitle.url === forcedSubtitleUrl
+              || matchesPreferredLanguage(subtitle.lang, effectiveSubtitleLanguage)
+              || matchesPreferredLanguage(subtitle.label, effectiveSubtitleLanguage))
+            : items;
 
-          let addonFound = false;
-          for (const id of idsToTry) {
-            for (const target of buildSubtitleTargets(base, requestType, id, extraArgs)) {
+          // Ask every enabled addon at once and try compatible URL encodings in
+          // parallel. The old nested loops serialized addons × IDs × URL forms,
+          // so a few slow addons could hold playback/download for minutes.
+          const lookupIds = [...immediateIds];
+          const immediateResults = await Promise.all(lookupIds.flatMap(id =>
+            buildSubtitleTargets(base, requestType, id, extraArgs).map(async target => {
               if (DEBUG_SUBTITLES) console.info("[AETHERIO:SUBTITLES] request", { addon: addon.name, target });
-              const json = await fetchJsonWithTimeout(target).catch(() => null);
-              if (!json) continue;
+              return fetchJsonWithTimeout(target).catch(() => null);
+            }),
+          ));
+          let found = filterPreferred(immediateResults.flatMap(normalizeResult));
 
-              const normalized = (json.subtitles ?? [])
-                .map((subtitle: any, index: number) => normalizeSubtitle(subtitle, addon.id, addon.name, index))
-                .filter(Boolean) as SubtitleSource[];
-              const effectiveSubtitleLanguage = resolvePreferredLanguage(playbackPreferences.preferredSubtitleLanguage, originalLanguage);
-              const filtered = playbackPreferences.addonSubtitleLoadMode === "preferred" && effectiveSubtitleLanguage
-                ? normalized.filter(subtitle =>
-                  subtitle.url === forcedSubtitleUrl ||
-                  matchesPreferredLanguage(subtitle.lang, effectiveSubtitleLanguage) ||
-                  matchesPreferredLanguage(subtitle.label, effectiveSubtitleLanguage)
-                )
-                : normalized;
-              loaded.push(...filtered);
-              if (filtered.length > 0) {
-                if (DEBUG_SUBTITLES) console.info("[AETHERIO:SUBTITLES] loaded", { addon: addon.name, count: filtered.length, target });
-                addonFound = true;
-                break;
-              }
+          // Resolve IMDb in parallel with the fast first pass; only wait for it
+          // when ID/hash lookups returned no usable tracks.
+          if (!found.length && supportsImdb) {
+            const imdbId = await imdbIdPromise;
+            if (imdbId) {
+              const imdbTargets = buildSubtitleTargets(base, requestType, imdbId, extraArgs);
+              const imdbResults = await Promise.all(imdbTargets.map(target => fetchJsonWithTimeout(target).catch(() => null)));
+              found = filterPreferred(imdbResults.flatMap(normalizeResult));
             }
-            if (addonFound) break;
           }
+          return found;
         } catch {
           // Subtitle addons are optional; keep playback moving.
+          return [] as SubtitleSource[];
         }
-      }
+      }));
+      loaded.push(...addonResults.flat());
 
       if (!cancelled) {
         const next = dedupe(loaded);

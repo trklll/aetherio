@@ -165,6 +165,107 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const visibleRows = new Set<HTMLElement>();
+    const observedRows = new WeakSet<HTMLElement>();
+    const activeTweens = new Set<gsap.core.Tween>();
+    let rowObserver: IntersectionObserver | null = null;
+
+    const animateVisibleCards = (row: HTMLElement) => {
+      if (row.dataset.rowEntranceAnimated === "true") return;
+
+      const scroller = row.querySelector<HTMLElement>("[data-row-scroller]");
+      const scrollerRect = scroller?.getBoundingClientRect();
+      const cards = Array.from(row.querySelectorAll<HTMLElement>("[data-row-card]"))
+        .filter(card => card.closest<HTMLElement>("[data-row-key]") === row)
+        .filter(card => {
+          const rect = card.getBoundingClientRect();
+          if (rect.bottom <= 0 || rect.top >= window.innerHeight) return false;
+          if (!scrollerRect) return rect.right > 0 && rect.left < window.innerWidth;
+          return rect.bottom > Math.max(0, scrollerRect.top)
+            && rect.top < Math.min(window.innerHeight, scrollerRect.bottom)
+            && rect.right > Math.max(0, scrollerRect.left)
+            && rect.left < Math.min(window.innerWidth, scrollerRect.right);
+        });
+      if (!cards.length) return;
+
+      row.dataset.rowEntranceAnimated = "true";
+      rowObserver?.unobserve(row);
+      visibleRows.delete(row);
+
+      const targets = cards.filter(card => !card.contains(document.activeElement));
+      if (!targets.length) return;
+      if (prefersReducedMotion()) {
+        gsap.set(targets, { clearProps: "opacity,visibility,transform" });
+        return;
+      }
+
+      let tween: gsap.core.Tween;
+      tween = gsap.fromTo(targets,
+        { autoAlpha: 0, y: 16, scale: 0.985 },
+        {
+          autoAlpha: 1,
+          y: 0,
+          scale: 1,
+          duration: 0.48,
+          stagger: 0.045,
+          ease: "power3.out",
+          clearProps: "opacity,visibility,transform",
+          onComplete: () => activeTweens.delete(tween),
+        },
+      );
+      activeTweens.add(tween);
+    };
+
+    const observeRow = (row: HTMLElement) => {
+      if (row.dataset.rowEntranceAnimated === "true" || observedRows.has(row)) return;
+      observedRows.add(row);
+      if (rowObserver) rowObserver.observe(row);
+      else animateVisibleCards(row);
+    };
+
+    if (typeof IntersectionObserver !== "undefined") {
+      rowObserver = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          const row = entry.target as HTMLElement;
+          if (entry.isIntersecting) {
+            visibleRows.add(row);
+            animateVisibleCards(row);
+          } else {
+            visibleRows.delete(row);
+          }
+        }
+      }, { threshold: 0.01 });
+    }
+
+    const observeRowsIn = (node: Element) => {
+      if (node.matches("[data-row-key]")) observeRow(node as HTMLElement);
+      node.querySelectorAll<HTMLElement>("[data-row-key]").forEach(observeRow);
+    };
+
+    document.querySelectorAll<HTMLElement>("[data-row-key]").forEach(observeRow);
+
+    const mutations = new MutationObserver(records => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof Element) observeRowsIn(node);
+        }
+
+        const containingRow = record.target instanceof Element
+          ? record.target.closest<HTMLElement>("[data-row-key]")
+          : null;
+        if (containingRow && visibleRows.has(containingRow)) animateVisibleCards(containingRow);
+      }
+    });
+    mutations.observe(document.body, { childList: true, subtree: true });
+
+    return () => {
+      mutations.disconnect();
+      rowObserver?.disconnect();
+      activeTweens.forEach(tween => tween.kill());
+    };
+  }, []);
+
   useEffect(() => {
     const el = backChromeRef.current;
     if (!el) return;

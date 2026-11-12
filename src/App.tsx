@@ -78,7 +78,8 @@ import {
 } from "./utils/appMode.ts";
 import { showBigPictureBrand } from "./utils/bigPictureTransition.ts";
 import { recordRouteVisit, resetEntrancePlayed } from "./utils/homeEntrance.ts";
-import { restorePageTransition } from "./utils/pageTransition.ts";
+import { animatePageTransitionCurtain, restorePageTransition } from "./utils/pageTransition.ts";
+import { prefersReducedMotion } from "./utils/motion.ts";
 import { pageCacheKey } from "./utils/pageCacheKey.ts";
 
 const PROCESSED_OAUTH_CALLBACKS_KEY = "aetherio-processed-oauth-callbacks-v1";
@@ -561,12 +562,24 @@ export default function App() {
       <GamepadWakeListener />
       <AppShell>
         {location.pathname !== "/home" ? (
-          <div key={`curtain-${location.key}`} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />
+          <PageTransitionCurtain key={`curtain-${location.key}`} />
         ) : null}
         <CachedPageRoutes key={profileRevision} location={location} defaultRoute={defaultRoute} />
       </AppShell>
     </PartyProvider>,
   );
+}
+
+function PageTransitionCurtain() {
+  const curtainRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const curtain = curtainRef.current;
+    if (!curtain) return;
+    return animatePageTransitionCurtain(curtain, prefersReducedMotion());
+  }, []);
+
+  return <div ref={curtainRef} className="aetherio-page-curtain" aria-hidden="true" style={{ opacity: 0 }} />;
 }
 
 function CachedPageRoutes({

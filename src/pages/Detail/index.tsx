@@ -43,7 +43,7 @@ import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../uti
 import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../services/tmdbComments";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, appleEase, prefersReducedMotion, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
-import { clearSharedElementName, getSharedElementName, playHeroExpandAnimation } from "../../utils/sharedElementTransition";
+import { clearSharedElementName } from "../../utils/sharedElementTransition";
 import { useAwardsByTmdbId, awardCategoryLabel, featuredText } from "../../hooks/useAwards";
 import { AwardLogo } from "../../components/awards/AwardLogo";
 import AppleSpinner from "../../components/ui/AppleSpinner";
@@ -1301,14 +1301,6 @@ export default function DetailPage({
     if (data?.logo || cachedLogo) setLogoStatus("loaded");
     else setLogoStatus("idle");
   }, [data?.id, data?.logo, cachedLogo]);
-
-  useLayoutEffect(() => {
-    const name = getSharedElementName();
-    if (!name) return;
-    const target = heroRef.current ?? document.querySelector<HTMLElement>("[data-vt-hero-claim]");
-    if (!target) return;
-    playHeroExpandAnimation(target, () => { clearSharedElementName(); });
-  }, [loading, data?.id]);
 
   useLayoutEffect(() => {
     if (!bigPicture && !isActiveDetailPath(location.pathname, type, id)) return;

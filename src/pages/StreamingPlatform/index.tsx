@@ -16,6 +16,9 @@ import type { CatalogRowData } from "../../types/ui";
 import { shouldPlayPlatformIntroForEntry } from "../../services/streamingPlatformIntroHistory";
 import StreamingCollectionsRow from "./StreamingCollectionsRow";
 import CrunchyrollTrending from "./CrunchyrollTrending";
+import MubiTrending from "./MubiTrending";
+import AppleTvTrending from "./AppleTvTrending";
+import StreamingPlatformTrending from "./StreamingPlatformTrending";
 import "./index.css";
 
 const PLATFORM_ROWS_CACHE_TTL = 15 * 60 * 1000;
@@ -297,6 +300,11 @@ export default function StreamingPlatformPage({ bigPicture = false }: { bigPictu
 
         <section className="streaming-platform-catalog" aria-label={`Catálogo de ${platform.name}`}>
           {platform.id === "crunchyroll" ? <CrunchyrollTrending /> : null}
+          {platform.id === "mubi" ? <MubiTrending /> : null}
+          {platform.id === "apple-tv-plus" ? <AppleTvTrending /> : null}
+          {platform.id !== "crunchyroll" && platform.id !== "mubi" && platform.id !== "apple-tv-plus" ? (
+            <StreamingPlatformTrending platformId={platform.id} />
+          ) : null}
           {loading ? (
             <div className="streaming-platform-state" role="status">Cargando películas y series…</div>
           ) : rows.length ? (

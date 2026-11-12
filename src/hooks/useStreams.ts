@@ -394,10 +394,49 @@ export function useStreams(query: StreamQuery | null): UseStreamsResult {
         ? addon.streamAttempts
         : DEFAULT_STREAM_ATTEMPTS;
       for (const type of types) {
-        resolveAddonStreamId(addon, query, type, streamId)
-          .then(requestStreamId => {
+        // Start the canonical query immediately while IMDb ID resolution runs.
+        // The previous chain awaited TMDB and then Cinemeta before making any
+        // stream request, adding two network round-trips to first results.
+        const fallbackUrl = `${base}/stream/${type}/${encodeURIComponent(streamId)}.json`;
+        const fallbackKey = JSON.stringify([fallbackUrl, attempts, timeoutMs]);
+        let fallbackPayload = sharedPayloads.get(fallbackKey);
+        if (!fallbackPayload) {
+          fallbackPayload = fetchStreamPayload(fallbackUrl, attempts, timeoutMs);
+          sharedPayloads.set(fallbackKey, fallbackPayload);
+        }
+        // Make fallback-ID results visible immediately; the main path below
+        // still resolves the addon's preferred ID and fetches it when needed.
+        void fallbackPayload.then(({ json }) => {
+          if (cancelled) return;
+          const raw = Array.isArray(json) ? json : Array.isArray(json?.streams)
+            ? json.streams : Array.isArray(json?.addonStreams) ? json.addonStreams : [];
+          const fresh = raw
+            .filter((item: any) => item && typeof item === "object" && matchesAddonStreamFilter(item, addon.streamNameFilter))
+            .map((item: any, index: number) => {
+              const normalized = normalizeStream(item, addon.id, addon.name, index);
+              return normalized && addon.streamNameFilter ? { ...normalized, sourceName: addon.name } : normalized;
+            })
+            .filter(Boolean) as MediaStream[];
+          if (!fresh.length) return;
+          accRef.current = sortStreamsForPlayback(dedupeStreams([...accRef.current, ...fresh]));
+          STREAM_CACHE.set(cacheKey, { streams: [...accRef.current], updatedAt: Date.now() });
+          setStreams([...accRef.current]);
+        }).catch(() => {});
+        const fallbackResultPromise = fallbackPayload.then(
+          value => ({ value }),
+          error => ({ error }),
+        );
+        Promise.all([
+          resolveAddonStreamId(addon, query, type, streamId),
+          fallbackResultPromise,
+        ])
+          .then(([requestStreamId, fallbackOutcome]) => {
             const url = `${base}/stream/${type}/${encodeURIComponent(requestStreamId)}.json`;
             if (DEBUG_STREAMS) console.info("[AETHERIO:STREAMS] request", { addonId: addon.id, addonName: addon.name, type, streamId: requestStreamId, url, timeoutMs });
+            if (url === fallbackUrl) {
+              if ("error" in fallbackOutcome) throw fallbackOutcome.error;
+              return fallbackOutcome.value;
+            }
             const payloadKey = JSON.stringify([url, attempts, timeoutMs]);
             let payload = sharedPayloads.get(payloadKey);
             if (!payload) {

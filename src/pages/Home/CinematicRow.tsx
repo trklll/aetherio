@@ -5,7 +5,6 @@ import { buildDetailPath, isBigPictureLocation } from "../../utils/bigPictureDet
 import { HOME_CARD_ARTWORK_CHANGED_EVENT, readHomeCardArtwork } from "../../utils/homeCardArtwork";
 import { resolveDetailBackground, writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { scrollByGsap, tweenTo } from "../../utils/motion";
-import { captureCardRect, setSharedElementName } from "../../utils/sharedElementTransition";
 import { saveHomeScroll, rowKey as makeRowKey } from "../../store/homeScrollStore";
 import { isShellPreviewOpen, type ShellPreviewItem, type ShellPreviewRequest } from "../../utils/shellPreview";
 import { getTmdbCardImageResponsiveProps } from "../../utils/tmdbCardImage";
@@ -184,8 +183,6 @@ export default function CinematicRow({ row, restoreScrollLeft, onOpenPreview }: 
       vertical: shell?.scrollTop ?? 0,
       rows: { [rowKey]: scrollerRef.current?.scrollLeft ?? 0 },
     });
-    setSharedElementName(row.type, item.id);
-    captureCardRect(card);
     navigate(detailPath);
   };
 

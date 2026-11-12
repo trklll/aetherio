@@ -466,6 +466,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<RouteP
           : null
         airingLabel = getAiringScheduleLabel({
           mediaType: "tv",
+          isAnime: details.original_language === "ja"
+            && details.genres?.some((genre: { id?: number }) => genre.id === 16),
           tvStatus: details.status,
           inProduction: details.in_production,
           lastAirDate: details.last_air_date,

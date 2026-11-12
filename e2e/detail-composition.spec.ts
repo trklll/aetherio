@@ -45,10 +45,11 @@ for (const bigPicture of [false, true]) {
       const sections = root.locator(".detail-page-content > :not(.detail-content-logo)");
       const styles = await sections.evaluateAll(elements => elements.map(el => ({
         transform: getComputedStyle(el).transform,
+        identity: new DOMMatrixReadOnly(getComputedStyle(el).transform).isIdentity,
         overflow: getComputedStyle(el).overflow,
       })));
       expect(styles.length).toBeGreaterThan(1);
-      expect(styles.every(style => bigPicture ? style.transform === "none" : style.transform !== "none")).toBe(true);
+      expect(styles.every(style => style.transform !== "none" && style.identity)).toBe(true);
       expect(styles.every(style => style.overflow === "visible")).toBe(true);
       expect(await root.locator(".detail-episode-card").evaluateAll(cards => cards.filter(el =>
         getComputedStyle(el).transform.startsWith("matrix3d") || getComputedStyle(el).willChange.includes("transform"),
@@ -59,15 +60,27 @@ for (const bigPicture of [false, true]) {
   }
 }
 
-test("normal: composed sections preserve episode hover, menu and viewport placement after scrolling", async ({ page }) => {
-  const root = await openDetail(page, false);
+for (const bigPicture of [false, true]) {
+test(`${bigPicture ? "TV" : "normal"}: composed sections preserve episode hover, menu and viewport placement after scrolling`, async ({ page }) => {
+  const root = await openDetail(page, bigPicture);
   const first = root.locator(".detail-episode-card").first();
   await first.scrollIntoViewIfNeeded();
-  await first.hover();
-  const trigger = first.locator(".detail-episode-card__menu");
-  await expect(trigger).toBeVisible();
-  await trigger.click();
   const menu = page.locator('[data-aetherio-context-menu][data-context-open="true"]');
+  if (bigPicture) {
+    // TV has no ellipsis button: holding A/Enter opens the same menu.
+    await first.focus();
+    await page.keyboard.down("Enter");
+    try {
+      await expect(menu).toBeVisible();
+    } finally {
+      await page.keyboard.up("Enter");
+    }
+  } else {
+    await first.hover();
+    const trigger = first.locator(".detail-episode-card__menu");
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+  }
   await expect(menu).toBeVisible();
   const bounds = await menu.boundingBox();
   expect(bounds).not.toBeNull();
@@ -80,4 +93,11 @@ test("normal: composed sections preserve episode hover, menu and viewport placem
   await expect(menu).toHaveCount(0);
   await first.focus();
   await expect(first).toBeFocused();
+  if (bigPicture) {
+    await page.keyboard.press("ArrowRight");
+    const next = root.locator(".detail-episode-card").nth(1);
+    await expect(next).toBeFocused();
+    await expect(next).toBeInViewport();
+  }
 });
+}

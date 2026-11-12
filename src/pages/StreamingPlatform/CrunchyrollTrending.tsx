@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { gsap } from "gsap";
 import { useHomePreferences } from "../../config/homePreferences";
 import { GAMEPAD_ACTION_EVENT } from "../../hooks/useGamepad";
 import { useBigPictureActive } from "../../navigation/spatialNav";
 import { fetchAnilistTrendingAnime, resolveAnilistToTmdb } from "../../services/anilist";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import { prefersReducedMotion } from "../../utils/motion";
+import AppleSpinner from "../../components/ui/AppleSpinner";
 import CatalogRow from "../Home/CatalogRow";
 import "../Detail/SeasonTabs.css";
 import "./CrunchyrollTrending.css";
@@ -32,6 +34,7 @@ export default function CrunchyrollTrending() {
   const preferences = useHomePreferences();
   const bigPicture = useBigPictureActive();
   const [genre, setGenre] = useState("");
+  const resultsRef = useRef<HTMLDivElement>(null);
   const tablistRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   const previousGenreRef = useRef(genre);
@@ -53,6 +56,54 @@ export default function CrunchyrollTrending() {
     name: "Anime",
     items,
   }), [items]);
+
+  useLayoutEffect(() => {
+    const results = resultsRef.current;
+    if (!results || !isPending || prefersReducedMotion()) return;
+
+    const spinner = results.querySelector<HTMLElement>(".aetherio-petal-spinner");
+    if (!spinner) return;
+    const ctx = gsap.context(() => {
+      gsap.fromTo(spinner, { autoAlpha: 0, scale: 0.82 }, {
+        autoAlpha: 1,
+        scale: 1,
+        duration: 0.42,
+        ease: "power3.out",
+        clearProps: "transform",
+      });
+    }, results);
+
+    return () => ctx.revert();
+  }, [isPending]);
+
+  useLayoutEffect(() => {
+    const results = resultsRef.current;
+    if (!results || isPending || isError || !items.length) return;
+
+    const cards = results.querySelectorAll<HTMLElement>("[data-row-card]");
+    if (!cards.length) return;
+    if (prefersReducedMotion()) {
+      gsap.set(cards, { clearProps: "opacity,visibility,transform" });
+      return;
+    }
+
+    const ctx = gsap.context(() => {
+      gsap.fromTo(cards,
+        { autoAlpha: 0, y: 14, scale: 0.99 },
+        {
+          autoAlpha: 1,
+          y: 0,
+          scale: 1,
+          duration: 0.46,
+          stagger: 0.045,
+          ease: "power3.out",
+          clearProps: "opacity,visibility,transform",
+        },
+      );
+    }, results);
+
+    return () => ctx.revert();
+  }, [isError, isPending, items]);
 
   useEffect(() => {
     const previousGenre = previousGenreRef.current;
@@ -158,9 +209,11 @@ export default function CrunchyrollTrending() {
         ))}
       </div>
 
-      <div className="crunchyroll-trending__results" aria-busy={isPending}>
+      <div ref={resultsRef} className="crunchyroll-trending__results" aria-busy={isPending}>
         {isPending ? (
-          <p className="crunchyroll-trending__state" role="status">Cargando tendencias de AniList…</p>
+          <div className="crunchyroll-trending__state crunchyroll-trending__state--loading" role="status" aria-label="Cargando tendencias de AniList">
+            <AppleSpinner />
+          </div>
         ) : isError ? (
           <div className="crunchyroll-trending__state" role="status">
             <p>No pudimos cargar las tendencias de AniList.</p>

@@ -6,6 +6,7 @@ import { getSourceLogo } from "../../utils/sourceLogos";
 import { getReportedSeeders } from "../../utils/torrentHealth";
 import { buildSourceChips, normalizeSourceKey } from "../../utils/sourceFilterOrder";
 import { sourceFilterPriority, useAddonStore } from "../../store/addonStore";
+import { getPlayerGlassSurface } from "../../components/ui/glassSurface";
 import { getStreamKind } from "./utils";
 import PlayerSidePanel from "./PlayerSidePanel";
 
@@ -82,7 +83,16 @@ export default function SourcePanel({
   return (
     <PlayerSidePanel
       id="player-sources-panel"
-      surfaceStyle={{ background: "rgba(20,21,24,0.92)" }}
+      panelStyle={{
+        top: "calc(var(--app-safe-top) + 96px)",
+        bottom: "calc(100vh - var(--aetherio-player-controls-top, 80vh) - 32px)",
+        width: bigPicture ? "min(620px, calc(100vw - 64px))" : "min(460px, calc(100vw - 32px))",
+      }}
+      surfaceStyle={{
+        ...getPlayerGlassSurface(),
+        backdropFilter: "none",
+        WebkitBackdropFilter: "none",
+      }}
       visible={visible}
       bigPicture={bigPicture}
       title="Fuentes"
@@ -156,7 +166,9 @@ export default function SourcePanel({
                 }`}
               >
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-black/20 text-sm font-semibold uppercase text-white/82">
-                  {provider.slice(0, 2)}
+                  {providerLogo ? (
+                    <img src={providerLogo} alt="" className="h-8 w-8 object-contain" />
+                  ) : provider.slice(0, 2)}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-semibold text-white">{provider}</span>
@@ -180,13 +192,7 @@ export default function SourcePanel({
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-black">
                     <Check size={15} strokeWidth={2.5} />
                   </span>
-                ) : providerLogo ? (
-                  <img src={providerLogo} alt={`Logo de ${provider}`} className="h-7 w-7 shrink-0 object-contain opacity-85" />
-                ) : (
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/[0.07] text-[10px] font-bold uppercase text-white/48">
-                    {provider.slice(0, 2)}
-                  </span>
-                )}
+                ) : null}
               </button>
             );
           })}

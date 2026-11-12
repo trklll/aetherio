@@ -8,6 +8,6 @@ interface BackButtonProps {
 
 export default function BackButton({ onClick, title = "Volver" }: BackButtonProps) {
   return (
-    <FloatingActionButton onClick={onClick} title={title} icon={<ArrowLeft size={20} />} />
+    <FloatingActionButton onClick={onClick} title={title} icon={<ArrowLeft size={20} />} playerGlass />
   );
 }

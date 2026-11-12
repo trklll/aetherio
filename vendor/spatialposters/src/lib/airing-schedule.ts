@@ -41,6 +41,8 @@ interface EpisodeDate {
 
 export interface AiringInput {
   mediaType: "movie" | "tv"
+  /** Anime japones: TMDB entrega el dia de emision un dia antes. */
+  isAnime?: boolean
   /** `status` de TMDB, ya TRADUCIDO por el locale de la request. */
   tvStatus?: string | null
   inProduction?: boolean
@@ -71,6 +73,7 @@ export function getAiringScheduleLabel(input: AiringInput): string | null {
     input.lastAirDate,
     nextAirDate,
     input.lang,
+    input.isAnime === true,
   )
   if (!weekdays.length) return null
 
@@ -120,15 +123,17 @@ function inferRecurringWeekdays(
   lastAirDate: string | null | undefined,
   nextAirDate: string,
   lang?: string,
+  isAnime = false,
 ): string[] {
   const names = weekdayNames(lang)
+  const scheduleDate = (date: string | null | undefined) => isAnime ? shiftDate(date, 1) : normalizeDate(date)
 
   const dated = episodes
-    .map((episode) => normalizeDate(episode.air_date))
+    .map((episode) => scheduleDate(episode.air_date))
     .filter((date): date is string => Boolean(date))
   // Sin la lista de episodios quedan los dos extremos; sirve para series que
   // TMDB todavia no detail de temporada.
-  const fallback = [normalizeDate(lastAirDate), nextAirDate].filter(
+  const fallback = [scheduleDate(lastAirDate), scheduleDate(nextAirDate)].filter(
     (date): date is string => Boolean(date),
   )
   const dates = dated.length ? dated : fallback
@@ -170,6 +175,15 @@ function inferRecurringWeekdays(
   }
 
   return selected.sort((a, b) => mondayFirst(a) - mondayFirst(b)).map((weekday) => names[weekday])
+}
+
+/** Desplaza una fecha de calendario sin depender de la zona horaria local. */
+function shiftDate(value: string | null | undefined, days: number): string | null {
+  const date = normalizeDate(value)
+  if (!date) return null
+  const time = Date.parse(`${date}T12:00:00Z`)
+  if (!Number.isFinite(time)) return null
+  return new Date(time + days * DAY_MS).toISOString().slice(0, 10)
 }
 
 /**

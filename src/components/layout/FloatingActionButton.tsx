@@ -6,9 +6,10 @@ interface FloatingActionButtonProps {
   onClick: () => void;
   title: string;
   animateOnClick?: boolean;
+  playerGlass?: boolean;
 }
 
-export default function FloatingActionButton({ icon, onClick, title, animateOnClick = false }: FloatingActionButtonProps) {
+export default function FloatingActionButton({ icon, onClick, title, animateOnClick = false, playerGlass = false }: FloatingActionButtonProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export default function FloatingActionButton({ icon, onClick, title, animateOnCl
   return (
     <button
       ref={buttonRef}
+      data-player-control-glass={playerGlass ? "true" : undefined}
       onClick={handleClick}
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}

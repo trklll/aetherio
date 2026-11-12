@@ -435,7 +435,6 @@ const motionSelector = [
   ".aetherio-nav-pop",
   ".aetherio-hero-image",
   ".aetherio-hero-content",
-  ".aetherio-page-curtain",
   ".aetherio-player-handoff",
   ".person-page",
   ".gsap-transition",
@@ -503,9 +502,6 @@ function initializeElement(element: Element) {
   }
   if (element.classList.contains("aetherio-hero-content")) {
     gsap.fromTo(element, { opacity: 0, x: 34 }, { opacity: 1, x: 0, duration: 0.42, ease: appleEase });
-  }
-  if (element.classList.contains("aetherio-page-curtain")) {
-    gsap.fromTo(element, { opacity: 0.4, xPercent: 0 }, { opacity: 0, xPercent: -22, duration: 0.38, ease: appleEase });
   }
   if (element.classList.contains("aetherio-detail-fade")) {
     const children = element.children;

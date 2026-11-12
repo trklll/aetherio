@@ -40,4 +40,19 @@ describe("animateLibraryTabPanel", () => {
     });
   });
 
+  it("settles the panel if GSAP does not finish its entrance tween", () => {
+    vi.useFakeTimers();
+    const panel = {} as HTMLElement;
+    const cleanup = animateLibraryTabPanel(panel, false);
+
+    vi.advanceTimersByTime(600);
+
+    expect(tween.kill).toHaveBeenCalledOnce();
+    expect(gsap.set).toHaveBeenLastCalledWith(panel, {
+      clearProps: "opacity,transform,willChange",
+    });
+    cleanup();
+    vi.useRealTimers();
+  });
+
 });

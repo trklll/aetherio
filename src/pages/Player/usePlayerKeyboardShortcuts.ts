@@ -6,6 +6,7 @@ interface KeyboardShortcutHandlers {
   togglePlay: () => void;
   jump: (offset: number) => void;
   applyVolume: (value: number) => void;
+  toggleMute: () => void;
   flash: (kind: PlayerFeedbackKind, extra?: { deltaSeconds?: number; volume?: number }) => void;
   startSpaceAcceleration: () => boolean;
   stopSpaceAcceleration: () => void;
@@ -19,6 +20,7 @@ export function usePlayerKeyboardShortcuts({
   togglePlay,
   jump,
   applyVolume,
+  toggleMute,
   flash,
   startSpaceAcceleration,
   stopSpaceAcceleration,
@@ -31,6 +33,7 @@ export function usePlayerKeyboardShortcuts({
     togglePlay,
     jump,
     applyVolume,
+    toggleMute,
     flash,
     startSpaceAcceleration,
     stopSpaceAcceleration,
@@ -42,6 +45,7 @@ export function usePlayerKeyboardShortcuts({
     togglePlay,
     jump,
     applyVolume,
+    toggleMute,
     flash,
     startSpaceAcceleration,
     stopSpaceAcceleration,
@@ -83,6 +87,13 @@ export function usePlayerKeyboardShortcuts({
           target.isContentEditable ||
           (tag === "input" && type !== "range");
         if (isTextEntry) return;
+      }
+
+      if (event.key.toLowerCase() === "m") {
+        if (event.repeat) return;
+        event.preventDefault();
+        handlersRef.current.toggleMute();
+        return;
       }
 
       if (event.key === "Tab") {

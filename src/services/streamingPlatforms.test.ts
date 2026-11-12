@@ -5,11 +5,16 @@ const { tmdbFetch } = vi.hoisted(() => ({ tmdbFetch: vi.fn() }));
 vi.mock("../config/apiKeys", () => ({ tmdbFetch }));
 
 import {
+  APPLE_TV_TRENDING_GENRES,
+  fetchAppleTvTrendingRows,
+  fetchMubiTrendingRows,
+  fetchStreamingPlatformTrendingRows,
   fetchStreamingPlatformCollections,
   fetchStreamingPlatformRows,
   getStreamingPlatformCatalogRequest,
   getStreamingPlatform,
   getStreamingPlatformPath,
+  MUBI_TRENDING_CATEGORIES,
   STREAMING_PLATFORMS,
 } from "./streamingPlatforms";
 
@@ -85,6 +90,143 @@ describe("streaming platform catalogs", () => {
 
     expect(rows).toHaveLength(4);
     expect(tmdbFetch.mock.calls.every(([, { params }]) => params.with_watch_providers === "11")).toBe(true);
+  });
+
+  it("uses one shared genre bar that maps each category to both TMDB media taxonomies", () => {
+    expect(MUBI_TRENDING_CATEGORIES.find(genre => genre.key === "drama")).toMatchObject({
+      label: "Drama",
+      movieGenreIds: [18],
+      seriesGenreIds: [18],
+    });
+    expect(MUBI_TRENDING_CATEGORIES.find(genre => genre.key === "action-adventure")).toMatchObject({
+      movieGenreIds: [28, 12],
+      seriesGenreIds: [10759],
+    });
+    expect(APPLE_TV_TRENDING_GENRES.find(genre => genre.key === "drama")).toMatchObject({
+      movieGenreIds: [18],
+      seriesGenreIds: [18],
+    });
+    expect(APPLE_TV_TRENDING_GENRES.some(genre => genre.key === "kids" && genre.seriesGenreIds.includes(10762))).toBe(true);
+  });
+
+  it.each([
+    { name: "MUBI", providerId: "11", fetchRows: fetchMubiTrendingRows },
+    { name: "Apple TV+", providerId: "350", fetchRows: fetchAppleTvTrendingRows },
+  ])("shows $name movies and series simultaneously from every reported region", async ({ name, providerId, fetchRows }) => {
+    tmdbFetch.mockImplementation((path: string, { params }: { params: Record<string, string> } = { params: {} }) => {
+      if (path === "/watch/providers/movie" || path === "/watch/providers/tv") {
+        return Promise.resolve({ results: [{ provider_id: Number(providerId), display_priorities: { GB: 0, US: 1 } }] });
+      }
+
+      const genreIds = path === "/discover/movie" ? [18] : [18];
+      const resultBase = path === "/discover/movie"
+        ? { title: `${name} film`, release_date: "2024-01-01" }
+        : { name: `${name} series`, first_air_date: "2024-01-01" };
+      const results = params.watch_region === "GB"
+        ? [{ id: 1, ...resultBase, genre_ids: genreIds, popularity: 20 }]
+        : [
+          { id: 1, ...resultBase, genre_ids: genreIds, popularity: 20 },
+          { id: 2, ...resultBase, genre_ids: genreIds, popularity: 10 },
+        ];
+      return Promise.resolve({ results });
+    });
+
+    const rows = await fetchRows("drama");
+    const movieRow = rows.find(row => row.catalogId.endsWith(".movie.genre.drama"));
+    const seriesRow = rows.find(row => row.catalogId.endsWith(".series.genre.drama"));
+    const discoverCalls = tmdbFetch.mock.calls.filter(([path]) => path.startsWith("/discover/"));
+
+    expect(movieRow?.type).toBe("movie");
+    expect(movieRow?.items.map(item => item.id)).toEqual(["tmdb:1", "tmdb:2"]);
+    expect(movieRow?.items.every(item => item.type === "movie")).toBe(true);
+    expect(seriesRow?.type).toBe("series");
+    expect(seriesRow?.items.map(item => item.id)).toEqual(["tmdb:1", "tmdb:2"]);
+    expect(seriesRow?.items.every(item => item.type === "series")).toBe(true);
+    expect(discoverCalls).toHaveLength(4);
+    expect(discoverCalls.map(([path]) => path).sort()).toEqual([
+      "/discover/movie", "/discover/movie", "/discover/tv", "/discover/tv",
+    ]);
+    expect(discoverCalls.every(([, { params }]) =>
+      params.with_watch_providers === providerId
+      && params.with_watch_monetization_types === "flatrate"
+      && params.with_genres === "18"
+      && ["GB", "US"].includes(params.watch_region),
+    )).toBe(true);
+  });
+
+  it("unions provider regions once per media type for the all-genres view", async () => {
+    tmdbFetch.mockImplementation((path: string, { params }: { params: Record<string, string> } = { params: {} }) => {
+      if (path === "/watch/providers/movie" || path === "/watch/providers/tv") {
+        return Promise.resolve({ results: [{ provider_id: 11, display_priorities: { GB: 0, US: 1 } }] });
+      }
+      const genreIds = path === "/discover/movie" ? [18] : [18];
+      const title = path === "/discover/movie" ? { title: "Global film" } : { name: "Global series" };
+      return Promise.resolve({ results: [
+        { id: params.watch_region === "GB" ? 10 : 11, ...title, genre_ids: genreIds, popularity: 20 },
+      ] });
+    });
+
+    const rows = await fetchMubiTrendingRows();
+    const movieDrama = rows.find(row => row.catalogId.endsWith(".movie.genre.drama"));
+    const seriesDrama = rows.find(row => row.catalogId.endsWith(".series.genre.drama"));
+    const discoverCalls = tmdbFetch.mock.calls.filter(([path]) => path.startsWith("/discover/"));
+
+    expect(movieDrama?.items.map(item => item.id)).toEqual(["tmdb:10", "tmdb:11"]);
+    expect(seriesDrama?.items.map(item => item.id)).toEqual(["tmdb:10", "tmdb:11"]);
+    expect(discoverCalls).toHaveLength(4);
+  });
+
+  it.each([
+    { name: "Netflix", platformId: "netflix", providerIds: "8" },
+    { name: "HBO Max", platformId: "hbo-max", providerIds: "1899|384" },
+    { name: "Prime Video", platformId: "prime-video", providerIds: "9" },
+    { name: "Disney+", platformId: "disney-plus", providerIds: "337" },
+  ])("fetches globally playable movies and series for $name using its configured provider IDs", async ({ platformId, providerIds }) => {
+    const ids = providerIds.split("|").map(Number);
+    tmdbFetch.mockImplementation((path: string, { params }: { params: Record<string, string> } = { params: {} }) => {
+      if (path === "/watch/providers/movie" || path === "/watch/providers/tv") {
+        return Promise.resolve({ results: ids.map((provider_id, index) => ({
+          provider_id,
+          display_priorities: ids.length > 1
+            ? index === 0 ? { GB: 0 } : { US: 0 }
+            : { GB: 0, US: 1 },
+        })) });
+      }
+
+      const mediaType = path === "/discover/movie" ? "movie" : "series";
+      const title = mediaType === "movie" ? { title: "Playable movie" } : { name: "Playable series" };
+      return Promise.resolve({ results: [{
+        id: params.watch_region === "GB" ? 301 : 302,
+        ...title,
+        genre_ids: [18],
+        popularity: params.watch_region === "GB" ? 20 : 10,
+      }] });
+    });
+
+    const rows = await fetchStreamingPlatformTrendingRows(platformId);
+    const movieRow = rows.find(row => row.catalogId === `streaming.${platformId}.movie.genre.all`);
+    const seriesRow = rows.find(row => row.catalogId === `streaming.${platformId}.series.genre.all`);
+    const discoverCalls = tmdbFetch.mock.calls.filter(([path]) => path.startsWith("/discover/"));
+
+    expect(movieRow?.type).toBe("movie");
+    expect(movieRow?.items[0]).toMatchObject({ id: "tmdb:301", type: "movie" });
+    expect(seriesRow?.type).toBe("series");
+    expect(seriesRow?.items[0]).toMatchObject({ id: "tmdb:301", type: "series" });
+    expect(discoverCalls).toHaveLength(4);
+    expect(discoverCalls.every(([, { params }]) =>
+      params.with_watch_providers === providerIds
+      && params.with_watch_monetization_types === "flatrate"
+      && Boolean(params.with_genres)
+      && ["GB", "US"].includes(params.watch_region),
+    )).toBe(true);
+    expect(discoverCalls.map(([path]) => path).sort()).toEqual([
+      "/discover/movie", "/discover/movie", "/discover/tv", "/discover/tv",
+    ]);
+  });
+
+  it("returns no global trending rows for unknown platforms without calling TMDB", async () => {
+    expect(await fetchStreamingPlatformTrendingRows("not-a-platform")).toEqual([]);
+    expect(tmdbFetch).not.toHaveBeenCalled();
   });
 
   it("uses the original Prime Video title artwork", () => {

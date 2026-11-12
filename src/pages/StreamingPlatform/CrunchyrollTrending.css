@@ -46,3 +46,8 @@
 .crunchyroll-trending__state p {
   margin: 0;
 }
+
+.crunchyroll-trending__state--loading {
+  align-items: center;
+  padding-block: 1em;
+}

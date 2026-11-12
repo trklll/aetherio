@@ -9,6 +9,7 @@ import { IMG, getDetailLogoKey, resolveTmdbId } from "./utils";
 export function useEpisodeMetadata(query: StreamQuery | null) {
   const [episodeOptions, setEpisodeOptions] = useState<EpisodeOption[]>([]);
   const [seriesLogoUrl, setSeriesLogoUrl] = useState<string | null>(null);
+  const [seriesBackdropUrl, setSeriesBackdropUrl] = useState<string | null>(null);
   const [nextSeasonEpisode, setNextSeasonEpisode] = useState<EpisodeOption | null>(null);
   const [episodeMetadataReady, setEpisodeMetadataReady] = useState(false);
 
@@ -16,6 +17,7 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
     if (!query?.season || !query.episode || query.type === "movie") {
       setEpisodeOptions([]);
       setSeriesLogoUrl(null);
+      setSeriesBackdropUrl(null);
       setNextSeasonEpisode(null);
       setEpisodeMetadataReady(true);
       return;
@@ -23,6 +25,7 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
     let cancelled = false;
     setEpisodeOptions([]);
     setSeriesLogoUrl(null);
+    setSeriesBackdropUrl(null);
     setNextSeasonEpisode(null);
     setEpisodeMetadataReady(false);
 
@@ -46,6 +49,8 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
         const logos = detailsJson?.images?.logos ?? [];
         const logoPath = logos.find((item: any) => typeof item?.file_path === "string")?.file_path;
         setSeriesLogoUrl(logoPath ? `${IMG}/original${logoPath}` : null);
+        const backdropPath = detailsJson?.backdrop_path;
+        setSeriesBackdropUrl(typeof backdropPath === "string" ? `${IMG}/original${backdropPath}` : null);
 
         // La duración por episodio es opcional en TMDB; la de la serie sirve de
         // respaldo para que la tarjeta no se quede sin dato.
@@ -99,6 +104,7 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
         if (!cancelled) {
           setEpisodeOptions([]);
           setSeriesLogoUrl(null);
+          setSeriesBackdropUrl(null);
           setNextSeasonEpisode(null);
           setEpisodeMetadataReady(true);
         }
@@ -111,7 +117,7 @@ export function useEpisodeMetadata(query: StreamQuery | null) {
     };
   }, [query]);
 
-  return { episodeOptions, seriesLogoUrl, nextSeasonEpisode, episodeMetadataReady };
+  return { episodeOptions, seriesLogoUrl, seriesBackdropUrl, nextSeasonEpisode, episodeMetadataReady };
 }
 
 export function usePlayerLogos(query: StreamQuery | null, stream: MediaStream | null) {

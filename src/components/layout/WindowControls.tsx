@@ -10,17 +10,20 @@ export default function WindowControls() {
         onClick={() => void minimizeWindow()}
         title="Minimizar"
         icon={<Minus size={18} />}
+        playerGlass
       />
       <FloatingActionButton
         onClick={toggleWindowFullscreen}
         title="Pantalla completa"
         icon={<Maximize size={18} />}
         animateOnClick
+        playerGlass
       />
       <FloatingActionButton
         onClick={() => void closeWindow()}
         title="Cerrar"
         icon={<X size={18} />}
+        playerGlass
       />
     </>
   );

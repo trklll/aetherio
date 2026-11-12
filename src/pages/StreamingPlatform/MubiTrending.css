@@ -1,0 +1,53 @@
+.mubi-trending {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.mubi-trending__header {
+  display: flex;
+  align-items: center;
+  padding-inline: var(--app-gutter-x);
+  margin-bottom: 0.75em;
+}
+
+.mubi-trending__header h2 {
+  margin: 0;
+  color: #e5e5e5;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.mubi-trending .mubi-trending__genres {
+  margin: 0 0 0.75em;
+  padding-inline: var(--app-gutter-x);
+  scroll-padding-inline: var(--app-gutter-x);
+  overscroll-behavior-inline: contain;
+}
+
+.mubi-trending__results {
+  min-width: 0;
+}
+
+.mubi-trending__state {
+  display: flex;
+  min-height: 7em;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1em;
+  padding: 0 var(--app-gutter-x);
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+}
+
+.mubi-trending__state--loading {
+  align-items: center;
+  padding-block: 1em;
+}
+
+.mubi-trending__state p {
+  margin: 0;
+}

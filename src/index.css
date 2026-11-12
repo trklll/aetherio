@@ -328,7 +328,7 @@ html.aetherio-android-tv .bp-player-controls .spatial-focus{
   position:absolute;
   z-index:41;
   right:clamp(28px, 6.4vw, 132px);
-  bottom:clamp(160px, 23vh, 280px);
+  bottom:calc(clamp(160px, 23vh, 280px) + clamp(24px, 4vh, 40px));
   display:flex;
   align-items:center;
   gap:32px;
@@ -1140,10 +1140,10 @@ html.aetherio-android-tv .scroll-row{
 .line-clamp-2{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .line-clamp-3{overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;}
 
-.detail-page-scale[data-detail-mode="normal"] > .detail-page-content > *{
+.detail-page-scale:is([data-detail-mode="normal"], [data-detail-mode="tv"]) > .detail-page-content > :not(.detail-content-logo){
   /* Reuse one composited surface per section while scrolling past the shared
      backdrop. Keep glass, shadows and overflow intact; do not promote every
-     episode card or change Big Picture's separate scroll/transition path. */
+     episode card or the animated TV logo. Both modes keep their scroll path. */
   transform:translateZ(0);
 }
 .detail-page-scale{
@@ -1219,10 +1219,10 @@ html.aetherio-android-tv .scroll-row{
   transform:scale(var(--app-bp-scale));
   transform-origin:top left;
 }
-.home-page-scale[data-home-page="normal"] [data-row-key]{
+.home-page-scale:is([data-home-page="normal"], [data-home-page="tv"]) [data-row-key]{
   /* Bound paint-chunk layerization to a row instead of merging the whole
-     catalog on each GSAP scroll update. Keep offscreen content-visibility and
-     promote row surfaces only, never every poster. TV is deliberately unchanged. */
+     catalog on each scroll update. Keep offscreen content-visibility and
+     promote row surfaces only, never every poster. TV keeps compositor scrolling. */
   transform:translateZ(0);
 }
 /* Entity: shell propio con scroll program�tico (como el Detail) y sin
