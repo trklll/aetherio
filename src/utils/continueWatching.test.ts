@@ -5,11 +5,13 @@ import {
   classifyContinueWatchingEntryKind,
   CONTINUE_WATCHING_EVENT,
   getContinueWatchingRows,
+  isContinueWatchingEntryDismissed,
   mergeContinueWatchingEntries,
   mergeRemotePlaybackState,
   readContinueWatchingEntries,
   readWatchedHistoryEntries,
   removeContinueWatchingEntry,
+  removeContinueWatchingMedia,
   saveNextEpisodePrompt,
   saveContinueWatchingProgress,
   tryMarkMediaAsWatched,
@@ -386,5 +388,61 @@ describe("continue watching tombstones", () => {
 
     applyContinueWatchingTombstones([{ key: entry.key, deletedAt: Date.now() - 15 }]);
     expect(readContinueWatchingEntries()).toHaveLength(1);
+  });
+
+  it("does not restore a locally dismissed entry during a remote merge", () => {
+    saveContinueWatchingProgress(baseInput);
+    const entry = readContinueWatchingEntries()[0];
+    if (!entry) throw new Error("Expected entry");
+    removeContinueWatchingEntry(entry.key);
+
+    mergeRemotePlaybackState({ progress: [entry] });
+
+    expect(isContinueWatchingEntryDismissed(entry.key)).toBe(true);
+    expect(readContinueWatchingEntries()).toHaveLength(0);
+  });
+
+  it("removes every pending episode of a title without deleting watched history or other titles", () => {
+    saveContinueWatchingProgress({ ...baseInput, query: { ...baseInput.query, episode: 1 }, currentTime: baseInput.duration });
+    // A previously watched episode may also have active progress from a rewatch.
+    saveContinueWatchingProgress({ ...baseInput, currentTime: baseInput.duration });
+    const current = saveContinueWatchingProgress(baseInput)!;
+    const next = saveNextEpisodePrompt({
+      query: { ...baseInput.query, episode: 3 },
+      name: baseInput.name,
+    })!;
+    saveContinueWatchingProgress({ ...baseInput, query: { type: "movie", id: "tmdb:900" }, name: "Otra película" });
+
+    expect(removeContinueWatchingMedia(baseInput.query.type, baseInput.query.id).ok).toBe(true);
+    expect(getContinueWatchingRows().map(entry => entry.id)).toEqual(["tmdb:900"]);
+    expect(readWatchedHistoryEntries().map(entry => entry.episode).sort()).toEqual([1, 2]);
+
+    // Neither stale sync nor a history scan should restore the discarded title.
+    mergeRemotePlaybackState({ progress: [current, next] });
+    applyContinueWatchingTombstones([]);
+    expect(saveNextEpisodePrompt({ query: { ...baseInput.query, episode: 4 }, name: baseInput.name })).toBeNull();
+    expect(getContinueWatchingRows().map(entry => entry.id)).toEqual(["tmdb:900"]);
+    expect(readWatchedHistoryEntries().map(entry => entry.episode).sort()).toEqual([1, 2]);
+  });
+
+  it("allows a dismissed title and its next prompt again after actual playback resumes", () => {
+    saveContinueWatchingProgress(baseInput);
+    saveNextEpisodePrompt({ query: { ...baseInput.query, episode: 3 }, name: baseInput.name });
+    removeContinueWatchingMedia(baseInput.query.type, baseInput.query.id);
+
+    expect(trySaveContinueWatchingProgress({ ...baseInput, currentTime: 40 }).ok).toBe(true);
+    expect(saveNextEpisodePrompt({ query: { ...baseInput.query, episode: 3 }, name: baseInput.name })).not.toBeNull();
+    expect(readContinueWatchingEntries()).toHaveLength(2);
+  });
+
+  it("does not treat a newer automatic remote prompt as resumed playback", () => {
+    const prompt = saveNextEpisodePrompt({ query: baseInput.query, name: baseInput.name })!;
+    removeContinueWatchingMedia(baseInput.query.type, baseInput.query.id);
+
+    mergeRemotePlaybackState({ progress: [{ ...prompt, updatedAt: Date.now() + 5000 }] });
+    applyContinueWatchingTombstones([]);
+
+    expect(getContinueWatchingRows()).toEqual([]);
+    expect(saveNextEpisodePrompt({ query: baseInput.query, name: baseInput.name })).toBeNull();
   });
 });

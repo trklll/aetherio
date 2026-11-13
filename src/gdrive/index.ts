@@ -1,4 +1,4 @@
-import { openExternalUrl } from "../runtime/platform.ts";
+import { invokeCommand, isTauriRuntime, openExternalUrl } from "../runtime/platform.ts";
 import { EXPERIENCE_STORAGE_CHANGED_EVENT } from "../domain/experienceStorage";
 import {
   EXPERIENCE_SCOPE_CHANGED_EVENT,
@@ -7,14 +7,14 @@ import {
 } from "../utils/localProfiles";
 import { applyContinueWatchingTombstones, mergeRemotePlaybackState, type ContinueWatchingEntry } from "../utils/continueWatching.ts";
 import { LIBRARY_CHANGED_EVENT, applyLibraryTombstones, mergeSavedLibraryItems, type SavedLibraryItem } from "../utils/library.ts";
+import { mergeRemoteUserRatings } from "../utils/userRatings.ts";
 
 /**
  * Respaldo de la experiencia del usuario en el Google Drive del propio usuario
  * (mismo modelo que CloudRedirect para los saves de Steam: los datos viven en
  * la cuenta del usuario, no en un servidor de Aetherio).
  *
- * - OAuth 2.0 con PKCE por deep link `aetherio://gdrive/callback`; los tokens
- *   se intercambian contra Google directamente desde el cliente (Desktop app).
+ * - OAuth 2.0 de escritorio con PKCE y callback loopback efímero en 127.0.0.1.
  * - Los archivos viven en `appDataFolder` (carpeta privada de la app, oculta
  *   para el usuario) con un JSON por clave de experiencia y por
  *   cuenta/perfil: continuar viendo, historial visto y biblioteca guardada.
@@ -29,7 +29,6 @@ const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 
-const REDIRECT_URI = "aetherio://gdrive/callback";
 const AUTH_STORAGE_KEY = "aetherio-gdrive-auth-v1";
 const SYNC_META_STORAGE_KEY = "aetherio-gdrive-sync-v1";
 const FILE_META_STORAGE_KEY = "aetherio-gdrive-files-v1";
@@ -44,17 +43,21 @@ const PUSH_DEBOUNCE_MS = 4000;
 // for development or alternate deployments.
 const GDRIVE_CLIENT_ID = (import.meta.env.VITE_GDRIVE_CLIENT_ID as string | undefined)?.trim()
   || "90295001611-mkht3fim4jvnu7npp16qjnpt5iu0r5lf.apps.googleusercontent.com";
+// Google desktop OAuth clients are public clients: this value is optional and
+// must never be treated as a confidential secret inside a distributed app.
+const GDRIVE_CLIENT_SECRET = (import.meta.env.VITE_GDRIVE_CLIENT_SECRET as string | undefined)?.trim() ?? "";
 
 export const GDRIVE_AUTH_CHANGED_EVENT = "aetherio-gdrive-auth-changed";
 export const GDRIVE_SYNC_CHANGED_EVENT = "aetherio-gdrive-sync-changed";
 
-/** Claves de experiencia respaldadas en Drive (MVP: continuar viendo + biblioteca). */
+/** Claves de experiencia respaldadas en Drive. */
 const SYNC_KEYS = [
   "aetherio-continue-watching-v1",
   "aetherio-watched-history-v1",
   "aetherio-continue-watching-tombstones-v1",
   "aetherio-saved-library-v1",
   "aetherio-library-tombstones-v1",
+  "aetherio-user-ratings-v1",
 ] as const;
 
 const LIBRARY_KEY = "aetherio-saved-library-v1";
@@ -74,6 +77,7 @@ interface GoogleDriveAuthState {
   pendingAuthorizationState?: string;
   pendingAuthorizationCodeVerifier?: string;
   pendingAuthorizationStartedAt?: number;
+  pendingAuthorizationRedirectUri?: string;
 }
 
 interface GoogleDriveTokenResponse {
@@ -213,6 +217,10 @@ export async function startGoogleDriveAuthorization() {
   if (!GDRIVE_CLIENT_ID) {
     throw new Error("Google Drive no esta configurado en esta version de Aetherio.");
   }
+  if (!isTauriRuntime()) {
+    throw new Error("La conexión con Google Drive requiere abrir Aetherio para escritorio.");
+  }
+  const redirectUri = await invokeCommand<string>("start_gdrive_oauth_listener");
   const state = createAuthorizationState();
   const codeVerifier = createCodeVerifier();
   const startedAt = Date.now();
@@ -221,13 +229,14 @@ export async function startGoogleDriveAuthorization() {
     pendingAuthorizationState: state,
     pendingAuthorizationCodeVerifier: codeVerifier,
     pendingAuthorizationStartedAt: startedAt,
+    pendingAuthorizationRedirectUri: redirectUri,
   });
   dispatchAuthChanged();
 
   const authorizationUrl = new URL(AUTH_ENDPOINT);
   authorizationUrl.searchParams.set("response_type", "code");
   authorizationUrl.searchParams.set("client_id", GDRIVE_CLIENT_ID);
-  authorizationUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+  authorizationUrl.searchParams.set("redirect_uri", redirectUri);
   authorizationUrl.searchParams.set("scope", DRIVE_SCOPE);
   authorizationUrl.searchParams.set("state", state);
   authorizationUrl.searchParams.set("code_challenge", await createCodeChallenge(codeVerifier));
@@ -243,20 +252,41 @@ export async function startGoogleDriveAuthorization() {
     gdriveLog("opener failed, falling back to window.open", { error: String(error) });
     window.open(authorizationUrl.toString(), "_blank", "noopener,noreferrer");
   }
-  return { authorizationUrl: authorizationUrl.toString(), state, expiresAt: startedAt + AUTHORIZATION_PENDING_TTL_MS };
+  while (Date.now() - startedAt < AUTHORIZATION_PENDING_TTL_MS) {
+    const callbackUrl = await invokeCommand<string | null>("take_gdrive_oauth_callback");
+    if (callbackUrl) {
+      await completeGoogleDriveAuthorization(callbackUrl);
+      return { authorizationUrl: authorizationUrl.toString(), state, expiresAt: startedAt + AUTHORIZATION_PENDING_TTL_MS };
+    }
+    await new Promise(resolve => window.setTimeout(resolve, 350));
+  }
+  clearPendingAuthorization();
+  throw new Error("La autorización de Google expiró. Vuelve a intentarlo.");
 }
 
 export function isGoogleDriveCallbackUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl);
-    return (
-      url.protocol === "aetherio:"
-      && url.hostname === "gdrive"
-      && url.pathname.replace(/\/$/, "") === "/callback"
-    );
+    return url.protocol === "http:"
+      && url.hostname === "127.0.0.1"
+      && Number(url.port) > 0
+      && url.pathname === "/";
   } catch {
     return false;
   }
+}
+
+function clearPendingAuthorization() {
+  const state = readAuthState();
+  const {
+    pendingAuthorizationState: _pendingState,
+    pendingAuthorizationCodeVerifier: _codeVerifier,
+    pendingAuthorizationStartedAt: _startedAt,
+    pendingAuthorizationRedirectUri: _redirectUri,
+    ...rest
+  } = state;
+  writeAuthState(rest);
+  dispatchAuthChanged();
 }
 
 /** Deduplicación de callbacks (reenvíos del deep link al arrancar). */
@@ -286,7 +316,10 @@ export async function completeGoogleDriveAuthorization(callbackUrl: string): Pro
   const code = url.searchParams.get("code") ?? "";
   const error = url.searchParams.get("error");
 
-  if (error) throw new Error(describeGoogleOAuthError(error, url.searchParams.get("error_description")));
+  if (error) {
+    clearPendingAuthorization();
+    throw new Error(describeGoogleOAuthError(error, url.searchParams.get("error_description")));
+  }
   if (!state || !code) return { status: "ignored" };
   if (hasProcessedCallback(state)) return { status: "ignored" };
 
@@ -298,10 +331,14 @@ export async function completeGoogleDriveAuthorization(callbackUrl: string): Pro
     throw new Error("La autorizacion de Google expiro. Vuelve a conectarla desde Ajustes.");
   }
 
+  if (url.origin + url.pathname !== current.pendingAuthorizationRedirectUri) {
+    throw new Error("El retorno de Google no coincide con la solicitud de autorización.");
+  }
   const token = await exchangeGoogleToken({
     grantType: "authorization_code",
     code,
     codeVerifier: current.pendingAuthorizationCodeVerifier,
+    redirectUri: current.pendingAuthorizationRedirectUri,
   });
   markCallbackProcessed(state);
   writeAuthState({
@@ -338,17 +375,23 @@ function describeGoogleOAuthError(error: string, description: string | null) {
   return trimmed ? `Google denegó la autorización: ${trimmed}.` : "No se pudo completar la autorización de Google.";
 }
 
-async function exchangeGoogleToken(input: { grantType: "authorization_code" | "refresh_token"; code?: string; codeVerifier?: string }) {
+async function exchangeGoogleToken(input: {
+  grantType: "authorization_code" | "refresh_token";
+  code?: string;
+  codeVerifier?: string;
+  redirectUri?: string;
+}) {
   if (!GDRIVE_CLIENT_ID) {
     throw new Error("Google Drive no esta configurado en esta version de Aetherio.");
   }
   const body = new URLSearchParams();
   body.set("client_id", GDRIVE_CLIENT_ID);
+  if (GDRIVE_CLIENT_SECRET) body.set("client_secret", GDRIVE_CLIENT_SECRET);
   body.set("grant_type", input.grantType);
   if (input.grantType === "authorization_code") {
     body.set("code", input.code ?? "");
     body.set("code_verifier", input.codeVerifier ?? "");
-    body.set("redirect_uri", REDIRECT_URI);
+    body.set("redirect_uri", input.redirectUri ?? "");
   } else {
     const refreshToken = readAuthState().refreshToken ?? "";
     body.set("refresh_token", refreshToken);
@@ -367,6 +410,11 @@ async function exchangeGoogleToken(input: { grantType: "authorization_code" | "r
     const description = typeof (payload as { error_description?: unknown })?.error_description === "string"
       ? (payload as { error_description: string }).error_description
       : "";
+    if (/client.secret.*missing|missing.*client.secret/i.test(description)) {
+      throw new Error(
+        "Google requiere el client secret de este cliente OAuth. Configura VITE_GDRIVE_CLIENT_SECRET en el entorno de compilación y vuelve a generar Aetherio."
+      );
+    }
     throw new Error(describeGoogleOAuthError(String((payload as { error?: unknown })?.error ?? response.status), description));
   }
   return token;
@@ -754,6 +802,10 @@ function applyRemoteKey(key: string, raw: string) {
   }
   if (key === CONTINUE_WATCHING_TOMBSTONES_KEY) {
     applyContinueWatchingTombstones((parsed as { tombstones?: unknown })?.tombstones);
+    return;
+  }
+  if (key === "aetherio-user-ratings-v1") {
+    mergeRemoteUserRatings(parsed);
   }
 }
 

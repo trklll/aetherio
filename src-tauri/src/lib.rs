@@ -47,6 +47,86 @@ use reqwest::blocking::Client;
 use std::sync::mpsc;
 use tauri::{Emitter, Manager};
 
+static GDRIVE_OAUTH_CALLBACK: Mutex<Option<String>> = Mutex::new(None);
+static GDRIVE_OAUTH_LISTENER_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[tauri::command]
+fn start_gdrive_oauth_listener() -> Result<String, String> {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("No se pudo iniciar el retorno OAuth local: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("No se pudo preparar el retorno OAuth local: {error}"))?;
+    let address = listener
+        .local_addr()
+        .map_err(|error| format!("No se pudo consultar el retorno OAuth local: {error}"))?;
+    let generation = GDRIVE_OAUTH_LISTENER_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    *GDRIVE_OAUTH_CALLBACK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
+
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(600);
+        while Instant::now() < deadline
+            && GDRIVE_OAUTH_LISTENER_GENERATION.load(Ordering::Acquire) == generation
+        {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0_u8; 8192];
+                    let Ok(length) = stream.read(&mut request) else {
+                        continue;
+                    };
+                    let request = String::from_utf8_lossy(&request[..length]);
+                    let target = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("");
+                    let callback = if target.starts_with("/?") {
+                        Some(format!("http://{address}{target}"))
+                    } else {
+                        None
+                    };
+                    let body = if callback.is_some() {
+                        "<!doctype html><meta charset=\"utf-8\"><title>Aetherio</title><p>Autorización recibida. Puedes volver a Aetherio.</p>"
+                    } else {
+                        "<!doctype html><meta charset=\"utf-8\"><title>Aetherio</title><p>Solicitud no válida.</p>"
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                        if callback.is_some() { "200 OK" } else { "404 Not Found" },
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    if let Some(callback) = callback {
+                        *GDRIVE_OAUTH_CALLBACK
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()) = Some(callback);
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    Ok(format!("http://{address}/"))
+}
+
+#[tauri::command]
+fn take_gdrive_oauth_callback() -> Option<String> {
+    GDRIVE_OAUTH_CALLBACK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+}
+
 #[tauri::command]
 fn playback_capabilities(app: tauri::AppHandle) -> serde_json::Value {
     let runtime_dir = find_mpv_runtime_dir(&app);
@@ -6052,6 +6132,8 @@ pub fn run() {
             toggle_window_maximize,
             toggle_window_fullscreen,
             take_pending_open_files,
+            start_gdrive_oauth_listener,
+            take_gdrive_oauth_callback,
             open_mpv,
             set_mpv_surface_visible,
             set_mpv_controls_blur,

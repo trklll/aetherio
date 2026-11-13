@@ -265,7 +265,7 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
       element.dispatchEvent(wheel);
       return wheel.defaultPrevented;
     });
-    // Desktop Home uses GSAP inertia; TV keeps its compositor-backed routing.
+    // PC uses short continuous smoothing; TV retains its existing routing.
     expect(prevented).toBe(true);
     // Use a real visible card, not a viewport coordinate that may still be
     // covered by Big Picture's entrance layer or floating navigation.
@@ -276,7 +276,7 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
     await expect.poll(() => shell.evaluate(element => element.scrollTop)).toBeGreaterThan(before + 200);
   });
 
-  test(`${mode}: ${mode === "normal" ? "anima scrollTop con GSAP" : "mantiene el scroll del compositor sin tweens GSAP"}`, async ({ page }) => {
+  test(`${mode}: la rueda no crea tweens GSAP en el Home`, async ({ page }) => {
     await openFullHome(page, route);
     const card = page.locator(".media-card-frame").first();
     await card.hover();
@@ -287,8 +287,43 @@ for (const [mode, route] of [["normal", "/home"], ["TV", "/big-picture"]]) {
       const shell = document.querySelector("[data-aetherio-scroll-shell]");
       return gsap.getTweensOf(shell).filter((tween: { vars: { scrollTop?: number } }) => tween.vars.scrollTop !== undefined).length;
     });
-    expect(tweens).toBe(mode === "normal" ? 1 : 0);
+    expect(tweens).toBe(0);
   });
+
+  if (mode === "normal") {
+    test("PC: suaviza la rueda sin saltos instantáneos ni reiniciar cada giro", async ({ page }) => {
+      await openFullHome(page, route);
+      const result = await page.locator(".media-card-frame").first().evaluate(async element => {
+        const shell = document.querySelector<HTMLElement>("[data-aetherio-scroll-shell]")!;
+        shell.scrollTo({ top: 1000, behavior: "instant" });
+        const start = shell.scrollTop;
+        for (const deltaY of [120, 120, 480]) {
+          element.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true }));
+        }
+        const immediate = shell.scrollTop - start;
+        const positions: number[] = [];
+        await new Promise<void>(resolve => {
+          const start = performance.now();
+          const check = (now: number) => {
+            positions.push(shell.scrollTop);
+            if (now - start < 600) requestAnimationFrame(check);
+            else resolve();
+          };
+          requestAnimationFrame(check);
+        });
+        return {
+          immediate,
+          distance: shell.scrollTop - start,
+          intermediate: positions.some(position => position > start && position < start + 720),
+          tail: positions.slice(-3).map(position => position - shell.scrollTop),
+        };
+      });
+      expect(result.immediate).toBe(0);
+      expect(result.intermediate).toBe(true);
+      expect(result.distance).toBe(720);
+      expect(result.tail.every(distance => distance === 0)).toBe(true);
+    });
+  }
 
   test(`${mode}: desplaza un Home completo y conserva hover y navegación horizontal`, async ({ page }) => {
     await openFullHome(page, route);

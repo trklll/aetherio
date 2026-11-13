@@ -8,7 +8,7 @@ import HomePartyModal, { PartyHomeButton, PartyPendingJoinHandler } from "../../
 import { toggleWindowFullscreen } from "../../utils/windowControls";
 import { listenPlatformEvent, stopNativePlayback } from "../../runtime/platform";
 import { getHomeScroll } from "../../store/homeScrollStore";
-import { gsap, installInertialScroll, springTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
+import { gsap, installWheelScroll, springTo, prefersReducedMotion, stopInertialScroll, motionTimings } from "../../utils/motion";
 import { consumeAutoResolveBackPress } from "../../utils/autoResolveGuard";
 import { buildPlayerBackPath } from "../../utils/bigPictureDetail";
 import { useBackAction } from "../../input/inputActions";
@@ -554,7 +554,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     const shell = scrollRef.current;
     if (!shell || isPlayer || isEpisodePage) return;
-    return installInertialScroll(shell);
+    return installWheelScroll(shell);
   }, [isEpisodePage, isPlayer, navigationScrollKey]);
 
   useEffect(() => {

@@ -103,7 +103,8 @@ export function tweenTo(
       duration: 0.2,
       ease: "power1.out",
       overwrite: "auto",
-      clearProps: vars.clearProps,
+      ...(vars.clearProps === undefined ? {} : { clearProps: vars.clearProps }),
+      onComplete: vars.onComplete,
     });
   }
   return gsap.to(resolvedTarget, {
@@ -201,6 +202,15 @@ interface InertialScrollState {
 }
 
 const inertialScrollStates = new WeakMap<HTMLElement, InertialScrollState>();
+interface WheelScrollState {
+  target: number;
+  position: number;
+  lastTime: number;
+  frame: number;
+}
+const wheelScrollStates = new WeakMap<HTMLElement, WheelScrollState>();
+// Response time, not a fixed-duration tween: new notches preserve the motion.
+const wheelResponseMs = 65;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -237,11 +247,128 @@ function resolveVerticalScroller(root: HTMLElement, target: EventTarget | null, 
 
 export function stopInertialScroll(element: HTMLElement | null) {
   if (!element) return;
+  const wheel = wheelScrollStates.get(element);
+  if (wheel) cancelAnimationFrame(wheel.frame);
+  wheelScrollStates.delete(element);
   const state = inertialScrollStates.get(element);
   state?.tween?.kill();
   if (state?.compositor) element.scrollTo({ top: element.scrollTop, behavior: "instant" });
   inertialScrollStates.delete(element);
   gsap.killTweensOf(element, "scrollTop");
+}
+
+/**
+ * PC mouse wheels get a short, continuous interpolation instead of restarting
+ * an easing tween on every notch. Precision trackpad gestures stay native.
+ * TV continues to use installInertialScroll below, unchanged.
+ */
+export function installWheelScroll(root: HTMLElement) {
+  const controlled = new Set<HTMLElement>();
+  const reducedMotion = prefersReducedMotion();
+  const stopControlled = () => {
+    controlled.forEach(stopInertialScroll);
+    controlled.clear();
+  };
+
+  const onWheel = (event: WheelEvent) => {
+    if (
+      event.defaultPrevented
+      || !event.cancelable
+      || event.ctrlKey
+      || event.metaKey
+      || event.shiftKey
+      || Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      || event.deltaY === 0
+    ) {
+      return;
+    }
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (target?.closest("[data-disable-inertial-scroll]")) return;
+
+    if (event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(event.deltaY) < 42) {
+      stopControlled();
+      return;
+    }
+
+    let scroller: HTMLElement | null = target ?? root;
+    while (scroller) {
+      if (canScrollVertically(scroller)) {
+        if (canConsumeScroll(scroller, event.deltaY)) break;
+        const overscroll = getComputedStyle(scroller).overscrollBehaviorY;
+        if (overscroll === "contain" || overscroll === "none") return;
+      }
+      if (scroller === root) return;
+      scroller = scroller.parentElement;
+    }
+    if (!scroller) return;
+
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 18
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? scroller.clientHeight
+        : 1;
+    const delta = event.deltaY * unit;
+    const existing = wheelScrollStates.get(scroller);
+    const position = existing?.position ?? scroller.scrollTop;
+    // Reversals respond immediately rather than first consuming an old target.
+    const origin = existing && Math.sign(existing.target - position) === Math.sign(delta)
+      ? existing.target
+      : position;
+    const top = clamp(
+      origin + delta,
+      0,
+      Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+    );
+    event.preventDefault();
+    gsap.killTweensOf(scroller, "scrollTop");
+    if (reducedMotion) {
+      scroller.scrollTo({ top, behavior: "instant" });
+      return;
+    }
+    if (existing) {
+      existing.target = top;
+      return;
+    }
+
+    const element = scroller;
+    const state: WheelScrollState = { target: top, position, lastTime: performance.now(), frame: 0 };
+    const tick = (now: number) => {
+      const elapsed = clamp(now - state.lastTime, 0, 64);
+      state.lastTime = now;
+      // Time-based smoothing remains consistent at 60/120/144 Hz. Wheel bursts
+      // update the target only: the running frame loop is never restarted.
+      state.position += (state.target - state.position) * (1 - Math.exp(-elapsed / wheelResponseMs));
+      const settled = Math.abs(state.target - state.position) <= 0.5;
+      element.scrollTo({ top: settled ? state.target : state.position, behavior: "instant" });
+      if (settled) {
+        wheelScrollStates.delete(element);
+        controlled.delete(element);
+      } else {
+        state.frame = requestAnimationFrame(tick);
+      }
+    };
+    wheelScrollStates.set(element, state);
+    controlled.add(element);
+    state.frame = requestAnimationFrame(tick);
+  };
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+      stopControlled();
+    }
+  };
+
+  // Only mouse-wheel steps are replaced; touch, trackpad and horizontal input
+  // keep their native behavior and do not get an additional smoothing layer.
+  root.addEventListener("wheel", onWheel, { passive: false });
+  root.addEventListener("pointerdown", stopControlled, { passive: true });
+  window.addEventListener("keydown", onKeyDown, true);
+  return () => {
+    root.removeEventListener("wheel", onWheel);
+    root.removeEventListener("pointerdown", stopControlled);
+    window.removeEventListener("keydown", onKeyDown, true);
+    stopControlled();
+  };
 }
 
 /**

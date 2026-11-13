@@ -15,6 +15,7 @@ import {
   progressPercent,
   readWatchedHistoryEntries,
   removeContinueWatchingEntry,
+  removeContinueWatchingMedia,
   saveNextEpisodePrompt,
   updateContinueWatchingEntryArtwork,
   type ContinueWatchingEntry,
@@ -63,6 +64,8 @@ export default function ContinueWatchingRow() {
   const [episodeScanRevision, setEpisodeScanRevision] = useState(0);
   const [availableEpisodeBadges, setAvailableEpisodeBadges] = useState<Record<string, string>>({});
   const [removingKeys, setRemovingKeys] = useState<Set<string>>(() => new Set());
+  const removingKeysRef = useRef(new Set<string>());
+  const [removalError, setRemovalError] = useState("");
   const [hovered, setHovered] = useState(false);
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(false);
@@ -97,7 +100,24 @@ export default function ContinueWatchingRow() {
   const { scrollRef } = virtualWindow;
 
   useEffect(() => {
-    const refresh = () => setItems(getContinueWatchingRows());
+    const refresh = () => {
+      const latest = getContinueWatchingRows();
+      if (!removingKeysRef.current.size) {
+        setItems(latest);
+        return;
+      }
+      // El borrado ya está guardado; conservar solo la tarjeta que está
+      // saliendo hasta terminar su animación, sin recuperar otros episodios.
+      setItems(current => {
+        const byKey = new Map(latest.map(entry => [entry.key, entry]));
+        const kept = current.flatMap(entry => {
+          const live = byKey.get(entry.key);
+          byKey.delete(entry.key);
+          return removingKeysRef.current.has(entry.key) ? [entry] : live ? [live] : [];
+        });
+        return [...kept, ...byKey.values()];
+      });
+    };
     window.addEventListener(CONTINUE_WATCHING_EVENT, refresh);
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
@@ -267,8 +287,20 @@ export default function ContinueWatchingRow() {
           if (artwork) {
             const updated = updateContinueWatchingEntryArtwork(entry.key, artwork);
             if (hasCardArtwork(updated ?? artwork)) {
+              const resolvedEntry = updated ?? { ...entry, ...artwork };
+              writeDetailMediaMeta({
+                id: resolvedEntry.id,
+                type: resolvedEntry.type,
+                name: resolvedEntry.name,
+                logo: resolvedEntry.logo,
+                background: resolvedEntry.background,
+                poster: resolvedEntry.poster,
+              });
+              // Importes (incluido Trakt) pueden escribir Continue Watching antes
+              // de que esta fila monte; refrescar desde storage asegura que la
+              // tarjeta aplique el arte enriquecido incluso si se perdió el evento.
+              setItems(getContinueWatchingRows());
               resolvedWithArtwork = true;
-              const resolvedEntry = updated ?? entry;
               if (needsArtworkEnrichment(resolvedEntry)) {
                 const timer = artworkRetryTimersRef.current.get(entry.key);
                 if (timer !== undefined) {
@@ -340,8 +372,6 @@ export default function ContinueWatchingRow() {
     };
   }, [displayItems.length]);
 
-  if (!displayItems.length) return null;
-
   function applyArrowState(nextLeft: boolean, nextRight: boolean) {
     if (showLeftRef.current !== nextLeft) {
       showLeftRef.current = nextLeft;
@@ -379,6 +409,8 @@ export default function ContinueWatchingRow() {
     tweenTo(rightArrowRef.current, { opacity: hovered && showRight ? 1 : 0 }, 0.45);
   }, [hovered, showLeft, showRight]);
 
+  if (!displayItems.length) return null;
+
   async function resume(entry: ContinueWatchingEntry) {
     window.performance?.mark?.("continue:card_click");
     const cached = readDetailMediaMeta(entry.type, entry.id);
@@ -414,16 +446,22 @@ export default function ContinueWatchingRow() {
   }
 
   function removeWithAnimation(entry: ContinueWatchingEntry) {
-    setRemovingKeys(keys => new Set(keys).add(entry.key));
+    if (removingKeysRef.current.has(entry.key)) return;
+    setRemovalError("");
+    removingKeysRef.current.add(entry.key);
+    setRemovingKeys(new Set(removingKeysRef.current));
+    const result = removeContinueWatchingMedia(entry.type, entry.id);
+    if (!result.ok) {
+      removingKeysRef.current.delete(entry.key);
+      setRemovingKeys(new Set(removingKeysRef.current));
+      setRemovalError("No se pudo guardar la eliminación. Inténtalo de nuevo.");
+    }
   }
 
   function commitRemove(entry: ContinueWatchingEntry) {
-    removeContinueWatchingEntry(entry.key);
-    setRemovingKeys(keys => {
-      const next = new Set(keys);
-      next.delete(entry.key);
-      return next;
-    });
+    removingKeysRef.current.delete(entry.key);
+    setRemovingKeys(new Set(removingKeysRef.current));
+    setItems(current => current.filter(item => item.key !== entry.key));
   }
 
   return (
@@ -431,6 +469,11 @@ export default function ContinueWatchingRow() {
       <div data-row-header style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingLeft: "var(--app-gutter-x)", paddingRight: "var(--app-gutter-x)" }}>
         <span className="home-row-title" style={{ fontSize: 20, fontWeight: 700 }}>Continuar viendo</span>
       </div>
+      {removalError && (
+        <p role="alert" style={{ paddingInline: "var(--app-gutter-x)", color: "#ffb4ab" }}>
+          {removalError}
+        </p>
+      )}
       <div
         style={{ position: "relative" }}
         onMouseEnter={() => setHovered(true)}
@@ -680,7 +723,11 @@ async function createNextEpisodePromptFromEntry(
     const nextKey = buildContinueWatchingKey(nextQuery);
     const existing = getContinueWatchingRows().find(item => item.key === nextKey);
     const existingHasProgress = Boolean(existing && (existing.entryKind === "resume" || progressPercent(existing) > 0));
-    if (savePrompt && !existingHasProgress && existing?.entryKind !== candidate.entryKind) {
+    if (
+      savePrompt
+      && !existingHasProgress
+      && existing?.entryKind !== candidate.entryKind
+    ) {
       const still = tmdbImage(candidate.stillPath, "original");
       saveNextEpisodePrompt({
         query: nextQuery,
@@ -1033,22 +1080,16 @@ const ContinueCard = memo(function ContinueCard({
     onLongPress: () => setMenuOpen(true),
   });
   const enterCard = (target: HTMLDivElement) => {
+    if (removing) return;
     setCardHovered(true);
-    if (removing) {
-      tweenTo(target, { scale: 0.96 });
-    } else {
-      tweenTo(target, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
-    }
+    tweenTo(target, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
     const img = target.querySelector("img");
     if (img) tweenTo(img, { scale: 1.04 });
   };
   const leaveCard = (target: HTMLDivElement) => {
+    if (removing) return;
     setCardHovered(false);
-    if (removing) {
-      tweenTo(target, { scale: 0.96, y: 0 });
-    } else {
-      tweenTo(target, { scale: 1, y: 0, zIndex: 1 }, 0.32);
-    }
+    tweenTo(target, { scale: 1, y: 0, zIndex: 1 }, 0.32);
     const img = target.querySelector("img");
     if (img) tweenTo(img, { scale: 1 });
   };
@@ -1080,7 +1121,21 @@ const ContinueCard = memo(function ContinueCard({
       tweenTo(cardRef.current, { opacity: 1, scale: 1 });
       return;
     }
-    tweenTo(cardRef.current, { opacity: 0, scale: 0.96, onComplete: onCommitRemove });
+    let finished = false;
+    const complete = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timer);
+      onCommitRemove();
+    };
+    // La animación solo retira la copia visual: nunca decide si se guarda el
+    // borrado. El límite también cubre tweens cancelados por foco o virtualizado.
+    const timer = window.setTimeout(complete, 300);
+    const tween = tweenTo(cardRef.current, { opacity: 0, scale: 0.96, onComplete: complete });
+    return () => {
+      window.clearTimeout(timer);
+      tween.kill();
+    };
   }, [removing]);
 
   useEffect(() => {

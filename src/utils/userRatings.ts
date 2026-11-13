@@ -11,6 +11,13 @@ export type UserRatingMap = Record<string, number>;
 interface UserRatingsDocument {
   version: 1;
   ratings: UserRatingMap;
+  changes?: Record<string, RatingChange>;
+}
+
+interface RatingChange {
+  rating: number | null;
+  updatedAt: number;
+  operationId: string;
 }
 
 export function normalizeFiveStarRating(value: unknown): number | null {
@@ -70,21 +77,70 @@ export function setUserRating(type: string, id: string, rating: number | null): 
   const current = readExperienceJSON<UserRatingsDocument>(scope, USER_RATINGS_KEY, isUserRatingsDocument);
   if (!current.ok) return false;
   const ratings = current.value ? sanitizeRatings(current.value.ratings) : {};
+  const changes = normalizeRatingChanges(current.value);
 
   if (normalizedRating === null) {
-    if (!Object.prototype.hasOwnProperty.call(ratings, key)) return true;
+    if (!Object.prototype.hasOwnProperty.call(ratings, key) && changes[key]?.rating === null) return true;
     delete ratings[key];
   } else {
     if (ratings[key] === normalizedRating) return true;
     ratings[key] = normalizedRating;
   }
+  changes[key] = {
+    rating: normalizedRating,
+    updatedAt: Date.now(),
+    operationId: createOperationId(),
+  };
 
   return writeExperienceJSON(
     scope,
     USER_RATINGS_KEY,
-    { version: 1, ratings } satisfies UserRatingsDocument,
+    { version: 1, ratings, changes } satisfies UserRatingsDocument,
     [USER_RATINGS_CHANGED_EVENT, LIBRARY_CHANGED_EVENT],
   ).ok;
+}
+
+/** Merge a Drive copy into this profile, retaining per-rating edits and removals. */
+export function mergeRemoteUserRatings(remoteValue: unknown): boolean {
+  if (!hasBrowserStorage() || !isUserRatingsDocument(remoteValue)) return false;
+  const scope = captureExperienceScope();
+  const current = readExperienceJSON<UserRatingsDocument>(scope, USER_RATINGS_KEY, isUserRatingsDocument);
+  if (!current.ok) return false;
+
+  const merged = mergeUserRatingsDocuments(current.value, remoteValue);
+  if (!merged) return false;
+  if (current.value && JSON.stringify(current.value) === JSON.stringify(merged)) return true;
+
+  return writeExperienceJSON(
+    scope,
+    USER_RATINGS_KEY,
+    merged,
+    [USER_RATINGS_CHANGED_EVENT, LIBRARY_CHANGED_EVENT],
+  ).ok;
+}
+
+/** Pure merge helper also used to verify conflict and deletion behavior. */
+export function mergeUserRatingsDocuments(
+  localValue: unknown,
+  remoteValue: unknown,
+): UserRatingsDocument | null {
+  const local = normalizeDocument(localValue);
+  const remote = normalizeDocument(remoteValue);
+  if (!local || !remote) return null;
+
+  const mergedChanges: Record<string, RatingChange> = { ...(local.changes ?? {}) };
+  for (const [key, remoteChange] of Object.entries(remote.changes ?? {})) {
+    const localChange = mergedChanges[key];
+    if (!localChange || compareRatingChanges(remoteChange, localChange) > 0) {
+      mergedChanges[key] = remoteChange;
+    }
+  }
+
+  const ratings: UserRatingMap = {};
+  for (const [key, change] of Object.entries(mergedChanges)) {
+    if (change.rating !== null) ratings[key] = change.rating;
+  }
+  return { version: 1, ratings, changes: mergedChanges };
 }
 
 function mediaRatingKey(type: string, id: string): string | null {
@@ -103,6 +159,56 @@ function isUserRatingsDocument(value: unknown): value is UserRatingsDocument {
     && document.ratings !== null
     && typeof document.ratings === "object"
     && !Array.isArray(document.ratings);
+}
+
+function normalizeDocument(value: unknown): UserRatingsDocument | null {
+  if (value === null || value === undefined) return { version: 1, ratings: {}, changes: {} };
+  if (!isUserRatingsDocument(value)) return null;
+
+  const ratings = sanitizeRatings(value.ratings);
+  const changes = normalizeRatingChanges(value);
+  // Older documents only had the ratings map. Give those entries a stable,
+  // lowest-priority revision so newer timestamped edits and tombstones win.
+  for (const [key, rating] of Object.entries(ratings)) {
+    changes[key] ??= { rating, updatedAt: 0, operationId: `legacy:${key}:${rating}` };
+  }
+  return { version: 1, ratings, changes };
+}
+
+function normalizeRatingChanges(value: UserRatingsDocument | null | undefined): Record<string, RatingChange> {
+  const changes = value?.changes;
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) return {};
+  return Object.fromEntries(
+    Object.entries(changes).flatMap(([key, candidate]) => {
+      if (!key || !candidate || typeof candidate !== "object") return [];
+      const change = candidate as Partial<RatingChange>;
+      const rating = change.rating === null ? null : normalizeFiveStarRating(change.rating);
+      if (
+        (change.rating !== null && rating === null)
+        || typeof change.updatedAt !== "number"
+        || !Number.isFinite(change.updatedAt)
+        || typeof change.operationId !== "string"
+      ) return [];
+      return [[key, {
+        rating,
+        updatedAt: change.updatedAt,
+        operationId: change.operationId,
+      } satisfies RatingChange]];
+    }),
+  );
+}
+
+function compareRatingChanges(left: RatingChange, right: RatingChange): number {
+  if (left.updatedAt !== right.updatedAt) return left.updatedAt > right.updatedAt ? 1 : -1;
+  return left.operationId.localeCompare(right.operationId);
+}
+
+function createOperationId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
 }
 
 function sanitizeRatings(ratings: UserRatingMap): UserRatingMap {

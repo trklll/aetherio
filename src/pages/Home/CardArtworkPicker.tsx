@@ -10,8 +10,9 @@ import {
 import { GAMEPAD_ACTION_EVENT } from "../../hooks/useGamepad";
 import type { MediaItem } from "../../types/ui";
 import type { HomeCardArtworkMode } from "../../utils/homeCardArtwork";
-import { installInertialScroll, tweenTo } from "../../utils/motion";
+import { installWheelScroll, installInertialScroll, tweenTo } from "../../utils/motion";
 import { getPlayerGlassSurface } from "../../components/ui/glassSurface";
+import { isBigPictureMode } from "../../runtime/platform";
 
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
@@ -192,9 +193,8 @@ export default function CardArtworkPicker({
     if (!open) return;
     const panel = panelRef.current;
     if (!panel) return;
-    // El picker vive en un portal fuera del scroll shell; instala aquí la misma
-    // inercia de rueda/trackpad de la app para que el panel no use scroll nativo.
-    return installInertialScroll(panel);
+    // El portal usa el suavizado corto de PC; TV conserva su comportamiento.
+    return isBigPictureMode() ? installInertialScroll(panel) : installWheelScroll(panel);
   }, [open]);
 
   useEffect(() => {

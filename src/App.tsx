@@ -33,7 +33,7 @@ import {
 import { prefetchHomeData, warmHomeStartup } from "./hooks/useCatalogs.ts";
 import { useFullscreen } from "./hooks/useFullscreen.ts";
 import { getHomePreferences } from "./config/homePreferences.ts";
-import { completeGoogleDriveAuthorization, initGoogleDriveSync, isGoogleDriveCallbackUrl } from "./gdrive";
+import { initGoogleDriveSync } from "./gdrive";
 import {
   getCurrentDeepLinks,
   listenOpenFiles,
@@ -363,18 +363,6 @@ export default function App() {
               setAuthError(message);
               dispatchAuthError(message);
             }
-          }
-          continue;
-        }
-        if (isGoogleDriveCallbackUrl(url)) {
-          try {
-            const result = await completeGoogleDriveAuthorization(url);
-            if (result.status === "ignored") continue;
-            if (!disposed) navigate("/settings?tab=gdrive", { replace: true });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "No se pudo completar la conexion con Google Drive.";
-            console.warn("[AETHERIO:GDRIVE] callback failed", { error: message });
-            if (!disposed) navigate("/settings?tab=gdrive", { replace: true });
           }
           continue;
         }

@@ -699,7 +699,7 @@ function AccountPanel({
     try {
       await startGoogleDriveAuthorization();
       setGdriveSync(getGoogleDriveAuthSnapshot());
-      setGdriveStatus("Autoriza Aetherio en Google. Volverás automáticamente a la app.");
+      setGdriveStatus("Google Drive conectado. Iniciando la sincronización automática.");
     } catch (error) {
       setGdriveError(describeUnknownError(error, "No se pudo iniciar la conexión con Google Drive."));
     } finally {
