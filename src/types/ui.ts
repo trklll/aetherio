@@ -2,6 +2,7 @@ import type { MdbListRatings } from "../config/mdblist.ts";
 import type { SportsMatchArtwork } from "./sportsMatch.ts";
 
 export type TrailerSource = "netflix" | "crunchyroll" | "hbo" | "disney" | "prime" | "apple" | "hulu" | "paramount" | "mubi" | "youtube" | "tmdb";
+export type LibraryStatus = "to_watch" | "watched";
 
 export interface MediaItem {
   id: string;
@@ -17,6 +18,10 @@ export interface MediaItem {
   description?: string;
   imdbRating?: string;
   rating?: string;
+  /** Personal rating imported from a connected service such as Trakt. */
+  userRating?: number;
+  /** The only two states a title can have in the user's library. */
+  libraryStatus?: LibraryStatus;
   year?: number;
   genres?: string[];
   /** TMDB genre IDs preserve the canonical genre identity across translations. */

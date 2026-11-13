@@ -147,7 +147,6 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const nativeRow = row.addonId === "aetherio-starter" || row.addonId === "tmdb";
   const title = useMemo(() => titleOverride?.trim() || homeRailTitle(row.name, row.type, !nativeRow), [nativeRow, row.name, row.type, titleOverride]);
   const ranked = useMemo(() => isTopFormatRow(row), [row]);
-  const sportsRow = row.type === "live" || row.type === "sports-replay";
   // Replays page within this virtualized row instead of the generic catalog.
   const maxCards = ranked ? 10 : row.type === "sports-replay" ? row.items.length : maxItems;
   // Vistos fuera: los completados sin episodios nuevos no ocupan las rows
@@ -155,9 +154,9 @@ function CatalogRow({ row, posterLayout, hideHeader = false, embedded = false, o
   const hiddenMediaKeys = useMemo(() => readHiddenMediaKeys(), [watchedVersion]);
   const rowItems = useMemo(
     () => row.items
-      .filter(item => sportsRow || !hiddenMediaKeys.has(buildMediaKey(row.type, item.id)))
+      .filter(item => !hiddenMediaKeys.has(buildMediaKey(row.type, item.id)))
       .slice(0, maxCards),
-    [row.items, maxCards, hiddenMediaKeys, sportsRow, row.type],
+    [row.items, maxCards, hiddenMediaKeys, row.type],
   );
   const showViewMore = allowViewMore && rowItems.length > 0;
   const rowKey = makeRowKey(row.addonId, row.catalogId, row.type);

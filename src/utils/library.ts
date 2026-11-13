@@ -1,4 +1,4 @@
-import type { MediaItem } from "../types/ui";
+import type { LibraryStatus, MediaItem } from "../types/ui";
 import { captureExperienceScope, getScopedStorageKey } from "./localProfiles";
 import { MediaIdentityError, mediaRefFromLegacy, mediaRefKey } from "../domain/mediaIdentity";
 import { recoverExperienceJournal, writeExperienceJSON } from "../domain/experienceStorage";
@@ -53,6 +53,22 @@ export function isInLibrary(type: string, id: string) {
   });
 }
 
+export function getSavedLibraryRating(type: string, id: string): number | null {
+  let key: string;
+  try {
+    key = mediaKey(type, id);
+  } catch {
+    return null;
+  }
+  const item = readSavedLibrary().find(saved => {
+    try { return mediaKey(saved.type, saved.id) === key; }
+    catch { return false; }
+  });
+  return typeof item?.userRating === "number" && Number.isFinite(item.userRating)
+    ? item.userRating
+    : null;
+}
+
 export function addToLibrary(item: MediaItem) {
   tryAddToLibrary(item);
 }
@@ -68,6 +84,7 @@ export function tryAddToLibrary(item: MediaItem): StorageResult {
   const next: SavedLibraryItem = {
     ...item,
     type: normalizeType(item.type),
+    libraryStatus: item.libraryStatus === "watched" ? "watched" : "to_watch",
     addedAt: Date.now(),
   };
   const index = items.findIndex(current => {
@@ -139,6 +156,84 @@ export function mergeSavedLibraryItems(remoteItems: SavedLibraryItem[]) {
   if (!changed) return;
   const next = Array.from(byKey.values()).sort((a, b) => b.addedAt - a.addedAt);
   writeSavedLibrary(next);
+}
+
+/** Import-only union: existing entries always win and are never overwritten. */
+export function addMissingLibraryItems(importedItems: MediaItem[]) {
+  if (!Array.isArray(importedItems) || !importedItems.length) return 0;
+  const items = readSavedLibrary();
+  const keys = new Set<string>();
+  const indexByKey = new Map<string, number>();
+  items.forEach((item, index) => {
+    try {
+      const key = mediaKey(item.type, item.id);
+      keys.add(key);
+      indexByKey.set(key, index);
+    }
+    catch { /* Ignore malformed legacy entries. */ }
+  });
+  const added: SavedLibraryItem[] = [];
+  const addedKeys: string[] = [];
+  const addedAt = Date.now();
+  let metadataAdded = false;
+  for (const item of importedItems) {
+    if (!item || typeof item.id !== "string" || typeof item.type !== "string" || typeof item.name !== "string") continue;
+    let key: string;
+    try { key = mediaKey(item.type, item.id); }
+    catch { continue; }
+    if (keys.has(key)) {
+      const currentIndex = indexByKey.get(key);
+      const current = currentIndex == null ? undefined : items[currentIndex];
+      if (current && current.userRating == null && typeof item.userRating === "number" && Number.isFinite(item.userRating)) {
+        items[currentIndex!] = { ...current, userRating: item.userRating };
+        metadataAdded = true;
+      }
+      if (current && item.libraryStatus === "watched" && current.libraryStatus !== "watched") {
+        items[currentIndex!] = { ...items[currentIndex!], libraryStatus: "watched" };
+        metadataAdded = true;
+      } else if (current && !current.libraryStatus && item.libraryStatus === "to_watch") {
+        items[currentIndex!] = { ...items[currentIndex!], libraryStatus: "to_watch" };
+        metadataAdded = true;
+      }
+      continue;
+    }
+    keys.add(key);
+    addedKeys.push(key);
+    added.push({ ...item, type: normalizeType(item.type), addedAt });
+  }
+  if (!added.length && !metadataAdded) return 0;
+  const result = writeSavedLibrary([...added, ...items]);
+  if (!result.ok) throw new Error("No se pudo guardar la biblioteca importada.");
+  for (const key of addedKeys) clearDeletionTombstone(TOMBSTONES_KEY, key);
+  return added.length;
+}
+
+export function setLibraryStatus(type: string, id: string, status: LibraryStatus): boolean {
+  let key: string;
+  try { key = mediaKey(type, id); }
+  catch { return false; }
+  const items = readSavedLibrary();
+  const index = items.findIndex(item => {
+    try { return mediaKey(item.type, item.id) === key; }
+    catch { return false; }
+  });
+  if (index < 0 || items[index].libraryStatus === status) return index >= 0;
+  items[index] = { ...items[index], libraryStatus: status };
+  return writeSavedLibrary(items).ok;
+}
+
+/** Persist TMDB artwork resolved later for an existing library entry. */
+export function updateSavedLibraryArtwork(type: string, id: string, poster: string) {
+  if (!poster) return false;
+  const items = readSavedLibrary();
+  const key = mediaKey(type, id);
+  const index = items.findIndex(item => {
+    try { return mediaKey(item.type, item.id) === key; }
+    catch { return false; }
+  });
+  if (index < 0 || items[index].poster === poster) return false;
+  items[index] = { ...items[index], poster, originalPoster: poster };
+  return writeSavedLibrary(items).ok;
 }
 
 /**

@@ -402,6 +402,12 @@ export function installGsapAnimations() {
         });
         record.removedNodes.forEach(node => {
           if (!(node instanceof HTMLElement)) return;
+          // Un nodo REORDENADO (React mueve las páginas cacheadas al volver
+          // atrás) genera removedNodes pero sigue conectado al documento:
+          // matar sus tweens congelaba a medias la entrada de la ficha y los
+          // fundidos de pósters — la "capa oscura" del detalle cacheado.
+          // Solo matar cuando el nodo de verdad salió del documento.
+          if (node.isConnected) return;
           gsap.killTweensOf(node);
           gsap.killTweensOf(node.querySelectorAll("*"));
         });

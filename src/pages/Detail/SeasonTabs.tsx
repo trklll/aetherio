@@ -40,8 +40,8 @@ export default function SeasonTabs({
     return seasons.includes(0) ? [...regular, 0] : regular;
   }, [seasons]);
 
-  // En Big Picture la row es solo indicador (cambio por LB/RB): se excluye
-  // de la navegación espacial para que el analógico la ignore.
+  // En Big Picture la row es un indicador de la temporada activa (cambio por
+  // LB/RB o por el episodio visible): se excluye de la navegación espacial.
   const bigPictureList = useBigPictureActive();
   const rowRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef(new Map<number, HTMLButtonElement>());
@@ -125,8 +125,8 @@ function SeasonTab({
   registerRef: (element: HTMLButtonElement | null) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
-  // En Big Picture la row de temporadas es solo indicador: no focuseable,
-  // el cambio va por LB/RB desde el Detail.
+  // En Big Picture la row de temporadas es solo indicador: no focuseable;
+  // el Detail actualiza la selección con LB/RB y con la temporada visible.
   const bigPictureTabs = useBigPictureActive();
   // Corto = elegir (como el onClick nativo); mantenido 500ms = opciones.
   const longPress = useLongPressAction(!bigPictureTabs, {

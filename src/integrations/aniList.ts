@@ -122,12 +122,20 @@ export async function syncAniListLibrary() {
       }];
     }),
   );
+  const existingEntries = readAniListLibrary();
+  const existingIds = new Set(existingEntries.map(entry => entry.aniListId));
+  const mergedEntries = [...existingEntries];
+  for (const entry of entries) {
+    if (existingIds.has(entry.aniListId)) continue;
+    existingIds.add(entry.aniListId);
+    mergedEntries.push(entry);
+  }
   const syncedAt = Date.now();
-  localStorage.setItem(getScopedStorageKey(ANILIST_LIBRARY_KEY), JSON.stringify(entries));
+  localStorage.setItem(getScopedStorageKey(ANILIST_LIBRARY_KEY), JSON.stringify(mergedEntries));
   window.dispatchEvent(new CustomEvent(ANILIST_LIBRARY_CHANGED_EVENT, {
-    detail: { count: entries.length, syncedAt },
+    detail: { count: mergedEntries.length, syncedAt },
   }));
-  return entries;
+  return mergedEntries;
 }
 
 export async function updateAniListProgress(

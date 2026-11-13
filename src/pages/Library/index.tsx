@@ -1,6 +1,6 @@
 ﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Compass, Download, Film, RefreshCw, Tv } from "lucide-react";
+import { Compass, Download, EyeOff, Film, RefreshCw, Tv } from "lucide-react";
 import AppleSpinner from "../../components/ui/AppleSpinner";
 import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
 import { restorePageTransition } from "../../utils/pageTransition";
@@ -21,14 +21,20 @@ import {
   readAniListLibrary,
   syncAniListLibrary,
 } from "../../integrations/aniList";
-import { connectAniListAccount } from "../../auth/authClient";
+import { connectAniListAccount, getAniListAccessToken } from "../../auth/authClient";
+import TraktImportCard from "../../components/library/TraktImportCard";
+import RatingStar from "../../components/ratings/RatingStar";
+import { useDismissedIntegrationBanner } from "../../hooks/useDismissedIntegrationBanner";
 import { useAddonStore } from "../../store/addonStore";
 import type { CatalogRowData, MediaItem } from "../../types/ui";
 import {
   CONTINUE_WATCHING_EVENT,
   readPlaybackStateEntries,
 } from "../../utils/continueWatching";
-import { LIBRARY_CHANGED_EVENT, readSavedLibrary } from "../../utils/library";
+import { LIBRARY_CHANGED_EVENT, readSavedLibrary, updateSavedLibraryArtwork } from "../../utils/library";
+import { formatFiveStarRating, getPersonalRatingFromMap, readUserRatings } from "../../utils/userRatings";
+import { fetchTmdbArtwork } from "../../services/tmdbArtworkService";
+import { tmdbImage } from "../../utils/tmdbArtwork";
 import {
   buildDiscoverCatalogs,
   buildLibraryItems,
@@ -92,6 +98,7 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
   const [filters, setFilters] = useState<LibraryFilters>(readLibraryFilters);
   const [aniListSyncing, setAniListSyncing] = useState(false);
   const [aniListError, setAniListError] = useState("");
+  const [aniListConnected, setAniListConnected] = useState(false);
 
   const selectTab = (next: LibraryTab) => {
     if (next === "downloads" && !downloadsEnabled) return;
@@ -163,7 +170,11 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
   }, [bigPicture, downloadsEnabled, location.hash, location.pathname, location.search, location.state, navigate, visibleTab]);
 
   useEffect(() => {
-    const refresh = () => setVersion(value => value + 1);
+    const refresh = () => {
+      setVersion(value => value + 1);
+      void getAniListAccessToken().then(token => setAniListConnected(Boolean(token)));
+    };
+    refresh();
     window.addEventListener(CONTINUE_WATCHING_EVENT, refresh as EventListener);
     window.addEventListener(ANILIST_LIBRARY_CHANGED_EVENT, refresh as EventListener);
     window.addEventListener(LIBRARY_CHANGED_EVENT, refresh as EventListener);
@@ -183,6 +194,7 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
   const playbackEntries = useMemo(() => readPlaybackStateEntries(), [version]);
   const aniListEntries = useMemo(() => readAniListLibrary(), [version]);
   const savedEntries = useMemo(() => readSavedLibrary(), [version]);
+  const userRatings = useMemo(() => readUserRatings(), [version]);
   const libraryItems = useMemo(
     () => buildLibraryItems(savedEntries, playbackEntries, aniListEntries),
     [aniListEntries, playbackEntries, savedEntries],
@@ -236,8 +248,10 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
         <div key={visibleTab} id="library-tab-panel" role={bigPicture ? "tabpanel" : undefined} aria-labelledby={bigPicture ? `library-tab-${visibleTab}` : undefined} ref={tabPanelRef} className="flex flex-col gap-9">
           {visibleTab === "library" ? (
             <>
-              <AniListSyncBanner
+              <TraktImportCard />
+              {!aniListConnected ? <AniListSyncBanner
                 count={aniListEntries.length}
+                connected={aniListConnected}
                 syncing={aniListSyncing}
                 error={aniListError}
                 onConnect={async () => {
@@ -259,7 +273,7 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
                     setAniListSyncing(false);
                   }
                 }}
-              />
+              /> : null}
               <LibrarySummary items={libraryItems.map(item => item.media)} />
               {libraryItems.length ? (
                 <>
@@ -284,6 +298,7 @@ export default function LibraryPage({ bigPicture = false }: { bigPicture?: boole
                     >
                       {filtered.items.map(item => (
                         <LibraryGridCard key={item.key} item={item.media} itemKey={item.key} bigPicture={bigPicture}
+                          personalRating={getPersonalRatingFromMap(item.media.type, item.media.id, item.media.userRating, userRatings)}
                           onBeforeOpen={() => { if (bigPicture) saveLibraryReturn({ tab: "library", itemKey: item.key }); }} />
                       ))}
                     </div>
@@ -537,6 +552,7 @@ function LibrarySelectors({
           { value: "added_asc", label: "Añadidos primero" },
           { value: "title_asc", label: "Título A–Z" },
           { value: "title_desc", label: "Título Z–A" },
+          { value: "rating_desc", label: "Por puntuación" },
         ]}
         onChange={value => onChange("sort", value as LibraryFilters["sort"])}
       />
@@ -546,17 +562,22 @@ function LibrarySelectors({
 
 function AniListSyncBanner({
   count,
+  connected,
   syncing,
   error,
   onConnect,
   onSync,
 }: {
   count: number;
+  connected: boolean;
   syncing: boolean;
   error: string;
   onConnect: () => Promise<void>;
   onSync: () => Promise<void>;
 }) {
+  const { dismissed, dismiss } = useDismissedIntegrationBanner("aetherio-anilist-banner-dismissed-v1");
+  if (dismissed) return null;
+
   return (
     <div className="liquid-glass flex flex-wrap items-center justify-between gap-4 rounded-2xl px-5 py-4">
       <div>
@@ -568,12 +589,16 @@ function AniListSyncBanner({
         </p>
       </div>
       <div className="library-anilist-actions flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => void onConnect()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="inline-flex h-10 items-center rounded-full border border-white/12 px-4 text-xs font-black text-white disabled:opacity-55">
+        {!connected ? <button type="button" onClick={() => void onConnect()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="inline-flex h-10 items-center rounded-full border border-white/12 px-4 text-xs font-black text-white disabled:opacity-55">
           Conectar cuenta
-        </button>
+        </button> : null}
         <button type="button" onClick={() => void onSync()} disabled={syncing} onPointerDown={e => { if (e.button === 0 && !syncing) tweenTo(e.currentTarget, { scale: 0.96 }); }} onPointerUp={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} onPointerCancel={e => tweenTo(e.currentTarget, { scale: 1 }, 0.24)} className="inline-flex h-10 items-center gap-2 rounded-full border border-transparent bg-white px-4 text-xs font-black text-black disabled:opacity-55">
           {syncing ? <AppleSpinner size={15} color="#111" /> : <RefreshCw size={15} />}
           {syncing ? "Sincronizando…" : "Sincronizar ahora"}
+        </button>
+        <button type="button" onClick={dismiss} disabled={syncing} className="inline-flex h-10 items-center gap-2 rounded-full px-4 text-xs font-bold text-white/65 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-55" aria-label="No mostrar el aviso de AniList">
+          <EyeOff size={15} aria-hidden="true" />
+          No mostrar
         </button>
       </div>
     </div>
@@ -683,18 +708,34 @@ function EmptyFilteredLibrary() {
   );
 }
 
-function LibraryGridCard({ item, itemKey, bigPicture = false, onBeforeOpen }: {
+function LibraryGridCard({ item, itemKey, bigPicture = false, personalRating = null, onBeforeOpen }: {
   item: MediaItem;
   itemKey?: string;
   bigPicture?: boolean;
+  personalRating?: number | null;
   onBeforeOpen?: () => void;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [failed, setFailed] = useState(false);
-  const image = getLibraryPoster(item) ?? "";
+  const [resolvedPoster, setResolvedPoster] = useState("");
+  const image = getLibraryPoster(item) ?? resolvedPoster;
   const type = item.type ?? "series";
-  useEffect(() => setFailed(false), [image]);
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(false);
+    setResolvedPoster("");
+    if (getLibraryPoster(item)) return () => { cancelled = true; };
+    const match = /^tmdb:([1-9]\d*)$/.exec(item.id);
+    if (!match || (type !== "movie" && type !== "series")) return () => { cancelled = true; };
+    void fetchTmdbArtwork(type === "movie" ? "movie" : "tv", Number(match[1])).then(artwork => {
+      const poster = tmdbImage(artwork?.posterPath, "w500");
+      if (cancelled || !poster) return;
+      setResolvedPoster(poster);
+      updateSavedLibraryArtwork(type, item.id, poster);
+    });
+    return () => { cancelled = true; };
+  }, [item.id, item.type, item.poster, item.originalPoster, type]);
 
   const openDetail = () => {
     onBeforeOpen?.();
@@ -734,6 +775,11 @@ function LibraryGridCard({ item, itemKey, bigPicture = false, onBeforeOpen }: {
         {image && !failed ? (
           <img src={image} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
         ) : <span className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-white/70">{item.name}</span>}
+        {personalRating !== null ? (
+          <span role="img" aria-label={`Tu valoración: ${formatFiveStarRating(personalRating)} de 5 estrellas`} style={{ position: "absolute", top: 9, right: 9, display: "inline-flex", alignItems: "center", gap: 4, borderRadius: 999, padding: "5px 8px", color: "#fff", background: "rgba(0,0,0,0.65)", fontSize: 12, fontWeight: 800, backdropFilter: "blur(10px)" }}>
+            <RatingStar fill={1} size={12} />{formatFiveStarRating(personalRating)}
+          </span>
+        ) : null}
       </button>
       <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
         {item.name}

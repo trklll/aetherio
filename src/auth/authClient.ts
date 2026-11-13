@@ -180,18 +180,12 @@ export async function completeOAuthAuthorization(rawUrl: string) {
     if (!viewerResponse.ok || viewerPayload.errors?.length || !viewer?.id || !viewer.name) {
       throw new Error(viewerPayload.errors?.[0]?.message || "AniList no devolvió una identidad válida.");
     }
-    const existingToken = await getAccountToken();
-    const response = await authRequest<AuthResponse>("/api/auth/oauth/anilist/session", {
-      method: "POST",
-      headers: existingToken ? { Authorization: `Bearer ${existingToken}` } : undefined,
-      body: JSON.stringify({ accessToken: aniListToken, viewer }),
-    });
     await writeSecureCredential("anilist-access-token", ANILIST_TOKEN_KEY, aniListToken);
     const expiresIn = Number(fragment.get("expires_in"));
     const expiresAt = Date.now() + (Number.isFinite(expiresIn) ? expiresIn : 365 * 24 * 60 * 60) * 1000;
     localStorage.setItem(ANILIST_TOKEN_EXPIRES_KEY, String(expiresAt));
-    await persistAuth(response);
-    return response.user;
+    window.dispatchEvent(new CustomEvent("aetherio-anilist-library-changed"));
+    return null;
   }
 
   const providerError = url.searchParams.get("error");

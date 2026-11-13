@@ -28,7 +28,7 @@ export default function DetailPageFrame({
         height: "100vh",
         marginTop: "calc(-1 * var(--app-shell-nav-height))",
         overflow: "hidden",
-        background: "#000",
+        background: "transparent",
       }}
     >
       <div
@@ -39,7 +39,7 @@ export default function DetailPageFrame({
           inset: 0,
           zIndex: 0,
           overflow: "hidden",
-          background: "#000",
+          background: "transparent",
           pointerEvents: "none",
         }}
       >

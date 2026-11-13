@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { Compass, Film, RefreshCw, Tv } from "lucide-react";
+import { Compass, EyeOff, Film, RefreshCw, Tv } from "lucide-react";
 import AppleSpinner from "../../components/ui/AppleSpinner";
 import PageContainer from "../../components/layout/PageContainer";
 import LibraryIcon from "../../components/ui/LibraryIcon";
@@ -22,7 +22,9 @@ import {
   type AniListLibraryEntry,
   type AniListAnimeStatus,
 } from "../../integrations/aniList";
-import { connectAniListAccount } from "../../auth/authClient";
+import { connectAniListAccount, getAniListAccessToken } from "../../auth/authClient";
+import TraktImportCard from "../../components/library/TraktImportCard";
+import { useDismissedIntegrationBanner } from "../../hooks/useDismissedIntegrationBanner";
 
 type LibraryTab = "library" | "discover";
 
@@ -34,9 +36,14 @@ export default function LibraryPage() {
   const [version, setVersion] = useState(0);
   const [aniListSyncing, setAniListSyncing] = useState(false);
   const [aniListError, setAniListError] = useState("");
+  const [aniListConnected, setAniListConnected] = useState(false);
 
   useEffect(() => {
-    const refresh = () => setVersion(value => value + 1);
+    const refresh = () => {
+      setVersion(value => value + 1);
+      void getAniListAccessToken().then(token => setAniListConnected(Boolean(token)));
+    };
+    refresh();
     window.addEventListener(CONTINUE_WATCHING_EVENT, refresh as EventListener);
     window.addEventListener(ANILIST_LIBRARY_CHANGED_EVENT, refresh as EventListener);
     window.addEventListener("storage", refresh);
@@ -76,8 +83,10 @@ export default function LibraryPage() {
 
       {tab === "library" ? (
         <div className="flex flex-col gap-9">
-          <AniListSyncBanner
+          <TraktImportCard />
+          {!aniListConnected ? <AniListSyncBanner
             count={aniListEntries.length}
+            connected={aniListConnected}
             syncing={aniListSyncing}
             error={aniListError}
             onConnect={async () => {
@@ -99,7 +108,7 @@ export default function LibraryPage() {
                 setAniListSyncing(false);
               }
             }}
-          />
+          /> : null}
           <LibrarySummary entriesVersion={version} />
           <ContinueWatchingRow />
           {aniListRows.map(row => (
@@ -132,17 +141,22 @@ export default function LibraryPage() {
 
 function AniListSyncBanner({
   count,
+  connected,
   syncing,
   error,
   onConnect,
   onSync,
 }: {
   count: number;
+  connected: boolean;
   syncing: boolean;
   error: string;
   onConnect: () => Promise<void>;
   onSync: () => Promise<void>;
 }) {
+  const { dismissed, dismiss } = useDismissedIntegrationBanner("aetherio-anilist-banner-dismissed-v1");
+  if (dismissed) return null;
+
   return (
     <div className="liquid-glass flex flex-wrap items-center justify-between gap-4 rounded-2xl px-5 py-4">
       <div>
@@ -154,14 +168,14 @@ function AniListSyncBanner({
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button
+        {!connected ? <button
           type="button"
           onClick={() => void onConnect()}
           disabled={syncing}
           className="gsap-transition inline-flex h-10 items-center rounded-full border border-white/12 px-4 text-xs font-black text-white disabled:opacity-55"
         >
           Conectar cuenta
-        </button>
+        </button> : null}
         <button
           type="button"
           onClick={() => void onSync()}
@@ -170,6 +184,16 @@ function AniListSyncBanner({
         >
           {syncing ? <AppleSpinner size={15} color="#111" /> : <RefreshCw size={15} />}
           {syncing ? "Sincronizando…" : "Sincronizar ahora"}
+        </button>
+        <button
+          type="button"
+          onClick={dismiss}
+          disabled={syncing}
+          className="gsap-transition inline-flex h-10 items-center gap-2 rounded-full px-4 text-xs font-bold text-white/65 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-55"
+          aria-label="No mostrar el aviso de AniList"
+        >
+          <EyeOff size={15} aria-hidden="true" />
+          No mostrar
         </button>
       </div>
     </div>

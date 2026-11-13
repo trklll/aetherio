@@ -16,9 +16,7 @@ export function ensureOriginalTmdbImage(url?: string | null) {
 }
 
 export function pickPreferredTmdbBackdrop(backdrops: unknown, fallbackPath?: string | null) {
-  const candidates = Array.isArray(backdrops)
-    ? backdrops.filter((item: any) => typeof item?.file_path === "string")
-    : [];
+  const candidates = getBackdropCandidates(backdrops);
 
   for (const preferred of PREFERRED_BACKDROP_SIZES) {
     const exact = candidates
@@ -35,12 +33,19 @@ export function pickPreferredTmdbBackdrop(backdrops: unknown, fallbackPath?: str
 }
 
 export function sortTmdbBackdropsByPreference(backdrops: unknown) {
-  if (!Array.isArray(backdrops)) return [];
-  return [...backdrops]
-    .filter((item: any) => typeof item?.file_path === "string")
+  return getBackdropCandidates(backdrops)
     .sort(compareBackdropFallback)
     .map((item: any) => tmdbImage(item.file_path, "original"))
     .filter((value): value is string => Boolean(value));
+}
+
+function getBackdropCandidates(backdrops: unknown) {
+  if (!Array.isArray(backdrops)) return [];
+  const candidates = backdrops.filter((item: any) => typeof item?.file_path === "string");
+  const languageNeutral = candidates.filter((item: any) => (
+    item.iso_639_1 === null || item.iso_639_1 === undefined || item.iso_639_1 === ""
+  ));
+  return languageNeutral.length ? languageNeutral : candidates;
 }
 
 function compareBackdropQuality(a: any, b: any) {

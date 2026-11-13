@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { isBigPictureMode } from "../runtime/platform.ts";
+import { getSteppedRangeValue, requestRangeInputValue } from "../utils/rangeInput.ts";
 import { dispatchGamepadAction } from "../hooks/useGamepad.ts";
 import { playerGamepadActionForKeyboardKey } from "../pages/Player/playerGamepadMap.ts";
 import { prefersReducedMotion, tweenTo } from "../utils/motion.ts";
@@ -642,6 +643,13 @@ function firstStreamingPlatformRowScrollTop(el: HTMLElement): number | null {
   return visibleRows[0] === row ? 0 : null;
 }
 
+function firstSettingsRowScrollTop(el: HTMLElement): number | null {
+  const settings = el.closest<HTMLElement>("[data-bp-settings]");
+  const row = el.closest<HTMLElement>("[data-settings-row]");
+  const firstRow = settings?.querySelector<HTMLElement>("[data-settings-row]");
+  return settings && row === firstRow ? 0 : null;
+}
+
 /** ScrollTop que conserva el ancla de entrada de la primera row del Detail. */
 function detailRowContentTop(row: HTMLElement, shell: HTMLElement): number | null {
   if (!((row.getAttribute("data-row-key") ?? "").startsWith("detail:"))) return null;
@@ -824,6 +832,10 @@ function fastBringIntoView(el: HTMLElement, dir: SpatialDir) {
     if (shell.scrollTop > 2) tweenVerticalScroll(shell, 0, true);
     return;
   }
+  if (dir === "up" && firstSettingsRowScrollTop(el) !== null) {
+    if (shell.scrollTop > 2) tweenVerticalScroll(shell, 0, true);
+    return;
+  }
   const s = shell.getBoundingClientRect();
   const c = el.getBoundingClientRect();
   const scaleY = contentVisualScaleY(el, shell);
@@ -887,6 +899,11 @@ function bringIntoView(el: HTMLElement, dir: SpatialDir, fast = false) {
   // Suave como la app normal (el anclaje de rows se mantiene); instantáneo
   // solo con reduced-motion.
   const behavior: ScrollBehavior = prefersReducedMotion() ? "auto" : "smooth";
+  if (dir === "up" && firstSettingsRowScrollTop(el) !== null) {
+    const shell = el.closest<HTMLElement>("[data-aetherio-scroll-shell]");
+    if (shell) shell.scrollTo({ top: 0, behavior });
+    return;
+  }
   if (dir === "up" && el.closest("[data-bp-library]") && !el.closest("[data-library-media-key]")) {
     const shell = el.closest<HTMLElement>("[data-aetherio-scroll-shell]");
     if (shell) shell.scrollTo({ top: 0, behavior });
@@ -953,12 +970,15 @@ function bringIntoView(el: HTMLElement, dir: SpatialDir, fast = false) {
 }
 
 function bringModalCandidateIntoView(modal: HTMLElement, candidate: HTMLElement, fast: boolean) {
-  const modalRect = modal.getBoundingClientRect();
-  const viewportTop = modalRect.top + modal.clientTop;
-  const viewportBottom = viewportTop + modal.clientHeight;
+  // SettingsDialog guarda el desbordamiento en su body interno, no en el
+  // elemento <dialog>. Desplazar el modal exterior no revela las opciones.
+  const scroller = candidate.closest<HTMLElement>(".settings-dialog__body") ?? modal;
+  const modalRect = scroller.getBoundingClientRect();
+  const viewportTop = modalRect.top + scroller.clientTop;
+  const viewportBottom = viewportTop + scroller.clientHeight;
   const candidateRect = candidate.getBoundingClientRect();
-  const gutter = Math.min(12, modal.clientHeight / 4);
-  let nextScrollTop = modal.scrollTop;
+  const gutter = Math.min(12, scroller.clientHeight / 4);
+  let nextScrollTop = scroller.scrollTop;
 
   if (candidateRect.top < viewportTop + gutter) {
     nextScrollTop += candidateRect.top - (viewportTop + gutter);
@@ -967,12 +987,12 @@ function bringModalCandidateIntoView(modal: HTMLElement, candidate: HTMLElement,
   }
 
   nextScrollTop = Math.min(
-    Math.max(0, modal.scrollHeight - modal.clientHeight),
+    Math.max(0, scroller.scrollHeight - scroller.clientHeight),
     Math.max(0, nextScrollTop),
   );
-  if (Math.abs(nextScrollTop - modal.scrollTop) < 1) return;
+  if (Math.abs(nextScrollTop - scroller.scrollTop) < 1) return;
 
-  tweenVerticalScroll(modal, nextScrollTop, fast);
+  tweenVerticalScroll(scroller, nextScrollTop, fast);
 }
 
 /** Foco inicial de pantalla: primer candidato fuera del rail (el rail no es foco inicial). */
@@ -1000,6 +1020,18 @@ function moveFocus(dir: SpatialDir): boolean {
   if (!all.length) return false;
   const spatialModal = topSpatialModal();
 
+  // Los sliders dentro de dialogs son controles, no elementos de navegación:
+  // izquierda/derecha del mando modifica su valor en sitio sin mover el foco.
+  if (active instanceof HTMLInputElement && active.type === "range" && (dir === "left" || dir === "right")) {
+    const currentValue = Number(active.dataset.targetValue ?? active.value);
+    const step = active.step === "any" ? 1 : Number(active.step || 1);
+    const nextValue = getSteppedRangeValue(currentValue, Number(active.min), Number(active.max), step, dir === "left" ? -step : step);
+    active.dataset.targetValue = String(nextValue);
+    active.dataset.preciseTargetValue = String(nextValue);
+    requestRangeInputValue(active, nextValue);
+    return true;
+  }
+
   if (!active || active === document.body || active === document.documentElement) {
     if (spatialModal) {
       const initial = all.find(el => el.dataset.selected === "true") ?? all[0];
@@ -1021,6 +1053,29 @@ function moveFocus(dir: SpatialDir): boolean {
   const current = active.getBoundingClientRect();
   // Racha = movimiento mantenido → glide fluido en todo el salto.
   const fast = registerNav();
+  const ratingSteps = active.closest<HTMLElement>(".media-rating-control__steps");
+  if (ratingSteps && (dir === "left" || dir === "right")) {
+    const steps = Array.from(ratingSteps.querySelectorAll<HTMLElement>(".media-rating-control__step:not(:disabled)"));
+    const index = steps.indexOf(active);
+    const nextIndex = index + (dir === "right" ? 1 : -1);
+    if (index >= 0 && nextIndex >= 0 && nextIndex < steps.length) {
+      steps[nextIndex].focus({ preventScroll: true });
+    } else if (index === 0 && dir === "left") {
+      const adjacent = findBestCandidate(current, dir, all
+        .filter(candidate => !ratingSteps.contains(candidate))
+        .map(el => {
+          const rect = el.getBoundingClientRect();
+          return { el, left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        }));
+      if (adjacent) {
+        adjacent.el.focus({ preventScroll: true });
+        bringIntoView(adjacent.el, dir, fast);
+      }
+    }
+    // En los extremos solo salimos por la acción inmediatamente anterior;
+    // hacia la derecha se consume la dirección para no saltar a otra fila.
+    return true;
+  }
   // Menú contextual abierto: controles exclusivos del menú. Se omiten los
   // atajos zonales (héroe, rows, teclado, rail) y solo se navega dentro con
   // el vecino geométrico. Sin vecino en esa dirección se consume la flecha

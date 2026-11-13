@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import LoadingState from "../../components/ui/LoadingState";
+import ProfileBackdrop from "../../components/profile/ProfileBackdrop";
 import { useHomePreferences } from "../../config/homePreferences.ts";
 import { useHomeCatalogs } from "../../hooks/useCatalogs.ts";
 import { useHiddenCursor } from "../../hooks/useHiddenCursor.ts";
@@ -12,7 +14,7 @@ import {
   setBigPictureActive,
 } from "../../runtime/platform.ts";
 import { getContextGlassStyle } from "../../components/ui/glassSurface.ts";
-import { useBackAction } from "../../input/inputActions.ts";
+import { INPUT_BACK_EVENT, useBackAction } from "../../input/inputActions.ts";
 import { useAddonStore } from "../../store/addonStore.ts";
 import { consumeAutoResolveBackPress } from "../../utils/autoResolveGuard.ts";
 import { buildDetailPath, buildPlayerBackPath } from "../../utils/bigPictureDetail.ts";
@@ -23,6 +25,7 @@ import { gsap, installInertialScroll, prefersReducedMotion, springTo } from "../
 import { restorePageTransition } from "../../utils/pageTransition.ts";
 import { useRowPositionMemory } from "../../hooks/useRowPositionMemory";
 import { enterSportsMode } from "../../utils/sportsMode";
+import { getActiveProfile } from "../../utils/localProfiles.ts";
 import type { MediaItem } from "../../types/ui.ts";
 import type { DetailEpisodeRequest } from "../Detail/index.tsx";
 import HomePage from "../Home/index.tsx";
@@ -35,6 +38,7 @@ import BigPictureGenre from "./BigPictureGenre.tsx";
 import BigPictureLibrary from "./BigPictureLibrary.tsx";
 import "./BigPicture.css";
 import "./BigPictureSettings.css";
+import "./ExitConfirm.css";
 
 const DetailPage = lazy(() => import("../Detail/index.tsx"));
 const DetailSectionPage = lazy(() => import("../Detail/DetailSectionPage.tsx"));
@@ -356,6 +360,7 @@ export default function BigPicturePage() {
   //   /big-picture/detail/...): B retrocede a la página
   //   anterior, igual que Escape en la app normal (siempre dentro de Big Picture).
   const handleBack = useCallback(() => {
+    if (location.pathname === "/big-picture/settings" && document.querySelector('[data-settings-nested="true"], .settings-dialog[open]')) return;
     // Con el modal de salida abierto, B lo cierra a él; no actuar encima.
     if (exitConfirmOpen) return;
     if (isShellPreviewOpen()) return;
@@ -419,6 +424,7 @@ export default function BigPicturePage() {
 
   return (
     <div className="big-picture big-picture--home-maximized" data-aetherio-big-picture>
+      {isSettings ? <ProfileBackdrop imageUrl={getActiveProfile()?.avatarDataUrl} className="bp-settings-profile-backdrop" /> : null}
       {!isSubPage && (
         <BigPictureBackdrop items={heroItems} scrollRef={scrollRef} onActiveItem={handleActiveItem} animateEntrance={isEntrance} contentVisible={heroContentVisible} />
       )}
@@ -519,16 +525,20 @@ export default function BigPicturePage() {
 * B/Escape cancela; el foco cae en "Cancelar" para el mando.
  */
 function ExitConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const cardRef = useRef(null as HTMLDivElement | null);
   const backdropRef = useRef(null as HTMLDivElement | null);
   const cancelRef = useRef(null as HTMLButtonElement | null);
-  const enteredRef = useRef(false);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
 
   useLayoutEffect(() => {
+    const dialog = dialogRef.current;
     const card = cardRef.current;
     const backdrop = backdropRef.current;
-    if (!card || !backdrop || enteredRef.current) return;
-    enteredRef.current = true;
+    if (!dialog || !card || !backdrop) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.showModal();
     if (prefersReducedMotion()) {
       gsap.set([card, backdrop], { opacity: 0 });
       gsap.to([card, backdrop], { opacity: 1, duration: 0.2, overwrite: "auto" });
@@ -538,27 +548,74 @@ function ExitConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
       springTo(backdrop, { opacity: 1 } as unknown as gsap.TweenVars, { duration: 0.3, damping: 1.0 });
       springTo(card, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { duration: 0.4, damping: 1.0 });
     }
-    requestAnimationFrame(() => cancelRef.current?.focus({ preventScroll: true }));
+    const focusFrame = requestAnimationFrame(() => cancelRef.current?.focus({ preventScroll: true }));
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      gsap.killTweensOf([card, backdrop]);
+      if (dialog.open) dialog.close();
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
   }, []);
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" && event.key !== "Esc" && event.code !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onCancel();
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const isTopDialog = () => {
+      const dialogs = document.querySelectorAll("dialog[open]");
+      return dialogs[dialogs.length - 1] === dialog;
     };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
+    const onBack = (event: Event) => {
+      if (!isTopDialog()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onCancelRef.current();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (!isTopDialog()) return;
+      if (event.key === "Escape" || event.key === "Esc" || event.code === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onCancelRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex='0']",
+      )).filter(control => control.getBoundingClientRect().height > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    window.addEventListener(INPUT_BACK_EVENT, onBack, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener(INPUT_BACK_EVENT, onBack, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
 
   const glassStyle = getContextGlassStyle();
 
-  return (
-    <div data-bp-exit-confirm style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+  return createPortal(
+    <dialog
+      ref={dialogRef}
+      className="bp-exit-confirm"
+      data-bp-exit-confirm
+      data-spatial-modal="true"
+      aria-modal="true"
+      aria-labelledby="bp-exit-confirm-title"
+      aria-describedby="bp-exit-confirm-description"
+      onCancel={event => { event.preventDefault(); onCancelRef.current(); }}
+    >
       <div
         ref={backdropRef}
-        style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", pointerEvents: "auto", cursor: "pointer" }}
+        className="bp-exit-confirm__backdrop"
         onClick={onCancel}
       />
       <div
@@ -574,24 +631,17 @@ function ExitConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
           boxShadow: "0 30px 80px rgba(0,0,0,0.55)",
         }}
       >
-        <p style={{ margin: 0, fontSize: 19, fontWeight: 800, color: "#fff" }}>¿Quieres salir de la app?</p>
-        <p style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.62)" }}>
+        <p id="bp-exit-confirm-title" style={{ margin: 0, fontSize: 19, fontWeight: 800, color: "#fff" }}>¿Quieres salir de la app?</p>
+        <p id="bp-exit-confirm-description" style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.62)" }}>
           Tus datos y lo que estás viendo se guardan. Puedes volver cuando quieras.
         </p>
-        <div style={{ display: "flex", gap: 10, marginTop: 22, justifyContent: "center" }}>
+        <div className="bp-exit-confirm__actions">
           <button
             type="button"
             onClick={onConfirm}
-            style={{
-              borderRadius: 999,
-              padding: "10px 26px",
-              fontWeight: 800,
-              fontSize: 14,
-              border: "none",
-              cursor: "pointer",
-              background: "#fff",
-              color: "#000",
-              boxShadow: "0 3px 12px rgba(0,0,0,0.38)",
+            className="bp-exit-confirm__action bp-exit-confirm__action--accept"
+            onPointerEnter={event => {
+              if (event.pointerType === "mouse") event.currentTarget.focus({ preventScroll: true });
             }}
           >
             Salir
@@ -600,21 +650,16 @@ function ExitConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
             ref={cancelRef}
             type="button"
             onClick={onCancel}
-            style={{
-              borderRadius: 999,
-              padding: "10px 26px",
-              fontWeight: 800,
-              fontSize: 14,
-              cursor: "pointer",
-              background: "rgba(255,255,255,0.12)",
-              color: "#fff",
-              border: "1px solid rgba(255,255,255,0.18)",
+            className="bp-exit-confirm__action bp-exit-confirm__action--reject"
+            onPointerEnter={event => {
+              if (event.pointerType === "mouse") event.currentTarget.focus({ preventScroll: true });
             }}
           >
             Cancelar
           </button>
         </div>
       </div>
-    </div>
+    </dialog>,
+    document.body,
   );
 }

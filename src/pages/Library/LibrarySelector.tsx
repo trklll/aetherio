@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { INPUT_BACK_EVENT, isBackspaceKey, isEscapeKey } from "../../input/inputActions";
 
 export default function LibrarySelector({
@@ -49,13 +49,20 @@ export default function LibrarySelector({
     return (
       <label className="flex min-w-[150px] flex-1 flex-col gap-1.5">
         <span className="text-sm font-black text-white">{label}</span>
-        <select
-          value={selected?.value ?? ""}
-          onChange={event => onChange(event.target.value)}
-          className="h-10 rounded-xl border border-white/10 bg-black/30 pl-3 pr-8 text-sm font-bold text-white outline-none"
-        >
-          {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
+        <div className="relative">
+          <select
+            value={selected?.value ?? ""}
+            onChange={event => onChange(event.target.value)}
+            className="library-filter-select h-10 w-full appearance-none rounded-xl border border-white/10 bg-black/30 pl-3 pr-12 text-sm font-bold text-white outline-none"
+          >
+            {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <ChevronDown
+            className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"
+            size={16}
+            aria-hidden="true"
+          />
+        </div>
       </label>
     );
   }
@@ -66,7 +73,7 @@ export default function LibrarySelector({
       <button
         ref={triggerRef}
         type="button"
-        className="library-tv-selector h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm font-bold text-white"
+        className="library-tv-selector h-10 rounded-xl border border-white/10 bg-black/30 pl-3 pr-5 text-sm font-bold text-white"
         aria-label={`${label}: ${selected?.label ?? "Sin opciones"}`}
         aria-haspopup="dialog"
         aria-expanded={open}

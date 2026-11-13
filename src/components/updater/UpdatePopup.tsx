@@ -1,11 +1,26 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
-import { CloudDownload, RefreshCw, Sparkles, X } from "lucide-react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { isTauriRuntime } from "../../runtime/platform";
-import { gsap, tweenTo } from "../../utils/motion";
+import { gsap, prefersReducedMotion, tweenTo } from "../../utils/motion";
+import "./UpdatePopup.css";
 
 type UpdateStage = "available" | "downloading" | "installing" | "error";
+
+function animateActionFocus(button: HTMLButtonElement, focused: boolean) {
+  gsap.killTweensOf(button);
+  if (prefersReducedMotion()) {
+    gsap.set(button, { scale: 1, y: 0 });
+    return;
+  }
+  gsap.to(button, {
+    scale: focused ? 1.09 : 1,
+    y: focused ? -4 : 0,
+    duration: focused ? 0.38 : 0.24,
+    ease: focused ? "back.out(2.4)" : "power3.out",
+    overwrite: "auto",
+  });
+}
 
 interface UpdateProgress {
   downloaded: number;
@@ -33,6 +48,11 @@ export default function UpdatePopup() {
   const [stage, setStage] = useState<UpdateStage>("available");
   const [progress, setProgress] = useState<UpdateProgress>({ downloaded: 0 });
   const [errorMessage, setErrorMessage] = useState("");
+  const [isClosing, setIsClosing] = useState(false);
+  const isClosingRef = useRef(false);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLElement>(null);
+  const closeAnimationRef = useRef<gsap.core.Timeline | null>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
 
@@ -62,6 +82,7 @@ export default function UpdatePopup() {
 
   useEffect(() => {
     return () => {
+      closeAnimationRef.current?.kill();
       if (progressRef.current) gsap.killTweensOf(progressRef.current);
     };
   }, []);
@@ -116,10 +137,26 @@ export default function UpdatePopup() {
   }
 
   function dismissUpdate() {
-    if (busy || !update) return;
+    if (busy || !update || isClosingRef.current) return;
     const pendingUpdate = update;
-    setUpdate(null);
-    void pendingUpdate.close().catch(() => undefined);
+    if (prefersReducedMotion() || !backdropRef.current || !cardRef.current) {
+      setUpdate(null);
+      void pendingUpdate.close().catch(() => undefined);
+      return;
+    }
+
+    isClosingRef.current = true;
+    setIsClosing(true);
+    closeAnimationRef.current = gsap.timeline({
+      onComplete: () => {
+        setUpdate(null);
+        isClosingRef.current = false;
+        setIsClosing(false);
+        void pendingUpdate.close().catch(() => undefined);
+      },
+    })
+      .to(cardRef.current, { opacity: 0, y: 18, scale: 0.94, duration: 0.24, ease: "power2.in" })
+      .to(backdropRef.current, { opacity: 0, duration: 0.2, ease: "power1.in" }, "<0.04");
   }
 
   function handleBackdropClick(event: MouseEvent<HTMLDivElement>) {
@@ -128,35 +165,23 @@ export default function UpdatePopup() {
 
   return (
     <div
+      ref={backdropRef}
       className="aetherio-popup-backdrop"
       role="presentation"
       onMouseDown={handleBackdropClick}
       style={backdropStyle}
     >
       <section
+        ref={cardRef}
         className="aetherio-popup-card"
         role="dialog"
         aria-modal="true"
+        data-spatial-modal
         aria-labelledby="aetherio-update-title"
         aria-describedby="aetherio-update-description"
         style={cardStyle}
       >
-        <button
-          type="button"
-          aria-label="Cerrar actualización"
-          onClick={dismissUpdate}
-          disabled={busy}
-          style={{ ...iconButtonStyle, opacity: busy ? 0.35 : 0.72, cursor: busy ? "default" : "pointer" }}
-        >
-          <X size={18} />
-        </button>
-
-        <div style={updateIconStyle} aria-hidden="true">
-          <Sparkles size={25} strokeWidth={1.8} />
-        </div>
-
         <div style={{ minWidth: 0 }}>
-          <p style={eyebrowStyle}>ACTUALIZACIÓN</p>
           <h2 id="aetherio-update-title" style={titleStyle}>Aetherio {update.version}</h2>
           <p id="aetherio-update-description" style={descriptionStyle}>
             Hay una nueva versión lista para instalar.
@@ -164,7 +189,7 @@ export default function UpdatePopup() {
         </div>
 
         {update.body?.trim() ? (
-          <div style={notesStyle}>{update.body.trim()}</div>
+          <div className="aetherio-popup-notes" style={notesStyle}>{update.body.trim()}</div>
         ) : null}
 
         {busy || stage === "error" ? (
@@ -184,22 +209,27 @@ export default function UpdatePopup() {
 
         <div style={actionsStyle}>
           <button
-            type="button"
-            onClick={dismissUpdate}
-            disabled={busy}
-            style={{ ...secondaryButtonStyle, opacity: busy ? 0.45 : 1 }}
-          >
-            Ahora no
-          </button>
-          <button
             ref={primaryActionRef}
             type="button"
             onClick={() => void installUpdate()}
-            disabled={busy}
+            disabled={busy || isClosing}
+            className="aetherio-popup-action aetherio-popup-action--primary"
             style={{ ...primaryButtonStyle, opacity: busy ? 0.72 : 1 }}
+            onFocus={event => animateActionFocus(event.currentTarget, true)}
+            onBlur={event => animateActionFocus(event.currentTarget, false)}
           >
-            {stage === "error" ? <RefreshCw size={17} /> : <CloudDownload size={18} />}
             {stage === "error" ? "Reintentar" : busy ? "Actualizando…" : "Actualizar ahora"}
+          </button>
+          <button
+            type="button"
+            onClick={dismissUpdate}
+            disabled={busy || isClosing}
+            className="aetherio-popup-action aetherio-popup-action--secondary"
+            style={{ ...secondaryButtonStyle, opacity: busy ? 0.45 : 1 }}
+            onFocus={event => animateActionFocus(event.currentTarget, true)}
+            onBlur={event => animateActionFocus(event.currentTarget, false)}
+          >
+            Ahora no
           </button>
         </div>
       </section>
@@ -220,84 +250,51 @@ const backdropStyle: CSSProperties = {
   display: "grid",
   placeItems: "center",
   padding: 24,
-  background: "rgba(4, 4, 5, 0.68)",
-  backdropFilter: "var(--lg-filter-md)",
-  WebkitBackdropFilter: "var(--lg-filter-md)",
+  background: "rgba(0, 0, 0, 0.12)",
+  backdropFilter: "blur(18px)",
+  WebkitBackdropFilter: "blur(18px)",
 };
 
 const cardStyle: CSSProperties = {
   position: "relative",
-  width: "min(520px, calc(100vw - 48px))",
-  maxHeight: "min(660px, calc(100vh - 48px))",
+  width: "min(360px, calc(100vw - 40px))",
+  minHeight: "min(300px, 76dvh, calc(100dvh - 40px))",
+  maxHeight: "min(76dvh, calc(100dvh - 40px))",
   overflowY: "auto",
   display: "grid",
-  gap: 18,
-  padding: "30px 30px 26px",
-  borderRadius: 28,
-  border: "1px solid rgba(255, 255, 255, 0.1)",
-  background: "linear-gradient(145deg, rgba(50, 50, 53, 0.96), rgba(24, 24, 26, 0.98))",
-  boxShadow: "0 34px 100px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.08)",
+  alignContent: "space-between",
+  gap: 20,
+  padding: "24px 18px",
+  borderRadius: 24,
+  border: "1px solid rgba(255, 255, 255, 0.14)",
+  background: "#2c2c2e",
+  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.22)",
   color: "#fff",
-};
-
-const iconButtonStyle: CSSProperties = {
-  position: "absolute",
-  top: 18,
-  right: 18,
-  width: 34,
-  height: 34,
-  display: "grid",
-  placeItems: "center",
-  border: "none",
-  borderRadius: 999,
-  background: "rgba(255, 255, 255, 0.07)",
-  color: "#fff",
-};
-
-const updateIconStyle: CSSProperties = {
-  width: 52,
-  height: 52,
-  display: "grid",
-  placeItems: "center",
-  borderRadius: 17,
-  color: "#f4f4f5",
-  background: "linear-gradient(145deg, rgba(255,255,255,0.17), rgba(255,255,255,0.055))",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12), 0 12px 26px rgba(0,0,0,0.24)",
-};
-
-const eyebrowStyle: CSSProperties = {
-  margin: "0 0 7px",
-  color: "rgba(255,255,255,0.48)",
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: "0.16em",
 };
 
 const titleStyle: CSSProperties = {
-  margin: 0,
-  fontSize: 27,
-  lineHeight: 1.12,
-  letterSpacing: "-0.035em",
+  margin: "2px 6px 10px",
+  fontSize: 22,
+  lineHeight: 1.3,
+  fontWeight: 700,
 };
 
 const descriptionStyle: CSSProperties = {
-  margin: "8px 0 0",
-  color: "rgba(255,255,255,0.62)",
-  fontSize: 14,
+  margin: "0 6px 18px",
+  color: "rgba(255,255,255,0.82)",
+  fontSize: 16,
   lineHeight: 1.5,
+  fontWeight: 500,
 };
 
 const notesStyle: CSSProperties = {
-  maxHeight: 190,
+  maxHeight: "min(24dvh, 190px)",
   overflowY: "auto",
   whiteSpace: "pre-wrap",
-  padding: "14px 16px",
-  borderRadius: 17,
-  border: "1px solid rgba(255,255,255,0.07)",
-  background: "rgba(255,255,255,0.035)",
-  color: "rgba(255,255,255,0.72)",
-  fontSize: 13,
-  lineHeight: 1.55,
+  margin: "0 6px 18px",
+  color: "rgba(255,255,255,0.78)",
+  fontSize: 15,
+  lineHeight: 1.5,
 };
 
 const progressTrackStyle: CSSProperties = {
@@ -318,8 +315,9 @@ const progressLabelStyle: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   gap: 16,
-  color: "rgba(255,255,255,0.58)",
-  fontSize: 12,
+  margin: "8px 6px 18px",
+  color: "rgba(255,255,255,0.76)",
+  fontSize: 14,
 };
 
 const errorStyle: CSSProperties = {
@@ -330,36 +328,36 @@ const errorStyle: CSSProperties = {
 };
 
 const actionsStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 10,
+  display: "grid",
+  gap: 20,
   marginTop: 2,
 };
 
 const actionButtonStyle: CSSProperties = {
-  minHeight: 42,
-  display: "inline-flex",
+  width: "82%",
+  justifySelf: "center",
+  minHeight: 44,
+  display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  gap: 8,
-  padding: "0 17px",
-  borderRadius: 13,
-  fontSize: 13,
-  fontWeight: 700,
+  padding: "12px 18px",
+  borderRadius: 999,
+  fontSize: 16,
+  fontWeight: 600,
   cursor: "pointer",
 };
 
 const secondaryButtonStyle: CSSProperties = {
   ...actionButtonStyle,
-  border: "1px solid rgba(255,255,255,0.08)",
-  background: "rgba(255,255,255,0.045)",
-  color: "rgba(255,255,255,0.72)",
+  border: "none",
+  background: "#e04444",
+  color: "#fff",
 };
 
 const primaryButtonStyle: CSSProperties = {
   ...actionButtonStyle,
-  border: "1px solid rgba(255,255,255,0.86)",
-  background: "#f4f4f5",
-  color: "#18181b",
-  boxShadow: "0 9px 24px rgba(0,0,0,0.28)",
+  border: "none",
+  background: "#087cff",
+  color: "#fff",
+  boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
 };

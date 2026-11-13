@@ -1146,6 +1146,16 @@ html.aetherio-android-tv .scroll-row{
      episode card or the animated TV logo. Both modes keep their scroll path. */
   transform:translateZ(0);
 }
+
+/* One literal row gap for every detail section in PC and TV. Reset all child
+   margins: episode/special/trailer rows used local negative margins that made
+   them read as a separate spacing group from cast, comments and companies. */
+.detail-page-scale:is([data-detail-mode="normal"], [data-detail-mode="tv"]) > .detail-page-content{
+  row-gap:75px !important;
+}
+.detail-page-scale:is([data-detail-mode="normal"], [data-detail-mode="tv"]) > .detail-page-content > :not(.detail-content-logo){
+  margin:0 !important;
+}
 .detail-page-scale{
   width:83.333333%;
   transform:scale(1.2);
@@ -1246,17 +1256,9 @@ html.aetherio-android-tv .scroll-row{
   position:relative;
   flex:0 0 347px;
   width:347px;
-  height:352px;
+  height:auto;
   border-radius:14px;
   outline:none;
-}
-.detail-episode-card:hover,
-.detail-episode-card:focus-visible,
-.detail-episode-card:focus-within{
-  transform:translateY(-3px);
-}
-.detail-episode-card:focus-visible .detail-episode-card__media{
-  box-shadow:0 0 0 2px rgba(255,255,255,0.86),0 14px 34px rgba(0,0,0,0.34);
 }
 .detail-episode-card__media{
   position:relative;

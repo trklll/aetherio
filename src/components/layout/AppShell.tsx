@@ -218,6 +218,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
 
     const observeRow = (row: HTMLElement) => {
+      // DetailPage already reveals its sections. A second per-card entrance
+      // tween races the shared hover/focus transform as detail rows scroll in.
+      if ((row.dataset.rowKey ?? "").startsWith("detail:")) {
+        row.dataset.rowEntranceAnimated = "true";
+        return;
+      }
       if (row.dataset.rowEntranceAnimated === "true" || observedRows.has(row)) return;
       observedRows.add(row);
       if (rowObserver) rowObserver.observe(row);
@@ -669,6 +675,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [loc.pathname, loc.search]);
 
   function goBack() {
+    // Settings owns subpage and popup back. Window-targeted gamepad actions
+    // can reach this shell before the page listener, even with capture=true.
+    if (loc.pathname === "/settings" && document.querySelector('[data-settings-nested="true"], .settings-dialog[open]')) return;
     // Loader de auto-resolve activo: atras/ESC cancela el
     // autoplay y revela el picker manual en vez de salir de la pagina.
     if (consumeAutoResolveBackPress()) return;

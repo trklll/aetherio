@@ -1,0 +1,65 @@
+.aetherio-popup-card .aetherio-popup-action {
+  transition:
+    background-color 180ms ease,
+    filter 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.aetherio-popup-card .aetherio-popup-action:hover:not(:disabled) {
+  transform: scale(1.01);
+}
+
+.aetherio-popup-card .aetherio-popup-action:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.aetherio-popup-card .aetherio-popup-action--primary:focus-visible {
+  background: #005fd1 !important;
+}
+
+.aetherio-popup-card .aetherio-popup-action--secondary:focus-visible {
+  background: #f12632 !important;
+}
+
+.aetherio-popup-card .aetherio-popup-action--primary.spatial-focus,
+.aetherio-popup-card .aetherio-popup-action--primary:focus {
+  background: #005fd1 !important;
+}
+
+.aetherio-popup-card .aetherio-popup-action--secondary.spatial-focus,
+.aetherio-popup-card .aetherio-popup-action--secondary:focus {
+  background: #f12632 !important;
+}
+
+.aetherio-popup-card .aetherio-popup-action:disabled {
+  cursor: not-allowed;
+}
+
+.aetherio-popup-notes {
+  user-select: text;
+  scrollbar-color: rgba(255, 255, 255, .32) transparent;
+  scrollbar-width: thin;
+}
+
+.aetherio-popup-notes::-webkit-scrollbar {
+  width: 8px;
+}
+
+.aetherio-popup-notes::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .32);
+  background-clip: padding-box;
+}
+
+.aetherio-popup-notes::selection {
+  background: #fff;
+  color: #1c1c1e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aetherio-popup-card .aetherio-popup-action {
+    transition: none;
+  }
+}

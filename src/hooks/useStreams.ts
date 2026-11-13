@@ -8,9 +8,11 @@ import { normalizeStreamTechnicalMetadata } from "../utils/streamTechnicalMetada
 import { matchesAddonStreamFilter } from "../utils/addonStreamFilter.ts";
 import type { InstalledAddon } from "../store/addonStore.ts";
 import { isCncVerseTvAddon } from "../services/cncverseBridge.ts";
+import { fetchAddonStreamPayload } from "../services/addonStreamRequest.ts";
 
 const DEBUG_STREAMS = import.meta.env.DEV;
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_STREAM_TIMEOUT_MS = 60_000;
 const STREAM_CACHE = new Map<string, { streams: MediaStream[]; updatedAt: number }>();
 const IMDB_ID_CACHE = new Map<string, Promise<string | null>>();
 
@@ -165,15 +167,17 @@ const DEFAULT_STREAM_ATTEMPTS = 3;
 
 async function fetchStreamPayload(url: string, attempts = DEFAULT_STREAM_ATTEMPTS, timeoutMs = DEFAULT_STREAM_TIMEOUT_MS) {
   let lastError: unknown = null;
+  const boundedTimeoutMs = Math.min(MAX_STREAM_TIMEOUT_MS, Math.max(250, timeoutMs));
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    const timer = window.setTimeout(() => controller.abort(), boundedTimeoutMs);
     try {
-      const response = await fetch(url, { signal: controller.signal });
+      const payload = await fetchAddonStreamPayload(url, {
+        signal: controller.signal,
+        timeoutMs: boundedTimeoutMs,
+      });
       window.clearTimeout(timer);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      return { json, status: response.status };
+      return payload;
     } catch (error) {
       window.clearTimeout(timer);
       lastError = error;

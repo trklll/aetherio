@@ -9,8 +9,11 @@ import { tmdbFetch } from "../../config/apiKeys";
 import { isSpatialPosterUrl } from "../../config/spatialPosters";
 import { fetchAnilistDiscover } from "../../services/anilist";
 import { TMDB_MOVIE_GENRES, TMDB_TV_GENRES, tmdbGenreName } from "../../services/tmdbGenres";
+import { getPersonalRatingFromMap, readUserRatings } from "../../utils/userRatings";
+import { buildMediaKey } from "../../utils/continueWatching";
+import { getSeriesEpisodeCompletions } from "../../utils/libraryCompletion";
 
-export type LibrarySort = "added_desc" | "added_asc" | "title_asc" | "title_desc";
+export type LibrarySort = "added_desc" | "added_asc" | "title_asc" | "title_desc" | "rating_desc";
 
 export interface LibraryItem {
   key: string;
@@ -19,6 +22,11 @@ export interface LibraryItem {
   listKey: string;
   listLabel: string;
 }
+
+const LIBRARY_STATUS_LABELS = {
+  to_watch: "Por ver",
+  watched: "Vistas",
+} as const;
 
 export function getLibraryPoster(item: Pick<MediaItem, "originalPoster" | "poster" | "background">): string | undefined {
   return [item.originalPoster, item.poster, item.background].find(
@@ -119,58 +127,72 @@ export function buildLibraryItems(
   aniListEntries: AniListLibraryEntry[],
 ): LibraryItem[] {
   const byKey = new Map<string, LibraryItem>();
+  const put = (media: MediaItem, addedAt: number, status: "to_watch" | "watched") => {
+    const key = `${normalizeType(media.type)}:${media.id}`;
+    const current = byKey.get(key);
+    const resolvedStatus = current?.listKey === "watched" || status === "watched" ? "watched" : "to_watch";
+    byKey.set(key, {
+      key,
+      media: { ...current?.media, ...media, libraryStatus: resolvedStatus },
+      addedAt: Math.max(current?.addedAt ?? 0, addedAt),
+      listKey: resolvedStatus,
+      listLabel: LIBRARY_STATUS_LABELS[resolvedStatus],
+    });
+  };
 
   for (const entry of playbackEntries.filter(item => item.completed)) {
-    const key = `${normalizeType(entry.type)}:${entry.mediaKey}`;
-    const item: LibraryItem = {
-      key,
-      media: {
-        id: entry.id,
-        type: normalizeType(entry.type),
-        name: entry.name,
-        poster: entry.poster,
-        originalPoster: entry.originalPoster,
-        background: entry.background ?? entry.episodeStill,
-        logo: entry.logo,
-        genres: entry.genres,
-        genreIds: entry.genreIds,
-      },
-      addedAt: entry.updatedAt,
-      listKey: "activity",
-      listLabel: "Actividad",
-    };
-    const current = byKey.get(key);
-    if (!current || current.addedAt < item.addedAt) byKey.set(key, item);
+    const movie = normalizeType(entry.type) === "movie";
+    const wholeShow = !movie && (entry.season ?? 0) === 0 && (entry.episode ?? 0) === 0;
+    put({
+      id: entry.id,
+      type: normalizeType(entry.type),
+      name: entry.name,
+      poster: entry.poster,
+      originalPoster: entry.originalPoster,
+      background: entry.background ?? entry.episodeStill,
+      logo: entry.logo,
+      genres: entry.genres,
+      genreIds: entry.genreIds,
+    }, entry.updatedAt, movie || wholeShow ? "watched" : "to_watch");
   }
 
   for (const entry of aniListEntries) {
-    const key = `series:${entry.mediaId}`;
     const addedAt = entry.updatedAt ? Date.parse(entry.updatedAt) || 0 : 0;
-    byKey.set(key, {
-      key,
-      media: {
-        id: entry.mediaId,
-        type: "series",
-        name: entry.title,
-        poster: entry.poster,
-        year: entry.year,
-        genres: entry.genres?.length ? entry.genres : ["Anime"],
-      },
-      addedAt,
-      listKey: `anilist:${entry.status}`,
-      listLabel: aniListStatusLabel(entry.status),
-    });
+    put({
+      id: entry.mediaId,
+      type: "anime",
+      name: entry.title,
+      poster: entry.poster,
+      year: entry.year,
+      genres: entry.genres?.length ? entry.genres : ["Anime"],
+    }, addedAt, entry.status === "completed" ? "watched" : "to_watch");
   }
 
   for (const entry of savedEntries) {
-    const key = `${normalizeType(entry.type)}:${entry.id}`;
-    byKey.set(key, {
-      key,
-      media: entry,
-      addedAt: entry.addedAt,
-      listKey: "saved",
-      listLabel: "Mi lista",
-    });
+    put(entry, entry.addedAt, entry.libraryStatus === "watched" ? "watched" : "to_watch");
+  }
+
+  for (const manifest of getSeriesEpisodeCompletions(playbackEntries)) {
+    const key = `${normalizeType(manifest.type)}:${manifest.id}`;
+    const current = byKey.get(key);
+    const latestEntry = playbackEntries.find(entry => entry.mediaKey === buildMediaKey(manifest.type, manifest.id));
+    if (!current && !latestEntry) continue;
+    const status = manifest.complete ? "watched" : "to_watch";
+    put({
+      ...current?.media,
+      id: manifest.id,
+      type: current?.media.type ?? manifest.type,
+      name: current?.media.name ?? latestEntry?.name ?? manifest.id,
+    }, Math.max(current?.addedAt ?? 0, latestEntry?.updatedAt ?? 0), status);
+    const resolved = byKey.get(key);
+    if (resolved) {
+      byKey.set(key, {
+        ...resolved,
+        media: { ...resolved.media, libraryStatus: status },
+        listKey: status,
+        listLabel: LIBRARY_STATUS_LABELS[status],
+      });
+    }
   }
 
   return Array.from(byKey.values());
@@ -407,10 +429,17 @@ export function mergeUniqueMedia(current: MediaItem[], incoming: MediaItem[]) {
   return { items: Array.from(byKey.values()), added };
 }
 
-function sortLibraryItems(items: LibraryItem[], sort: LibrarySort) {
+export function sortLibraryItems(items: LibraryItem[], sort: LibrarySort) {
   const copy = [...items];
   const titleKey = (item: LibraryItem) => item.media.name.trim().replace(LEADING_ARTICLE, "").toLocaleLowerCase("es");
   switch (sort) {
+    case "rating_desc":
+      const userRatings = readUserRatings();
+      return copy.sort((a, b) => {
+        const scoreA = getPersonalRatingFromMap(a.media.type, a.media.id, a.media.userRating, userRatings) ?? -1;
+        const scoreB = getPersonalRatingFromMap(b.media.type, b.media.id, b.media.userRating, userRatings) ?? -1;
+        return scoreB - scoreA || b.addedAt - a.addedAt || titleKey(a).localeCompare(titleKey(b), "es");
+      });
     case "added_asc":
       return copy.sort((a, b) => a.addedAt - b.addedAt || titleKey(a).localeCompare(titleKey(b), "es"));
     case "title_asc":
@@ -424,23 +453,11 @@ function sortLibraryItems(items: LibraryItem[], sort: LibrarySort) {
 
 function buildListOptions(items: LibraryItem[]): FacetOption[] {
   const counts = countBy(items, item => item.listKey);
-  const labels = new Map(items.map(item => [item.listKey, item.listLabel]));
-  const facets = Array.from(counts, ([key, count]) => ({
-    key,
-    label: labels.get(key) ?? key,
-    count,
-  }));
-  const byKey = new Map(facets.map(facet => [facet.key, facet]));
-  const ordered = [];
-  const saved = byKey.get("saved");
-  if (saved) ordered.push(saved);
-  const activity = byKey.get("activity");
-  if (activity) ordered.push(activity);
-  for (const facet of facets) {
-    if (facet.key === "saved" || facet.key === "activity") continue;
-    ordered.push(facet);
-  }
-  return [{ key: ALL, label: "Todo", count: items.length }, ...ordered];
+  return [
+    { key: ALL, label: "Todo", count: items.length },
+    { key: "to_watch", label: LIBRARY_STATUS_LABELS.to_watch, count: counts.get("to_watch") ?? 0 },
+    { key: "watched", label: LIBRARY_STATUS_LABELS.watched, count: counts.get("watched") ?? 0 },
+  ];
 }
 
 function buildTypeOptions(allItems: LibraryItem[], filteredItems: LibraryItem[]): FacetOption[] {
@@ -510,19 +527,8 @@ function typeLabel(type: string) {
   return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
-function aniListStatusLabel(status: AniListLibraryEntry["status"]) {
-  const labels: Record<AniListLibraryEntry["status"], string> = {
-    watching: "Viendo en AniList",
-    plan_to_watch: "Planeados en AniList",
-    completed: "Completados en AniList",
-    on_hold: "En pausa en AniList",
-    dropped: "Abandonados en AniList",
-  };
-  return labels[status];
-}
-
 function isLibrarySort(value: unknown): value is LibrarySort {
-  return ["added_desc", "added_asc", "title_asc", "title_desc"].includes(String(value));
+  return ["added_desc", "added_asc", "title_asc", "title_desc", "rating_desc"].includes(String(value));
 }
 
 function readSkipStep(extras: any[]) {

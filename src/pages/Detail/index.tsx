@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, Children, Component, lazy, Suspense, type LazyExoticComponent, type ComponentType } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Children, Component, lazy, Suspense, type LazyExoticComponent, type ComponentType } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useBackAction } from "../../input/inputActions.ts";
@@ -12,16 +12,20 @@ import { useAddonStore } from "../../store/addonStore";
 import ContextMenu from "../../components/ui/ContextMenu";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow";
+import MediaRatingControl from "../../components/ratings/MediaRatingControl";
 import type { MediaStream } from "../../types/stream";
 import { fetchMdbListRatingsForMedia } from "../../services/MDBListService";
 import { fetchDetailCollection, type DetailCollectionItem } from "../../services/detailCollections";
 import { isYoutubeTrailerKey, TRAILER_PROBE_MIN_WIDTH, youtubeTrailerThumbnail } from "../../services/trailerProbe";
+import { animateDetailCardFocus } from "./detailFocus";
 import { resolveMalId, fetchAnimeCast } from "../../services/animeResolve";
 import { fetchAnilistIdByMalId } from "../../services/anilist";
 import {
   CONTINUE_WATCHING_EVENT,
+  buildContinueWatchingKey,
   formatResumeTime,
   markEpisodeAsWatched,
+  markMediaAsWatched,
   progressPercent,
   readPlaybackStateEntries,
   removeContinueWatchingEntry,
@@ -30,6 +34,7 @@ import {
 } from "../../utils/continueWatching";
 import { readCachedLogo, sanitizeLogoUrl, writeCachedLogo } from "../../utils/artwork";
 import { ensureOriginalTmdbImage, pickPreferredTmdbBackdrop, sortTmdbBackdropsByPreference } from "../../utils/tmdbArtwork";
+import { chooseDetailBackdrop } from "../../utils/detailBackdrop";
 import { writeHomeCardArtwork } from "../../utils/homeCardArtwork";
 import {
   readDetailBackgroundOverride,
@@ -39,7 +44,8 @@ import {
   writeDetailLogoOverride,
   writeDetailMediaMeta,
 } from "../../utils/mediaMetadata";
-import { isInLibrary, LIBRARY_CHANGED_EVENT, toggleLibraryItem } from "../../utils/library";
+import { isInLibrary, LIBRARY_CHANGED_EVENT, setLibraryStatus, toggleLibraryItem } from "../../utils/library";
+import { hasCompletedSeriesEpisodes, saveSeriesEpisodeManifest } from "../../utils/libraryCompletion";
 import { fetchTmdbCommentsForMedia, type TmdbCommentReview } from "../../services/tmdbComments";
 import { SELECTED_ENGINE_KEY, SELECTED_MEDIA_META_KEY, SELECTED_STREAM_KEY } from "../Player/utils";
 import { gsap, appleEase, prefersReducedMotion, scrollByGsap, scrollToElementGsap, tweenTo } from "../../utils/motion";
@@ -53,6 +59,7 @@ import SeasonTabs from "./SeasonTabs.tsx";
 import RelatedPosterCard from "./RelatedPosterCard";
 import { relatedMediaDetailSeed } from "./relatedMedia";
 import { resolveEpisodeFocusKey } from "./episodeFocus";
+import { getEpisodeVirtualCenterIndex, getEpisodeVirtualRange } from "./episodeRowVirtualization";
 import DetailPageFrame from "./DetailPageFrame";
 import { readPageDataCache, writePageDataCache } from "../../utils/pageDataCache";
 import { buildDetailPath, buildEntityPath, buildEpisodePath, buildPersonPath, buildPlayerPath, detailDataMatchesRoute, isBigPictureLocation } from "../../utils/bigPictureDetail";
@@ -264,6 +271,7 @@ interface DetailData {
   director?:string;directorId?:number|string;trailers?:Trailer[];related?:Related[];
   collection?:DetailCollectionItem[];collectionName?:string;
   seasons?:{number:number;episodes:Episode[]}[];
+  expectedSeasonNumbers?: number[];
   productionCompanies?:MetaCompany[];
   networks?:MetaCompany[];
   backgroundOptions?:BackgroundOption[];
@@ -620,10 +628,6 @@ function normalizeTitle(value: string | undefined | null) {
 
 function compactTitle(value: string | undefined | null) {
   return normalizeTitle(value).replace(/\s+/g, "");
-}
-
-function isTmdbImageUrl(value?: string | null) {
-  return Boolean(value && /image\.tmdb\.org\/t\/p\//i.test(value));
 }
 
 function uniqueAliases(...values: Array<string | undefined | null | false>) {
@@ -1023,6 +1027,7 @@ export default function DetailPage({
   const [loading, setLoading]   = useState(() => isBigPictureLocation(location.pathname) || !normalizedInitialDetail);
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [season, setSeason]     = useState(1);
+  const [activeSeason, setActiveSeason] = useState(1);
   const seasonRepeatAtRef = useRef(0);
   const [showMore, setShowMore] = useState(false);
   const [synopsisTop, setSynopsisTop] = useState<number | null>(null);
@@ -1050,7 +1055,7 @@ export default function DetailPage({
   const loadGenerationRef = useRef(0);
   const backdropImageRef = useRef<HTMLDivElement>(null);
   const backdropBlurAmountRef = useRef(0);
-  const lastBackdropRef = useRef<string | undefined>(initialDetail?.backdrop ?? initialDetail?.poster);
+  const lastBackdropRef = useRef<string | undefined>(initialDetail?.backdrop);
   const logoImgRef = useRef<HTMLImageElement>(null);
   const logoPrevImageRef = useRef<HTMLImageElement>(null);
   const [logoStack, setLogoStack] = useState<{ prev: string | null; curr: string }>({ prev: null, curr: "" });
@@ -1066,6 +1071,13 @@ export default function DetailPage({
   // del primer render (vacía).
   const episodeScrollKeyRef = useRef("");
   const lastFocusedEpisodeKeyRef = useRef("");
+  const setActiveSeasonFromEpisode = useCallback((episode: Episode) => {
+    setActiveSeason(current => current === episode.season ? current : episode.season);
+  }, []);
+  const rememberEpisodeFocus = useCallback((episode: Episode) => {
+    lastFocusedEpisodeKeyRef.current = getEpisodeKey(episode.season, episode.episode);
+    setActiveSeasonFromEpisode(episode);
+  }, [setActiveSeasonFromEpisode]);
   const getEnabled = useAddonStore(s => s.getEnabledAddons);
   const { allowTmdbArtworkFallback } = useHomePreferences();
   const mdbListSettings = useMdbListSettings();
@@ -1074,8 +1086,8 @@ export default function DetailPage({
   const bigPicture = useBigPictureActive();
   const dataMatchesRoute = detailDataMatchesRoute(data, id);
   const frameBackground = dataMatchesRoute
-    ? data?.backdrop || data?.poster || lastBackdropRef.current
-    : initialDetail?.backdrop || initialDetail?.poster || lastBackdropRef.current || data?.backdrop || data?.poster;
+    ? data?.backdrop || lastBackdropRef.current
+    : initialDetail?.backdrop || lastBackdropRef.current || data?.backdrop;
   const contentPending = (loading || episodesLoading || (!bigPicture && tmdbCommentsLoading)) && dataMatchesRoute;
   // Episodie como sección embebida: nunca se sale del Detail, solo cambia de
   // sección sobre el MISMO fondo (una sola imagen). La sección se pilota con
@@ -1331,9 +1343,105 @@ backdropBlurAmountRef.current = 0;
     gsap.set(darkOverlayRef.current, { opacity: darkReset });
   }, [bigPicture, type, id, location.pathname]);
 
+  // Entrada de ficha compartida entre PC y Big Picture: el fondo toma foco,
+  // luego aparece la información y por último asoman las secciones.
+  useLayoutEffect(() => {
+    const root = detailContentRef.current;
+    if (!dataMatchesRoute || inShellPreview || !root) return;
+
+    const backdrop = backdropImageRef.current;
+    const heroItems = Array.from(root.querySelectorAll<HTMLElement>("[data-hero-reveal]"));
+    const credits = heroCreditsRef.current?.firstElementChild as HTMLElement | null;
+    const contentSections = Array.from(
+      root.querySelectorAll<HTMLElement>(".detail-page-content > section, .detail-page-content > div"),
+    ).filter(element => !element.hasAttribute("data-content-logo"));
+
+    if (prefersReducedMotion()) {
+      gsap.set([backdrop, ...heroItems, credits, ...contentSections].filter(Boolean), { clearProps: "opacity,transform,filter" });
+      return;
+    }
+
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+    if (backdrop) {
+      timeline.fromTo(
+        backdrop,
+        { opacity: 0.55, scale: 1.035, filter: "blur(8px)" },
+        { opacity: 1, scale: 1, filter: "blur(0px)", duration: 0.72, clearProps: "filter" },
+        0,
+      );
+    }
+    if (heroItems.length) {
+      timeline.fromTo(
+        heroItems,
+        { opacity: 0, y: 18 },
+        { opacity: 1, y: 0, duration: 0.46, stagger: 0.055, clearProps: "transform" },
+        0.12,
+      );
+    }
+    if (credits) {
+      timeline.fromTo(credits, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.38, clearProps: "transform" }, 0.3);
+    }
+    if (contentSections.length) {
+      timeline.fromTo(
+        contentSections,
+        { opacity: 0, y: 20 },
+        { opacity: 1, y: 0, duration: 0.42, stagger: 0.065, clearProps: "transform" },
+        0.32,
+      );
+    }
+
+    return () => {
+      timeline.kill();
+      gsap.set([backdrop, ...heroItems, credits, ...contentSections].filter(Boolean), {
+        clearProps: "opacity,transform,filter",
+      });
+    };
+  }, [dataMatchesRoute, data?.id, inShellPreview, location.pathname, type, id]);
+
+  // Revela cada artwork al terminar de cargar, también los que llegan después
+  // por lazy loading. El listener delegado cubre filas que se montan más tarde.
+  useEffect(() => {
+    const root = detailContentRef.current;
+    if (!root) return;
+    const fadeImage = (image: HTMLImageElement) => {
+      if (
+        image === logoImgRef.current
+        || image === logoPrevImageRef.current
+        || image.closest("[data-hero-reveal]")
+      ) return;
+      // El objetivo del fundido es la opacidad "de diseño" (la que dicta el
+      // CSS), no el computed del momento: si un fundido anterior quedó a medias
+      // (nodo desmontado por la virtualización de la row, segundo load con el
+      // fundido en curso, reactivación de la página cacheada), releer el
+      // computed encadena fundidos 0→valor parcial y el poster queda oscurecido
+      // para siempre. Se muestrea una vez por imagen —antes de escribir inline—
+      // y se reutiliza en los fundidos siguientes.
+      let targetOpacity = Number.parseFloat(image.dataset.fadeTargetOpacity ?? "");
+      if (!Number.isFinite(targetOpacity)) {
+        const computedOpacity = Number.parseFloat(window.getComputedStyle(image).opacity);
+        targetOpacity = Number.isFinite(computedOpacity) ? computedOpacity : 1;
+        image.dataset.fadeTargetOpacity = String(targetOpacity);
+      }
+      gsap.fromTo(image, { opacity: 0 }, {
+        opacity: targetOpacity,
+        duration: prefersReducedMotion() ? 0.12 : 0.32,
+        ease: "power2.out",
+        overwrite: true,
+      });
+    };
+    const onImageLoad = (event: Event) => {
+      if (event.target instanceof HTMLImageElement) fadeImage(event.target);
+    };
+    root.addEventListener("load", onImageLoad, true);
+    root.querySelectorAll("img").forEach(image => {
+      if (image.complete && image.naturalWidth > 0) fadeImage(image);
+    });
+    return () => root.removeEventListener("load", onImageLoad, true);
+  }, [data?.id]);
+
   useLayoutEffect(() => {
     if (!dataMatchesRoute) return;
-    const currentBackdrop = data?.backdrop ?? data?.poster;
+    const currentBackdrop = data?.backdrop;
     if (currentBackdrop) lastBackdropRef.current = currentBackdrop;
   }, [dataMatchesRoute, data?.backdrop, data?.poster]);
 
@@ -1384,7 +1492,10 @@ backdropBlurAmountRef.current = 0;
     const reduced = prefersReducedMotion();
     const timeline = gsap.timeline({
       defaults: { ease: "power3.out" },
-      onComplete: () => { entranceAnimatedIdRef.current = mediaId; },
+      onComplete: () => {
+        entranceAnimatedIdRef.current = mediaId;
+        window.dispatchEvent(new CustomEvent("aetherio:detail-entrance-complete", { detail: { id: mediaId } }));
+      },
     });
     timeline.fromTo(
       items,
@@ -2175,7 +2286,7 @@ backdropBlurAmountRef.current = 0;
         ...(d.backgroundOptions ?? []),
         ...collectTmdbBackgroundOptions(imgs.backdrops, main.backdrop_path),
       ]);
-      if (shouldUseTmdbArtwork && preferredBackdrop && (!d.backdrop || isTmdbImageUrl(d.backdrop))) d.backdrop=preferredBackdrop;
+      d.backdrop = chooseDetailBackdrop(d.backdrop, preferredBackdrop, shouldUseTmdbArtwork);
       if (backgroundOverride) d.backdrop = backgroundOverride;
       if (shouldUseTmdbArtwork&&!d.poster&&main.poster_path)     d.poster=`${IMG}/w780${main.poster_path}`;
        if (explicitTmdbIdentity || !d.description || t === "anime") d.description=main.overview ?? d.description;
@@ -2297,10 +2408,15 @@ backdropBlurAmountRef.current = 0;
         }).catch(() => undefined);
       }
 
-      if (t!=="movie"&&main.seasons&&(!d.seasons?.length || !hasRegularEpisodes(d.seasons))) {
-        const seasonNumbers = (main.seasons ?? [])
+      const seasonNumbers = (main.seasons ?? [])
           .map((item: any) => Number(item?.season_number))
           .filter((number: number) => Number.isInteger(number) && number >= 0);
+      const expectedSeasonNumbers = (main.seasons ?? [])
+        .filter((item: any) => Number(item?.season_number) > 0 && Number(item?.episode_count) > 0)
+        .map((item: any) => Number(item.season_number));
+      d.expectedSeasonNumbers = expectedSeasonNumbers;
+      const hasAllExpectedSeasons = expectedSeasonNumbers.every((number: number) => d.seasons?.some(item => item.number === number));
+      if (t!=="movie"&&main.seasons&&(!d.seasons?.length || !hasRegularEpisodes(d.seasons) || !hasAllExpectedSeasons)) {
         const preferredSeason = typeof episodeRequest?.season === "number" && seasonNumbers.includes(episodeRequest.season)
           ? episodeRequest.season
           : seasonNumbers.includes(1) ? 1 : seasonNumbers[0];
@@ -2443,7 +2559,7 @@ backdropBlurAmountRef.current = 0;
       .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
   }, [data, playbackEntries]);
 
-  const { trailers: playableTrailers, ready: trailersReady } = usePlayableTrailers(data?.trailers);
+  const { trailers: playableTrailers } = usePlayableTrailers(data?.trailers);
 
   const focusEpisodeEntry = useMemo(() => {
     if (!data) return null;
@@ -2481,6 +2597,8 @@ backdropBlurAmountRef.current = 0;
   }, [episodeScrollKey]);
 
   useEffect(() => {
+    setSeason(1);
+    setActiveSeason(1);
     lastFocusedEpisodeKeyRef.current = "";
   }, [type, id]);
 
@@ -2544,10 +2662,68 @@ backdropBlurAmountRef.current = 0;
     const targetSeason = focusTargetEpisode?.season;
     if (!targetSeason) return;
     setSeason(current => current === targetSeason ? current : targetSeason);
-  }, [focusTargetEpisode?.season]);
+    setActiveSeason(current => current === targetSeason ? current : targetSeason);
+  }, [focusTargetEpisode?.season, type, id]);
 
-  const regularSeasons = data?.seasons?.filter(s => s.number > 0) ?? [];
+  const regularSeasons = useMemo(
+    () => (data?.seasons ?? []).filter(s => s.number > 0).sort((a, b) => a.number - b.number),
+    [data?.seasons],
+  );
   const curSeason = regularSeasons.find(s => s.number === season) ?? regularSeasons[0];
+  const allRegularEpisodes = useMemo(
+    () => regularSeasons.flatMap(item => [...item.episodes].sort((a, b) => a.episode - b.episode)),
+    [regularSeasons],
+  );
+  const selectedSeasonEpisode = curSeason?.episodes.find(episode => {
+    const entry = episodeProgressMap.get(`${episode.season}:${episode.episode}`);
+    return entry && !entry.completed;
+  }) ?? curSeason?.episodes.find(episode => !isEpisodeLocked(episode)) ?? curSeason?.episodes[0];
+  const selectedSeasonScrollKey = curSeason && selectedSeasonEpisode
+    ? focusTargetEpisode?.season === curSeason.number && episodeScrollKey
+      ? episodeScrollKey
+      : getEpisodeKey(selectedSeasonEpisode.season, selectedSeasonEpisode.episode)
+    : "";
+
+  const availableSeriesEpisodes = useMemo(
+    () => (data?.seasons ?? [])
+      .filter(item => item.number > 0)
+      .flatMap(item => item.episodes)
+      .filter(item => !isEpisodeLocked(item)),
+    [data?.seasons],
+  );
+  const hasAllExpectedSeasons = !data?.expectedSeasonNumbers?.length
+    || data.expectedSeasonNumbers.every(number => regularSeasons.some(item => item.number === number));
+  const seriesManifestReady = Boolean(
+    data
+    && data.type !== "movie"
+    && !episodesLoading
+    && availableSeriesEpisodes.length > 0
+    && (data.expectedSeasonNumbers === undefined || data.expectedSeasonNumbers.length > 0)
+    && hasAllExpectedSeasons,
+  );
+  const isSeriesComplete = data
+    ? seriesManifestReady && hasCompletedSeriesEpisodes(data.type, data.id, availableSeriesEpisodes, playbackEntries)
+    : false;
+
+  useEffect(() => {
+    if (!data || !seriesManifestReady) return;
+    saveSeriesEpisodeManifest(data.type, data.id, availableSeriesEpisodes);
+  }, [availableSeriesEpisodes, data?.id, data?.type, seriesManifestReady]);
+
+  useEffect(() => {
+    if (!data || data.type === "movie" || !isSeriesComplete) return;
+    const wholeShowKey = buildContinueWatchingKey({ type: data.type, id: data.id, season: 0, episode: 0 });
+    const alreadyMarked = playbackEntries.some(entry => entry.key === wholeShowKey && entry.completed);
+    if (alreadyMarked) return;
+    markMediaAsWatched({
+      type: data.type,
+      id: data.id,
+      name: data.name,
+      logo: data.logo,
+      background: data.backdrop,
+      poster: data.poster,
+    });
+  }, [data, isSeriesComplete, playbackEntries]);
 
   // Keep this hook before the loading returns below. Detail data arrives
   // asynchronously, so placing it after an early return changes the hook
@@ -2593,6 +2769,7 @@ backdropBlurAmountRef.current = 0;
       const nextSeason = seasonNumbers[nextIndex];
       if (nextSeason === undefined || nextSeason === currentNumber) return false;
       setSeason(nextSeason);
+      setActiveSeason(nextSeason);
       focusSeasonEpisode(nextSeason);
       return true;
     };
@@ -2646,6 +2823,7 @@ backdropBlurAmountRef.current = 0;
   const detailData = data;
 
   const isMovie = detailData.type==="movie";
+  const hasSeasonTabs = !isMovie && regularSeasons.length > 1;
   const typeLabel = isMovie ? "Película" : data.type === "anime" ? "Anime" : "Programa de TV";
   const DESC_MAX  = 180;
   const normalizedDescription = normalizeMojibakeText(data.description ?? "");
@@ -2705,6 +2883,13 @@ backdropBlurAmountRef.current = 0;
     const target = findPlaybackEntryForEpisode(episode, entries);
     if (!target) return;
     removeContinueWatchingEntry(target.key);
+    removeContinueWatchingEntry(buildContinueWatchingKey({
+      type: detailData.type,
+      id: detailData.id,
+      season: 0,
+      episode: 0,
+    }));
+    setLibraryStatus(detailData.type, detailData.id, "to_watch");
   }
 
   function markSeasonAsWatched(seasonNumber: number) {
@@ -3095,7 +3280,13 @@ function updateBackdropBlur(scrollTop: number) {
       // prefers-reduced-motion (which tweenTo would otherwise strip).
       const el = backdropImageRef.current;
       if (el) {
-        gsap.killTweensOf(el);
+        // El kill defiende el set de un tween de blur/escala en vuelo, pero
+        // nunca debe tocar la opacidad: la entrada de la ficha anima el wrapper
+        // 0.55→1 y un kill completo la congelaba en 0.55 al reactivar la página
+        // cacheada (volver atrás desde otra ficha) — la "capa oscura" del fondo.
+        // Lo mismo pasaba al scrollear durante la entrada o al cerrar Episodie.
+        // Limitar el kill a filter/scale deja vivo el fundido de opacidad.
+        gsap.killTweensOf(el, "filter,scale");
         gsap.set(el, { filter: `blur(${blur}px)`, scale: 1 + blur * 0.0018 });
       }
       }
@@ -3145,7 +3336,6 @@ function updateBackdropBlur(scrollTop: number) {
   // El -26 de Big Picture en colección/relacionados compensa el gutter
   // negativo del ScrollRow previo. Tras el panel de Producción (caja normal,
   // sin gutter) hay que mantener el gap: si no, el header queda pegado.
-  const hasCompanyLogos = Boolean(data.networks?.length || data.productionCompanies?.length);
 
   return (
     <DetailPageFrame
@@ -3275,6 +3465,25 @@ function updateBackdropBlur(scrollTop: number) {
             >
               <MoreHorizontal size={20} />
             </button>
+            <MediaRatingControl
+              type={data.type}
+              id={data.id}
+              bigPicture={bigPicture}
+              aliases={[
+                ...(data.type === "anime" && data.ids?.tmdb
+                  ? [{ type: "series", id: `tmdb:${data.ids.tmdb}` }]
+                  : []),
+                ...(data.type === "anime" && data.ids?.imdb
+                  ? [{ type: "series", id: data.ids.imdb }]
+                  : []),
+                ...(data.type === "series" && data.ids?.anilist
+                  ? [{ type: "anime", id: `anilist:${data.ids.anilist}` }]
+                  : []),
+                ...(data.type === "series" && data.ids?.mal
+                  ? [{ type: "anime", id: `mal:${data.ids.mal}` }]
+                  : []),
+              ]}
+            />
             <ContextMenu
               open={detailMenuOpen}
               anchorRef={detailMenuButtonRef}
@@ -3419,7 +3628,11 @@ function updateBackdropBlur(scrollTop: number) {
       </div>
 
       {/* SECCIONES INFERIORES */}
-      <div className="detail-page-content" style={{ padding:"24px var(--app-safe-x)",display:"flex",flexDirection:"column",gap:28,background:"transparent" }}>
+      <div
+        className="detail-page-content"
+        data-has-season-tabs={hasSeasonTabs ? "true" : undefined}
+        style={{ padding:`${hasSeasonTabs ? 40 : 24}px var(--app-safe-x)`,display:"flex",flexDirection:"column",gap:75,background:"transparent" }}
+      >
 
         {/* Zona de contenido: el logo se mantiene dentro de la zona, pero
             permanece colapsado mientras el hero todavía está visible para
@@ -3453,8 +3666,11 @@ function updateBackdropBlur(scrollTop: number) {
               <div className="detail-season-header" style={{ marginBottom: bigPicture ? 24 : 0 }}>
               <SeasonTabs
                 seasons={regularSeasons.map(item => item.number)}
-                selectedSeason={curSeason.number}
-                onSeasonSelected={setSeason}
+                selectedSeason={activeSeason}
+                onSeasonSelected={nextSeason => {
+                  setSeason(nextSeason);
+                  setActiveSeason(nextSeason);
+                }}
                 seasonWatched={seasonNumber => seasonMarkedMap.get(seasonNumber) ?? false}
                 onMarkSeasonWatched={markSeasonAsWatched}
                 onMarkSeasonUnwatched={markSeasonAsUnwatched}
@@ -3466,19 +3682,26 @@ function updateBackdropBlur(scrollTop: number) {
               </div>
             )}
             <div style={{ marginTop: bigPicture ? 12 : 0 }}>
-            <ScrollRow key={curSeason.number} rowKey={`detail:${type}:${id}:episodes:${curSeason.number}`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP} initialScrollKey={episodeScrollKey || getEpisodeKey(curSeason.episodes[0]?.season, curSeason.episodes[0]?.episode)}>
-              {curSeason.episodes.map(ep=>(
+            <ScrollRow
+              rowKey={`detail:${type}:${id}:episodes`}
+              gap={DETAIL_EPISODE_CARD_GAP}
+              arrowTop={DETAIL_MEDIA_ARROW_TOP}
+              initialScrollKey={selectedSeasonScrollKey}
+              virtualItems={allRegularEpisodes}
+              virtualItemWidth={347}
+              onVisibleEpisodeChange={setActiveSeasonFromEpisode}
+              renderVirtualItem={ep => (
                 <EpCard
-                  key={ep.id}
+                  key={getEpisodeKey(ep.season, ep.episode)}
                   scrollKey={getEpisodeKey(ep.season, ep.episode)}
                   ep={ep}
                   fallbackImage={data.backdrop ?? undefined}
                   locked={isEpisodeLocked(ep)}
                   progressEntry={episodeProgressMap.get(`${ep.season}:${ep.episode}`)}
-                  seasonMarked={seasonMarkedMap.get(0) ?? false}
+                  seasonMarked={seasonMarkedMap.get(ep.season) ?? false}
                   previousMarked={arePreviousEpisodesMarked(ep.season, ep.episode)}
                   onPlay={()=>goToStreams(ep.season,ep.episode,ep.name)}
-                  onRememberFocus={() => { lastFocusedEpisodeKeyRef.current = getEpisodeKey(ep.season, ep.episode); }}
+                  onRememberFocus={() => rememberEpisodeFocus(ep)}
                   onMarkWatched={() => markEpisodeFromCard(ep)}
                   onMarkSeasonWatched={() => markSeasonAsWatched(ep.season)}
                   onMarkSeasonUnwatched={() => markSeasonAsUnwatched(ep.season)}
@@ -3490,14 +3713,16 @@ function updateBackdropBlur(scrollTop: number) {
                     removeContinueWatchingEntry(entry.key);
                   }}
                 />
-              ))}
+              )}
+            >
+              {null}
             </ScrollRow>
             </div>
           </section>
         )}
 
         {!isMovie&&Boolean(specialSeason?.episodes.length)&&(
-          <section style={{ marginTop: bigPicture ? -26 : undefined }}>
+          <section>
             <h2 className="detail-row-title" style={{ fontSize:20,fontWeight:750,lineHeight:1.1,marginBottom:bigPicture ? 24 : 12 }}>Especiales</h2>
             <div style={{ marginTop: bigPicture ? 12 : 0 }}>
             <ScrollRow rowKey={`detail:${type}:${id}:specials`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_MEDIA_ARROW_TOP}>
@@ -3531,7 +3756,7 @@ function updateBackdropBlur(scrollTop: number) {
         )}
 
         {!!playableTrailers.length&&(
-          <section style={{ marginTop: bigPicture && !isMovie && (curSeason || Boolean(specialSeason?.episodes.length)) ? -26 : undefined }}>
+          <section>
             <SectionH title="Tráilers" />
             <ScrollRow rowKey={`detail:${type}:${id}:trailers`} gap={DETAIL_EPISODE_CARD_GAP} arrowTop={DETAIL_TRAILER_ARROW_TOP} shadowGutter={DETAIL_TRAILER_ROW_SHADOW_GUTTER}>
               {playableTrailers.slice(0,8).map((t,index)=><TrailerCard key={t.key ?? `trailer-${index}`} trailer={t} media={data} />)}
@@ -3539,19 +3764,17 @@ function updateBackdropBlur(scrollTop: number) {
           </section>
         )}
 
-        <div
-          ref={commentsSectionRef}
-          style={!isMovie && Boolean(specialSeason?.episodes.length) && trailersReady && !playableTrailers.length
-            ? { marginTop: bigPicture ? -76 : -32 }
-            : undefined}
-        >
-          <TmdbCommentsSection
-            comments={tmdbComments}
-            loading={tmdbCommentsLoading}
-            error={tmdbCommentsError}
-            detailKey={data ? `${data.type}:${data.id}` : undefined}
-          />
-        </div>
+        {(!(tmdbCommentsLoading && bigPicture)
+          && (tmdbComments.length > 0 || Boolean(tmdbCommentsError) || tmdbCommentsLoading)) && (
+          <div ref={commentsSectionRef}>
+            <TmdbCommentsSection
+              comments={tmdbComments}
+              loading={tmdbCommentsLoading}
+              error={tmdbCommentsError}
+              detailKey={data ? `${data.type}:${data.id}` : undefined}
+            />
+          </div>
+        )}
 
         {!!data.cast?.length&&(
           <section>
@@ -3565,7 +3788,7 @@ function updateBackdropBlur(scrollTop: number) {
         <CompanyLogoSection networks={data.networks} productionCompanies={data.productionCompanies} detailKey={`${data.type}:${data.id}`} background={data.backdrop ?? data.poster} />
 
         {!!data.collection?.length&&(
-          <section style={{ marginTop: bigPicture && !hasCompanyLogos ? -26 : undefined }}>
+          <section>
             <SectionH title={data.collectionName || "Colección"} />
             <ScrollRow rowKey={`detail:${type}:${id}:collection`} gap={20} arrowTop={DETAIL_COLLECTION_ARROW_TOP} shadowGutter={DETAIL_COLLECTION_ROW_SHADOW_GUTTER} initialScrollKey={`${data.id}:collection`}>
               {data.collection.map(item=><CollectionCard key={`${item.type}:${item.id}`} item={item} onPress={()=>{
@@ -3586,7 +3809,7 @@ function updateBackdropBlur(scrollTop: number) {
         )}
 
         {!!data.related?.length&&(
-          <section style={{ marginTop: bigPicture && !hasCompanyLogos && !data.collection?.length ? -26 : undefined }}>
+          <section>
             <SectionH title="Más como esto" />
             <ScrollRow rowKey={`detail:${type}:${id}:related`} gap={DETAIL_VERTICAL_CARD_GAP} shadowGutter={DETAIL_RELATED_ROW_SHADOW_GUTTER} arrowTop={DETAIL_RELATED_ARROW_TOP}>
               {data.related.map(r=>(
@@ -3671,7 +3894,6 @@ function CompanyLogoSection({
 
 function CompanyGroup({ title, kind, items, startIndex, background }: { title: string; kind: "network" | "company"; items: MetaCompany[]; startIndex: number; background?: string }) {
   const navigate = useNavigate();
-  const bigPicture = useBigPictureActive();
 
   return (
     <div className="liquid-glass-dark" style={{ borderRadius:18,padding:"22px 24px",minHeight:138 }}>
@@ -3689,24 +3911,22 @@ function CompanyGroup({ title, kind, items, startIndex, background }: { title: s
             style={{ height:60,minWidth:116,maxWidth:188,borderRadius:14,border:"1px solid rgba(255,255,255,0.82)",background:"linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))",display:"flex",alignItems:"center",justifyContent:"center",padding:"10px 15px",overflow:"hidden",cursor:"pointer",boxShadow:"0 10px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.92)" }}
             onMouseEnter={event => {
               const el = event.currentTarget;
-              tweenTo(el, { y: -2 }, 0.22);
+              animateDetailCardFocus(el, true);
               gsap.set(el, { background: "linear-gradient(180deg, rgba(255,255,255,1), rgba(244,246,250,0.94))" });
             }}
             onMouseLeave={event => {
               const el = event.currentTarget;
-              tweenTo(el, { y: 0 }, 0.22);
+              animateDetailCardFocus(el, false);
               gsap.set(el, { background: "linear-gradient(180deg, rgba(255,255,255,0.97), rgba(240,242,246,0.9))" });
             }}
-            onFocus={bigPicture ? event => {
+            onFocus={event => {
               const el = event.currentTarget;
-              tweenTo(el, { y: -2, scale: 1.06, zIndex: 5 }, 0.32);
-              gsap.set(el, { boxShadow: "0 18px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.35)" });
-            } : undefined}
-            onBlur={bigPicture ? event => {
+              animateDetailCardFocus(el, true);
+            }}
+            onBlur={event => {
               const el = event.currentTarget;
-              tweenTo(el, { y: 0, scale: 1, zIndex: 1 }, 0.32);
-              gsap.set(el, { boxShadow: "0 10px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.92)" });
-            } : undefined}
+              animateDetailCardFocus(el, false);
+            }}
           >
             {item.logo ? (
               <img src={item.logo} alt={item.name} loading="lazy" decoding="async" style={{ maxWidth:"100%",maxHeight:"100%",objectFit:"contain",filter:"drop-shadow(0 1px 2px rgba(0,0,0,0.16))" }} />
@@ -3779,14 +3999,10 @@ function TmdbCommentCard({ comment }: { comment: TmdbCommentReview }) {
       // se saltaba al bajar desde Tráilers hacia Reparto.
       tabIndex={bigPicture ? 0 : undefined}
       aria-label={bigPicture ? `Comentario de ${comment.authorDisplayName}` : undefined}
-      onFocus={bigPicture ? (e=>{
-        tweenTo(e.currentTarget, { y: -4, scale: 1.04, zIndex: 5 }, 0.32);
-        gsap.set(e.currentTarget, { boxShadow: "0 22px 46px rgba(0,0,0,0.56)" });
-      }) : undefined}
-      onBlur={bigPicture ? (e=>{
-        tweenTo(e.currentTarget, { y: 0, scale: 1, zIndex: 1 }, 0.32);
-        gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-      }) : undefined}
+      onMouseEnter={event => animateDetailCardFocus(event.currentTarget, true)}
+      onMouseLeave={event => animateDetailCardFocus(event.currentTarget, false)}
+      onFocus={bigPicture ? event => animateDetailCardFocus(event.currentTarget, true) : undefined}
+      onBlur={bigPicture ? event => animateDetailCardFocus(event.currentTarget, false) : undefined}
       style={{ width:320,minHeight:144,flexShrink:0,borderRadius:14,padding:16,display:"flex",flexDirection:"column",gap:10,cursor:"default",outline:"none" }}
     >
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12 }}>
@@ -3816,7 +4032,6 @@ function TmdbCommentCard({ comment }: { comment: TmdbCommentReview }) {
 
 function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=>void}) {
   const [logoFailed, setLogoFailed] = useState(false);
-  const bigPicture = useBigPictureActive();
   const image = item.backdrop || item.poster;
   return (
     <button
@@ -3824,22 +4039,10 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
       className="media-card-frame"
       onClick={onPress}
       aria-label={item.title}
-      onMouseEnter={event=>{
-        tweenTo(event.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
-        gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-      }}
-      onMouseLeave={event=>{
-        tweenTo(event.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
-        gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-      }}
-      onFocus={bigPicture ? (event=>{
-        tweenTo(event.currentTarget, { scale: 1.05, zIndex: 5 }, 0.32);
-        gsap.set(event.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-      }) : undefined}
-      onBlur={bigPicture ? (event=>{
-        tweenTo(event.currentTarget, { scale: 1, zIndex: 1 }, 0.32);
-        gsap.set(event.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-      }) : undefined}
+      onMouseEnter={event => animateDetailCardFocus(event.currentTarget, true)}
+      onMouseLeave={event => animateDetailCardFocus(event.currentTarget, false)}
+      onFocus={event => animateDetailCardFocus(event.currentTarget, true)}
+      onBlur={event => animateDetailCardFocus(event.currentTarget, false)}
       style={{
         position:"relative",
         flexShrink:0,
@@ -3886,23 +4089,69 @@ function CollectionCard({ item, onPress }:{item:DetailCollectionItem;onPress:()=
     </button>
   );
 }
-function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTop, rowKey }:{children:ReactNode;gap?:number;initialScrollKey?:string;shadowGutter?:{top:number;bottom:number};arrowTop?:number|string;rowKey?:string}) {
+function ScrollRow({
+  children,
+  gap = 10,
+  initialScrollKey,
+  shadowGutter,
+  arrowTop,
+  rowKey,
+  virtualItems,
+  virtualItemWidth,
+  onVisibleEpisodeChange,
+  renderVirtualItem,
+}:{
+  children:ReactNode;
+  gap?:number;
+  initialScrollKey?:string;
+  shadowGutter?:{top:number;bottom:number};
+  arrowTop?:number|string;
+  rowKey?:string;
+  virtualItems?:readonly Episode[];
+  virtualItemWidth?:number;
+  onVisibleEpisodeChange?:(episode:Episode)=>void;
+  renderVirtualItem?:(episode:Episode)=>ReactNode;
+}) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [virtualRange, setVirtualRange] = useState({ start: 0, end: 3 });
   const leftArrowRef = useRef<HTMLDivElement>(null);
   const rightArrowRef = useRef<HTMLDivElement>(null);
+  const isVirtualized = Boolean(virtualItems && virtualItemWidth && renderVirtualItem);
+  const virtualItemCount = virtualItems?.length ?? 0;
+  const virtualStride = (virtualItemWidth ?? 0) + gap;
+  const syncVirtualRange = useCallback((scrollLeft: number, viewportWidth: number) => {
+    if (!isVirtualized) return;
+    const next = getEpisodeVirtualRange(scrollLeft, viewportWidth, virtualItemCount, virtualStride);
+    setVirtualRange(current =>
+      current.start === next.start && current.end === next.end ? current : next,
+    );
+  }, [isVirtualized, virtualItemCount, virtualStride]);
+  const syncVisibleEpisode = useCallback((scrollLeft: number, viewportWidth: number) => {
+    const row = rowRef.current;
+    if (!row || !isVirtualized || !virtualItems?.length || !onVisibleEpisodeChange) return;
+    const leftInset = Number.parseFloat(window.getComputedStyle(row).paddingLeft) || 0;
+    const index = getEpisodeVirtualCenterIndex(
+      scrollLeft,
+      viewportWidth,
+      virtualItemCount,
+      virtualStride,
+      leftInset,
+    );
+    if (index >= 0) onVisibleEpisodeChange(virtualItems[index]);
+  }, [isVirtualized, onVisibleEpisodeChange, virtualItemCount, virtualItems, virtualStride]);
 
   // Sistema de rows del Home: la row expone data-row-key/count y cada card
   // directa lleva data-item-index + data-row-card. Así el motor espacial se
   // mueve por índice (al final de la row se queda, no baja) y recuerda la
   // columna al subir/bajar. Se asigna por DOM para no reestructurar el flex
   // ni romper el scroll inicial por data-scroll-key. Sin rowKey, geométrico.
-  const rowCount = rowKey ? Children.count(children) : 0;
+  const rowCount = rowKey ? (isVirtualized ? virtualItemCount : Children.count(children)) : 0;
   useEffect(() => {
     const row = rowRef.current;
-    if (!row || !rowKey) return;
+    if (!row || !rowKey || isVirtualized) return;
     const kids = Array.from(row.children).filter(
       (el): el is HTMLElement => el instanceof HTMLElement && el.getAttribute("aria-hidden") !== "true",
     );
@@ -3916,7 +4165,7 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
         kid.removeAttribute("data-row-card");
       });
     };
-  }, [children, rowKey]);
+  }, [children, isVirtualized, rowKey]);
 
   function updateScrollState() {
     const row = rowRef.current;
@@ -3934,20 +4183,26 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
     updateScrollState();
     const row = rowRef.current;
     if (!row) return;
-    const onScroll = () => updateScrollState();
+    const measure = () => {
+      updateScrollState();
+      syncVirtualRange(row.scrollLeft, row.clientWidth);
+      syncVisibleEpisode(row.scrollLeft, row.clientWidth);
+    };
+    const onScroll = () => measure();
     row.addEventListener("scroll", onScroll, { passive: true });
-    const onResize = () => updateScrollState();
+    const onResize = () => measure();
     window.addEventListener("resize", onResize);
     const resizeObserver = typeof ResizeObserver !== "undefined"
-      ? new ResizeObserver(() => updateScrollState())
+      ? new ResizeObserver(measure)
       : null;
     resizeObserver?.observe(row);
+    measure();
     return () => {
       row.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onResize);
       resizeObserver?.disconnect();
     };
-  }, [children]);
+  }, [children, syncVisibleEpisode, syncVirtualRange]);
 
   useLayoutEffect(() => {
     if (!initialScrollKey) return;
@@ -3956,6 +4211,25 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
       if (cancelled) return;
       const row = rowRef.current;
       if (!row) return;
+      if (isVirtualized && virtualItems && virtualItemWidth) {
+        const targetIndex = virtualItems.findIndex(item =>
+          getEpisodeKey(item.season, item.episode) === initialScrollKey,
+        );
+        if (targetIndex >= 0) {
+          const style = window.getComputedStyle(row);
+          const horizontalPadding =
+            (Number.parseFloat(style.paddingLeft) || 0) +
+            (Number.parseFloat(style.paddingRight) || 0);
+          const viewportWidth = Math.max(0, row.clientWidth - horizontalPadding);
+          const centeredLeft = targetIndex * virtualStride
+            - Math.max(0, (viewportWidth - virtualItemWidth) / 2);
+          row.scrollTo({ left: Math.max(0, centeredLeft), behavior: "auto" });
+          syncVirtualRange(row.scrollLeft, row.clientWidth);
+          syncVisibleEpisode(row.scrollLeft, row.clientWidth);
+          window.setTimeout(updateScrollState, 0);
+        }
+        return;
+      }
       const target = row.querySelector<HTMLElement>(`[data-scroll-key="${initialScrollKey}"]`);
       if (!target) return;
       const left = Math.max(0, target.offsetLeft - Math.max(0, (row.clientWidth - target.offsetWidth) / 2));
@@ -3971,7 +4245,7 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
       window.clearTimeout(retryShort);
       window.clearTimeout(retryLong);
     };
-  }, [children, initialScrollKey]);
+  }, [children, initialScrollKey, isVirtualized, syncVisibleEpisode, syncVirtualRange, virtualItems, virtualItemWidth, virtualStride]);
 
   const move = (direction:"left"|"right") => {
     const row = rowRef.current;
@@ -3986,10 +4260,17 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
 
   // El scroller horizontal recorta por definición el desbordado vertical
   // (overflow-x:auto convierte overflow-y:visible en auto). El gutter de
-  // sombra vive dentro del scrollport; el margen negativo lo compensa para
-  // no alterar el ritmo entre secciones (neto: +4 arriba, +12 abajo).
+  // sombra vive dentro del scrollport; se compensa completamente por fuera
+  // para que no se sume al gap entre esta fila y la siguiente (neto: +4 arriba,
+  // 0 abajo).
   const topGutter = shadowGutter?.top ?? DETAIL_ROW_SHADOW_TOP_GUTTER;
   const bottomGutter = shadowGutter?.bottom ?? DETAIL_ROW_SHADOW_BOTTOM_GUTTER;
+  const virtualStartOffset = virtualRange.start > 0
+    ? Math.max(0, virtualRange.start * virtualStride - gap)
+    : 0;
+  const virtualEndOffset = isVirtualized && virtualRange.end < virtualItemCount
+    ? Math.max(0, (virtualItemCount - virtualRange.end) * virtualStride - gap)
+    : 0;
 
   return (
     <div
@@ -4025,7 +4306,7 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
           gap,
           overflowX: "auto",
           overflowY: "visible",
-          margin: `${-(topGutter - 4)}px calc(-1 * var(--app-safe-x)) ${-(bottomGutter - 12)}px`,
+          margin: `${-(topGutter - 4)}px calc(-1 * var(--app-safe-x)) ${-bottomGutter}px`,
           // The horizontal scroller clips vertical overflow by definition. Keep
           // enough scrollport gutter for the scaled card and its shadow.
           paddingTop: topGutter,
@@ -4036,7 +4317,29 @@ function ScrollRow({ children, gap = 10, initialScrollKey, shadowGutter, arrowTo
           scrollbarWidth: "none",
         }}
       >
-        {children}
+        {isVirtualized && virtualItems && renderVirtualItem ? (
+          <>
+            {virtualStartOffset > 0 ? (
+              <div aria-hidden="true" style={{ flex: `0 0 ${virtualStartOffset}px`, width: virtualStartOffset }} />
+            ) : null}
+            {virtualItems.slice(virtualRange.start, virtualRange.end).map((episode, offset) => {
+              const index = virtualRange.start + offset;
+              return (
+                <div
+                  key={getEpisodeKey(episode.season, episode.episode)}
+                  data-item-index={index}
+                  data-row-card=""
+                  style={{ flex: `0 0 ${virtualItemWidth}px`, width: virtualItemWidth }}
+                >
+                  {renderVirtualItem(episode)}
+                </div>
+              );
+            })}
+            {virtualEndOffset > 0 ? (
+              <div aria-hidden="true" style={{ flex: `0 0 ${virtualEndOffset}px`, width: virtualEndOffset }} />
+            ) : null}
+          </>
+        ) : children}
         <div aria-hidden="true" style={{ flex: `0 0 var(--app-safe-x)`, width: "var(--app-safe-x)", height: 1 }} />
       </div>
       <div
@@ -4133,30 +4436,26 @@ function EpCard({
       onMouseEnter={(e)=>{
         setFocused(true);
         const card = e.currentTarget as HTMLDivElement;
-        tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
-        gsap.set(card,{boxShadow:"0 18px 40px rgba(0,0,0,0.42)"});
+        animateDetailCardFocus(card, true);
       }}
       onMouseLeave={(e)=>{
         setFocused(false);
         const card = e.currentTarget as HTMLDivElement;
-        tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
-        gsap.set(card,{boxShadow:"none"});
+        animateDetailCardFocus(card, false);
       }}
       // En picture el foco del mando espeja el hover: escala sin bordes.
       // Las bloqueadas también escalan al tener foco (solo no reproducen).
-      onFocus={bigPicture ? (e)=>{
+      onFocus={(e)=>{
         onRememberFocus?.();
         setFocused(true);
         const card = e.currentTarget as HTMLDivElement;
-        tweenTo(card,{y:-3,scale:1.03,zIndex:4},0.28);
-        gsap.set(card,{boxShadow:"0 18px 40px rgba(0,0,0,0.42)"});
-      } : undefined}
-      onBlur={bigPicture ? (e)=>{
+        animateDetailCardFocus(card, true);
+      }}
+      onBlur={(e)=>{
         setFocused(false);
         const card = e.currentTarget as HTMLDivElement;
-        tweenTo(card,{y:0,scale:1,zIndex:1},0.28);
-        gsap.set(card,{boxShadow:"none"});
-      } : undefined}
+        animateDetailCardFocus(card, false);
+      }}
     >
       <div className="detail-episode-card__media">
         {(ep.still ?? fallbackImage) ? (
@@ -4190,7 +4489,7 @@ function EpCard({
         </button>}
       </div>
       <div className="detail-episode-card__copy">
-        <p className="detail-episode-card__eyebrow">EPISODIO {ep.episode}</p>
+        <p className="detail-episode-card__eyebrow">Episodio {ep.episode}</p>
         <p className="detail-episode-card__title">{ep.name??`Episodio ${ep.episode}`}</p>
         {ep.overview ? (
           <p className="detail-episode-card__overview" style={focused ? { color:"rgba(255,255,255,0.92)" } : undefined}>{ep.overview}</p>
@@ -4223,7 +4522,6 @@ function EpCard({
 
 function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
   const navigate = useNavigate();
-  const bigPicture = useBigPictureActive();
   const fallbackThumb = media.backdrop ?? media.poster ?? "";
   const trailerKey = typeof trailer.key === "string" ? trailer.key.trim() : undefined;
   const initialThumb = trailerKey ? youtubeTrailerThumbnail(trailerKey) : trailer.thumbnail ?? fallbackThumb;
@@ -4277,22 +4575,14 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
       className="media-card-frame"
       onClick={playTrailer}
       style={{ flexShrink:0,width:399,height:224,borderRadius:14,overflow:"hidden",display:"block",position:"relative",cursor:"pointer",background:"#1c1c1e",textDecoration:"none",border:"1px solid rgba(225,230,238,0.1)",boxShadow:"0 12px 28px rgba(0,0,0,0.28)",padding:0,textAlign:"left" }}
-      onMouseEnter={e=>{
-         tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
-         gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-       }}
-       onMouseLeave={e=>{
-         tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
-         gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-       }}
-       onFocus={bigPicture ? (e=>{
-         tweenTo(e.currentTarget, { scale: 1.04, y: -4, zIndex: 5 }, 0.32);
-         gsap.set(e.currentTarget, { boxShadow: "0 20px 42px rgba(0,0,0,0.48)" });
-       }) : undefined}
-       onBlur={bigPicture ? (e=>{
-         tweenTo(e.currentTarget, { scale: 1, y: 0, zIndex: 1 }, 0.32);
-         gsap.set(e.currentTarget, { boxShadow: "0 12px 28px rgba(0,0,0,0.28)" });
-       }) : undefined}
+      onMouseEnter={e=>animateDetailCardFocus(e.currentTarget, true)}
+      onMouseLeave={e=>animateDetailCardFocus(e.currentTarget, false)}
+        onFocus={e=>{
+          animateDetailCardFocus(e.currentTarget, true);
+        }}
+        onBlur={e=>{
+          animateDetailCardFocus(e.currentTarget, false);
+        }}
     >
       {thumbSrc ? (
         <img src={thumbSrc} alt={trailer.name}
@@ -4314,7 +4604,6 @@ function TrailerCard({ trailer, media }:{trailer:Trailer;media:DetailData}) {
 function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>void;scrollKey?:string}) {
   const [imageFailed, setImageFailed] = useState(false);
   const [focused, setFocused] = useState(false);
-  const bigPicture = useBigPictureActive();
   const portraitAvailable = Boolean(member.profile_path) && !imageFailed;
   const initials = member.name
     .split(/\s+/)
@@ -4325,18 +4614,7 @@ function CastCard({ member, onPress, scrollKey }:{member:CastMember;onPress:()=>
   const character = member.character?.split("(")[0]?.trim();
   const setFocusedScale = (element:HTMLButtonElement,focused:boolean) => {
     setFocused(focused);
-    tweenTo(element, { scale: focused ? 1.05 : 1, y: focused ? -4 : 0, zIndex: focused ? 5 : 1 }, 0.32);
-    const portrait = element.querySelector<HTMLElement>("[data-cast-portrait]");
-    if (portrait) {
-      // En picture el foco es solo escala: sin anillo blanco.
-      const ring = bigPicture ? "" : ", 0 0 0 1px rgba(255,255,255,0.18)";
-      tweenTo(portrait, {
-        scale: focused ? 1.05 : 1,
-        boxShadow: focused
-          ? `0 18px 38px rgba(0,0,0,0.48)${ring}`
-          : "0 11px 26px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.1)",
-      }, 0.32);
-    }
+    animateDetailCardFocus(element, focused);
   };
   return (
     <button

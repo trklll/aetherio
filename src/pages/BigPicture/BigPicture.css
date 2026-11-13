@@ -28,6 +28,17 @@
   outline: none;
 }
 
+/* Settings share the shell's profile backdrop instead of painting a flat TV
+   fallback over it. Keep this scoped so other Big Picture routes retain their
+   own opaque backgrounds. */
+.big-picture:has([data-bp-settings]) {
+  background: transparent;
+}
+
+.bp-settings-profile-backdrop {
+  z-index: 0;
+}
+
 .big-picture__ambient {
   position: fixed;
   inset: 0;
@@ -597,7 +608,10 @@
   height: 0;
   padding-top: 0;
   margin-top: -28px;
-  margin-bottom: -28px;
+  /* El row-gap del detalle aumentó para separar sus filas. Compénsalo en el
+     logo colapsado: no es una fila visible y no debe empujar episodios fuera
+     del peek inicial del hero. */
+  margin-bottom: -75px;
   overflow: hidden;
   opacity: 0;
   transform: translateY(34px);
@@ -611,6 +625,14 @@
     transform 0.55s cubic-bezier(0.22, 0.9, 0.28, 1);
 }
 
+/* Con tabs de temporada, añade aire sobre el logo sin bajar las pestañas ni
+   cambiar el peek inicial: el inset extra del contenedor se compensa en los
+   estados colapsado y visible del logo. */
+.big-picture--home-maximized .detail-page-content[data-has-season-tabs="true"] .detail-content-logo,
+.shell-preview-app .detail-page-content[data-has-season-tabs="true"] .detail-content-logo {
+  margin-top: -44px;
+}
+
 .big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-content-logo,
 .shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-content-logo {
   height: 95px;
@@ -619,6 +641,11 @@
   margin-bottom: 0;
   opacity: 1;
   transform: translateY(0);
+}
+
+.big-picture--home-maximized [data-past-hero="1"][data-content-zone="1"] .detail-page-content[data-has-season-tabs="true"] .detail-content-logo,
+.shell-preview-app [data-past-hero="1"][data-content-zone="1"] .detail-page-content[data-has-season-tabs="true"] .detail-content-logo {
+  margin-bottom: -16px;
 }
 
 /* Headers de la zona de contenido: ocultos en el peek del hero (sin mover

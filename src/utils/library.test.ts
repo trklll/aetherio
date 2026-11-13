@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyLibraryTombstones,
+  addMissingLibraryItems,
   isInLibrary,
   mergeSavedLibraryItems,
   readSavedLibrary,
+  setLibraryStatus,
   tryAddToLibrary,
   tryRemoveFromLibrary,
 } from "./library";
@@ -79,5 +81,36 @@ describe("library tombstones", () => {
 
     applyLibraryTombstones([{ key: libraryKey("44"), deletedAt: saved.addedAt + 5000 }]);
     expect(readSavedLibrary()).toHaveLength(0);
+  });
+
+  it("promotes imported titles to watched without replacing existing user data", () => {
+    tryAddToLibrary({ ...item, poster: "existing-poster", userRating: 6 });
+
+    const added = addMissingLibraryItems([{
+      ...item,
+      name: "Nombre de Trakt",
+      poster: "imported-poster",
+      userRating: 9,
+      libraryStatus: "watched",
+    }]);
+
+    expect(added).toBe(0);
+    expect(readSavedLibrary()[0]).toMatchObject({
+      name: "Serie de prueba",
+      poster: "existing-poster",
+      userRating: 6,
+      libraryStatus: "watched",
+    });
+  });
+
+  it("lets a user switch a saved title between the two library states", () => {
+    tryAddToLibrary(item);
+
+    expect(readSavedLibrary()[0].libraryStatus).toBe("to_watch");
+    expect(setLibraryStatus(item.type, item.id, "watched")).toBe(true);
+    expect(readSavedLibrary()[0].libraryStatus).toBe("watched");
+    expect(setLibraryStatus(item.type, item.id, "to_watch")).toBe(true);
+    expect(readSavedLibrary()[0].libraryStatus).toBe("to_watch");
+    expect(setLibraryStatus(item.type, "tmdb:missing", "watched")).toBe(false);
   });
 });

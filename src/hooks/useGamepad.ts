@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { dispatchBackAction, dispatchDeleteCharInTextContext, dispatchSyntheticEscape, GAMEPAD_BUTTON } from "../input/inputActions.ts";
+import { getSteppedRangeValue, requestRangeInputValue } from "../utils/rangeInput.ts";
 
 /**
  * Hook de mando estilo Steam Big Picture para Aetherio.
@@ -94,6 +95,7 @@ const STICK_REPEAT_MS = 220;
 // Al mantener dirección el repeat acelera hasta este suelo (recorrer rows).
 const STICK_REPEAT_MIN_MS = 70;
 const STICK_REPEAT_ACCEL_MS = 30;
+const RATING_STEP_REPEAT_MS = 85;
 // LB/RB: una pulsación sigue valiendo (no hay umbral de arranque), pero al
 // mantener se repite cada BUMPER_REPEAT_MS para que el volumen del reproductor
 // sea continuo en vez de tener que pulsarlo varias veces.
@@ -160,6 +162,8 @@ export function useGamepad({ onCombo, onStart, onView, onGuide, enabled = true }
     let raf = 0;
     let lastDir: Dir | null = null;
     let lastDirAt = 0;
+    let lastPollAt = 0;
+    let activeRangeSlider: HTMLInputElement | null = null;
     let dirHoldCount = 0;
     // Bumper mantenido (LB/RB) con su última emisión: permite repetir la
     // acción sin volver a pulsar (volumen continuo en el reproductor).
@@ -196,6 +200,8 @@ export function useGamepad({ onCombo, onStart, onView, onGuide, enabled = true }
       }
 
       const now = performance.now();
+      const deltaSeconds = lastPollAt > 0 ? Math.min(0.05, (now - lastPollAt) / 1000) : 0;
+      lastPollAt = now;
       const btn = (i: number) => {
         if (i === 6 || i === 7) return isTriggerEngaged(pad.buttons[i]);
         return Boolean(pad.buttons[i]?.pressed);
@@ -215,6 +221,44 @@ export function useGamepad({ onCombo, onStart, onView, onGuide, enabled = true }
       else if (ax > AXIS_DEADZONE) direction = { dir: "right", source: "stick" };
       const dir = direction?.dir ?? null;
 
+      // El stick analógico se comporta como un deslizador táctil si el foco
+      // está en uno: sigue el ángulo del stick continuamente, no por pasos de
+      // repetición como la navegación normal.
+      const rangeSlider = document.activeElement instanceof HTMLInputElement
+        && document.activeElement.type === "range"
+        ? document.activeElement
+        : null;
+      if (rangeSlider && direction?.source === "stick" && (dir === "left" || dir === "right")) {
+        const axis = Math.abs(ax) > AXIS_DEADZONE ? ax : 0;
+        if (deltaSeconds > 0 && axis !== 0) {
+          const min = Number(rangeSlider.min || 0);
+          const max = Number(rangeSlider.max || 100);
+          const preciseCurrent = Number(rangeSlider.dataset.preciseTargetValue ?? rangeSlider.value);
+          const next = Math.min(max, Math.max(min, preciseCurrent + axis * (max - min) * 1.25 * deltaSeconds));
+          rangeSlider.dataset.preciseTargetValue = String(next);
+          if (next !== preciseCurrent) {
+            rangeSlider.dataset.targetValue = String(next);
+            requestRangeInputValue(rangeSlider, next, false);
+          }
+        }
+        activeRangeSlider = rangeSlider;
+        lastDir = dir;
+        lastDirAt = now;
+      } else {
+        if (activeRangeSlider) {
+          const slider = activeRangeSlider;
+          const min = Number(slider.min || 0);
+          const max = Number(slider.max || 100);
+          const step = Number(slider.dataset.rangeStep || 1);
+          const current = Number(slider.dataset.preciseTargetValue ?? slider.value);
+          const settled = getSteppedRangeValue(current, min, max, step, 0);
+          slider.dataset.targetValue = String(settled);
+          slider.dataset.preciseTargetValue = String(settled);
+          requestRangeInputValue(slider, settled, true);
+          activeRangeSlider = null;
+        }
+      }
+
       if (dir) {
         // Un cambio de dirección (o la primera) es "el usuario está moviendo el
         // mando": lo consumen las superficies que derivan el modo del
@@ -222,8 +266,12 @@ export function useGamepad({ onCombo, onStart, onView, onGuide, enabled = true }
         if (dir !== lastDir) signalGamepadActivity();
         // Movimiento rápido al mantener: el intervalo baja de 220ms a 70ms
         // mientras se sostiene la misma dirección (recorrer rows enteras).
+        const ratingStepFocused = document.activeElement instanceof HTMLElement
+          && document.activeElement.matches(".media-rating-control__step");
         const interval = dir === lastDir
-          ? Math.max(STICK_REPEAT_MIN_MS, STICK_REPEAT_MS - dirHoldCount * STICK_REPEAT_ACCEL_MS)
+          ? ratingStepFocused
+            ? RATING_STEP_REPEAT_MS
+            : Math.max(STICK_REPEAT_MIN_MS, STICK_REPEAT_MS - dirHoldCount * STICK_REPEAT_ACCEL_MS)
           : 0;
         if (dir !== lastDir || now - lastDirAt > interval) {
           const repeat = dir === lastDir;

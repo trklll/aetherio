@@ -1,0 +1,80 @@
+.bp-exit-confirm {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bp-exit-confirm:not([open]) {
+  display: none;
+}
+
+.bp-exit-confirm::backdrop {
+  background: transparent;
+}
+
+.bp-exit-confirm__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+
+.bp-exit-confirm__actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.bp-exit-confirm__action {
+  min-height: 46px;
+  padding: 10px 26px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    transform 220ms cubic-bezier(.2, .8, .2, 1),
+    filter 220ms ease,
+    box-shadow 220ms ease,
+    background-color 160ms ease-out;
+}
+
+.bp-exit-confirm__action--accept {
+  background: #087cff;
+}
+
+.bp-exit-confirm__action--reject {
+  background: #e04444;
+}
+
+.bp-exit-confirm__action--accept:is(:focus, :focus-visible, .spatial-focus) {
+  background: #006be6;
+}
+
+.bp-exit-confirm__action--reject:is(:focus, :focus-visible, .spatial-focus) {
+  background: #f12632;
+}
+
+.bp-exit-confirm__action:is(:focus, :focus-visible, .spatial-focus) {
+  outline: none;
+  transform: scale(1.06);
+  filter: brightness(1.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+}

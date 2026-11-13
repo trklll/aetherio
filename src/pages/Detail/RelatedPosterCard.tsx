@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
+import { animateDetailCardFocus } from "./detailFocus";
 import { tweenTo } from "../../utils/motion";
 
 // Card de "Más como esto": idéntica a la card vertical del Home
@@ -21,11 +22,11 @@ export default function RelatedPosterCard({ name, poster, completed = false, big
 
   const enterCard = (target: HTMLDivElement) => {
     setHovered(true);
-    tweenTo(target, { scale: 1.05, y: -3, zIndex: 5 }, 0.32);
+    animateDetailCardFocus(target, true);
   };
   const leaveCard = (target: HTMLDivElement) => {
     setHovered(false);
-    tweenTo(target, { scale: 1, y: 0, zIndex: 1 }, 0.32);
+    animateDetailCardFocus(target, false);
   };
 
   // Aparición/ocultación del nombre, igual que el título bajo la card del Home.

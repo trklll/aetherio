@@ -615,6 +615,31 @@ export function mergeContinueWatchingEntries(importedEntries: ContinueWatchingEn
   writeProgressAndHistory(nextProgress, nextHistory, watchedEntries.length > 0);
 }
 
+/** Import-only union: an existing progress/history entry is left untouched. */
+export function addMissingContinueWatchingEntries(importedEntries: ContinueWatchingEntry[]) {
+  if (!Array.isArray(importedEntries) || !importedEntries.length) return 0;
+  const progress = readContinueWatchingEntries();
+  const history = readWatchedHistoryEntries();
+  const keys = new Set([...progress, ...history].map(entry => entry.key));
+  const missing: ContinueWatchingEntry[] = [];
+  for (const entry of importedEntries) {
+    if (!entry || typeof entry.key !== "string" || keys.has(entry.key)) continue;
+    keys.add(entry.key);
+    missing.push(entry);
+  }
+  if (!missing.length) return 0;
+  const completed = missing.filter(entry => entry.completed);
+  const incomplete = missing.filter(entry => !entry.completed);
+  const result = writeProgressAndHistory(
+    [...incomplete, ...progress],
+    [...completed, ...history],
+    completed.length > 0,
+  );
+  if (!result.ok) throw new Error("No se pudo guardar el historial importado.");
+  for (const entry of missing) clearDeletionTombstone(TOMBSTONES_KEY, entry.key);
+  return missing.length;
+}
+
 export interface RemotePlaybackState {
   progress?: ContinueWatchingEntry[];
   history?: ContinueWatchingEntry[];

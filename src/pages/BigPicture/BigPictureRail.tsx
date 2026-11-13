@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Users } from "lucide-react";
+import { SlidersHorizontal } from "@phosphor-icons/react";
 import BasketballCourtIcon from "../../components/ui/BasketballCourtIcon.tsx";
 import LibraryIcon from "../../components/ui/LibraryIcon.tsx";
 import SearchThinIcon from "../../components/ui/SearchThinIcon.tsx";
@@ -53,6 +54,7 @@ const PRIMARY_RAIL_ITEMS: readonly RailItem[] = [
   { key: "home", route: "/big-picture", label: "Inicio", Icon: HomeBoldIcon },
   { key: "library", route: "/big-picture/library", label: "Biblioteca", Icon: LibraryIcon, iconSize: 22 },
   { key: "party", route: "/big-picture/party", label: "Party", Icon: Users },
+  { key: "settings", route: "/big-picture/settings", label: "Configuración", Icon: SlidersHorizontal },
   ...(import.meta.env.DEV ? [{ key: "sports", route: "/big-picture/sports", label: "Deportes", Icon: BasketballCourtIcon }] : []),
 ];
 const PLATFORM_RAIL_ITEMS: readonly RailItem[] = STREAMING_PLATFORMS.map(platform => ({
@@ -63,15 +65,15 @@ const PLATFORM_RAIL_ITEMS: readonly RailItem[] = STREAMING_PLATFORMS.map(platfor
 }));
 
 // Tokens nativos × 1.2 (ver TvPagePill.kt: 230 / 11 / 52 / 7 / 50).
-const RAIL_W = 276;
-const RAIL_PAD = 13;
-const RAIL_PROFILE_H = 62;
-const RAIL_GAP = 8;
-const RAIL_ITEM_H = 60;
-const RAIL_ICON_SIZE = 24;
-const PLATFORM_ITEM_H = 48;
-const PLATFORM_ITEM_GAP = 4;
-const PLATFORM_SECTION_H = 48;
+const RAIL_W = 300;
+const RAIL_PAD = 14;
+const RAIL_PROFILE_H = 68;
+const RAIL_GAP = 9;
+const RAIL_ITEM_H = 66;
+const RAIL_ICON_SIZE = 26;
+const PLATFORM_ITEM_H = 53;
+const PLATFORM_ITEM_GAP = 5;
+const PLATFORM_SECTION_H = 53;
 function getRailItemOffset(index: number, sectionStartIndex: number): number {
   if (index < sectionStartIndex) return index * (RAIL_ITEM_H + RAIL_GAP);
   return (
@@ -99,7 +101,6 @@ export default function BigPictureRail({
   sectionTitle: customSectionTitle,
   sectionItems: customSectionItems = [],
   label = "Navegación espacial",
-  profileRoute = "/big-picture/settings",
   onNavigate,
 }: {
   items?: readonly RailItem[];
@@ -142,8 +143,8 @@ export default function BigPictureRail({
   // entra desde la izquierda y se expande.
   const [pastHero, setPastHero] = useState(false);
   const contracted = pastHero && !expanded;
-  // Círculo contraído: icono 38 + paddings 6/6 + borde 2.
-  const CONTRACTED_PILL_W = 52;
+  // Círculo contraído más borde exterior de la píldora.
+  const CONTRACTED_PILL_W = 50;
   // Aparcado tras contraer (da tiempo a la contracción: 0.38s de width).
   const [parkedBase, setParkedBase] = useState(false);
   // Borde izquierdo: asoma la pill aparcada sin abrir el menú.
@@ -186,7 +187,11 @@ export default function BigPictureRail({
         // artifacts/bp-library/measure/rail-labels.mjs, 15 de 18 combinaciones
         // de ruta y ancho). Sin holgura, cualquier etiqueta larga pierde su
         // último glifo.
-        setCollapsedW(Math.ceil(el.getBoundingClientRect().width) + 6);
+        const icon = el.querySelector<HTMLElement>(".bp-rail__collapsed-icon");
+        const text = el.querySelector<HTMLElement>(".bp-rail__collapsed-label");
+        const contentWidth = (icon?.getBoundingClientRect().width ?? 0)
+          + (text?.scrollWidth ?? 0);
+        setCollapsedW(Math.ceil(contentWidth) + 18);
       }
     };
     measure();
@@ -534,7 +539,7 @@ export default function BigPictureRail({
                 alt=""
               />
             ) : CollapsedIcon ? (
-              <CollapsedIcon size={20} />
+              <CollapsedIcon size={24} />
             ) : null}
           </span>
           <span className="bp-rail__collapsed-label">{collapsedLabel}</span>
@@ -544,16 +549,22 @@ export default function BigPictureRail({
           className={`bp-rail__box${expanded ? " is-expanded" : ""}${parked ? " is-parked" : ""}`}
           style={{
             width: expanded ? RAIL_W : contracted ? CONTRACTED_PILL_W : collapsedW || "auto",
-            height: expanded ? railOpenHeight : 53,
+            height: expanded ? railOpenHeight : 48,
           }}
         >
           {!expanded && (
-            <button
-              className={`bp-rail__collapsed${contracted ? " is-contracted" : ""}`}
-              onClick={expand}
-              onFocus={expand}
-              aria-label={`Abrir navegación, sección actual: ${collapsedLabel}`}
-            >
+            <>
+              <span className={`bp-rail__back-arrow${contracted ? " is-contracted" : ""}`} aria-hidden="true">
+                <svg width="13" height="30" viewBox="0 0 12 29" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M9.5 1.5L2.5 14.5L9.5 27.5" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+              <button
+                className={`bp-rail__collapsed${contracted ? " is-contracted" : ""}`}
+                onClick={expand}
+                onFocus={expand}
+                aria-label={`Abrir navegación, sección actual: ${collapsedLabel}`}
+              >
               <span className="bp-rail__collapsed-icon">
                 {collapsedItem.logoImage ? (
                   <img
@@ -561,11 +572,12 @@ export default function BigPictureRail({
                     alt=""
                   />
                 ) : CollapsedIcon ? (
-                  <CollapsedIcon size={20} />
+              <CollapsedIcon size={26} />
                 ) : null}
               </span>
               <span className={`bp-rail__collapsed-label${contracted ? " is-contracted" : ""}`}>{collapsedLabel}</span>
-            </button>
+              </button>
+            </>
           )}
 
           <div className={`bp-rail__expanded${expanded ? " is-visible" : ""}`} aria-hidden={!expanded}>
@@ -576,10 +588,11 @@ export default function BigPictureRail({
               className="bp-rail__profile"
               tabIndex={expanded ? 0 : -1}
               onFocus={() => setCursor("profile")}
-              aria-label="Abrir ajustes del perfil"
+              aria-label="Cambiar perfil"
+              title="Cambiar perfil"
               onClick={() => {
                 collapse();
-                navigate(profileRoute);
+                navigate("/profiles?from=big-picture");
               }}
             >
               <span className="bp-rail__avatar">

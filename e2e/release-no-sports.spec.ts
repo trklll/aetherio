@@ -17,7 +17,7 @@ test("release has no Sports navigation, settings, route or provider requests", a
 
   await page.goto("/big-picture/settings?tab=sources", { waitUntil: "domcontentloaded" });
   await revealForCapture(page);
-  await expect(page.getByRole("heading", { name: "Fuentes", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Complementos", exact: true }).click();
   await expect(page.getByText("Instancia deportiva", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Sports", { exact: true })).toHaveCount(0);
   expect(sportsRequests).toEqual([]);

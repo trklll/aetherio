@@ -284,10 +284,9 @@ export default function App() {
   }, [account, authRestored, enabledAddons, isCreatingProfile, localMode, navigate, needsProfileGate, profileRevision, queryClient, startupReady]);
 
   useEffect(() => {
-    if (!account) return;
     void syncAniListLibrary().catch(() => undefined);
     return initializeAniListProgressSync();
-  }, [account]);
+  }, [account, profileRevision]);
 
   useEffect(() => {
     const check = () => {
@@ -343,7 +342,14 @@ export default function App() {
           if (oauthKey) markProcessedOAuthCallback(oauthKey);
           try {
             const user = await completeOAuthAuthorization(url);
-            if (!disposed) {
+            if (!user) {
+              try {
+                await syncAniListLibrary();
+              } catch (error) {
+                console.warn("[AETHERIO:ANILIST] first sync failed", error);
+              }
+            }
+            if (!disposed && user) {
               setAccount(user);
               setLocalMode(false);
               setAuthError("");
@@ -562,7 +568,7 @@ export default function App() {
       <GamepadWakeListener />
       <AppShell>
         {location.pathname !== "/home" ? (
-          <PageTransitionCurtain key={`curtain-${location.key}`} />
+          <PageTransitionCurtain key={`curtain-${location.pathname}`} />
         ) : null}
         <CachedPageRoutes key={profileRevision} location={location} defaultRoute={defaultRoute} />
       </AppShell>

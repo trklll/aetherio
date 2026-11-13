@@ -38,7 +38,12 @@ const AUTHORIZATION_PENDING_TTL_MS = 10 * 60 * 1000;
 const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 const PUSH_DEBOUNCE_MS = 4000;
 
-const GDRIVE_CLIENT_ID = (import.meta.env.VITE_GDRIVE_CLIENT_ID as string | undefined)?.trim() ?? "";
+// OAuth client IDs are public identifiers (PKCE uses no client secret). Keep
+// the project client ID in source so signed release builds work even when
+// `.env.local` is not available to the release builder; allow an env override
+// for development or alternate deployments.
+const GDRIVE_CLIENT_ID = (import.meta.env.VITE_GDRIVE_CLIENT_ID as string | undefined)?.trim()
+  || "90295001611-mkht3fim4jvnu7npp16qjnpt5iu0r5lf.apps.googleusercontent.com";
 
 export const GDRIVE_AUTH_CHANGED_EVENT = "aetherio-gdrive-auth-changed";
 export const GDRIVE_SYNC_CHANGED_EVENT = "aetherio-gdrive-sync-changed";

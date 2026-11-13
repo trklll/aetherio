@@ -1,34 +1,25 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { Children, isValidElement, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { gsap } from "gsap";
 import clsx from "clsx";
 import {
   ArrowLeft,
   ArrowDown,
   ArrowUp,
-  ChevronRight,
   ExternalLink,
-  ImagePlus,
-  Info,
   LogIn,
   LogOut,
-  Palette,
-  PlayCircle,
-  Puzzle,
-  RadioTower,
   RefreshCw,
-  Save,
   Trash2,
   Unlink,
-  UserRound,
-  Search,
+  ChevronRight,
 } from "lucide-react";
-import PageContainer from "../../components/layout/PageContainer";
 import AppleSpinner from "../../components/ui/AppleSpinner";
+import aetherioLogo from "../../assets/aetheriologo.png";
 import ProfileAvatar from "../../components/profile/ProfileAvatar";
 import { saveDownloadsEnabled, useDownloadsEnabled } from "../../config/downloadPreferences";
 import SourcesPanel from "./SourcesPanel";
 import ToggleSwitch from "../../components/ui/ToggleSwitch";
-import aetherioLogo from "../../assets/aetheriologo.png";
 import { getApiKeys, saveApiKeys, type ApiKeys } from "../../config/apiKeys";
 import {
   MDBLIST_PROVIDER_OPTIONS,
@@ -98,12 +89,18 @@ import { openExternalUrl } from "../../runtime/platform";
 import { isBigPictureLocation } from "../../utils/bigPictureDetail";
 import packageJson from "../../../package.json";
 import PinPad from "../../components/pin/PinPad.tsx";
+import NameKeyboard, { type KeyboardMode } from "../../components/quickstart/NameKeyboard.tsx";
+import "../../components/quickstart/QuickStartProfile.css";
+import LibrarySyncSettings from "../../components/library/LibrarySyncSettings";
+import { ChoiceSetting, PopupSetting, SettingsDialog, SettingsHelpDescription, SettingsHelpProvider, SettingsRow } from "./SettingsSurface";
+import { getSteppedRangeValue, requestRangeInputValue, updateRangeInput } from "../../utils/rangeInput";
+import SettingsCategoryIcon, { type SettingsCategory } from "./SettingsCategoryIcon";
+import "./Settings.css";
 
-type SettingsTab = "account" | "design" | "addons" | "sources" | "playback" | "about";
-type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "anime-skip" | "theintrodb" | "gdrive" | "mdblist" | "discord";
+type SettingsTab = SettingsCategory;
+type AccountView = "overview" | "profiles" | "manage-profiles" | "integrations" | "library-sync" | "anime-skip" | "theintrodb" | "gdrive" | "mdblist" | "discord";
 type DesignView = "overview" | "home-screen" | "detail-screen";
 type SavedSections = {
-  profile: boolean;
   integrations: boolean;
   mdblist: boolean;
   playback: boolean;
@@ -111,23 +108,22 @@ type SavedSections = {
 };
 
 const EMPTY_SAVED_SECTIONS: SavedSections = {
-  profile: false,
   integrations: false,
   mdblist: false,
   playback: false,
   design: false,
 };
 
-const SIDEBAR_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
-  { id: "account", label: "Cuenta", icon: <UserRound size={17} /> },
-  { id: "design", label: "Diseño", icon: <Palette size={17} /> },
-  { id: "addons", label: "Complementos", icon: <Puzzle size={17} /> },
-  { id: "sources", label: "Fuentes", icon: <RadioTower size={17} /> },
-  { id: "playback", label: "Reproducción", icon: <PlayCircle size={17} /> },
-  { id: "about", label: "Acerca de", icon: <Info size={17} /> },
+const SIDEBAR_ITEMS: { id: SettingsTab; label: string; description: string }[] = [
+  { id: "account", label: "Cuenta", description: "Gestiona tu cuenta, tus perfiles locales y las integraciones de tu biblioteca." },
+  { id: "design", label: "Diseño", description: "Personaliza la pantalla de inicio, los pósters y las imágenes de cada título." },
+  { id: "addons", label: "Complementos", description: "Gestiona los complementos que aportan catálogos y enlaces de reproducción." },
+  ...(import.meta.env.DEV ? [{ id: "sources" as const, label: "Fuentes", description: "Configura los servicios y proveedores de contenido. Solo disponible en desarrollo." }] : []),
+  { id: "playback", label: "Reproducción", description: "Elige tus idiomas de audio y subtítulos, configura el vídeo y decide cómo continuar viendo." },
+  { id: "about", label: "Acerca de", description: "Consulta la versión de Aetherio y comprueba si hay actualizaciones." },
 ];
 
-export default function SettingsPage() {
+export default function SettingsPage({ tv = false }: { tv?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const downloadsEnabled = useDownloadsEnabled();
@@ -139,16 +135,105 @@ export default function SettingsPage() {
   const [mdbList, setMdbList] = useState<MdbListSettings>(() => getMdbListSettings());
   const [playback, setPlayback] = useState<PlaybackPreferences>(() => getPlaybackPreferences());
   const [spatialPosters, setSpatialPosters] = useState<SpatialPosterSettings>(() => getSpatialPosterSettings());
-  const [activeTab, setActiveTab] = useState<SettingsTab>(() => getInitialTab(location.search));
+  const [activeTab, setActiveTab] = useState<SettingsTab | null>(() => getInitialTab(location.search));
+  const [focusedCategory, setFocusedCategory] = useState<SettingsTab>(() => getInitialTab(location.search) ?? "account");
   const [accountView, setAccountView] = useState<AccountView>(() => getInitialAccountView(location.search));
   const [designView, setDesignView] = useState<DesignView>("overview");
   const [saved, setSaved] = useState<SavedSections>(EMPTY_SAVED_SECTIONS);
   const [profiles, setProfiles] = useState<LocalProfile[]>(() => getLocalProfiles());
   const [activeProfile, setActiveProfileState] = useState<LocalProfile | null>(() => getActiveProfile());
+  const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
   const [profileName, setProfileName] = useState(() => getActiveProfile()?.name ?? "");
   const [profilePin, setProfilePin] = useState("");
   const [profileAvatar, setProfileAvatar] = useState<string | undefined>(() => getActiveProfile()?.avatarDataUrl);
   const [profileError, setProfileError] = useState("");
+  const [profileEditView, setProfileEditView] = useState<"name" | "pin" | null>(null);
+  const [nameKeyboardMode, setNameKeyboardMode] = useState<KeyboardMode>("abc");
+  const [switchTarget, setSwitchTarget] = useState<LocalProfile | null>(null);
+  const [switchPin, setSwitchPin] = useState("");
+  const [switchError, setSwitchError] = useState("");
+  const [switchBusy, setSwitchBusy] = useState(false);
+  const surfaceRef = useRef<HTMLElement>(null);
+  const profileEditorExitRef = useRef<(() => void) | null>(null);
+  // Rows are remounted between levels; remember their stable labels, not DOM nodes.
+  const focusMemory = useRef(new Map<string, string>());
+  const profileEditReturnLabel = useRef<string | null>(null);
+  const pageKey = `${activeTab ?? "root"}:${activeTab === "account" ? accountView : activeTab === "design" ? designView : "overview"}`;
+  const focusedProfile = profiles.find(profile => profile.id === focusedProfileId) ?? activeProfile;
+  const identityProfileAvatar = accountView === "manage-profiles" && activeTab === "account"
+    ? focusedProfile?.id === activeProfile?.id ? profileAvatar ?? focusedProfile?.avatarDataUrl : focusedProfile?.avatarDataUrl
+    : undefined;
+
+  useLayoutEffect(() => {
+    let frame = 0;
+    let attempts = 0;
+    const focusWhenVisible = () => {
+      if (document.querySelector(".settings-dialog[open]")) return;
+      if (attempts > 0 && surfaceRef.current?.contains(document.activeElement)) return;
+      const remembered = focusMemory.current.get(pageKey);
+      const first = surfaceRef.current?.querySelector<HTMLElement>("[data-settings-row], .settings-panel button:not(:disabled)");
+      const target = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>("[data-settings-row]") ?? [])
+        .find(row => row.getAttribute("aria-label") === remembered) ?? first;
+      target?.focus({ preventScroll: true });
+      // The route entrance can temporarily hide this Activity. A fast release
+      // chunk must not lose initial remote focus before that entrance reveals it.
+      if (document.activeElement !== target && ++attempts < 120) frame = requestAnimationFrame(focusWhenVisible);
+    };
+    frame = requestAnimationFrame(focusWhenVisible);
+    return () => cancelAnimationFrame(frame);
+  }, [pageKey]);
+
+  function backLevel() {
+    if (profileEditView) {
+      if (profileEditorExitRef.current) profileEditorExitRef.current();
+      else closeProfileEditor(true);
+      return;
+    }
+    if (activeTab === "account" && accountView !== "overview") {
+      setAccountView(accountView === "manage-profiles" ? "profiles" : ["profiles", "integrations"].includes(accountView) ? "overview" : "integrations");
+    } else if (activeTab === "design" && designView !== "overview") setDesignView("overview");
+    else selectTab(null);
+  }
+
+  function closeProfileEditor(discard = false) {
+    if (discard && profileEditView === "name") setProfileName(activeProfile?.name ?? "");
+    setProfilePin("");
+    setProfileError("");
+    setProfileEditView(null);
+  }
+
+  function openProfileEditor(view: "name" | "pin") {
+    profileEditReturnLabel.current = view === "name" ? "Nombre" : "PIN opcional";
+    setProfileError("");
+    if (view === "name") setProfileName(activeProfile?.name ?? "");
+    else setProfilePin("");
+    setProfileEditView(view);
+  }
+
+  useLayoutEffect(() => {
+    if (profileEditView || !profileEditReturnLabel.current) return;
+    const label = profileEditReturnLabel.current;
+    profileEditReturnLabel.current = null;
+    requestAnimationFrame(() => surfaceRef.current?.querySelector<HTMLElement>(`[data-settings-row][aria-label="${label}"]`)?.focus({ preventScroll: true }));
+  }, [profileEditView]);
+
+  useEffect(() => {
+    const back = (event: Event) => {
+      if (!activeTab || document.querySelector("dialog[open], [data-settings-confirmation]")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      backLevel();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Backspace") return;
+      if (profileEditView === "name" && event.key === "Backspace") return;
+      if (event.key === "Backspace" && (event.target as HTMLElement)?.closest("input, textarea, select, [contenteditable='true']")) return;
+      back(event);
+    };
+    window.addEventListener("aetherio-input:back", back, true);
+    window.addEventListener("keydown", key, true);
+    return () => { window.removeEventListener("aetherio-input:back", back, true); window.removeEventListener("keydown", key, true); };
+  });
 
   useEffect(() => {
     setKeys(getApiKeys());
@@ -164,6 +249,7 @@ export default function SettingsPage() {
   useEffect(() => {
     const tab = getInitialTab(location.search);
     setActiveTab(tab);
+    setFocusedCategory(tab ?? "account");
     setAccountView(getInitialAccountView(location.search));
   }, [location.search]);
 
@@ -193,15 +279,16 @@ export default function SettingsPage() {
     [catalogRows, localHomePreferences],
   );
 
-  function selectTab(tab: SettingsTab) {
+  function selectTab(tab: SettingsTab | null) {
     setSaved(EMPTY_SAVED_SECTIONS);
     setActiveTab(tab);
+    if (tab) setFocusedCategory(tab);
     setAccountView("overview");
     setDesignView("overview");
     // En Big Picture los ajustes viven en /big-picture/settings: conservar
     // el prefijo para no salir del modo inmersivo.
     const base = isBigPictureLocation() ? "/big-picture/settings" : "/settings";
-    navigate(`${base}?tab=${tab}`, { replace: true });
+    navigate(tab ? `${base}?tab=${tab}` : base, { replace: true });
   }
 
   function updateKey(name: keyof ApiKeys, value: string) {
@@ -287,35 +374,62 @@ export default function SettingsPage() {
     if (!file) return;
     try {
       const dataUrl = await readImageFileAsDataUrl(file);
-      setProfileAvatar(dataUrl);
+      if (!activeProfile) return;
+      const updated = await updateLocalProfile(activeProfile.id, {
+        name: profileName,
+        avatarDataUrl: dataUrl,
+      });
+      if (updated) {
+        setActiveProfileState(updated);
+        setProfileAvatar(updated.avatarDataUrl);
+        setProfiles(getLocalProfiles());
+      }
       setProfileError("");
-      setSaved(current => ({ ...current, profile: false }));
     } catch (err) {
       setProfileError(err instanceof Error ? err.message : "No se pudo leer la imagen.");
     }
   }
 
-  async function saveProfile() {
+  async function saveProfileName() {
     if (!activeProfile) return;
-    if (!profileName.trim()) {
-      setProfileError("El perfil necesita un nombre.");
-      return;
+    const updated = await updateLocalProfile(activeProfile.id, {
+      name: profileName,
+      avatarDataUrl: activeProfile.avatarDataUrl,
+    });
+    if (updated) {
+      setActiveProfileState(updated);
+      setProfileName(updated.name);
+      setProfiles(getLocalProfiles());
     }
+    setProfileError("");
+  }
+
+  async function confirmProfileName() {
+    if (!profileName.trim()) return;
+    await saveProfileName();
+  }
+
+  async function saveProfilePin() {
+    if (!activeProfile || !profilePin) return false;
     const pinIssue = pinLengthError(profilePin);
     if (pinIssue) {
       setProfileError(pinIssue);
-      return;
+      return false;
     }
     const updated = await updateLocalProfile(activeProfile.id, {
-      name: profileName,
+      name: activeProfile.name,
       pin: profilePin,
-      avatarDataUrl: profileAvatar,
+      avatarDataUrl: activeProfile.avatarDataUrl,
     });
     setProfileError("");
-    setSaved(current => ({ ...current, profile: true }));
     if (updated) setActiveProfileState(updated);
     setProfilePin("");
     setProfiles(getLocalProfiles());
+    return Boolean(updated);
+  }
+
+  async function confirmProfilePin() {
+    return saveProfilePin();
   }
 
   function removeProfilePin() {
@@ -324,21 +438,28 @@ export default function SettingsPage() {
     setActiveProfileState(getActiveProfile());
     setProfiles(getLocalProfiles());
     setProfileError("");
-    setSaved(current => ({ ...current, profile: true }));
   }
 
   async function switchProfile(profile: LocalProfile) {
     if (profile.id === activeProfile?.id) return;
     if (profile.pin) {
-      const enteredPin = window.prompt("PIN del perfil");
-      const { verifyPin } = await import("../../utils/localProfiles");
-      if (!enteredPin || !(await verifyPin(enteredPin, profile.pin))) {
-        setProfileError("PIN incorrecto.");
-        return;
-      }
+      setSwitchTarget(profile);
+      setSwitchPin("");
+      setSwitchError("");
+      return;
     }
     setActiveProfile(profile.id);
     window.location.reload();
+  }
+
+  async function confirmProfileSwitch() {
+    if (!switchTarget?.pin || switchBusy) return;
+    setSwitchBusy(true);
+    try {
+      if (!(await verifyPin(switchPin, switchTarget.pin))) { setSwitchError("PIN incorrecto. Inténtalo de nuevo."); return; }
+      setActiveProfile(switchTarget.id);
+      window.location.reload();
+    } finally { setSwitchBusy(false); }
   }
 
   function deleteProfile(profile: LocalProfile) {
@@ -352,61 +473,64 @@ export default function SettingsPage() {
       setProfileName(remaining[0]?.name ?? "");
       setProfilePin("");
       setProfileAvatar(remaining[0]?.avatarDataUrl);
-      setSaved(current => ({ ...current, profile: false }));
       setProfileError("");
     }
     setProfiles(remaining);
   }
 
   return (
-    <PageContainer className="min-h-screen py-5 lg:py-8">
-      <div className="mx-auto grid max-w-[1360px] grid-cols-1 gap-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-8">
-        <aside className="self-start lg:sticky lg:top-4">
-          <h1 className="mb-5 px-2 text-3xl font-black text-white">Ajustes</h1>
-          <nav className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.055] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.34)] sm:grid-cols-3 lg:block lg:rounded-[30px]">
-            {SIDEBAR_ITEMS.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => selectTab(item.id)}
-                className={clsx(
-                  "flex w-full min-w-0 items-center gap-3 rounded-full px-4 py-3 text-left text-sm font-black lg:mb-1 lg:last:mb-0",
-                  activeTab === item.id
-                    ? "bg-white text-black"
-                    : "text-white/62 hover:bg-white/10 hover:text-white",
-                )}
-              >
-                {item.icon}
-                {item.label}
-              </button>
-            ))}
-          </nav>
+    <SettingsHelpProvider>
+    {profileEditView ? (
+      <ProfileFieldEditor
+        key={profileEditView}
+        view={profileEditView}
+        name={profileName}
+        pin={profilePin}
+        nameMode={nameKeyboardMode}
+        error={profileError}
+        onNameChange={setProfileName}
+        onNameModeChange={setNameKeyboardMode}
+        onPinChange={value => setProfilePin(value.replace(/\D/g, "").slice(0, PIN_LENGTH))}
+        onSaveName={confirmProfileName}
+        onSavePin={confirmProfilePin}
+        onCancel={() => closeProfileEditor(true)}
+        onSaved={() => closeProfileEditor()}
+        exitRef={profileEditorExitRef}
+      />
+    ) : null}
+    <main ref={surfaceRef} inert={profileEditView !== null} aria-hidden={profileEditView ? true : undefined} className={`settings-surface${tv ? " settings-surface--tv" : ""}`} data-settings-surface data-settings-nested={activeTab ? "true" : "false"} data-bp-settings={tv ? "" : undefined}
+      onFocusCapture={event => {
+        const row = event.target as HTMLElement;
+        const label = row.getAttribute("aria-label");
+        if (row.matches("[data-settings-row]") && label) focusMemory.current.set(pageKey, label);
+      }}>
+      <header className="settings-surface__header">
+        {activeTab && !tv ? <button type="button" className="settings-surface__back liquid-glass-pill rounded-full" aria-label="Volver" onClick={backLevel}><ArrowLeft size={20} /><span>Volver</span></button> : null}
+      </header>
+      <div className="settings-surface__layout">
+          <aside className="settings-surface__identity">
+          {identityProfileAvatar
+            ? <img className="settings-surface__image settings-surface__profile-image" src={identityProfileAvatar} alt="Foto de perfil" />
+            : <SettingsCategoryIcon category={activeTab ?? focusedCategory} />}
+          <p className="settings-surface__description" data-settings-description aria-live="polite"><SettingsHelpDescription /></p>
         </aside>
-
-        <main className="min-w-0 pb-16">
+        <div className="settings-surface__content">
+          {!activeTab ? <nav className="settings-surface__categories" aria-label="Categorías de ajustes">{SIDEBAR_ITEMS.map(item => <SettingsRow key={item.id} title={item.label} description={item.description} onFocus={() => setFocusedCategory(item.id)} onClick={() => selectTab(item.id)} />)}</nav> : null}
           {activeTab === "account" ? (
             <AccountPanel
               view={accountView}
               profiles={profiles}
               activeProfile={activeProfile}
+              onProfileFocus={setFocusedProfileId}
+              onEditProfileName={() => openProfileEditor("name")}
+              onEditProfilePin={() => openProfileEditor("pin")}
               profileName={profileName}
-              profilePin={profilePin}
-              profileAvatar={profileAvatar}
               profileError={profileError}
               saved={saved}
               keys={keys}
               mdbList={mdbList}
               onViewChange={setAccountView}
-              onProfileNameChange={value => {
-                setSaved(current => ({ ...current, profile: false }));
-                setProfileName(value);
-              }}
-              onProfilePinChange={value => {
-                setSaved(current => ({ ...current, profile: false }));
-                setProfilePin(value.replace(/\D/g, "").slice(0, PIN_LENGTH));
-              }}
               onChooseProfileImage={chooseProfileImage}
-              onSaveProfile={saveProfile}
               onRemoveProfilePin={removeProfilePin}
               onStartProfileQuickStart={() => navigate("/quick-start/profile")}
               onSwitchProfile={switchProfile}
@@ -445,7 +569,7 @@ export default function SettingsPage() {
             />
           ) : null}
 
-          {activeTab === "sources" ? <SourcesPanel /> : null}
+          {import.meta.env.DEV && activeTab === "sources" ? <PanelScaffold title="Fuentes"><PopupSetting title="Gestionar fuentes" description="Administra repositorios, proveedores y servicios de contenido en esta versión de desarrollo."><SourcesPanel /></PopupSetting></PanelScaffold> : null}
 
           {activeTab === "playback" ? (
             <PlaybackPanel
@@ -458,9 +582,14 @@ export default function SettingsPage() {
           ) : null}
 
           {activeTab === "about" ? <AboutPanel /> : null}
-        </main>
+        </div>
       </div>
-    </PageContainer>
+    </main>
+    {switchTarget ? <SettingsDialog title={`Entrar en ${switchTarget.name}`} description="Introduce el PIN de este perfil." onClose={() => setSwitchTarget(null)}>
+      <PinPad value={switchPin} onChange={value => { setSwitchPin(value.replace(/\D/g, "").slice(0, PIN_LENGTH)); setSwitchError(""); }} error={switchError} title="PIN del perfil" />
+      <ActionButton onClick={() => void confirmProfileSwitch()} disabled={switchBusy || switchPin.length !== PIN_LENGTH}>{switchBusy ? "Verificando…" : "Entrar"}</ActionButton>
+    </SettingsDialog> : null}
+    </SettingsHelpProvider>
   );
 }
 
@@ -468,18 +597,16 @@ function AccountPanel({
   view,
   profiles,
   activeProfile,
+  onProfileFocus,
+  onEditProfileName,
+  onEditProfilePin,
   profileName,
-  profilePin,
-  profileAvatar,
   profileError,
   saved,
   keys,
   mdbList,
   onViewChange,
-  onProfileNameChange,
-  onProfilePinChange,
   onChooseProfileImage,
-  onSaveProfile,
   onRemoveProfilePin,
   onStartProfileQuickStart,
   onSwitchProfile,
@@ -495,18 +622,16 @@ function AccountPanel({
   view: AccountView;
   profiles: LocalProfile[];
   activeProfile: LocalProfile | null;
+  onProfileFocus: (profileId: string) => void;
+  onEditProfileName: () => void;
+  onEditProfilePin: () => void;
   profileName: string;
-  profilePin: string;
-  profileAvatar?: string;
   profileError: string;
   saved: SavedSections;
   keys: ApiKeys;
   mdbList: MdbListSettings;
   onViewChange: (view: AccountView) => void;
-  onProfileNameChange: (value: string) => void;
-  onProfilePinChange: (value: string) => void;
   onChooseProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
-  onSaveProfile: () => void;
   onRemoveProfilePin: () => void;
   onStartProfileQuickStart: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
@@ -651,15 +776,12 @@ function AccountPanel({
         <ManageProfiles
           profiles={profiles}
           activeProfile={activeProfile}
+          onProfileFocus={onProfileFocus}
+          onEditProfileName={onEditProfileName}
+          onEditProfilePin={onEditProfilePin}
           profileName={profileName}
-          profilePin={profilePin}
-          profileAvatar={profileAvatar}
-          saved={saved.profile}
           profileError={profileError}
-          onProfileNameChange={onProfileNameChange}
-          onProfilePinChange={onProfilePinChange}
           onChooseProfileImage={onChooseProfileImage}
-          onSaveProfile={onSaveProfile}
           onRemoveProfilePin={onRemoveProfilePin}
           onSwitchProfile={onSwitchProfile}
           onDeleteProfile={onDeleteProfile}
@@ -675,9 +797,17 @@ function AccountPanel({
           <NavRow title="MDBList" description="Configura ratings externos para la pantalla de detalle." onClick={() => onViewChange("mdblist")} />
           <NavRow title="Anime skip" description="Usa Anime Skip para detectar intros en anime cuando tengas un Client ID." onClick={() => onViewChange("anime-skip")} />
           <NavRow title="TheIntroDB" description="Timestamps de créditos (outros) para disparar Up Next en películas y series." onClick={() => onViewChange("theintrodb")} />
-          <NavRow title="Google Drive" description="Respalda continuar viendo, historial y biblioteca en tu propio Google Drive, con sincronización automática." onClick={() => onViewChange("gdrive")} />
+          <NavRow title="Biblioteca y sincronización" description="Sincroniza AniList o Google Drive, e importa o reimporta tus datos de Trakt." onClick={() => onViewChange("library-sync")} />
           <NavRow title="Discord Rich Presence" description="Muestra en Discord lo que estás viendo en Aetherio." onClick={() => onViewChange("discord")} />
         </PillBlock>
+      </PanelScaffold>
+    );
+  }
+
+  if (view === "library-sync") {
+    return (
+      <PanelScaffold title="Biblioteca y sincronización" onBack={() => onViewChange("integrations")}>
+        <LibrarySyncSettings renderIntegration={SettingsIntegration} />
       </PanelScaffold>
     );
   }
@@ -774,8 +904,9 @@ function AccountPanel({
     return (
       <PanelScaffold title={details.title} onBack={() => onViewChange("integrations")}>
         <PillBlock>
-          <PillRow
-            title={details.label}
+            <PillRow
+              title={details.label}
+              onSave={onSaveIntegrations}
             titleAction={(
               <a
                 href={details.docsUrl}
@@ -790,6 +921,7 @@ function AccountPanel({
             description={details.description}
           >
             <input
+              aria-label={details.label}
               type="password"
               value={keys[details.key]}
               onChange={event => onKeyChange(details.key, event.target.value)}
@@ -799,7 +931,6 @@ function AccountPanel({
           </PillRow>
         </PillBlock>
 <div className="mt-5 flex items-center gap-3">
-          <ActionButton onClick={onSaveIntegrations} icon={<Save size={15} />}>Guardar integración</ActionButton>
           {saved.integrations ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
       </PanelScaffold>
@@ -812,9 +943,11 @@ function AccountPanel({
         <PillBlock>
           <PillRow
             title="Token de TheIntroDB"
+            onSave={onSaveIntegrations}
             description="Proporciona timestamps exactos de créditos (outros) para películas y series. Aetherio los usa para mostrar Up Next justo cuando empiezan los créditos; si no hay dato, se usa el umbral por porcentaje."
           >
             <input
+              aria-label="Token de TheIntroDB"
               type="password"
               value={keys.introDbApiKey}
               onChange={event => onKeyChange("introDbApiKey", event.target.value)}
@@ -824,7 +957,6 @@ function AccountPanel({
           </PillRow>
         </PillBlock>
         <div className="mt-5 flex items-center gap-3">
-          <ActionButton onClick={onSaveIntegrations} icon={<Save size={15} />}>Guardar integración</ActionButton>
           {saved.integrations ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
       </PanelScaffold>
@@ -878,7 +1010,7 @@ return (
           </>
         ) : null}
         <NavRow title="Perfiles" description="Administrar perfiles locales o crear nuevos." onClick={() => onViewChange("profiles")} />
-        <NavRow title="Integraciones" description="Configurar MDBList, Anime Skip y Discord." onClick={() => onViewChange("integrations")} />
+        <NavRow title="Integraciones" description="Configurar servicios, bibliotecas y sincronización." onClick={() => onViewChange("integrations")} />
       </PillBlock>
     </PanelScaffold>
   );
@@ -909,6 +1041,7 @@ function MdbListPanel({
           />
           <PillRow
             title="API Key"
+            onSave={onSaveApiKey}
             titleAction={(
               <a
                 href="https://mdblist.com/preferences/"
@@ -923,6 +1056,7 @@ function MdbListPanel({
             description="Requerida para consultar ratings desde MDBList."
           >
             <input
+              aria-label="API Key de MDBList"
               type="password"
               value={settings.apiKey}
               onChange={event => onChange({ apiKey: event.target.value }, false)}
@@ -945,7 +1079,6 @@ function MdbListPanel({
         </PillBlock>
 
         <div className="flex items-center gap-3">
-          <ActionButton onClick={onSaveApiKey} icon={<Save size={15} />}>Guardar API key</ActionButton>
           {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
         </div>
 
@@ -957,42 +1090,33 @@ function MdbListPanel({
 function ManageProfiles({
   profiles,
   activeProfile,
+  onProfileFocus,
+  onEditProfileName,
+  onEditProfilePin,
   profileName,
-  profilePin,
-  profileAvatar,
-  saved,
   profileError,
-  onProfileNameChange,
-  onProfilePinChange,
   onChooseProfileImage,
-  onSaveProfile,
   onRemoveProfilePin,
   onSwitchProfile,
   onDeleteProfile,
 }: {
   profiles: LocalProfile[];
   activeProfile: LocalProfile | null;
+  onProfileFocus: (profileId: string) => void;
+  onEditProfileName: () => void;
+  onEditProfilePin: () => void;
   profileName: string;
-  profilePin: string;
-  profileAvatar?: string;
-  saved: boolean;
   profileError: string;
-  onProfileNameChange: (value: string) => void;
-  onProfilePinChange: (value: string) => void;
   onChooseProfileImage: (event: ChangeEvent<HTMLInputElement>) => void;
-  onSaveProfile: () => void;
   onRemoveProfilePin: () => void;
   onSwitchProfile: (profile: LocalProfile) => void;
   onDeleteProfile: (profile: LocalProfile) => void;
 }) {
-  const activePreview = activeProfile
-    ? { ...activeProfile, name: profileName, avatarDataUrl: profileAvatar }
-    : null;
-
   const [confirmDelete, setConfirmDelete] = useState<LocalProfile | null>(null);
   const [deletePin, setDeletePin] = useState("");
   const [deletePinError, setDeletePinError] = useState("");
   const [deletePinVerifying, setDeletePinVerifying] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (confirmDelete) deletePinError && setDeletePinError("");
@@ -1020,23 +1144,14 @@ function ManageProfiles({
   return (
     <div className="grid gap-5">
       <PillBlock title="Cuenta actual">
-        {activePreview ? (
-          <div className="grid gap-5 p-5 md:grid-cols-[auto,1fr]">
-            <div className="flex flex-col items-center gap-3">
-              <ProfileAvatar profile={activePreview} className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full" />
-              <label className="flex cursor-pointer items-center gap-2 rounded-full border border-white/12 bg-white/8 px-4 py-2 text-xs font-bold text-white/72 gsap-transition hover:bg-white/14 hover:text-white">
-                <ImagePlus size={14} />
-                Cambiar foto
-                <input type="file" accept="image/*" onChange={onChooseProfileImage} className="hidden" />
-              </label>
-            </div>
-
-            <div className="grid gap-4">
-              <TextField label="Nombre" value={profileName} placeholder="Nombre del perfil" onChange={onProfileNameChange} />
-              <TextField label="PIN opcional" value={profilePin} placeholder="Sin PIN" password numeric onChange={onProfilePinChange} />
+        {activeProfile ? (
+          <div className="grid gap-4 p-5">
+              <SettingsRow title="Nombre" description="Cambia el nombre que aparece en este perfil." value={profileName} onClick={onEditProfileName} />
+              <SettingsRow title="PIN opcional" description="Define un PIN de cuatro dígitos para proteger este perfil." value={activeProfile.pin ? "Configurado" : "Sin PIN"} onClick={onEditProfilePin} />
+              <SettingsRow title="Cambiar foto" description="Selecciona una imagen para este perfil." value="Elegir" onClick={() => avatarInputRef.current?.click()} />
+              <input ref={avatarInputRef} type="file" accept="image/*" aria-label="Archivo de foto de perfil" onChange={onChooseProfileImage} className="hidden" />
               <div className="flex items-center gap-3">
-                <ActionButton onClick={onSaveProfile} icon={<Save size={15} />}>Guardar perfil</ActionButton>
-                {activePreview.pin ? (
+                {activeProfile.pin ? (
                   <button
                     type="button"
                     onClick={onRemoveProfilePin}
@@ -1045,9 +1160,7 @@ function ManageProfiles({
                     Quitar PIN
                   </button>
                 ) : null}
-                {saved ? <span className="text-sm text-white/54">Guardado.</span> : null}
               </div>
-            </div>
           </div>
         ) : null}
       </PillBlock>
@@ -1057,7 +1170,7 @@ function ManageProfiles({
           const isActive = profile.id === activeProfile?.id;
           const isOnlyProfile = profiles.length <= 1;
           return (
-            <PillRow key={profile.id} title={profile.name} description={profile.pin ? "PIN activo" : "Sin PIN"} leading={<ProfileAvatar profile={profile} className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full" />}>
+            <PillRow key={profile.id} title={profile.name} description={profile.pin ? "PIN activo" : "Sin PIN"} leading={<ProfileAvatar profile={profile} className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full" />} onFocus={() => onProfileFocus(profile.id)}>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1074,6 +1187,7 @@ function ManageProfiles({
                 {!isActive || !isOnlyProfile ? (
                   <button
                     type="button"
+                    aria-label={`Eliminar perfil ${profile.name}`}
                     onClick={() => { setConfirmDelete(profile); setDeletePin(""); setDeletePinError(""); }}
                     className="flex shrink-0 items-center gap-2 rounded-full border border-white/12 px-4 py-2 text-xs font-black text-white/44 gsap-transition hover:border-red-500/60 hover:bg-red-500/12 hover:text-red-300"
                   >
@@ -1089,23 +1203,7 @@ function ManageProfiles({
       {profileError ? <p className="text-sm font-semibold text-red-300">{profileError}</p> : null}
 
       {confirmDelete ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-glass-sm"
-          onClick={() => { setConfirmDelete(null); setDeletePin(""); setDeletePinError(""); }}
-        >
-          <div
-            className="mx-4 w-full max-w-sm rounded-[24px] border border-white/10 bg-[#2a2a2d] p-6 shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/20 text-red-400">
-                <Trash2 size={20} />
-              </div>
-              <div>
-                <p className="text-base font-black text-white">Eliminar perfil</p>
-                <p className="text-sm font-medium text-white/50">Esta acción no se puede deshacer.</p>
-              </div>
-            </div>
+        <SettingsDialog title="Eliminar perfil" description="Esta acción no se puede deshacer." onClose={() => { setConfirmDelete(null); setDeletePin(""); setDeletePinError(""); }}>
             <p className="mb-4 text-sm leading-6 text-white/60">
               ¿Estás seguro de eliminar el perfil <span className="font-bold text-white">{confirmDelete.name}</span>? Todos los datos
               locales asociados se borrarán permanentemente.
@@ -1138,8 +1236,7 @@ function ManageProfiles({
                 {deletePinVerifying ? "Verificando..." : "Eliminar"}
               </button>
             </div>
-          </div>
-        </div>
+        </SettingsDialog>
       ) : null}
     </div>
   );
@@ -1175,12 +1272,10 @@ function DesignPanel({
       <PanelScaffold title="Pantalla de inicio" onBack={() => onViewChange("overview")}>
         <div className="grid gap-5">
           <section>
-            <SectionLabel>Contenido principal</SectionLabel>
             <ContentOrientationControl
               value={preferences.contentOrientation}
               onChange={contentOrientation => onPreferencesChange({ contentOrientation })}
             />
-            <p className="mt-3 text-xs text-white/36">Prioriza el contenido elegido sin ocultar los demás catálogos.</p>
           </section>
 
           <PillBlock title="Plataformas de streaming">
@@ -1194,12 +1289,10 @@ function DesignPanel({
 
           {preferences.contentOrientation === "both" ? (
             <section>
-              <SectionLabel>¿Con qué preferencia?</SectionLabel>
               <BothPreferenceControl
                 value={preferences.bothPreference}
                 onChange={bothPreference => onPreferencesChange({ bothPreference })}
               />
-              <p className="mt-3 text-xs text-white/36">Si eliges Anime, los catálogos de anime se muestran primero y viceversa.</p>
             </section>
           ) : null}
 
@@ -1213,8 +1306,8 @@ function DesignPanel({
           </PillBlock>
 
           <section>
-            <SectionLabel>Reordenar los catálogos</SectionLabel>
-            <div className="rounded-[30px] border border-white/10 bg-white/[0.055] p-4">
+            <PopupSetting title="Orden y visibilidad de catálogos" description="Activa los catálogos que quieres ver y usa las flechas para decidir su orden en Inicio." value={`${visibleCatalogRows.length} activos`}>
+            <div className="settings-catalogs">
               {catalogLoading ? (
                 <p className="px-2 py-5 text-sm text-white/52">Cargando catálogos...</p>
               ) : catalogRows.length ? (
@@ -1256,7 +1349,8 @@ function DesignPanel({
                 <p className="px-2 py-5 text-sm text-white/52">No hay catálogos disponibles.</p>
               )}
             </div>
-            <p className="mt-3 text-xs text-white/36">{visibleCatalogRows.length} catálogos activos.</p>
+            <p className="settings-static">{visibleCatalogRows.length} catálogos activos.</p>
+            </PopupSetting>
           </section>
         </div>
       </PanelScaffold>
@@ -1295,23 +1389,7 @@ function ContentOrientationControl({ value, onChange }: { value: ContentOrientat
     { value: "both", label: "Ambos" },
   ];
 
-  return (
-    <div className="grid gap-2 rounded-[26px] border border-white/10 bg-white/[0.055] p-2 sm:grid-cols-3">
-      {options.map(option => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={clsx(
-            "gsap-transition rounded-full px-4 py-3 text-sm font-black",
-            value === option.value ? "bg-white text-black" : "text-white/54 hover:bg-white/10 hover:text-white",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <ChoiceSetting title="Contenido principal" value={value} options={options} onChange={next => onChange(next as ContentOrientation)} />;
 }
 
 function BothPreferenceControl({ value, onChange }: { value: BothContentPreference; onChange: (value: BothContentPreference) => void }) {
@@ -1320,23 +1398,7 @@ function BothPreferenceControl({ value, onChange }: { value: BothContentPreferen
     { value: "movies-series", label: "Series y películas" },
   ];
 
-  return (
-    <div className="grid gap-2 rounded-[26px] border border-white/10 bg-white/[0.055] p-2 sm:grid-cols-2">
-      {options.map(option => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={clsx(
-            "gsap-transition rounded-full px-4 py-3 text-sm font-black",
-            value === option.value ? "bg-white text-black" : "text-white/54 hover:bg-white/10 hover:text-white",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <ChoiceSetting title="Preferencia de contenido" value={value} options={options} onChange={next => onChange(next as BothContentPreference)} />;
 }
 
 function AddonsPanel({ installedCount, enabledCount, onOpenAddons }: { installedCount: number; enabledCount: number; onOpenAddons: () => void }) {
@@ -1560,7 +1622,7 @@ function AboutPanel() {
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [updateReady, setUpdateReady] = useState(false);
-  const pendingUpdateRef = useRef<{ version: string; downloadAndInstall: () => Promise<void> } | null>(null);
+  const pendingUpdateRef = useRef<{ version: string; downloadAndInstall: () => Promise<void>; close?: () => Promise<void> } | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -1574,8 +1636,10 @@ function AboutPanel() {
 
   async function handleCheckUpdate() {
     setCheckingUpdate(true);
-    setUpdateMessage(null);
+    setUpdateMessage("Buscando actualizaciones…");
     setUpdateReady(false);
+    const previousUpdate = pendingUpdateRef.current;
+    if (previousUpdate?.close) void previousUpdate.close().catch(() => undefined);
     pendingUpdateRef.current = null;
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
@@ -1616,74 +1680,50 @@ function AboutPanel() {
   return (
     <PanelScaffold title="Acerca de">
       <PillBlock>
-        <div className="flex items-center gap-5 p-6">
-          <img src={aetherioLogo} alt="Logo de la aplicación Aetherio" className="h-20 w-20 rounded-3xl object-contain" />
-          <div>
-            <p className="text-xl font-black text-white">Aetherio</p>
-            <p className="mt-1 text-sm text-white/52">Version {appVersion}</p>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-white/60">Reproductor de escritorio con perfiles locales, complementos y reproducción integrada en la app.</p>
+        <PopupSetting title="Aetherio" value={`Versión ${appVersion}`} hideHeader>
+          <div className="settings-version-brand">
+            <img src={aetherioLogo} alt="Aetherio" />
+            <span>{appVersion}</span>
           </div>
-        </div>
+          <p className="settings-version-credit">Creado por trkll</p>
+        </PopupSetting>
       </PillBlock>
 
       <PillBlock title="Actualizaciones">
-        <div className="p-6 space-y-3">
-          <button
-            type="button"
-            onClick={() => void handleCheckUpdate()}
-            disabled={checkingUpdate}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/8 px-5 py-2.5 text-sm font-semibold text-white/80 transition-colors hover:bg-white/14 hover:text-white disabled:opacity-50"
-          >
-            {checkingUpdate ? <AppleSpinner size={15} /> : <Search size={15} />}
-            {checkingUpdate ? "Buscando…" : "Buscar actualizaciones"}
-          </button>
+        <PopupSetting title="Actualizaciones de Aetherio" description="Comprueba si hay una nueva versión y, si está disponible, descárgala e instálala." onOpen={() => void handleCheckUpdate()}>
+        <div className="settings-update-status" aria-live="polite">
+          {checkingUpdate ? <span className="settings-update-status__checking"><AppleSpinner size={16} /> Buscando actualizaciones…</span> : null}
           {updateReady && !installingUpdate ? (
             <button
               type="button"
               onClick={() => void handleInstallUpdate()}
-              className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-black text-black transition-colors hover:bg-white/86"
+              className="settings-update-status__install"
             >
               Instalar actualización
             </button>
           ) : null}
           {installingUpdate ? (
-            <p className="text-sm font-semibold text-white/80">Instalando… No cierres la app.</p>
+            <p className="settings-update-status__message">Instalando… No cierres la app.</p>
           ) : null}
-          {updateMessage ? (
-            <p className="text-sm text-white/60">{updateMessage}</p>
+          {!checkingUpdate && updateMessage ? (
+            <p className="settings-update-status__message">{updateMessage}</p>
           ) : null}
         </div>
+        </PopupSetting>
       </PillBlock>
     </PanelScaffold>
   );
 }
 
-function PanelScaffold({ title, children, onBack }: { title: string; children: ReactNode; onBack?: () => void }) {
-  return (
-    <section>
-      <header className="mb-6 flex items-center gap-3">
-        {onBack ? (
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/8 text-white/70 gsap-transition hover:bg-white/14 hover:text-white"
-            title="Volver"
-          >
-            <ArrowLeft size={18} />
-          </button>
-        ) : null}
-        <h2 className="text-3xl font-black text-white">{title}</h2>
-      </header>
-      {children}
-    </section>
-  );
+function PanelScaffold({ title, children }: { title: string; children: ReactNode; onBack?: () => void }) {
+  return <section className="settings-panel" aria-label={title}>{children}</section>;
 }
 
 function PillBlock({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section>
       {title ? <SectionLabel>{title}</SectionLabel> : null}
-      <div className="overflow-hidden rounded-[30px] border border-white/10 bg-white/[0.055] shadow-[0_16px_54px_rgba(0,0,0,0.22)]">
+      <div className="settings-block">
         {children}
       </div>
     </section>
@@ -1691,23 +1731,11 @@ function PillBlock({ title, children }: { title?: string; children: ReactNode })
 }
 
 function SectionLabel({ children }: { children: ReactNode }) {
-  return <h3 className="mb-3 text-xs font-black text-white/48">{children}</h3>;
+  return <h3 className="settings-section-label">{children}</h3>;
 }
 
 function NavRow({ title, description, onClick }: { title: string; description: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex w-full items-center justify-between gap-4 border-b border-white/[0.055] px-5 py-4 text-left gsap-transition last:border-b-0 hover:bg-white/[0.055]"
-    >
-      <span className="min-w-0">
-        <span className="block text-sm font-black text-white">{title}</span>
-        <span className="mt-1 block text-sm leading-5 text-white/50">{description}</span>
-      </span>
-      <ChevronRight size={18} className="shrink-0 text-white/38" />
-    </button>
-  );
+  return <SettingsRow title={title} description={description} onClick={onClick} />;
 }
 
 function PillRow({
@@ -1716,50 +1744,43 @@ function PillRow({
   description,
   leading,
   children,
+  onSave,
+  onFocus,
 }: {
   title: ReactNode;
   titleAction?: ReactNode;
   description?: string;
   leading?: ReactNode;
   children?: ReactNode;
+  onSave?: () => void;
+  onFocus?: () => void;
 }) {
-  return (
-    <div className="flex items-center justify-between gap-5 border-b border-white/[0.055] px-5 py-4 last:border-b-0">
-      <div className="flex min-w-0 items-center gap-3">
-        {leading}
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-black text-white">{title}</p>
-            {titleAction ? <span className="shrink-0">{titleAction}</span> : null}
-          </div>
-          {description ? <p className="mt-1 text-sm leading-5 text-white/50">{description}</p> : null}
-        </div>
-      </div>
-      {children ? <div className="shrink-0">{children}</div> : null}
-    </div>
-  );
+  const label = typeof title === "string" ? title : "Información";
+  return <PopupSetting title={label} description={description} leading={leading} value={controlSummary(children)} onSave={onSave} onFocus={onFocus}>
+    {titleAction ? <div className="mb-4">{titleAction}</div> : null}
+    {children ?? <p className="settings-static">{description ?? title}</p>}
+  </PopupSetting>;
+}
+
+function SettingsIntegration({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return <PopupSetting title={title} description={description}>{children}</PopupSetting>;
+}
+
+function controlSummary(children: ReactNode): string | undefined {
+  for (const child of Children.toArray(children)) {
+    if (!isValidElement<{ value?: unknown; type?: string; children?: ReactNode }>(child)) continue;
+    if (child.type === "input") return child.props.type === "password" ? (child.props.value ? "Configurado" : "Sin configurar") : String(child.props.value ?? "");
+    if (child.type === ActionButton) return typeof child.props.children === "string" ? child.props.children : undefined;
+  }
+  return undefined;
 }
 
 function ToggleRow({ title, description, checked, onChange }: { title: string; description?: string; checked: boolean; onChange: (checked: boolean) => void }) {
-  return (
-    <PillRow title={title} description={description}>
-      <ToggleSwitch checked={checked} onChange={() => onChange(!checked)} label={title} />
-    </PillRow>
-  );
+  return <SettingsRow title={title} description={description} value={checked ? "Activado" : "Desactivado"} pressed={checked} onClick={() => onChange(!checked)} />;
 }
 
 function SelectRow({ title, description, value, options, onChange }: { title: string; description?: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
-  return (
-    <PillRow title={title} description={description}>
-      <select
-        value={value}
-        onChange={event => onChange(event.target.value)}
-        className="min-w-[190px] rounded-full border border-white/12 bg-[#171719] px-4 py-2.5 text-sm font-semibold text-white outline-none gsap-transition focus:border-white/34"
-      >
-        {options.map(option => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}
-      </select>
-    </PillRow>
-  );
+  return <ChoiceSetting title={title} description={description} value={value} options={options} onChange={onChange} />;
 }
 
 function RangeRow({
@@ -1781,59 +1802,189 @@ function RangeRow({
   suffix: string;
   onChange: (value: number) => void;
 }) {
+  const [sliderOpen, setSliderOpen] = useState(false);
+  const sliderRef = useRef<HTMLInputElement>(null);
+  const quickToValueRef = useRef<((value: number) => void) | null>(null);
+  const displayValue = step == null || step >= 1 ? String(Math.round(value)) : String(Number(value.toFixed(1)));
+
+  useEffect(() => {
+    const slider = sliderRef.current;
+    if (!slider) return;
+    const quickToValue = gsap.quickTo(slider, "value", {
+      duration: 0.12,
+      ease: "none",
+      onUpdate: () => updateRangeInput(slider, Number(slider.value)),
+    });
+    quickToValueRef.current = quickToValue;
+    const onRangeTarget = (event: Event) => {
+      const detail = (event as CustomEvent<{ value: number; animate?: boolean }>).detail;
+      if (!detail || typeof detail.value !== "number" || !Number.isFinite(detail.value)) return;
+      if (detail.animate === false) {
+        gsap.killTweensOf(slider);
+        updateRangeInput(slider, detail.value);
+      } else quickToValue(detail.value);
+    };
+    slider.addEventListener("aetherio-range-input-target", onRangeTarget);
+    return () => {
+      slider.removeEventListener("aetherio-range-input-target", onRangeTarget);
+      gsap.killTweensOf(slider);
+      quickToValueRef.current = null;
+    };
+  }, [sliderOpen]);
+
+  const changeBy = (amount: number, input?: HTMLInputElement) => {
+    const next = Math.min(max, Math.max(min, Number((value + amount).toFixed(3))));
+    if (input) {
+      input.dataset.targetValue = String(next);
+      input.dataset.preciseTargetValue = String(next);
+      requestRangeInputValue(input, next);
+    }
+    if (!input) onChange(next);
+  };
   return (
-    <div className="border-b border-white/[0.055] px-5 py-4 last:border-b-0">
-      <div className="mb-4 flex items-start justify-between gap-5">
-        <div>
-          <p className="text-sm font-black text-white">{title}</p>
-          {description ? <p className="mt-1 text-sm leading-5 text-white/50">{description}</p> : null}
-        </div>
-        <span className="shrink-0 text-sm font-black text-white">{value}{suffix}</span>
-      </div>
+    <PopupSetting title={title} description={description} value={`${displayValue}${suffix}`} hideDialogDescription onOpen={() => setSliderOpen(true)} onClose={() => setSliderOpen(false)}>
+      <output className="settings-range-value">{displayValue}{suffix}</output>
       <input
+        ref={sliderRef}
+        className="settings-range-slider"
+        data-settings-range={title}
+        data-target-value={value}
+        data-range-step={step ?? 1}
+        aria-label={title}
         type="range"
         min={min}
         max={max}
-        step={step ?? 1}
+        step="any"
         value={value}
-        onChange={event => onChange(Number(event.target.value))}
-        className="w-full accent-white"
+        onChange={event => {
+          const nextValue = Number(event.target.value);
+          event.currentTarget.dataset.targetValue = String(nextValue);
+          event.currentTarget.dataset.preciseTargetValue = String(nextValue);
+          onChange(nextValue);
+        }}
+        onPointerUp={event => {
+          const input = event.currentTarget;
+          const next = getSteppedRangeValue(
+            Number(input.dataset.preciseTargetValue ?? input.value),
+            min,
+            max,
+            step ?? 1,
+            0,
+          );
+          input.dataset.targetValue = String(next);
+          input.dataset.preciseTargetValue = String(next);
+          requestRangeInputValue(input, next, true);
+        }}
+        onKeyDown={event => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          changeBy(event.key === "ArrowRight" ? (step ?? 1) : -(step ?? 1), event.currentTarget);
+        }}
       />
-    </div>
+    </PopupSetting>
   );
 }
 
 function StaticText({ children }: { children: ReactNode }) {
-  return <div className="border-b border-white/[0.055] px-5 py-4 text-sm leading-6 text-white/50 last:border-b-0">{children}</div>;
+  return <div className="settings-static">{children}</div>;
 }
 
-function TextField({
-  label,
-  value,
-  placeholder,
-  password,
-  numeric,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  placeholder: string;
-  password?: boolean;
-  numeric?: boolean;
-  onChange: (value: string) => void;
+function ProfileFieldEditor({ view, name, pin, nameMode, error, onNameChange, onNameModeChange, onPinChange, onSaveName, onSavePin, onCancel, onSaved, exitRef }: {
+  view: "name" | "pin";
+  name: string;
+  pin: string;
+  nameMode: KeyboardMode;
+  error: string;
+  onNameChange: (value: string) => void;
+  onNameModeChange: (mode: KeyboardMode) => void;
+  onPinChange: (value: string) => void;
+  onSaveName: () => Promise<void>;
+  onSavePin: () => Promise<boolean>;
+  onCancel: () => void;
+  onSaved: () => void;
+  exitRef: { current: (() => void) | null };
 }) {
+  const [exiting, setExiting] = useState(false);
+  const exitingRef = useRef(false);
+  const finishTimer = useRef<number | null>(null);
+
+  const beginExit = (finish: () => void) => {
+    if (exitingRef.current) return;
+    exitingRef.current = true;
+    setExiting(true);
+    finishTimer.current = window.setTimeout(finish, 220);
+  };
+
+  const cancelWithFade = () => beginExit(onCancel);
+  const saveNameWithFade = async () => {
+    if (exitingRef.current) return;
+    const startedAt = performance.now();
+    exitingRef.current = true;
+    setExiting(true);
+    try {
+      await onSaveName();
+      finishTimer.current = window.setTimeout(onSaved, Math.max(0, 220 - (performance.now() - startedAt)));
+    } catch {
+      exitingRef.current = false;
+      setExiting(false);
+    }
+  };
+  const savePinWithFade = async () => {
+    if (exitingRef.current) return;
+    const startedAt = performance.now();
+    exitingRef.current = true;
+    setExiting(true);
+    if (await onSavePin()) {
+      finishTimer.current = window.setTimeout(onSaved, Math.max(0, 220 - (performance.now() - startedAt)));
+    } else {
+      exitingRef.current = false;
+      setExiting(false);
+    }
+  };
+
+  const cancelWithFadeRef = useRef(cancelWithFade);
+  cancelWithFadeRef.current = cancelWithFade;
+
+  useLayoutEffect(() => {
+    exitRef.current = () => cancelWithFadeRef.current();
+    return () => {
+      exitRef.current = null;
+      if (finishTimer.current !== null) window.clearTimeout(finishTimer.current);
+    };
+  }, [exitRef]);
+
   return (
-    <label className="block">
-      <span className="mb-1.5 block text-sm font-semibold text-white/86">{label}</span>
-      <input
-        type={password ? "password" : "text"}
-        inputMode={numeric ? "numeric" : undefined}
-        value={value}
-        onChange={event => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-full border border-white/12 bg-white/10 px-4 py-3 text-sm text-white outline-none gsap-transition placeholder:text-white/34 focus:border-white/34"
-      />
-    </label>
+    <main className="qs-profile profile-field-editor" data-profile-field-editor={view} data-transitioning={exiting ? "out" : "in"}>
+      <button type="button" className="profile-field-editor__back" onClick={cancelWithFade}>Volver</button>
+      <div className="qs-profile__stage">
+        {view === "name" ? (
+          <div className="qs-name">
+            <NameKeyboard value={name} onChange={onNameChange} mode={nameMode} onModeChange={onNameModeChange} maxLength={32} />
+            <div className="qs-name__form">
+              <h1 className="qs-name__title">Elige un nombre</h1>
+              <p className="qs-name__field" aria-live="polite">{name}</p>
+              <button type="button" className="qs-name__cta" disabled={!name.trim() || exiting} onClick={saveNameWithFade}>
+                Listo <ChevronRight size={20} strokeWidth={2.6} />
+              </button>
+              <p className="qs-name__hint">El nombre aparece en tu perfil y en los puntos donde tengas sesión iniciada.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="qs-pin">
+            <PinPad
+              value={pin}
+              onChange={onPinChange}
+              onComplete={() => void savePinWithFade()}
+              onCancel={cancelWithFade}
+              title="Elige un PIN"
+              subtitle="Cuatro dígitos para proteger este perfil en este equipo."
+            />
+            <button type="button" className="qs-pin__skip" onClick={cancelWithFade}>Cancelar</button>
+          </div>
+        )}
+      </div>
+      {error ? <p className="qs-profile__error" role="alert">{error}</p> : null}
+    </main>
   );
 }
 
@@ -1844,7 +1995,7 @@ function ActionButton({ children, icon, disabled, onClick }: { children: ReactNo
       onClick={onClick}
       disabled={disabled}
       className={clsx(
-        "flex w-fit items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-black text-black gsap-transition hover:bg-white/86",
+        "settings-action",
         disabled && "cursor-not-allowed opacity-45 hover:bg-white",
       )}
     >
@@ -1872,16 +2023,17 @@ function IconButton({ children, title, disabled, onClick }: { children: ReactNod
   );
 }
 
-function getInitialTab(search: string): SettingsTab {
+function getInitialTab(search: string): SettingsTab | null {
   const tab = new URLSearchParams(search).get("tab");
-  if (tab === "account" || tab === "profile" || tab === "services") return "account";
-  if (tab === "design" || tab === "addons" || tab === "sources" || tab === "playback" || tab === "about") return tab;
-  return "account";
+  if (tab === "account" || tab === "profile" || tab === "services" || tab === "integrations" || tab === "gdrive" || tab === "mdblist") return "account";
+  if (tab === "sources") return import.meta.env.DEV ? "sources" : null;
+  if (tab === "design" || tab === "addons" || tab === "playback" || tab === "about") return tab;
+  return null;
 }
 
 function getInitialAccountView(search: string): AccountView {
   const tab = new URLSearchParams(search).get("tab");
-  if (tab === "services") return "integrations";
+  if (tab === "services" || tab === "integrations") return "integrations";
   if (tab === "gdrive") return "gdrive";
   if (tab === "mdblist") return "mdblist";
   return "overview";

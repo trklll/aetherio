@@ -12,12 +12,14 @@ export const EXPERIENCE_STORAGE_JOURNAL_KEY = "aetherio-experience-write-journal
 const JOURNAL_VERSION = 1;
 const LEGACY_COMPATIBILITY_KEYS = new Set([
   "aetherio-saved-library-v1",
+  "aetherio-user-ratings-v1",
   "aetherio-continue-watching-v1",
   "aetherio-watched-history-v1",
   "aetherio-continue-watching-audio-selection-v1",
 ]);
 const registeredKeys = new Set<string>([
   "aetherio-saved-library-v1",
+  "aetherio-user-ratings-v1",
   "aetherio-continue-watching-v1",
   "aetherio-watched-history-v1",
   "aetherio-continue-watching-audio-selection-v1",

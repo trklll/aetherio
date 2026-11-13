@@ -84,6 +84,7 @@ describe("experience storage", () => {
 
   it("registers new experience keys without including credentials", () => {
     expect(EXPERIENCE_STORAGE_KEYS).toContain("aetherio-saved-library-v1");
+    expect(EXPERIENCE_STORAGE_KEYS).toContain("aetherio-user-ratings-v1");
     expect(EXPERIENCE_STORAGE_KEYS).toContain("aetherio-watched-history-v1");
     expect(EXPERIENCE_STORAGE_KEYS).toContain("aetherio-title-playback-selections-v1");
     expect(EXPERIENCE_STORAGE_KEYS).toContain("aetherio-recommendation-feedback-v1");
@@ -137,6 +138,8 @@ describe("experience storage", () => {
     expect(accountA.profileId).toBeNull();
     expect("token" in accountA).toBe(false);
     expect(writeExperienceJSON(accountA, key, { version: 1, choice: "en" }).ok).toBe(true);
+    const ratingsKey = "aetherio-user-ratings-v1";
+    expect(writeExperienceJSON(accountA, ratingsKey, { version: 1, ratings: { "movie:one": 4.5 } }).ok).toBe(true);
 
     storage.setItem("aetherio-account-user-v1", JSON.stringify({ id: "account-b" }));
     window.dispatchEvent(new CustomEvent("aetherio-auth-changed"));
@@ -145,11 +148,16 @@ describe("experience storage", () => {
     expect(accountB.generation).toBeGreaterThan(accountA.generation);
     expect(observed.length).toBeGreaterThanOrEqual(2);
     expect(writeExperienceJSON(accountB, key, { version: 1, choice: "ja" }).ok).toBe(true);
+    expect(writeExperienceJSON(accountB, ratingsKey, { version: 1, ratings: { "movie:one": 3 } }).ok).toBe(true);
 
     const storageKeyA = `aetherio-experience:${encodeURIComponent("account:account-a")}:${key}`;
     const storageKeyB = `aetherio-experience:${encodeURIComponent("account:account-b")}:${key}`;
+    const ratingsStorageKeyA = `aetherio-experience:${encodeURIComponent("account:account-a")}:${ratingsKey}`;
+    const ratingsStorageKeyB = `aetherio-experience:${encodeURIComponent("account:account-b")}:${ratingsKey}`;
     expect(storage.getItem(storageKeyA)).toContain("en");
     expect(storage.getItem(storageKeyB)).toContain("ja");
+    expect(JSON.parse(storage.getItem(ratingsStorageKeyA) ?? "null")).toEqual({ version: 1, ratings: { "movie:one": 4.5 } });
+    expect(JSON.parse(storage.getItem(ratingsStorageKeyB) ?? "null")).toEqual({ version: 1, ratings: { "movie:one": 3 } });
     unsubscribe();
   });
 

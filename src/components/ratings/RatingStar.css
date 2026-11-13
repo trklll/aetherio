@@ -1,0 +1,38 @@
+.aetherio-rating-star {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.96);
+  line-height: 0;
+}
+
+.aetherio-rating-star__outline {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: transparent;
+}
+
+.aetherio-rating-star__fill {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  clip-path: inset(0 calc(100% - var(--rating-star-fill, 0%)) 0 0);
+  transition: clip-path 120ms ease-out;
+}
+
+.aetherio-rating-star__fill svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: #fff;
+  stroke: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aetherio-rating-star__fill {
+    transition: none;
+  }
+}
