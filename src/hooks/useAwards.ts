@@ -557,7 +557,6 @@ async function fetchMediaAwards(params: {
   try {
     res = await fetch(url, {
       headers: { "Accept": "application/json" },
-      cache: "no-cache",
       signal: AbortSignal.timeout(10000),
     });
   } catch (error) {
@@ -634,7 +633,6 @@ async function fetchPersonAwards(params: {
   try {
     res = await fetch(url, {
       headers: { Accept: "application/json" },
-      cache: "no-cache",
       signal: AbortSignal.timeout(10000),
     });
   } catch (error) {
@@ -683,18 +681,14 @@ function useAwardsQuery(
     enabled: enabled && (tmdbId !== null || Boolean(imdbId) || anilistId !== null),
     staleTime: (currentQuery) => {
       const payload = currentQuery.state.data;
-      if (!payload || payload.records.length === 0 || payload.resolution.status !== "resolved") return 0;
+      // Sin premios también es una respuesta válida: no repetirla en cada
+      // montaje del hero/detalle ni cada vez que el WebView recupera el foco.
+      if (!payload || payload.records.length === 0 || payload.resolution.status !== "resolved") return 1000 * 60 * 15;
       return 1000 * 60 * 60;
     },
     gcTime: 1000 * 60 * 60 * 24 * 30,
-    refetchOnMount: (currentQuery) => {
-      const payload = currentQuery.state.data;
-      return !payload || payload.records.length === 0 || payload.resolution.status !== "resolved" ? "always" : false;
-    },
-    refetchOnWindowFocus: (currentQuery) => {
-      const payload = currentQuery.state.data;
-      return !payload || payload.records.length === 0 || payload.resolution.status !== "resolved";
-    },
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
     retry: 1,
     retryDelay: (attempt: number) => Math.min(1000 * 2 ** attempt, 5000),
