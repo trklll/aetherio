@@ -3512,7 +3512,6 @@ function updateBackdropBlur(scrollTop: number) {
                 {
                   label: "Elegir fondo del medio",
                   icon: <ImageIcon size={15} />,
-                  disabled: !(data.backgroundOptions?.length),
                   onSelect: openBackgroundPicker,
                 },
                 {
@@ -3603,7 +3602,7 @@ function updateBackdropBlur(scrollTop: number) {
               mode="background"
               currentUrl={data.backdrop}
               extraOptions={backgroundPickerOptions}
-              fetchTmdbOptions={false}
+              fetchTmdbOptions
               titleOverride="Fondo del medio"
               descriptionOverride={`Escoge el fondo para ${data.name}`}
               onSelect={applyDetailBackground}

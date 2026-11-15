@@ -92,6 +92,20 @@ export function writeDetailMediaMeta(seed: MediaMetadataSeed) {
   writeMap(map);
 }
 
+export function writeContinueWatchingMediaMeta(seed: MediaMetadataSeed & { episodeStill?: string }) {
+  const cached = readDetailMediaMeta(seed.type, seed.id);
+  const episodeStill = seed.type !== "movie" ? ensureOriginalTmdbImage(seed.episodeStill) : undefined;
+  // El progreso antiguo puede guardar el still también como background.
+  // Nunca promoverlo al arte de la serie ni pisar un fondo del medio ya resuelto.
+  const candidates = seed.type === "movie"
+    ? [seed.background, cached?.background]
+    : [cached?.background, seed.background];
+  const background = candidates
+    .map(url => ensureOriginalTmdbImage(url) ?? url)
+    .find(url => Boolean(url) && url !== episodeStill);
+  writeDetailMediaMeta({ ...cached, ...seed, background });
+}
+
 export function readDetailBackgroundOverride(type?: string, id?: string) {
   if (!type || !id || !localStorageAvailable()) return undefined;
   try {

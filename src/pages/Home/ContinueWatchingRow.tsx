@@ -31,7 +31,7 @@ import {
   readHomeCardArtwork,
   writeHomeCardArtwork,
 } from "../../utils/homeCardArtwork";
-import { readDetailMediaMeta, writeDetailMediaMeta } from "../../utils/mediaMetadata";
+import { readDetailMediaMeta, writeContinueWatchingMediaMeta, writeDetailMediaMeta } from "../../utils/mediaMetadata";
 import { scrollByGsap, tweenTo } from "../../utils/motion";
 import { useBigPictureActive } from "../../navigation/spatialNav.ts";
 import { buildDetailPath, buildEpisodePath } from "../../utils/bigPictureDetail.ts";
@@ -288,12 +288,13 @@ export default function ContinueWatchingRow() {
             const updated = updateContinueWatchingEntryArtwork(entry.key, artwork);
             if (hasCardArtwork(updated ?? artwork)) {
               const resolvedEntry = updated ?? { ...entry, ...artwork };
-              writeDetailMediaMeta({
+              writeContinueWatchingMediaMeta({
                 id: resolvedEntry.id,
                 type: resolvedEntry.type,
                 name: resolvedEntry.name,
                 logo: resolvedEntry.logo,
                 background: resolvedEntry.background,
+                episodeStill: resolvedEntry.episodeStill,
                 poster: resolvedEntry.poster,
               });
               // Importes (incluido Trakt) pueden escribir Continue Watching antes
@@ -414,12 +415,13 @@ export default function ContinueWatchingRow() {
   async function resume(entry: ContinueWatchingEntry) {
     window.performance?.mark?.("continue:card_click");
     const cached = readDetailMediaMeta(entry.type, entry.id);
-    writeDetailMediaMeta({
+    writeContinueWatchingMediaMeta({
       id: entry.id,
       type: entry.type,
       name: entry.name || cached?.name || entry.id,
       logo: sanitizeLogoUrl(entry.logo) ?? cached?.logo,
       background: entry.background ?? cached?.background,
+      episodeStill: entry.episodeStill,
       poster: entry.poster ?? cached?.poster,
       description: cached?.description,
       year: cached?.year,
@@ -618,14 +620,9 @@ async function fetchContinueWatchingArtwork(entry: ContinueWatchingEntry) {
   const episodeDetails = entry.type !== "movie" && entry.season && entry.episode
     ? await fetchTmdbEpisodeDetails(tmdbId, entry.season, entry.episode)
     : null;
-  const seriesBackground = tmdbImage(episodeDetails?.still_path, "original")
-    ?? tmdbImage(artwork?.backdropPath, "original");
-
   return {
     name: artwork?.title ?? entry.name,
-    background: entry.type === "movie"
-      ? tmdbImage(artwork?.backdropPath, "original")
-      : seriesBackground,
+    background: tmdbImage(artwork?.backdropPath, "original"),
     episodeStill: entry.type !== "movie" ? tmdbImage(episodeDetails?.still_path, "original") : undefined,
     poster: tmdbImage(artwork?.posterPath, "original"),
     logo: entry.logo ?? sanitizeLogoUrl(tmdbImage(logoPath, "original")),

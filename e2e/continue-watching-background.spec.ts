@@ -8,7 +8,7 @@ const BACKDROP = `${IMAGE_BASE}/original/series-backdrop.svg`;
 const STILL = `${IMAGE_BASE}/w780/episode-still.svg`;
 const ALTERNATIVE = `${IMAGE_BASE}/original/alternative-backdrop.svg`;
 
-async function installFixture(page: Page, cachedBackground: boolean) {
+async function installFixture(page: Page, cachedBackground: boolean, withMediaBackdrop = true) {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.addInitScript(({ profile, scope, mediaKey, backdrop, still, cachedBackground }) => {
     const target = window as unknown as Record<string, any>;
@@ -51,11 +51,13 @@ async function installFixture(page: Page, cachedBackground: boolean) {
     }
     if (url.pathname.includes("/api/tmdb/") || url.hostname === "api.themoviedb.org") {
       const body = /\/tv\/990002\/images$/.test(url.pathname)
-        ? { backdrops: [{ file_path: "/alternative-backdrop.svg", iso_639_1: null }] }
+        ? { backdrops: url.searchParams.get("include_image_language") === "es,en,null"
+          ? [{ file_path: "/alternative-backdrop.svg", iso_639_1: null }]
+          : [] }
         : /\/tv\/990002$/.test(url.pathname)
           ? {
             id: 990002, name: "Serie de prueba", original_name: "Serie de prueba",
-            backdrop_path: "/series-backdrop.svg", first_air_date: "2020-01-01",
+            backdrop_path: withMediaBackdrop ? "/series-backdrop.svg" : null, first_air_date: "2020-01-01",
             seasons: [], genres: [], credits: { cast: [], crew: [] },
             images: { backdrops: [], logos: [] }, videos: { results: [] },
           }
@@ -88,21 +90,26 @@ for (const mode of [
     });
   }
 
-  test(`${mode.name}: el selector carga alternativas y guarda el fondo elegido al reabrir`, async ({ page }) => {
-    await installFixture(page, false);
-    await page.goto(mode.detail);
-    const root = page.locator(".detail-page-root:visible");
-    await root.getByRole("button", { name: "Opciones del medio", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Elegir fondo del medio", exact: true }).click();
-    const picker = page.locator("[data-artwork-picker]");
-    await expect(picker).toBeVisible();
-    await picker.getByRole("button", { name: "TMDB 1", exact: true }).click();
-    await expect(picker).toHaveCount(0);
-    await expect(root.locator('img[width="1920"]').last()).toHaveAttribute("src", ALTERNATIVE);
-    await expect.poll(() => page.evaluate(key =>
-      JSON.parse(localStorage.getItem(key) ?? "{}")["series:tmdb:990002"],
-    `${SCOPE}aetherio-detail-background-override-v1`)).toBe(ALTERNATIVE);
-    await page.reload();
-    await expect(page.locator('.detail-page-root:visible img[width="1920"]').last()).toHaveAttribute("src", ALTERNATIVE);
-  });
+  for (const withMediaBackdrop of [false, true]) {
+    test(`${mode.name}: el selector ${withMediaBackdrop ? "con fondo" : "sin opciones previas"} carga alternativas y guarda la elección al reabrir`, async ({ page }) => {
+      await installFixture(page, false, withMediaBackdrop);
+      await page.goto(mode.detail);
+      const root = page.locator(".detail-page-root:visible");
+      await root.getByRole("button", { name: "Opciones del medio", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Elegir fondo del medio", exact: true }).click();
+      const picker = page.locator("[data-artwork-picker]");
+      await expect(picker).toBeVisible();
+      await picker.getByRole("button", { name: "TMDB 1", exact: true }).click();
+      await expect(picker).toHaveCount(0);
+      await expect(root.locator('img[width="1920"]').last()).toHaveAttribute("src", ALTERNATIVE);
+      await expect.poll(() => page.evaluate(key =>
+        JSON.parse(localStorage.getItem(key) ?? "{}")["series:tmdb:990002"],
+      `${SCOPE}aetherio-detail-background-override-v1`)).toBe(ALTERNATIVE);
+      await page.reload();
+      await expect(page.locator('.detail-page-root:visible img[width="1920"]').last()).toHaveAttribute("src", ALTERNATIVE);
+      await page.goto(mode.home);
+      await page.locator('[data-row-key="continue-watching"] .media-card-frame').first().click();
+      await expect(page.locator('.detail-page-root:visible img[width="1920"]').last()).toHaveAttribute("src", ALTERNATIVE);
+    });
+  }
 }
