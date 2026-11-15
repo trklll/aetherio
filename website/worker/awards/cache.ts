@@ -106,7 +106,10 @@ function responseKey(request: Request): string {
       : [];
   const search = new URLSearchParams();
   for (const parameter of parameters) {
-    const value = url.searchParams.get(parameter)?.trim();
+    const raw = url.searchParams.get(parameter);
+    // mediaEndpoint acepta el tipo exacto, pero recorta IDs y nombres. La
+    // normalización de la clave no puede mezclar peticiones de distinto sentido.
+    const value = parameter === "type" ? raw : raw?.trim();
     if (value) search.set(parameter, value);
   }
   return `response${url.pathname}?${search}`;
