@@ -1,6 +1,6 @@
 // API pública e interna del catálogo de premiaciones.
-// La API pública se revalida para que un backfill nuevo llegue al cliente sin
-// quedar oculto por una caché de 24 horas.
+// Cobertura compartida y respuestas públicas cacheadas como máximo una hora.
+// Los resultados vacíos se renuevan antes para no ocultar backfills nuevos.
 
 import type {
   AwardCeremony,
@@ -22,13 +22,15 @@ import { sha256Checksum } from "./fetch";
 import { coverageByCeremony, loadManifestRows, syncManifest, type ManifestRow } from "./manifest";
 import { resolveIdentitiesBatch } from "./resolve";
 import { resolvePeopleBatch, syncRecipientRows } from "./people";
+import {
+  AWARDS_MAX_AGE, AWARDS_EMPTY_MAX_AGE, awardsCacheControl,
+  cachedAwardsData, cachedAwardsResponse, conditionalAwardsResponse, invalidateAwardsCache,
+} from "./cache";
 
 export interface AwardsApiEnv extends ImportEnv {
   AWARDS_DB: D1Database;
   AWARDS_IMPORT_TOKEN?: string;
 }
-
-const COVERAGE_MAX_AGE = 300; // 5 min
 
 interface RecordRow {
   id: string;
@@ -120,23 +122,7 @@ async function withEtag(request: Request, body: unknown, cacheControl: string): 
     : body;
   const payload = JSON.stringify(stableBody);
   const etag = `"${await sha256Checksum(payload)}"`;
-  const ifNoneMatch = request.headers.get("If-None-Match");
-  const matchesEtag = ifNoneMatch
-    ?.split(",")
-    .map(value => value.trim().replace(/^W\//, ""))
-    .includes(etag) ?? false;
-  if (matchesEtag) {
-    return new Response(null, {
-      status: 304,
-      headers: {
-        ETag: etag,
-        "Cache-Control": cacheControl,
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Expose-Headers": "Cache-Control, ETag",
-      },
-    });
-  }
-  return jsonResponse(body, 200, { ETag: etag, "Cache-Control": cacheControl });
+  return conditionalAwardsResponse(request, jsonResponse(body, 200, { ETag: etag, "Cache-Control": cacheControl }));
 }
 
 interface EditionRow {
@@ -153,6 +139,13 @@ async function loadEditionRows(env: AwardsApiEnv): Promise<EditionRow[]> {
     `SELECT ceremony, edition, award_year, coverage, status, updated_at FROM award_editions`,
   ).all<EditionRow>();
   return result.results ?? [];
+}
+
+function loadCoverage(request: Request, env: AwardsApiEnv) {
+  return cachedAwardsData(request, "coverage", async () => {
+    const [rows, manifestRows] = await Promise.all([loadEditionRows(env), loadManifestRows(env)]);
+    return { rows, manifestRows, coverage: coverageSummary(rows, manifestRows) };
+  });
 }
 
 export function coverageSummary(rows: EditionRow[], manifestRows: ManifestRow[] = []): CoverageResponse["byCeremony"] {
@@ -218,14 +211,29 @@ export async function handleAwardsRequest(
   env: AwardsApiEnv,
   url: URL,
 ): Promise<Response | null> {
+  const response = await dispatchAwardsRequest(request, env, url);
+  // Un 207 o incluso un 500 de importación puede haber publicado parte del lote.
+  // Nunca permitir que una petición inválida o sin token purgue la caché.
+  if (request.method === "POST" && url.pathname.startsWith("/api/internal/awards/")
+    && response && (response.ok || response.status >= 500)) {
+    await invalidateAwardsCache(request);
+  }
+  return response;
+}
+
+async function dispatchAwardsRequest(
+  request: Request,
+  env: AwardsApiEnv,
+  url: URL,
+): Promise<Response | null> {
   if (url.pathname === "/api/awards/media" && request.method === "GET") {
-    return mediaEndpoint(request, env, url);
+    return cachedAwardsResponse(request, fullRequest => mediaEndpoint(fullRequest, env, url));
   }
   if (url.pathname === "/api/awards/person" && request.method === "GET") {
-    return personEndpoint(request, env, url);
+    return cachedAwardsResponse(request, fullRequest => personEndpoint(fullRequest, env, url));
   }
   if (url.pathname === "/api/awards/coverage" && request.method === "GET") {
-    return coverageEndpoint(request, env);
+    return cachedAwardsResponse(request, fullRequest => coverageEndpoint(fullRequest, env));
   }
   if (url.pathname === "/api/internal/awards/import" && request.method === "POST") {
     return importEndpoint(request, env);
@@ -295,10 +303,11 @@ async function mediaEndpoint(request: Request, env: AwardsApiEnv, url: URL): Pro
   let rows: EditionRow[];
   let manifestRows: ManifestRow[];
   let coverage: CoverageResponse["byCeremony"];
+  let coverageExpiresAt: number;
   try {
-    rows = await loadEditionRows(env);
-    manifestRows = await loadManifestRows(env);
-    coverage = coverageSummary(rows, manifestRows);
+    const snapshot = await loadCoverage(request, env);
+    ({ rows, manifestRows, coverage } = snapshot.value);
+    coverageExpiresAt = snapshot.expiresAt;
   } catch (error) {
     return errorResponse(502, `No se pudo consultar la cobertura: ${describeError(error)}`);
   }
@@ -415,9 +424,10 @@ async function mediaEndpoint(request: Request, env: AwardsApiEnv, url: URL): Pro
     generatedAt: new Date().toISOString(),
   };
 
-  const cacheControl = records.length > 0 && resolutionStatus === "resolved"
-    ? "public, max-age=0, must-revalidate"
-    : "no-store";
+  const cacheControl = awardsCacheControl(
+    records.length > 0 && resolutionStatus === "resolved" ? AWARDS_MAX_AGE : AWARDS_EMPTY_MAX_AGE,
+    coverageExpiresAt,
+  );
   return withEtag(request, response, cacheControl);
 }
 
@@ -492,7 +502,7 @@ async function personEndpoint(request: Request, env: AwardsApiEnv, url: URL): Pr
       },
       generatedAt: new Date().toISOString(),
     };
-    return withEtag(request, response, records.length > 0 ? "public, max-age=300, must-revalidate" : "no-store");
+    return withEtag(request, response, awardsCacheControl(records.length > 0 ? AWARDS_MAX_AGE : AWARDS_EMPTY_MAX_AGE));
   } catch (error) {
     return errorResponse(502, `No se pudieron consultar los premios de la persona: ${describeError(error)}`);
   }
@@ -533,9 +543,9 @@ async function peopleResolveEndpoint(request: Request, env: AwardsApiEnv): Promi
 
 async function coverageEndpoint(request: Request, env: AwardsApiEnv): Promise<Response> {
   try {
-    const [rows, manifestRows] = await Promise.all([loadEditionRows(env), loadManifestRows(env)]);
-    const response: CoverageResponse = { byCeremony: coverageSummary(rows, manifestRows), generatedAt: new Date().toISOString() };
-    return withEtag(request, response, `public, max-age=${COVERAGE_MAX_AGE}, must-revalidate`);
+    const snapshot = await loadCoverage(request, env);
+    const response: CoverageResponse = { byCeremony: snapshot.value.coverage, generatedAt: new Date().toISOString() };
+    return withEtag(request, response, awardsCacheControl(AWARDS_MAX_AGE, snapshot.expiresAt));
   } catch (error) {
     return errorResponse(502, `No se pudo consultar la cobertura: ${describeError(error)}`);
   }
