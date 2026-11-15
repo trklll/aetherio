@@ -317,23 +317,32 @@ export default function App() {
     initGoogleDriveSync();
   }, []);
 
+  const deepLinkNavigateRef = useRef(navigate);
+  useLayoutEffect(() => {
+    deepLinkNavigateRef.current = navigate;
+  }, [navigate]);
+
+  // useNavigate cambia de identidad al cambiar la ruta en BrowserRouter.
+  // El enlace inicial de Tauri persiste: releerlo en cada navegación devuelve
+  // siempre al detalle de Discord. Leerlo y suscribirse solo al montar.
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
     const handleUrls = async (urls: string[] | null | undefined) => {
       for (const url of urls ?? []) {
+        if (disposed) return;
         const partyInvite = parsePartyJoinDeepLink(url);
         if (partyInvite) {
           // Link de invitación a una sala: se guarda y Home lo consume
           // (auto-unirse + directo al reproductor con la fuente del grupo).
           writePendingPartyJoin(partyInvite);
-          if (!disposed) navigate("/home");
+          deepLinkNavigateRef.current("/home");
           continue;
         }
         if (isOpenUrl(url)) {
           // Deep links de los botones del RPC de Discord: aetherio://open/detail/{type}/{id}
-          navigate(buildOpenPath(url) ?? "/home");
+          deepLinkNavigateRef.current(buildOpenPath(url) ?? "/home");
           continue;
         }
         if (isOAuthCallbackUrl(url)) {
@@ -355,7 +364,7 @@ export default function App() {
               setAuthError("");
               setNeedsProfileGate(true);
               setStartupReady(false);
-              navigate(hasActiveLocalProfile() ? "/" : "/quick-start/profile", { replace: true });
+              deepLinkNavigateRef.current(hasActiveLocalProfile() ? "/" : "/quick-start/profile", { replace: true });
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : "No se pudo iniciar sesión.";
@@ -386,7 +395,7 @@ export default function App() {
       disposed = true;
       if (unlisten) unlisten();
     };
-  }, [navigate]);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
