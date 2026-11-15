@@ -164,6 +164,32 @@ describe("caché de premios y consumo de D1", () => {
     expect((await other!.json() as { records: unknown[] }).records).toHaveLength(0);
   });
 
+  it("no permite contaminar una clave válida con un tipo que el endpoint no acepta", async () => {
+    const env = makeEnv();
+    seedAward(env);
+    await get(env, "/api/awards/media?tmdbId=1&type=%20tv%20");
+    const response = await get(env, "/api/awards/media?tmdbId=1&type=tv");
+    expect((await response!.json() as { records: unknown[] }).records).toHaveLength(0);
+  });
+
+  it("una ficha nueva no prolonga la vida de una cobertura a punto de caducar", async () => {
+    const env = makeEnv();
+    await get(env);
+    vi.setSystemTime(Date.now() + 3_540_000);
+    const response = await get(env, "/api/awards/media?tmdbId=2&type=movie");
+    expect(response?.headers.get("Cache-Control")).toContain("max-age=60");
+  });
+
+  it("no reutiliza cobertura caducada aunque el almacén la devuelva", async () => {
+    const env = makeEnv();
+    await get(env);
+    for (const entry of edge.entries.values()) entry.expiresAt = Number.POSITIVE_INFINITY;
+    vi.setSystemTime(Date.now() + 3_601_000);
+    const prepare = vi.spyOn(env.AWARDS_DB, "prepare");
+    await get(env, "/api/awards/media?tmdbId=2&type=movie");
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes("FROM award_editions"))).toHaveLength(1);
+  });
+
   it("no cachea errores de D1", async () => {
     const env = makeEnv();
     const prepare = vi.spyOn(env.AWARDS_DB, "prepare").mockImplementationOnce(() => {
@@ -186,6 +212,31 @@ describe("caché de premios y consumo de D1", () => {
     vi.stubGlobal("caches", { open: vi.fn(async () => { throw new Error("cache unavailable"); }) });
     const env = makeEnv();
     expect((await get(env))?.status).toBe(200);
+  });
+
+  it("no convierte un error de escritura de caché en un error de la API", async () => {
+    vi.spyOn(edge, "put").mockRejectedValue(new Error("cache full"));
+    const env = makeEnv();
+    expect((await get(env))?.status).toBe(200);
+  });
+
+  it("no convierte un error de lectura de caché en un error de la API", async () => {
+    const match = vi.spyOn(edge, "match").mockImplementation(async request => {
+      if (!request.url.endsWith("/revision")) throw new Error("cache unavailable");
+      return undefined;
+    });
+    const env = makeEnv();
+    expect((await get(env))?.status).toBe(200);
+    expect(match).toHaveBeenCalled();
+  });
+
+  it("mantiene la API operativa al fallar la invalidación tras una escritura", async () => {
+    const env = { ...makeEnv(), AWARDS_IMPORT_TOKEN: "secret" };
+    vi.spyOn(edge, "put").mockRejectedValue(new Error("cache full"));
+    const request = new Request("https://test/api/internal/awards/manifest/sync", {
+      method: "POST", headers: { Authorization: "Bearer secret" },
+    });
+    expect((await handleAwardsRequest(request, env, new URL(request.url)))?.status).toBe(200);
   });
 
   it("invalida fichas y cobertura después de una escritura interna autorizada", async () => {
