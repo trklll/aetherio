@@ -11,6 +11,8 @@ interface PlayerInfoOverlayProps {
   overview: string;
   posterUrl?: string | null;
   nativeSurfaceVisible: boolean;
+  /** Resumen automático al pausar: informativo, sin robar el foco del reproductor. */
+  pauseSummary?: boolean;
   onClose: () => void;
 }
 
@@ -21,6 +23,7 @@ export default function PlayerInfoOverlay({
   overview,
   posterUrl,
   nativeSurfaceVisible,
+  pauseSummary = false,
   onClose,
 }: PlayerInfoOverlayProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -30,7 +33,7 @@ export default function PlayerInfoOverlay({
     const panel = panelRef.current;
     if (!panel) return;
 
-    panel.focus({ preventScroll: true });
+    if (!pauseSummary) panel.focus({ preventScroll: true });
     gsap.killTweensOf(panel);
     if (prefersReducedMotion()) {
       gsap.set(panel, { opacity: 0 });
@@ -40,7 +43,7 @@ export default function PlayerInfoOverlay({
 
     gsap.set(panel, { opacity: 0, y: 10, scale: 0.985, filter: "blur(8px)" });
     springTo(panel, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }, { duration: 0.38, damping: 1.0 });
-  }, [visible]);
+  }, [pauseSummary, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -60,7 +63,7 @@ export default function PlayerInfoOverlay({
   return (
     <div
       className="fixed inset-0 z-[60] flex items-end justify-center px-[clamp(12px,2.5vw,40px)] pb-[clamp(16px,5.1vh,46px)]"
-      data-spatial-modal="true"
+      data-spatial-modal={pauseSummary ? undefined : "true"}
       onPointerDown={event => {
         event.stopPropagation();
         if (event.target === event.currentTarget) onClose();
@@ -71,12 +74,14 @@ export default function PlayerInfoOverlay({
         ref={panelRef}
         id="player-info-overlay"
         role="dialog"
-        aria-modal="true"
+        aria-modal={pauseSummary ? undefined : true}
         aria-label={`Información de ${title}`}
         tabIndex={-1}
         data-player-floating-panel-glass
         data-player-episode-panel-glass
-        onKeyDown={event => event.stopPropagation()}
+        onKeyDown={event => {
+          if (!pauseSummary) event.stopPropagation();
+        }}
         onPointerDown={event => event.stopPropagation()}
         className="flex w-full max-w-[1680px] items-center gap-[clamp(14px,1.5vw,24px)] overflow-hidden rounded-[24px] border p-[clamp(12px,1.4vw,22px)] text-white outline-none"
         style={{

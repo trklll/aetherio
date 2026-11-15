@@ -154,6 +154,8 @@ export function usePauseScreenDelay(active: boolean, delayMs = 3000) {
 
 interface PlayerPauseScreenProps {
   visible: boolean;
+  /** En escritorio conserva solo el velo oscuro; la información vive en su panel propio. */
+  showDetails?: boolean;
   /** Titulo del medio: hace de titular cuando no hay logo. */
   mediumTitle: string;
   /** Logo del medio. Si falta, cae al texto con el mismo estilo. */
@@ -167,6 +169,7 @@ interface PlayerPauseScreenProps {
 
 export default function PlayerPauseScreen({
   visible,
+  showDetails = true,
   mediumTitle,
   logoUrl = null,
   isSeries,
@@ -336,21 +339,20 @@ export default function PlayerPauseScreen({
       }}
     >
       {/*
-        Velo de legibilidad, UNIFORME. El texto va sobre video real: medido sobre
-        un frame blanco, sin velo el blanco puro da 1.20-1.77:1 y falla AA
-        (4.5:1). Antes era un degradado (denso a la izquierda, banda inferior,
-        transparente a la derecha) que dejaba la mitad derecha del frame limpia
-        y se leia como dos capas distintas; ahora es un 70 % plano en todo el
-        rectangulo. El contraste no baja: la zona del texto ya estaba al 70 %
-        (5.05-5.56:1 medido) y lo unico que cambia es que el resto del frame
-        tambien se atenua.
+        Velo uniforme: 70 % en Big Picture, donde sostiene el texto sobre video,
+        y 50 % en PC, donde el panel de información aporta el contraste y conviene
+        dejar más visible la imagen.
       */}
       <div
+        data-player-pause-backdrop
+        aria-hidden="true"
         className="absolute inset-0"
-        style={{ backgroundColor: "rgba(0,0,0,0.70)" }}
+        style={{
+          backgroundColor: showDetails ? "rgba(0,0,0,0.70)" : "rgba(0,0,0,0.50)",
+        }}
       />
 
-      <div
+      {showDetails && <div
         className="absolute"
         style={{
           left: px(T.marginLeft),
@@ -468,9 +470,9 @@ export default function PlayerPauseScreen({
             {overview}
           </p>
         ) : null}
-      </div>
+      </div>}
 
-      <p
+      {showDetails && <p
         data-player-pause-label
         className="absolute m-0 whitespace-nowrap"
         style={{
@@ -486,7 +488,7 @@ export default function PlayerPauseScreen({
         }}
       >
         {pausedLabel}
-      </p>
+      </p>}
     </div>
   );
 }

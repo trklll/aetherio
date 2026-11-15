@@ -9,6 +9,19 @@ const MAX_RESPONSE_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CONCURRENT_REQUESTS: usize = 20;
 const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const MIN_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 250;
+const MAX_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 60_000;
+
+fn provider_request_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(
+        timeout_ms
+            .unwrap_or(PROVIDER_REQUEST_TIMEOUT.as_millis() as u64)
+            .clamp(
+                MIN_PROVIDER_REQUEST_TIMEOUT_MS,
+                MAX_PROVIDER_REQUEST_TIMEOUT_MS,
+            ),
+    )
+}
 
 pub struct ProviderHttpState {
     client: reqwest::Client,
@@ -24,6 +37,7 @@ pub struct ProviderHttpRequest {
     headers: HashMap<String, String>,
     body: Option<String>,
     body_base64: Option<bool>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,7 +54,6 @@ impl Default for ProviderHttpState {
     fn default() -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
-            .timeout(PROVIDER_REQUEST_TIMEOUT)
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= 5 || !is_safe_url(attempt.url()) {
@@ -159,6 +172,7 @@ pub async fn provider_http_request(
     }
     let method = Method::from_bytes(method_name.as_bytes())
         .map_err(|error| format!("Provider HTTP method is invalid: {error}"))?;
+    let timeout = provider_request_timeout(request.timeout_ms);
     let body = match request.body {
         Some(body) if request.body_base64.unwrap_or(false) => STANDARD
             .decode(body)
@@ -170,12 +184,16 @@ pub async fn provider_http_request(
         return Err("Provider request body exceeds 2 MiB".to_string());
     }
 
-    let _permit = state
-        .semaphore
-        .acquire()
+    let request_started_at = tokio::time::Instant::now();
+    let _permit = tokio::time::timeout(timeout, state.semaphore.acquire())
         .await
+        .map_err(|_| "Provider HTTP queue timed out".to_string())?
         .map_err(|_| "Provider HTTP queue is unavailable".to_string())?;
-    let mut builder = state.client.request(method, url);
+    let remaining_timeout = timeout.saturating_sub(request_started_at.elapsed());
+    if remaining_timeout.is_zero() {
+        return Err("Provider HTTP request timed out".to_string());
+    }
+    let mut builder = state.client.request(method, url).timeout(remaining_timeout);
     for (name, value) in request.headers {
         let normalized = name.trim().to_ascii_lowercase();
         if matches!(
@@ -229,6 +247,23 @@ pub async fn provider_http_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn applies_a_bounded_timeout_to_provider_requests() {
+        assert_eq!(provider_request_timeout(None), Duration::from_secs(15));
+        assert_eq!(
+            provider_request_timeout(Some(6_000)),
+            Duration::from_secs(6)
+        );
+        assert_eq!(
+            provider_request_timeout(Some(1)),
+            Duration::from_millis(MIN_PROVIDER_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            provider_request_timeout(Some(u64::MAX)),
+            Duration::from_millis(MAX_PROVIDER_REQUEST_TIMEOUT_MS)
+        );
+    }
 
     #[test]
     fn rejects_local_provider_urls() {

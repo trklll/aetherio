@@ -388,13 +388,38 @@ function persistContinueWatchingProgress(entry: ContinueWatchingEntry): StorageR
 }
 
 export function markEpisodeAsWatched(input: MarkEpisodeWatchedInput) {
+  return markEpisodesAsWatched([input])[0]!;
+}
+
+/** Persist bulk actions once, without per-episode storage writes or sync events. */
+export function markEpisodesAsWatched(inputs: readonly MarkEpisodeWatchedInput[]): ContinueWatchingEntry[] {
+  if (!inputs.length) return [];
+  const entries = readContinueWatchingEntries();
+  const existingByKey = new Map(entries.map(entry => [entry.key, entry]));
+  const markedByKey = new Map<string, ContinueWatchingEntry>();
+  const updatedAt = Date.now();
+  for (const input of inputs) {
+    const key = buildContinueWatchingKey(input.query);
+    markedByKey.set(key, buildWatchedEpisodeEntry(input, existingByKey.get(key), updatedAt));
+  }
+  const marked = Array.from(markedByKey.values());
+  writeProgressAndHistory(
+    entries.filter(entry => !markedByKey.has(entry.key)).slice(0, MAX_ENTRIES),
+    mergeEntries(readWatchedHistoryEntries(), marked, MAX_WATCHED_HISTORY_ENTRIES),
+  );
+  return marked;
+}
+
+function buildWatchedEpisodeEntry(
+  input: MarkEpisodeWatchedInput,
+  existing: ContinueWatchingEntry | undefined,
+  updatedAt: number,
+): ContinueWatchingEntry {
   const key = buildContinueWatchingKey(input.query);
   const mediaKey = buildMediaKey(input.query.type, input.query.id);
-  const entries = readContinueWatchingEntries();
-  const existing = entries.find(entry => entry.key === key);
   const duration = Math.max(1, clampFinite(input.runtimeSeconds ?? existing?.duration ?? 0));
 
-  const entry: ContinueWatchingEntry = {
+  return {
     key,
     mediaKey,
     type: input.query.type,
@@ -409,7 +434,7 @@ export function markEpisodeAsWatched(input: MarkEpisodeWatchedInput) {
     episodeName: input.episodeName ?? existing?.episodeName,
     currentTime: duration,
     duration,
-    updatedAt: Date.now(),
+    updatedAt,
     completed: true,
     entryKind: "resume",
     source: "local",
@@ -422,10 +447,6 @@ export function markEpisodeAsWatched(input: MarkEpisodeWatchedInput) {
     selectedSubtitleLabel: existing?.selectedSubtitleLabel,
     selectedSubtitleLanguage: existing?.selectedSubtitleLanguage,
   };
-
-  const updated = entries.filter(item => item.key !== key).slice(0, MAX_ENTRIES);
-  writeProgressAndHistory(updated, mergeEntries(readWatchedHistoryEntries(), [entry], MAX_WATCHED_HISTORY_ENTRIES));
-  return entry;
 }
 
 export function saveNextEpisodePrompt(input: NextEpisodePromptInput) {

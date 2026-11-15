@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EXPERIENCE_STORAGE_CHANGED_EVENT, recoverExperienceJournal } from "../domain/experienceStorage";
 import type { MediaStream } from "../types/stream";
 import {
   applyContinueWatchingTombstones,
@@ -6,12 +7,15 @@ import {
   CONTINUE_WATCHING_EVENT,
   getContinueWatchingRows,
   isContinueWatchingEntryDismissed,
+  markEpisodeAsWatched,
+  markEpisodesAsWatched,
   mergeContinueWatchingEntries,
   mergeRemotePlaybackState,
   readContinueWatchingEntries,
   readWatchedHistoryEntries,
   removeContinueWatchingEntry,
   removeContinueWatchingMedia,
+  resetPlaybackStateCacheForTests,
   saveNextEpisodePrompt,
   saveContinueWatchingProgress,
   tryMarkMediaAsWatched,
@@ -141,6 +145,164 @@ describe("continue watching artwork", () => {
       episodeName: "Siguiente episodio",
       entryKind: "next",
     }]);
+  });
+});
+
+describe("batch watched episodes", () => {
+  beforeEach(() => {
+    // In-memory storage and inert events only: never run the real app or sync.
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("window", { dispatchEvent: vi.fn() });
+    vi.stubGlobal("CustomEvent", class {
+      constructor(public type: string) {}
+    });
+    resetPlaybackStateCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const watchedInput = {
+    query: baseInput.query,
+    name: baseInput.name,
+    runtimeSeconds: baseInput.duration,
+  };
+
+  it("persists a long synthetic series once and emits only one update", () => {
+    const getItem = vi.spyOn(localStorage, "getItem");
+    const setItem = vi.spyOn(localStorage, "setItem");
+    const inputs = Array.from({ length: 500 }, (_, index) => ({
+      ...watchedInput,
+      query: { ...baseInput.query, episode: index + 1 },
+    }));
+
+    const marked = markEpisodesAsWatched(inputs);
+
+    expect(marked).toHaveLength(500);
+    expect(setItem.mock.calls.filter(([key]) => key === "aetherio-watched-history-v1")).toHaveLength(1);
+    expect(setItem.mock.calls.filter(([key]) => key === "aetherio-continue-watching-v1")).toHaveLength(1);
+    // One read to merge, one to journal the previous value; not per episode.
+    expect(getItem.mock.calls.filter(([key]) => key === "aetherio-watched-history-v1")).toHaveLength(2);
+    expect(vi.mocked(window.dispatchEvent).mock.calls.map(([event]) => event.type)).toEqual([
+      EXPERIENCE_STORAGE_CHANGED_EVENT,
+      CONTINUE_WATCHING_EVENT,
+    ]);
+    const history = readWatchedHistoryEntries();
+    expect(history).toHaveLength(500);
+    expect(history.every(entry => entry.completed && entry.currentTime === entry.duration)).toBe(true);
+    expect(new Set(history.map(entry => entry.episode)).size).toBe(500);
+    expect(readContinueWatchingEntries()).toEqual([]);
+  });
+
+  it("does not read, write, or notify for an empty batch", () => {
+    const getItem = vi.spyOn(localStorage, "getItem");
+    const setItem = vi.spyOn(localStorage, "setItem");
+
+    expect(markEpisodesAsWatched([])).toEqual([]);
+
+    expect(getItem).not.toHaveBeenCalled();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps unrelated progress and history while preserving saved episode metadata", () => {
+    saveContinueWatchingProgress({ ...baseInput, selectedAudio: "2", selectedSubtitle: "3" });
+    saveContinueWatchingProgress({
+      ...baseInput,
+      query: { ...baseInput.query, episode: 3 },
+      currentTime: baseInput.duration,
+    });
+    saveContinueWatchingProgress({
+      ...baseInput,
+      query: { type: "movie", id: "tmdb:900" },
+      name: "Otra película",
+    });
+
+    markEpisodesAsWatched([
+      { query: baseInput.query, name: "" },
+      { ...watchedInput, query: { ...baseInput.query, episode: 4 } },
+    ]);
+
+    expect(readContinueWatchingEntries()).toMatchObject([{ id: "tmdb:900", completed: false }]);
+    expect(readWatchedHistoryEntries().map(entry => entry.episode).sort()).toEqual([2, 3, 4]);
+    expect(readWatchedHistoryEntries().find(entry => entry.episode === 2)).toMatchObject({
+      name: baseInput.name,
+      logo: baseInput.logo,
+      background: baseInput.background,
+      poster: baseInput.poster,
+      episodeStill: baseInput.episodeStill,
+      episodeName: baseInput.episodeName,
+      duration: baseInput.duration,
+      streamId: stream.id,
+      selectedAudio: "2",
+      selectedSubtitle: "3",
+      completed: true,
+    });
+  });
+
+  it("replaces pending next-episode prompts with completed history", () => {
+    saveNextEpisodePrompt({ ...watchedInput, entryKind: "new-season" });
+
+    markEpisodesAsWatched([watchedInput]);
+
+    expect(readContinueWatchingEntries()).toEqual([]);
+    expect(readWatchedHistoryEntries()).toMatchObject([{
+      episode: baseInput.query.episode,
+      completed: true,
+      entryKind: "resume",
+    }]);
+  });
+
+  it("deduplicates episode identities within a batch", () => {
+    const marked = markEpisodesAsWatched([
+      watchedInput,
+      { ...watchedInput, episodeName: "Nombre actualizado" },
+    ]);
+
+    expect(marked).toHaveLength(1);
+    expect(readWatchedHistoryEntries()).toMatchObject([{
+      episodeName: "Nombre actualizado",
+      completed: true,
+    }]);
+  });
+
+  it("retains the single-episode API for cards and movies", () => {
+    expect(markEpisodeAsWatched(watchedInput)).toMatchObject({
+      episode: baseInput.query.episode,
+      completed: true,
+    });
+    expect(markEpisodeAsWatched({
+      query: { type: "movie", id: "tmdb:900" },
+      name: "Película",
+    })).toMatchObject({ key: "movie:tmdb:900", duration: 1, completed: true });
+    expect(readWatchedHistoryEntries()).toHaveLength(2);
+  });
+
+  it("recovers the entire batch after an interrupted history write without notifying early", () => {
+    const originalSetItem = localStorage.setItem;
+    let failHistory = true;
+    vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+      if (key === "aetherio-watched-history-v1" && failHistory) {
+        failHistory = false;
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      originalSetItem(key, value);
+    });
+
+    markEpisodesAsWatched([
+      watchedInput,
+      { ...watchedInput, query: { ...baseInput.query, episode: 3 } },
+    ]);
+
+    expect(vi.mocked(window.dispatchEvent).mock.calls.map(([event]) => event.type))
+      .not.toContain(CONTINUE_WATCHING_EVENT);
+    expect(localStorage.getItem("aetherio-experience-write-journal-v1")).not.toBeNull();
+    expect(recoverExperienceJournal().ok).toBe(true);
+    expect(localStorage.getItem("aetherio-experience-write-journal-v1")).toBeNull();
+    expect(readWatchedHistoryEntries().map(entry => entry.episode).sort()).toEqual([2, 3]);
+    expect(readContinueWatchingEntries()).toEqual([]);
   });
 });
 

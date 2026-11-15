@@ -183,13 +183,38 @@ export default function ContextMenu({
         top = Math.max(margin, window.innerHeight - menuHeight - margin);
       }
 
-      setPosition({ left, top });
+      setPosition(current =>
+        Math.abs(current.left - left) < 0.5 && Math.abs(current.top - top) < 0.5
+          ? current
+          : { left, top },
+      );
     }
 
     updatePosition();
+    let frame = 0;
+    let stableFrames = 0;
+    let previousAnchorRect = anchorRef.current?.getBoundingClientRect() ?? null;
+    const followMovingAnchor = () => {
+      const anchorRect = anchorRef.current?.getBoundingClientRect() ?? null;
+      if (!anchorRect) return;
+      const moved = previousAnchorRect !== null && (
+        Math.abs(anchorRect.left - previousAnchorRect.left) > 0.5
+        || Math.abs(anchorRect.top - previousAnchorRect.top) > 0.5
+        || Math.abs(anchorRect.right - previousAnchorRect.right) > 0.5
+        || Math.abs(anchorRect.bottom - previousAnchorRect.bottom) > 0.5
+      );
+      stableFrames = moved ? 0 : stableFrames + 1;
+      previousAnchorRect = anchorRect;
+      updatePosition();
+      // El botón puede desplazarse por una transición CSS/GSAP sin emitir
+      // scroll ni resize (p. ej. al colapsar la fila de episodios).
+      if (stableFrames < 12) frame = window.requestAnimationFrame(followMovingAnchor);
+    };
+    frame = window.requestAnimationFrame(followMovingAnchor);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
     return () => {
+      window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
@@ -249,7 +274,7 @@ export default function ContextMenu({
     gsap.set(el, { opacity: 0, y: 6, scale: 0.98, filter: "blur(6px)" });
     // §3/§4 — critically damped spring, no bounce, interruptible
     springTo(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" } as unknown as gsap.TweenVars, { duration: 0.36, damping: 1.0 });
-  }, [open, mounted, position.left, position.top, width, items.length, anchorRef]);
+  }, [open, mounted, width, items.length, anchorRef]);
 
   // Al abrir: recordar el foco previo y llevarlo al primer item (el motor
   // espacial queda atrapado dentro mientras haya menú abierto).

@@ -157,7 +157,117 @@ test("modo TV abre la fila horizontal de episodios, no el panel lateral", async 
   const row = page.locator("[data-bp-episode-row]");
   await expect(row).toHaveAttribute("aria-hidden", "false");
   await expect(row.getByRole("button", { name: /Episodio 2/ })).toBeVisible();
+  await expect(page.locator(".bp-player-episode-row-anchor .row-arrow-button")).toHaveCount(0);
   await expect(page.locator("[data-player-side-panel]")).toHaveCount(0);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("aetherio-gamepad-action", {
+      cancelable: true,
+      detail: { id: "dpad-up", source: "stick" },
+    }));
+  });
+  await expect(row).toHaveAttribute("aria-hidden", "true");
+  await expect.poll(() => page.evaluate(() => (
+    document.activeElement instanceof HTMLButtonElement
+      && Boolean(document.activeElement.closest("[data-player-controls-glass]"))
+      && !document.activeElement.matches("[data-bp-episode-card]")
+  ))).toBe(true);
+});
+
+test("modo PC reutiliza las flechas de Detail en la fila de episodios", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.route("**/api/tmdb/tv/1/season/1**", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      episodes: Array.from({ length: 8 }, (_, index) => ({
+        episode_number: index + 1,
+        name: `Episodio ${index + 1}`,
+        air_date: `2026-01-${String(index + 1).padStart(2, "0")}`,
+      })),
+    }),
+  }));
+  await page.route("**/api/tmdb/tv/1?**", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ episode_run_time: [24], seasons: [{ season_number: 1 }] }),
+  }));
+  await stubPlayback(page);
+  await page.goto("/player?type=series&id=tmdb%3A1&season=1&ep=2");
+  await page.waitForTimeout(2500);
+  await page.addStyleTag({ content: "*, *::before, *::after { visibility: visible !important; }" });
+
+  const episodeToggle = page.locator('button[data-bp-episodes-label]');
+  await expect(episodeToggle).toBeAttached({ timeout: 15_000 });
+  await page.evaluate(() => {
+    const button = document.querySelector<HTMLButtonElement>('button[data-bp-episodes-label]');
+    button?.closest<HTMLElement>("[data-player-interactive]")?.removeAttribute("inert");
+    button?.click();
+  });
+  await expect(episodeToggle).toHaveAttribute("aria-expanded", "true");
+
+  const row = page.locator("[data-bp-episode-row]");
+  const arrowShell = page.locator(".bp-player-episode-row-anchor");
+  await expect(row).toHaveAttribute("aria-hidden", "false");
+  await page.waitForTimeout(3200);
+  await expect.poll(() => page.evaluate(() =>
+    document.documentElement.classList.contains("aetherio-hide-cursor"),
+  )).toBe(false);
+  await expect.poll(() => row.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await expect(arrowShell.locator(".liquid-glass-arrow")).toHaveCount(2);
+
+  const bounds = await arrowShell.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds) await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 30);
+  await expect.poll(() => arrowShell.getByRole("button", { name: "Siguiente" })
+    .evaluate(button => Number.parseFloat(getComputedStyle(button.parentElement!).opacity))).toBeGreaterThan(0.95);
+  const alignment = await page.evaluate(() => {
+    const arrow = document.querySelector<HTMLElement>(".bp-player-episode-row-anchor .liquid-glass-arrow");
+    const media = document.querySelector<HTMLElement>("[data-bp-episode-card] .detail-episode-card__media");
+    if (!arrow || !media) return Number.POSITIVE_INFINITY;
+    const arrowRect = arrow.getBoundingClientRect();
+    const mediaRect = media.getBoundingClientRect();
+    return Math.abs((arrowRect.top + arrowRect.height / 2) - (mediaRect.top + mediaRect.height / 2));
+  });
+  expect(alignment).toBeLessThan(12);
+
+  const initialScroll = await row.evaluate(element => element.scrollLeft);
+  const nextArrow = arrowShell.getByRole("button", { name: "Siguiente" });
+  await nextArrow.click();
+  await expect.poll(() => nextArrow.evaluate(button => {
+    const svg = button.querySelector("svg");
+    return {
+      background: getComputedStyle(button).backgroundColor,
+      fill: svg ? getComputedStyle(svg).fill : "",
+    };
+  })).toEqual({
+    background: "rgba(0, 0, 0, 0)",
+    fill: "rgb(255, 255, 255)",
+  });
+  await expect.poll(() => row.evaluate(element => element.scrollLeft)).toBeGreaterThan(initialScroll);
+  await expect(row.locator("[data-bp-episode-card]").nth(1)).toBeVisible();
+
+  const enhancementsTrigger = page.locator('[data-menu-id="video-enhancements"] > button');
+  await page.evaluate(() => {
+    document.querySelector<HTMLButtonElement>('[data-menu-id="video-enhancements"] > button')?.click();
+  });
+  const contextMenu = page.locator('[data-aetherio-context-menu][data-context-variant="apple"]');
+  await expect(contextMenu).toBeVisible();
+  await expect(episodeToggle).toHaveAttribute("aria-expanded", "false");
+  await page.waitForTimeout(700);
+  const anchoredPosition = await page.evaluate(() => {
+    const trigger = document.querySelector<HTMLElement>('[data-menu-id="video-enhancements"] > button');
+    const menu = document.querySelector<HTMLElement>('[data-aetherio-context-menu][data-context-variant="apple"]');
+    if (!trigger || !menu) return null;
+    return {
+      triggerTop: trigger.getBoundingClientRect().top,
+      menuBottom: menu.getBoundingClientRect().bottom,
+    };
+  });
+  expect(anchoredPosition).not.toBeNull();
+  if (anchoredPosition) {
+    expect(Math.abs(anchoredPosition.triggerTop - anchoredPosition.menuBottom)).toBeLessThan(30);
+  }
 });
 
 async function openBar(page: Page) {

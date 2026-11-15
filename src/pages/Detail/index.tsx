@@ -10,6 +10,7 @@ import { useDownloadsEnabled } from "../../config/downloadPreferences";
 import { useMdbListSettings, type MdbListRatings } from "../../config/mdblist";
 import { useAddonStore } from "../../store/addonStore";
 import ContextMenu from "../../components/ui/ContextMenu";
+import ScrollRowArrow from "../../components/ui/ScrollRowArrow";
 import LibraryIcon from "../../components/ui/LibraryIcon";
 import MDBListRatingsRow from "../../components/ratings/MDBListRatingsRow";
 import MediaRatingControl from "../../components/ratings/MediaRatingControl";
@@ -25,6 +26,7 @@ import {
   buildContinueWatchingKey,
   formatResumeTime,
   markEpisodeAsWatched,
+  markEpisodesAsWatched,
   markMediaAsWatched,
   progressPercent,
   readPlaybackStateEntries,
@@ -2841,15 +2843,7 @@ backdropBlurAmountRef.current = 0;
     : playableEpisodes.length > 0 && playableEpisodes.every(item => episodeProgressMap.get(getEpisodeKey(item.season, item.episode))?.completed);
 
   function markEpisodeFromCard(episode: Episode) {
-    markEpisodeAsWatched({
-      query: { type: detailData.type, id: detailData.id, season: episode.season, episode: episode.episode },
-      name: detailData.name,
-      episodeName: episode.name,
-      runtimeSeconds: (episode.runtime ?? 0) * 60,
-      logo: sanitizeLogoUrl(detailData.logo) ?? cachedLogo ?? undefined,
-      background: detailData.backdrop,
-      poster: detailData.poster,
-    });
+    markEpisodesFromCards([episode]);
     const nextEpisode = findNextEpisode(regularSeasons, episode.season, episode.episode);
     if (nextEpisode) {
       saveNextEpisodePrompt({
@@ -2865,6 +2859,19 @@ backdropBlurAmountRef.current = 0;
         source: "local",
       });
     }
+  }
+
+  function markEpisodesFromCards(episodes: Episode[]) {
+    const logo = sanitizeLogoUrl(detailData.logo) ?? cachedLogo ?? undefined;
+    markEpisodesAsWatched(episodes.filter(episode => !isEpisodeLocked(episode)).map(episode => ({
+      query: { type: detailData.type, id: detailData.id, season: episode.season, episode: episode.episode },
+      name: detailData.name,
+      episodeName: episode.name,
+      runtimeSeconds: (episode.runtime ?? 0) * 60,
+      logo,
+      background: detailData.backdrop,
+      poster: detailData.poster,
+    })));
   }
 
   function findPlaybackEntryForEpisode(
@@ -2895,10 +2902,7 @@ backdropBlurAmountRef.current = 0;
   function markSeasonAsWatched(seasonNumber: number) {
     const seasonData = detailData.seasons?.find(item => item.number === seasonNumber);
     if (!seasonData) return;
-    for (const episode of seasonData.episodes) {
-      if (isEpisodeLocked(episode)) continue;
-      markEpisodeFromCard(episode);
-    }
+    markEpisodesFromCards(seasonData.episodes);
     const nextSeasonEpisode = regularSeasons
       .filter(item => item.number > seasonNumber)
       .sort((a, b) => a.number - b.number)[0]
@@ -2930,10 +2934,7 @@ backdropBlurAmountRef.current = 0;
 
   function markPreviousEpisodesAsWatched(seasonNumber: number, episodeNumber: number) {
     const previousEpisodes = getPreviousEpisodesBefore(seasonNumber, episodeNumber);
-    for (const episode of previousEpisodes) {
-      if (isEpisodeLocked(episode)) continue;
-      markEpisodeFromCard(episode);
-    }
+    markEpisodesFromCards(previousEpisodes);
     const currentEpisode = detailData.seasons
       ?.find(item => item.number === seasonNumber)
       ?.episodes.find(item => item.episode === episodeNumber);
@@ -2987,10 +2988,7 @@ backdropBlurAmountRef.current = 0;
       });
       return;
     }
-    for (const episode of regularSeasons.flatMap(item => item.episodes)) {
-      if (isEpisodeLocked(episode)) continue;
-      markEpisodeFromCard(episode);
-    }
+    markEpisodesFromCards(regularSeasons.flatMap(item => item.episodes));
   }
 
   function markShowAsUnwatched() {
@@ -4277,23 +4275,14 @@ function ScrollRow({
       onMouseEnter={()=>setHovered(true)}
       onMouseLeave={()=>setHovered(false)}
     >
-      <div
+      <ScrollRowArrow
         ref={leftArrowRef}
-        className="liquid-glass-arrow row-arrow-shell"
-        style={{ position:"absolute",left:0,top:arrowTop ?? "50%",zIndex:10,transform:"translate(-30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollLeft?"auto":"none" }}
-      >
-        <button
-          onClick={()=>move("left")}
-          title="Anterior"
-          aria-label="Anterior"
-          className="row-arrow-button"
-          style={{ width:36,height:60,borderRadius:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
-        >
-          <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ transform:"rotate(180deg)", overflow:"visible" }}>
-            <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
-          </svg>
-        </button>
-      </div>
+        direction="left"
+        top={arrowTop}
+        visible={hovered}
+        enabled={canScrollLeft}
+        onClick={() => move("left")}
+      />
       <div
         ref={rowRef}
         data-row-scroller
@@ -4341,23 +4330,14 @@ function ScrollRow({
         ) : children}
         <div aria-hidden="true" style={{ flex: `0 0 var(--app-safe-x)`, width: "var(--app-safe-x)", height: 1 }} />
       </div>
-      <div
+      <ScrollRowArrow
         ref={rightArrowRef}
-        className="liquid-glass-arrow row-arrow-shell"
-        style={{ position:"absolute",right:0,top:arrowTop ?? "50%",zIndex:10,transform:"translate(30%,-50%)",opacity:0,pointerEvents:hovered&&canScrollRight?"auto":"none" }}
-      >
-        <button
-          onClick={()=>move("right")}
-          title="Siguiente"
-          aria-label="Siguiente"
-          className="row-arrow-button"
-          style={{ width:36,height:60,borderRadius:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer" }}
-        >
-          <svg width="18" height="30" viewBox="0 -0.5 17 17" fill="#fff" xmlns="http://www.w3.org/2000/svg" style={{ overflow:"visible" }}>
-            <path d="M6.077,1.162 C6.077,1.387 6.139,1.612 6.273,1.812 L10.429,8.041 L6.232,14.078 C5.873,14.619 6.019,15.348 6.56,15.707 C7.099,16.068 7.831,15.922 8.19,15.382 L12.82,8.694 C13.084,8.3 13.086,7.786 12.822,7.39 L8.233,0.51 C7.873,-0.032 7.141,-0.178 6.601,0.181 C6.26,0.409 6.077,0.782 6.077,1.162 L6.077,1.162 Z" transform="scale(1.15,1.9) translate(-1.3,-3.5)" />
-          </svg>
-        </button>
-      </div>
+        direction="right"
+        top={arrowTop}
+        visible={hovered}
+        enabled={canScrollRight}
+        onClick={() => move("right")}
+      />
     </div>
   );
 }

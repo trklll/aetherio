@@ -64,6 +64,17 @@ test("la copia es la de producto, en espanol", async ({ page }) => {
   await expect(overlay(page)).toContainText("entrevista");
 });
 
+test("modo PC conserva el velo oscuro y omite el texto estilo Netflix", async ({ page }) => {
+  await open(page, "?mode=pc");
+  await expect(overlay(page)).toBeVisible({ timeout: 10_000 });
+  await expect(overlay(page).locator("[data-player-pause-backdrop]")).toBeVisible();
+  await expect(overlay(page)).not.toContainText("Viendo Ahora");
+  await expect(overlay(page)).not.toContainText("Pausado");
+  await expect(overlay(page)).not.toContainText("Temporada");
+  await expect(overlay(page).locator("[data-player-pause-backdrop]"))
+    .toHaveCSS("background-color", "rgba(0, 0, 0, 0.5)");
+});
+
 test("serie: temporada y titulo de episodio", async ({ page }) => {
   await open(page);
   await expect(overlay(page)).toBeVisible({ timeout: 10_000 });

@@ -129,7 +129,7 @@ describe("resolvePlayerGamepadAction (mando en Big Picture player)", () => {
     expect(resolvePlayerGamepadAction("confirm", episodes)).toEqual({ type: "activate-focused" });
   });
 
-  it("B y la cruceta arriba cierran la fila de episodios", () => {
+  it("arriba y B cierran la fila de episodios", () => {
     const episodes: PlayerGamepadContext = { ...DIRECT, controlsMode: true, zone: "episodes" };
     expect(resolvePlayerGamepadAction("back", episodes)).toEqual({ type: "close-episode-row" });
     expect(resolvePlayerGamepadAction("dpad-up", episodes)).toEqual({ type: "close-episode-row" });

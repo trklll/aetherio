@@ -30,10 +30,11 @@ import ContextMenu from "../../components/ui/ContextMenu";
 import { getPlayerGlassSurface } from "../../components/ui/glassSurface";
 import type { StreamFormatBadge } from "../../utils/streamFormatters";
 import { formatAirDate, formatRuntime } from "../../utils/mediaLabels";
-import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin } from "../../utils/motion";
+import { gsap, springTo, prefersReducedMotion, anchorTransformOrigin, tweenTo } from "../../utils/motion";
 import { followHorizontalFocus } from "../../navigation/spatialNav.ts";
 import { sendNativePlaybackCommand, setNativeMpvControlsBlur } from "../../runtime/platform";
 import { buildSportsSourceOptions, shouldShowSportsSourceMenu } from "./sportsSourceMenu.ts";
+import ScrollRowArrow from "../../components/ui/ScrollRowArrow";
 import { SUBTITLE_DELAY_STEP_MS } from "./subtitleSync/config";
 import SubtitleSyncDialog from "./SubtitleSyncDialog";
 import type { SubtitleSyncCue } from "./subtitleSync/parser";
@@ -74,6 +75,7 @@ function isEpisodeCardVisibleInRow(row: HTMLElement, card: HTMLElement) {
 
 interface PlayerControlsProps {
   active: boolean;
+  pauseSummaryVisible?: boolean;
   currentMetaTitle: string;
   /** Un unico badge de plataforma, encima del titulo en Big Picture. */
   streamingServiceBadge?: StreamFormatBadge | null;
@@ -191,6 +193,7 @@ interface AudioHeaderBadge {
 
 export default function PlayerControls({
   active,
+  pauseSummaryVisible = false,
   currentMetaTitle,
   streamingServiceBadge = null,
   videoFormatBadges = [],
@@ -288,6 +291,10 @@ export default function PlayerControls({
   const controlsGlassRef = useRef<HTMLDivElement>(null);
   const controlsPointerTimerRef = useRef<number | null>(null);
   const episodeRowRef = useRef<HTMLDivElement>(null);
+  const episodeRowLeftArrowRef = useRef<HTMLDivElement>(null);
+  const episodeRowRightArrowRef = useRef<HTMLDivElement>(null);
+  const [episodeRowHovered, setEpisodeRowHovered] = useState(false);
+  const [episodeRowScrollState, setEpisodeRowScrollState] = useState({ left: false, right: false });
   const episodeRowScrollLeftRef = useRef(0);
   const hasEpisodeRowScrollMemoryRef = useRef(false);
   const lastFocusedEpisodeIdRef = useRef<string | null>(null);
@@ -553,6 +560,57 @@ useEffect(() => {
     }, 0.48);
   }, [bigPicture, episodesRowOpen, episodesMounted]);
 
+  useEffect(() => {
+    const row = episodeRowRef.current;
+    if (!bigPicture || legacyTv || !episodesMounted || !row) {
+      setEpisodeRowScrollState(current =>
+        current.left || current.right ? { left: false, right: false } : current,
+      );
+      setEpisodeRowHovered(false);
+      return;
+    }
+
+    const updateScrollState = () => {
+      const maxScrollLeft = row.scrollWidth - row.clientWidth;
+      const next = {
+        left: row.scrollLeft > 2,
+        right: maxScrollLeft - row.scrollLeft > 2,
+      };
+      setEpisodeRowScrollState(current =>
+        current.left === next.left && current.right === next.right ? current : next,
+      );
+    };
+
+    updateScrollState();
+    row.addEventListener("scroll", updateScrollState, { passive: true });
+    window.addEventListener("resize", updateScrollState);
+    const resizeObserver = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(updateScrollState)
+      : null;
+    resizeObserver?.observe(row);
+    return () => {
+      row.removeEventListener("scroll", updateScrollState);
+      window.removeEventListener("resize", updateScrollState);
+      resizeObserver?.disconnect();
+    };
+  }, [bigPicture, episodeOptions.length, episodesMounted, legacyTv]);
+
+  const showEpisodeLeftArrow = episodeRowHovered && episodesRowOpen && episodeRowScrollState.left;
+  const showEpisodeRightArrow = episodeRowHovered && episodesRowOpen && episodeRowScrollState.right;
+  useEffect(() => {
+    tweenTo(episodeRowLeftArrowRef.current, { opacity: showEpisodeLeftArrow ? 1 : 0 }, 0.45);
+    tweenTo(episodeRowRightArrowRef.current, { opacity: showEpisodeRightArrow ? 1 : 0 }, 0.45);
+  }, [showEpisodeLeftArrow, showEpisodeRightArrow]);
+
+  const moveEpisodeRow = (direction: "left" | "right") => {
+    const row = episodeRowRef.current;
+    if (!row) return;
+    row.scrollBy({
+      left: direction === "right" ? row.clientWidth * 0.82 : -row.clientWidth * 0.82,
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  };
+
   // Lobby Party: el transporte lo gobierna el anfitrión; volumen y Party siguen vivos.
   const transportLocked = controlsLocked || lobbyMode;
   const seekDraggingRef = useRef(false);
@@ -661,6 +719,7 @@ useEffect(() => {
   useEffect(() => {
     let animationFrame = 0;
     const configuredPosition = Math.max(0, Math.min(150, 100 - subtitleVerticalPercent));
+    const infoPanelVisible = activeSidePanel === "info" || pauseSummaryVisible;
 
     const syncSubtitlePosition = () => {
       window.cancelAnimationFrame(animationFrame);
@@ -671,6 +730,17 @@ useEffect(() => {
           const controlsTop = controlsGlass.getBoundingClientRect().top;
           const positionAboveControls = ((controlsTop - 18) / Math.max(1, window.innerHeight)) * 100;
           nextPosition = Math.min(configuredPosition, Math.max(0, positionAboveControls));
+        }
+        if (infoPanelVisible) {
+          const infoPanel = document.querySelector<HTMLElement>("[data-player-episode-panel-glass]");
+          const panelTop = infoPanel?.getBoundingClientRect().top;
+          if (panelTop !== undefined && Number.isFinite(panelTop)) {
+            // MPV dibuja los subtítulos por encima de las capas HTML. Al mostrar
+            // el cuadro de información, súbelos hasta su borde superior para
+            // evitar que tapen el texto o salgan de la zona difuminada.
+            const positionAboveInfo = ((panelTop - 18) / Math.max(1, window.innerHeight)) * 100;
+            nextPosition = Math.min(nextPosition, Math.max(0, positionAboveInfo));
+          }
         }
         nextPosition = Number(nextPosition.toFixed(2));
         if (lastSubtitlePositionRef.current === nextPosition) return;
@@ -689,6 +759,10 @@ useEffect(() => {
     syncSubtitlePosition();
     const observer = new ResizeObserver(syncSubtitlePosition);
     if (controlsGlassRef.current) observer.observe(controlsGlassRef.current);
+    if (infoPanelVisible) {
+      const infoPanel = document.querySelector<HTMLElement>("[data-player-episode-panel-glass]");
+      if (infoPanel) observer.observe(infoPanel);
+    }
     window.addEventListener("resize", syncSubtitlePosition);
     window.visualViewport?.addEventListener("resize", syncSubtitlePosition);
     return () => {
@@ -703,7 +777,7 @@ useEffect(() => {
       subtitlePositionQueueRef.current = restore;
       void restore.catch(() => undefined);
     };
-  }, [active, subtitleVerticalPercent]);
+  }, [active, activeSidePanel, pauseSummaryVisible, subtitleVerticalPercent]);
 
   // El shader aplica blur animado a la barra normal y, en Big Picture, a cada
   // superficie de control. Así acompaña el fade de los botones sin difuminar
@@ -755,7 +829,7 @@ useEffect(() => {
       const glass = controlsGlassRef.current;
       if (!glass) return null;
       const rect = glass.getBoundingClientRect();
-      const episodePanel = activeSidePanel
+      const episodePanel = activeSidePanel || pauseSummaryVisible
         ? document.querySelector<HTMLElement>("[data-player-episode-panel-glass]")
         : (episodesRowOpen || episodesMounted)
           ? document.querySelector<HTMLElement>("[data-player-episode-row-backdrop]")
@@ -819,7 +893,7 @@ useEffect(() => {
               top: r(episodeRect.top),
               right: r(episodeRect.right),
               bottom: r(episodeRect.bottom),
-              cornerRadius: Math.round((activeSidePanel === "info" ? 24 : 28) * scale),
+              cornerRadius: Math.round((activeSidePanel === "info" || pauseSummaryVisible ? 24 : 28) * scale),
             }
           : undefined,
         // El panel de sincronizacion ocupa toda la pantalla: no hay nada detras que
@@ -867,6 +941,7 @@ useEffect(() => {
         alpha.subtitleBlurAlpha > 0.01 ||
         !!document.querySelector("[data-player-glass-notice]") ||
         (!legacyTv && active) ||
+        pauseSummaryVisible ||
         !!activeSidePanel ||
         !!openMenu ||
         !!subtitleSyncOpen;
@@ -890,7 +965,7 @@ useEffect(() => {
     };
 
     const targetBar = active && !controlsLocked ? 1 : 0;
-    const targetEpisode = activeSidePanel || episodesRowOpen ? 1 : 0;
+    const targetEpisode = activeSidePanel || pauseSummaryVisible || episodesRowOpen ? 1 : 0;
     const targetSubtitle = openMenu || subtitleSyncOpen ? 1 : 0;
 
     gsap.killTweensOf(barAlphaRef.current);
@@ -983,7 +1058,7 @@ useEffect(() => {
       }
       if (nativeRetryTimer !== null) window.clearTimeout(nativeRetryTimer);
     };
-  }, [active, activeSidePanel, bigPicture, controlsLocked, episodesMounted, episodesRowOpen, legacyTv, nativeSurfaceVisible, openMenu, subtitleBlurRefreshKey, subtitleSyncOpen]);
+  }, [active, activeSidePanel, bigPicture, controlsLocked, episodesMounted, episodesRowOpen, legacyTv, nativeSurfaceVisible, openMenu, pauseSummaryVisible, subtitleBlurRefreshKey, subtitleSyncOpen]);
 
   function runControlAction(action: () => void) {
     setOpenMenu(null);
@@ -1579,6 +1654,33 @@ useEffect(() => {
         ) : null}
         {bigPicture && episodesMounted && episodeOptions.length > 0 ? (
           <div
+            className={legacyTv ? "bp-player-episode-row-anchor bp-player-episode-row-anchor--legacy" : "bp-player-episode-row-anchor"}
+            onMouseEnter={legacyTv ? undefined : () => setEpisodeRowHovered(true)}
+            onMouseLeave={legacyTv ? undefined : () => setEpisodeRowHovered(false)}
+          >
+            {!legacyTv ? (
+              <>
+                <ScrollRowArrow
+                  ref={episodeRowLeftArrowRef}
+                  direction="left"
+                  top={165}
+                  inset={32}
+                  visible={showEpisodeLeftArrow}
+                  enabled={episodeRowScrollState.left}
+                  onClick={() => moveEpisodeRow("left")}
+                />
+                <ScrollRowArrow
+                  ref={episodeRowRightArrowRef}
+                  direction="right"
+                  top={165}
+                  inset={32}
+                  visible={showEpisodeRightArrow}
+                  enabled={episodeRowScrollState.right}
+                  onClick={() => moveEpisodeRow("right")}
+                />
+              </>
+            ) : null}
+          <div
             id="bp-episode-row"
             data-bp-episode-row
             data-row-scroller
@@ -1595,8 +1697,10 @@ useEffect(() => {
               hasEpisodeRowScrollMemoryRef.current = true;
             }}
             style={{
-              marginTop: "-8px",
-              marginBottom: "-60px",
+              marginTop: legacyTv ? "-8px" : 0,
+              marginBottom: legacyTv ? "-60px" : 0,
+              marginLeft: legacyTv ? undefined : 0,
+              marginRight: legacyTv ? undefined : 0,
               pointerEvents: episodesRowOpen ? "auto" : "none",
             }}
           >
@@ -1673,6 +1777,7 @@ useEffect(() => {
                 </div>
               );
             })}
+          </div>
           </div>
         ) : null}
       </div>

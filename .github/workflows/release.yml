@@ -92,7 +92,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""          VITE_GDRIVE_CLIENT_SECRET: ${{ secrets.VITE_GDRIVE_CLIENT_SECRET }}
         with:
           tagName: v__VERSION__
           releaseName: "Aetherio v__VERSION__"

@@ -506,7 +506,12 @@ export default function PlayerPage() {
   // Se apoya en la clase global de `useHiddenCursor` (cursor: none !important)
   // y no en un estilo en línea: así también desaparece sobre la barra de
   // controles, cuyos botones traen `cursor: pointer` propio que lo pisaría.
-  useHiddenCursor(isBigPictureRoute ? "gamepad" : "idle", {
+  const cursorPolicy = isBigPictureRoute
+    ? "gamepad"
+    : bigPictureEpisodesOpen
+      ? null
+      : "idle";
+  useHiddenCursor(cursorPolicy, {
     idleMs: isBigPictureRoute ? 2500 : 3000,
     enabled: controlsReady,
   });
@@ -2942,12 +2947,11 @@ function activateFocusedControl() {
     focused.click();
   }
 }
-// Colapsa la fila de episodios y devuelve el foco al timeline. La comparten
-// el mando (B o cruceta arriba) y el teclado (flecha arriba): una sola accion
-// para que ambos caminos devuelvan la barra al estado anterior.
+// B, Escape o arriba colapsan la fila de episodios y devuelven el foco a los
+// botones del reproductor, sin animar la barra completa hacia el timeline.
 function closeEpisodeRow() {
   setActiveSidePanel(current => current === "episode-row" ? null : current);
-  focusBarTimeline();
+  focusBarButtons();
 }
 usePlayerGamepad({
   enabled: !showUpNext,
@@ -2957,7 +2961,13 @@ usePlayerGamepad({
   hasEpisodesPanel: episodeOptions.length > 0,
   volume,
   playing,
-  isDirectMode: () => !showFallbackPanel && !subtitleSync.open && playerMenu === null && activeSidePanel === null,
+  // La fila inline pertenece a la zona de la barra, no a un overlay modal:
+  // mantener el mando en modo directo permite que arriba/B ejecuten la acción
+  // de cerrar la fila y volver a los botones.
+  isDirectMode: () => !showFallbackPanel
+    && !subtitleSync.open
+    && playerMenu === null
+    && (activeSidePanel === null || activeSidePanel === "episode-row"),
   controlsMode: gamepadBarMode,
   barZone,
   previewActive: timelinePreviewTime !== null,
@@ -4039,6 +4049,8 @@ const showPrePlaybackBackdrop = !showFallbackPanel && !playbackStarted && !mpvEr
     && !pauseScreenBlocked;
   const pauseScreenReady = usePauseScreenDelay(pauseScreenArmed, 3000);
   const pauseScreenVisible = pauseScreenReady && !controlsVisible;
+  const pauseSummaryVisible = !isBigPictureRoute && pauseScreenVisible;
+  const infoOverlayVisible = activeSidePanel === "info" || pauseSummaryVisible;
 
 useEffect(() => {
   if (loadingOverlayTimerRef.current !== null) {
@@ -4298,7 +4310,7 @@ if (!stream) {
         </PlayerFloatingNotice>
       ) : null}
 
-      {postPlayAction === "skip" && floatingActionsVisible && activeSkipSegment && playbackStarted ? (
+      {postPlayAction === "skip" && floatingActionsVisible && activeSkipSegment && playbackStarted && !infoOverlayVisible ? (
         <button
           ref={skipButtonRef}
           data-player-interactive
@@ -4376,7 +4388,7 @@ if (!stream) {
         onSelect={selectSource}
       />
       <PlayerInfoOverlay
-        visible={activeSidePanel === "info"}
+        visible={infoOverlayVisible}
         title={currentMetaTitle}
         episodeLabel={query?.season && query?.episode
           ? `S${String(query.season).padStart(2, "0")}E${String(query.episode).padStart(2, "0")}`
@@ -4385,6 +4397,7 @@ if (!stream) {
         overview={pauseScreenOverview || (isMovie ? "No hay una descripción disponible para esta película." : currentOverview)}
         posterUrl={selectedMediaPoster || resumeEntry?.poster || streamBehaviorPoster || selectedMediaBackground || undefined}
         nativeSurfaceVisible={nativeSurfaceVisible}
+        pauseSummary={pauseSummaryVisible}
         onClose={closeInfoOverlay}
       />
       {!isSportsReplay && activeSidePanel === "sources" && sourcesMediaKey && resolveAttemptedKeyRef.current !== sourcesMediaKey ? (
@@ -4421,6 +4434,7 @@ if (!stream) {
       {/* Pantalla de pausa: solo cuando los controles ya se ocultaron solos. */}
       <PlayerPauseScreen
         visible={pauseScreenVisible}
+        showDetails={isBigPictureRoute}
         mediumTitle={mediaTitle}
         logoUrl={pauseScreenLogo}
         isSeries={!isMovie}
@@ -4432,6 +4446,7 @@ if (!stream) {
 
       <PlayerControls
         active={controlsReady && controlsActive && !showUpNext && !pauseScreenVisible && activeSidePanel !== "info"}
+        pauseSummaryVisible={pauseSummaryVisible}
         bigPicture={isBigPicturePlayer}
         legacyTv={isBigPictureRoute}
         currentMetaTitle={currentMetaTitle}

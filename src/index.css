@@ -279,6 +279,17 @@ html.aetherio-android-tv .shell-preview-app .spatial-focus{
   color:#000 !important;
   box-shadow:0 2px 14px rgba(0,0,0,0.45) !important;
 }
+/* La flecha de PC conserva su cristal al recibir foco: no debe tomar el velo
+   blanco que identifica al resto de controles de la barra. */
+.bp-player-controls:not([data-player-controls-variant="tv-legacy"]) button.row-arrow-button[data-bar-active="true"] svg{
+  fill:#fff !important;
+}
+.bp-player-controls:not([data-player-controls-variant="tv-legacy"]) button.row-arrow-button[data-bar-active="true"]{
+  background-color:transparent !important;
+  border-color:transparent !important;
+  color:#fff !important;
+  box-shadow:none !important;
+}
 /* spatialNav puede dejar la clase durante un frame en Android TV; nunca debe
    ser una fuente de estilo para la barra. */
 html.aetherio-android-tv .bp-player-controls .spatial-focus{
@@ -537,6 +548,11 @@ html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
 @media (prefers-reduced-motion:reduce){
   .bp-player-episode-row-backdrop{transition:none;}
 }
+.bp-player-episode-row-anchor{
+  position:relative;
+  margin:-8px calc(-1 * clamp(28px, 6.4vw, 132px)) -60px;
+}
+.bp-player-episode-row-anchor--legacy{display:contents;}
 .bp-player-episode-row{
   display:flex;
   gap:29px;
@@ -583,7 +599,7 @@ html.aetherio-android-tv [data-player-episode-panel-glass] button.spatial-focus{
   line-height:25px;
   text-shadow:0 1px 2px rgba(0,0,0,.9),0 2px 5px rgba(0,0,0,.48);
 }
-.bp-player-controls button:not([data-bar-active="true"]):not(.bp-bar-link):not([data-player-control-glass]){
+.bp-player-controls button:not([data-bar-active="true"]):not(.bp-bar-link):not([data-player-control-glass]):not(.row-arrow-button){
   background-color:rgba(255,255,255,0.10) !important;
   border-color:rgba(255,255,255,0.07) !important;
   color:rgba(255,255,255,0.9) !important;

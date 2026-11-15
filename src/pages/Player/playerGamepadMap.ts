@@ -100,7 +100,7 @@ export function resolvePlayerGamepadAction(
 
   // En timeline izquierda/derecha hacen seek, arriba enfoca controles y abajo
   // entra a episodios. En controles, arriba cierra la barra y abajo entra a
-  // episodios. La fila se recorre horizontalmente; arriba o B la cierra.
+  // episodios. En la fila, arriba y B la cierran y devuelven el foco a botones.
   // X/Y/LB/RB/LT/RT siguen vivos en ambas zonas.
   if (ctx.controlsMode) {
     if (ctx.zone === "timeline") {
@@ -119,8 +119,8 @@ export function resolvePlayerGamepadAction(
       if (id === "dpad-down" || id === "open-controls") return ctx.hasEpisodesPanel ? { type: "open-episodes" } : null;
       // X/Y/LT/RT/LB/RB caen al switch general (siguen vivos en el timeline).
     } else if (ctx.zone === "episodes") {
-      // La fila vive dentro de la barra, así que arriba/B la colapsan en lugar
-      // de salir; abajo se consume para no escapar a controles exteriores.
+      // La fila vive dentro de la barra: arriba/B la cierran y abajo se
+      // consume para no salir de la barra.
       if (id === "back") return { type: "close-episode-row" };
       if (id === "dpad-up") return { type: "close-episode-row" };
       if (id === "dpad-down" || id === "open-controls") return { type: "ignore" };
